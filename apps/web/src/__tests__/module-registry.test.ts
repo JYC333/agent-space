@@ -50,4 +50,19 @@ describe('module registry official plugin overlay', () => {
       planned: false,
     })
   })
+
+  it('registers Agent Rooms as a built-in space-scoped module', () => {
+    const rooms = MODULE_REGISTRY.find(module => module.id === 'agent_groups')
+
+    expect(rooms).toMatchObject({
+      label: 'Rooms',
+      path: '/agent-groups',
+      source: 'built_in',
+      group: 'agents',
+      perspectiveType: 'space-scoped',
+      enabled: true,
+      visible: true,
+      planned: false,
+    })
+  })
 })

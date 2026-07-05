@@ -57,7 +57,7 @@ afterAll(async () => {
 beforeEach(async () => {
   if (!available || !pool) return;
   await pool.query(
-    "TRUNCATE actors, agents, agent_versions, agent_runtime_profiles, context_snapshots, runs, run_steps, run_events, run_execution_locks, run_evaluations, run_finalizations, jobs, job_events, artifacts, tasks, task_runs, task_evaluations CASCADE",
+    "TRUNCATE actors, agents, agent_versions, agent_runtime_profiles, agent_run_groups, agent_run_group_members, agent_run_messages, context_snapshots, runs, run_delegations, run_steps, run_events, run_execution_locks, run_evaluations, run_finalizations, jobs, job_events, artifacts, tasks, task_runs, task_evaluations CASCADE",
   );
 });
 
@@ -411,6 +411,26 @@ describe("runs repositories against real PostgreSQL", () => {
     // INSERT...SELECT shape failed real "inconsistent types deduced" inference.
     expect(e0.event_index).toBe(0);
     expect(e1.event_index).toBe(1);
+  });
+
+  it("accepts delegation lifecycle run events", async (ctx) => {
+    if (!available) return ctx.skip();
+    const repo = new PgRunRepository(pool!);
+    const runId = await seedRun();
+
+    const event = await repo.appendRunEvent({
+      run_id: runId,
+      space_id: "space-1",
+      event_type: "delegation_requested",
+      status: "succeeded",
+      metadata_json: {
+        group_id: "group-1",
+        delegation_id: "delegation-1",
+        target_agent_id: "agent-reader",
+      },
+    });
+
+    expect(event.event_type).toBe("delegation_requested");
   });
 
   it("rejects an event_type outside ck_run_events_event_type", async (ctx) => {

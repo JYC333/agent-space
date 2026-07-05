@@ -108,6 +108,48 @@ function httpClient(profile?: ResolvedNetworkProfile | null): ProviderHttpClient
   return httpClientOverride ?? { fetch: globalThis.fetch.bind(globalThis) };
 }
 
+async function fetchProviderResponse(
+  profile: ResolvedNetworkProfile | null | undefined,
+  url: string,
+  init?: RequestInit,
+): Promise<Response> {
+  try {
+    return await httpClient(profile).fetch(url, init);
+  } catch (error) {
+    if (error instanceof ProviderInvocationError) throw error;
+    throw new ProviderInvocationError(
+      502,
+      `Provider network request failed (${safeUrlForError(url)}): ${errorDetail(error)}`,
+      { failure_class: "transient", actions: ["fallback_provider", "fail"] },
+      "provider_network_error",
+    );
+  }
+}
+
+function safeUrlForError(value: string): string {
+  try {
+    const url = new URL(value);
+    url.username = "";
+    url.password = "";
+    url.search = "";
+    return url.toString();
+  } catch {
+    return value.split("?")[0] ?? value;
+  }
+}
+
+function errorDetail(error: unknown): string {
+  if (!(error instanceof Error)) return "request failed before a provider response was received";
+  const cause = error.cause;
+  if (cause instanceof Error && cause.message && cause.message !== error.message) {
+    return `${error.message}: ${cause.message}`;
+  }
+  if (cause && typeof cause === "object" && "code" in cause && typeof cause.code === "string") {
+    return `${error.message}: ${cause.code}`;
+  }
+  return error.message || "request failed before a provider response was received";
+}
+
 export function buildProviderModelName(providerType: string, model: string): string {
   if (model.includes("/")) return model;
   if (providerType === "anthropic") return `anthropic/${model}`;
@@ -207,7 +249,7 @@ async function completeOpenAiCompatible(
   }
   const model = bareModelName(provider.provider_type, resolveModel(provider, body.model));
   const tools = openAiTools(body.tools);
-  const response = await httpClient(networkProfile).fetch(`${openAiBase(provider)}/chat/completions`, {
+  const response = await fetchProviderResponse(networkProfile, `${openAiBase(provider)}/chat/completions`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -262,7 +304,7 @@ async function completeAnthropic(
   }
   const model = bareModelName("anthropic", resolveModel(provider, body.model));
   const tools = anthropicTools(body.tools);
-  const response = await httpClient(networkProfile).fetch(anthropicMessagesUrl(provider), {
+  const response = await fetchProviderResponse(networkProfile, anthropicMessagesUrl(provider), {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -312,7 +354,7 @@ async function completeOllama(
     throw new ProviderInvocationError(400, "base_url is required for provider_type 'ollama'");
   }
   const model = bareModelName("ollama", resolveModel(provider, body.model));
-  const response = await httpClient(networkProfile).fetch(`${base}/api/chat`, {
+  const response = await fetchProviderResponse(networkProfile, `${base}/api/chat`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -840,7 +882,7 @@ async function embedOnce(
   if (provider.provider_type === "ollama") {
     const base = provider.base_url?.replace(/\/+$/, "");
     if (!base) throw new ProviderInvocationError(400, "base_url is required for provider_type 'ollama'");
-    const response = await httpClient(target.network_profile).fetch(`${base}/api/embed`, {
+    const response = await fetchProviderResponse(target.network_profile, `${base}/api/embed`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ model: resolvedModel, input: inputs }),
@@ -864,7 +906,7 @@ async function embedOnce(
     if (typeof dimensions === "number" && Number.isInteger(dimensions) && dimensions > 0) {
       body.dimensions = dimensions;
     }
-    const response = await httpClient(target.network_profile).fetch(`${base}/models/embed`, {
+    const response = await fetchProviderResponse(target.network_profile, `${base}/models/embed`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
       body: JSON.stringify(body),
@@ -886,7 +928,7 @@ async function embedOnce(
     if (typeof dimensions === "number" && Number.isInteger(dimensions) && dimensions > 0) {
       body.dimensions = dimensions;
     }
-    const response = await httpClient(target.network_profile).fetch(`${openAiBase(provider)}/embeddings`, {
+    const response = await fetchProviderResponse(target.network_profile, `${openAiBase(provider)}/embeddings`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
       body: JSON.stringify(body),
@@ -1082,7 +1124,7 @@ async function rerankOnce(
     const base = provider.base_url?.replace(/\/+$/, "");
     if (!base) throw new ProviderInvocationError(400, "base_url is required for provider_type 'zeroentropy'");
     const resolvedModel = bareModelName("zeroentropy", model?.trim() || "zerank-2");
-    const response = await httpClient(target.network_profile).fetch(`${base}/models/rerank`, {
+    const response = await fetchProviderResponse(target.network_profile, `${base}/models/rerank`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
       body: JSON.stringify({
@@ -1134,7 +1176,7 @@ export async function listProviderModels(
   const apiKey = target.candidates.find((c) => c.api_key)?.api_key ?? null;
   if (provider.provider_type === "ollama" && provider.base_url) {
     const data = (await parseJsonResponse(
-      await httpClient(target.network_profile).fetch(`${provider.base_url.replace(/\/+$/, "")}/api/tags`),
+      await fetchProviderResponse(target.network_profile, `${provider.base_url.replace(/\/+$/, "")}/api/tags`),
     )) as { models?: Array<{ name?: string }> };
     return {
       models: (data.models ?? []).map((m) => m.name).filter((m): m is string => Boolean(m)),
@@ -1145,7 +1187,7 @@ export async function listProviderModels(
     const headers: Record<string, string> = {};
     if (apiKey) headers.authorization = `Bearer ${apiKey}`;
     const data = (await parseJsonResponse(
-      await httpClient(target.network_profile).fetch(`${openAiBase(provider)}/models`, { headers }),
+      await fetchProviderResponse(target.network_profile, `${openAiBase(provider)}/models`, { headers }),
     )) as { data?: Array<{ id?: string }> };
     return {
       models: (data.data ?? []).map((m) => m.id).filter((m): m is string => Boolean(m)),

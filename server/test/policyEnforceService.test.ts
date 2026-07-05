@@ -64,6 +64,20 @@ describe("policy enforce service result mapping", () => {
     expect(res.error_code).toBe("policy_audit_persist_failed");
   });
 
+  it("same-space delegated credential use is allowed before fail-closed audit handling", async () => {
+    const res = await enforce(
+      config,
+      registry,
+      req("runtime.use_credential", {
+        space_id: "s1",
+        resource_space_id: "s1",
+        context: { trigger_origin: "delegation" },
+      }),
+    );
+    expect(res.status).toBe("error");
+    expect(res.error_code).toBe("policy_audit_persist_failed");
+  });
+
   it("allow that is not audit-required returns allow without touching the DB", async () => {
     const res = await enforce(
       config,

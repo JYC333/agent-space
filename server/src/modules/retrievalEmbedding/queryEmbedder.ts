@@ -7,7 +7,7 @@ import { sharedQueryEmbeddingCache, type QueryEmbeddingCache } from "./queryEmbe
 
 /**
  * Provider-backed query embedder for the vector recall arm. Routes through the
- * same `retrieval_embedding` task policy as backfill (ADR 0010 channel). Returns
+ * same `retrieval_embedding` task policy as backfill (ADR 0008 channel). Returns
  * null on any failure, empty query, or dimension mismatch so search degrades to
  * the deterministic arms rather than failing the request.
  *

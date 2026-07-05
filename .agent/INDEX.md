@@ -63,7 +63,7 @@ reports in `.agent/reports/` are not source of truth and should be deleted after
 | Doc | What it covers |
 |---|---|
 | [architecture/SECURITY_AND_ACCESS_BOUNDARIES.md](architecture/SECURITY_AND_ACCESS_BOUNDARIES.md) | Auth boundary, space isolation, object visibility, session/task/activity policy, cross-space exceptions, credential secrecy, dogfooding readiness |
-| [architecture/CREDENTIAL_STORAGE.md](architecture/CREDENTIAL_STORAGE.md) | How secrets are stored at rest: ModelProvider API keys (AES-256-GCM + disk master key + `secret_ref`) vs CLI login state; runtime resolution; ADR 0010 channel isolation |
+| [architecture/CREDENTIAL_STORAGE.md](architecture/CREDENTIAL_STORAGE.md) | How secrets are stored at rest: ModelProvider API keys (AES-256-GCM + disk master key + `secret_ref`) vs CLI login state; runtime resolution; ADR 0008 channel isolation |
 | [architecture/POLICY_ENFORCEMENT_INVENTORY.md](architecture/POLICY_ENFORCEMENT_INVENTORY.md) | All current policy enforcement points; enforcement status per class |
 
 ### Backend Domains
@@ -180,12 +180,10 @@ Load only the module docs relevant to your task.
 | [0003](decisions/0003-memory-proposal-flow.md) | Agents do not directly write active memory |
 | [0004](decisions/0004-context-wrapper.md) | Vendor files are generated adapters, not source of truth |
 | [0005](decisions/0005-desktop-runtime.md) | Windows desktop is not a full runtime |
-| [0006](decisions/0006-open-source-readiness.md) | Private-first, open-source-ready |
-| [0007](decisions/0007-plugin-module-architecture.md) | Module architecture (ServerModule registry, MODULE_REGISTRY) and official optional module control plane (PluginHost, diary) |
-| [0008](decisions/0008-multi-cli-mvp.md) | Multi-CLI MVP |
-| [0009](decisions/0009-anthropic-cli-only-policy.md) | Anthropic CLI-only policy (superseded by ADR 0010) |
-| [0010](decisions/0010-credential-channel-isolation.md) | Credential channel isolation |
-| [0011](decisions/0011-capability-workflow-open-skill-system.md) | Capability, Workflow, and Open Skill framework |
+| [0006](decisions/0006-plugin-module-architecture.md) | Module architecture (ServerModule registry, MODULE_REGISTRY) and official optional module control plane (PluginHost, diary) |
+| [0007](decisions/0007-multi-cli-mvp.md) | Multi-CLI MVP |
+| [0008](decisions/0008-credential-channel-isolation.md) | Credential channel isolation |
+| [0009](decisions/0009-capability-workflow-open-skill-system.md) | Capability, Workflow, and Open Skill framework |
 
 ---
 

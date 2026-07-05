@@ -57,6 +57,7 @@ describe('navigation model', () => {
     expect(sceneForPath('/spaces/x/proposals')?.id).toBe('review')
     expect(sceneForPath('/spaces/x/projects')).toBeNull()
     expect(sceneForPath('/spaces/x/agents')?.id).toBe('agents')
+    expect(sceneForPath('/spaces/x/agent-groups')?.id).toBe('agents')
     expect(sceneForPath('/spaces/x/sessions')?.id).toBe('agents')
     expect(sceneForPath('/spaces/x/workspaces')?.id).toBe('workspaces')
     // Knowledge intentionally has no scene sidebar — it uses an in-header breadcrumb switcher.
@@ -66,6 +67,15 @@ describe('navigation model', () => {
     expect(sceneForPath('/home')).toBeNull()
     expect(sceneForPath('/evolution')).toBeNull()
     expect(sceneForPath('/spaces/x/activity')?.id).not.toBe(sceneForPath('/spaces/x/proposals')?.id)
+  })
+
+  it('includes Agent Rooms in the Agents scene sidebar', () => {
+    const agentsScene = sceneForPath('/spaces/x/agent-groups')
+    expect(agentsScene?.kind).toBe('route')
+    if (agentsScene?.kind !== 'route') throw new Error('expected route scene')
+    expect(agentsScene.items).toEqual(expect.arrayContaining([
+      { label: 'Rooms', to: '/agent-groups' },
+    ]))
   })
 })
 

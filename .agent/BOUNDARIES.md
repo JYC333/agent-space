@@ -203,4 +203,4 @@ canonical schema adds that table.
 
 ## Open-Source Boundary
 
-**B22** — The project is private-first but open-source-ready. Do not put private data, real user memory, or non-shareable credentials into `core/`. See [0006](decisions/0006-open-source-readiness.md).
+**B22** — The project is open source. Do not put private data, real user memory, or non-shareable credentials into `core/`; see B1/B2.

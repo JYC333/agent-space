@@ -240,6 +240,67 @@ describe("provider invocation resilience", () => {
     expect(attempts[1]).toMatchObject({ key: "k2", model: "default-of-p2" });
   });
 
+  it("treats fetch failures as transient provider network errors and falls back", async () => {
+    const outcomes: Array<{ member: string; outcome: PoolOutcome }> = [];
+    const store = makeStore(
+      {
+        p1: target("p1", [{ member: "m1", key: "k1" }], { fallback_provider_ids: ["p2"] }),
+        p2: target("p2", [{ member: "m2", key: "k2" }]),
+      },
+      outcomes,
+    );
+    const attempts: Attempt[] = [];
+    __setProviderHttpClientForTests({
+      async fetch(url, init) {
+        const headers = (init?.headers ?? {}) as Record<string, string>;
+        const body = init?.body ? JSON.parse(String(init.body)) : {};
+        attempts.push({
+          url: String(url),
+          key: headers.authorization?.replace("Bearer ", "") ?? null,
+          model: body.model ?? null,
+          body,
+        });
+        if (attempts.length <= 2) {
+          const error = new Error("fetch failed") as Error & { cause?: Error };
+          error.cause = new Error("getaddrinfo ENOTFOUND api.p1.test");
+          throw error;
+        }
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { content: "fallback ok" } }],
+            model: body.model,
+            usage: {},
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      },
+    });
+
+    const result = await completeProviderChat(store, "space-1", {
+      ...CHAT,
+      provider_id: "p1",
+      model: "explicit-model-for-p1",
+    });
+
+    expect(result.content).toBe("fallback ok");
+    expect(attempts.map((a) => a.key)).toEqual(["k1", "k1", "k2"]);
+    expect(attempts.map((a) => a.model)).toEqual([
+      "explicit-model-for-p1",
+      "explicit-model-for-p1",
+      "default-of-p2",
+    ]);
+    expect(outcomes[0]).toEqual({
+      member: "m1",
+      outcome: {
+        kind: "failure",
+        failure_class: "transient",
+        cooldown_seconds: undefined,
+        unhealthy: false,
+      },
+    });
+    expect(outcomes[1]).toEqual({ member: "m2", outcome: { kind: "success" } });
+  });
+
   it("does not rotate keys on permanent request errors", async () => {
     const outcomes: Array<{ member: string; outcome: PoolOutcome }> = [];
     const store = makeStore(

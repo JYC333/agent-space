@@ -241,6 +241,15 @@ installed when implemented:
   `tool_use` / `tool_result` blocks. The runtime host reports an unsupported
   provider with the `runtime_tool_provider_unsupported` code, and the managed-run
   tool loop degrades to a single no-tool turn rather than failing the run.
+- Managed API runs inside Agent Rooms expose room tools when the run belongs to
+  an active group. `agent.delegate` is available when there are active target
+  members and creates child runs through the agent group service and
+  `run.spawn_child` policy gate. `agent.wait_for_results` lets the current run
+  pause on current-turn sibling runs, its own delegated child runs, or explicit
+  same-room run ids; orchestration stores `waiting_for_dependency` and the
+  lifecycle projector requeues the same run after every dependency is terminal.
+  These tools are not free-form provider tools and do not parse natural-language
+  text server-side.
 
 General MCP/tool scheduling is deferred to the extended server runtime stage;
 CLI adapters remain the broad tool-bearing agent loop path for the near term.

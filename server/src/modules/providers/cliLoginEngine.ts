@@ -11,7 +11,7 @@
  * After a successful login the engine copies the login state from the
  * process HOME into the managed profile directory (the durable credential
  * store under AGENT_SPACE_HOME/secrets/cli-credentials) and emits a
- * `synced` event. Login state is the ADR 0010 CLI channel: it is never
+ * `synced` event. Login state is the ADR 0008 CLI channel: it is never
  * pooled, rotated, or exposed through responses.
  */
 

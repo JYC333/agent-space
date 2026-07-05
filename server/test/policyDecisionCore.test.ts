@@ -27,6 +27,32 @@ function req(action: string, extra: Record<string, unknown> = {}) {
   return { action, force_record: false, ...extra } as never;
 }
 
+function spawnChildContext(extra: Record<string, unknown> = {}) {
+  return {
+    action: "run.spawn_child",
+    space_id: "s1",
+    resource_space_id: "s1",
+    group_id: "group-1",
+    parent_run_id: "run-parent",
+    root_run_id: "run-root",
+    requesting_agent_id: "agent-manager",
+    target_agent_id: "agent-reader",
+    manager_user_id: "user-1",
+    group_status: "active",
+    requesting_agent_status: "active",
+    target_agent_status: "active",
+    requesting_member_status: "active",
+    target_member_status: "active",
+    depth: 1,
+    max_depth: 3,
+    fanout_count: 1,
+    max_fanout: 8,
+    concurrency_count: 1,
+    max_concurrency: 4,
+    ...extra,
+  };
+}
+
 describe("roles", () => {
   it("normalizes unknown roles to guest", () => {
     expect(normalizeRole("ADMIN")).toBe("admin");
@@ -232,6 +258,16 @@ describe("engine + registry default", () => {
     expect(d.decision).toBe("allow");
     expect(d.policy_rule_id).toBe("credential_same_space_manual_allow");
   });
+  it("runtime.use_credential same-space delegation allows", () => {
+    const d = engineCheck(registry, {
+      action: "runtime.use_credential",
+      space_id: "s1",
+      resource_space_id: "s1",
+      trigger_origin: "delegation",
+    });
+    expect(d.decision).toBe("allow");
+    expect(d.policy_rule_id).toBe("credential_same_space_manual_allow");
+  });
   it("runtime.use_credential automation requires approval", () => {
     const d = engineCheck(registry, {
       action: "runtime.use_credential",
@@ -260,6 +296,141 @@ describe("engine + registry default", () => {
     });
     expect(d.decision).toBe("deny");
     expect(d.reason_code).toBe("tool_not_permitted");
+  });
+  it("run.spawn_child requires delegation context and fails closed when missing", () => {
+    const d = engineCheck(registry, {
+      action: "run.spawn_child",
+      space_id: "s1",
+      resource_space_id: "s1",
+    });
+    expect(d.decision).toBe("deny");
+    expect(d.audit_code).toBe("run_spawn_child_missing_context");
+  });
+  it("run.spawn_child requires explicit active-state proofs", () => {
+    const d = engineCheck(registry, {
+      action: "run.spawn_child",
+      space_id: "s1",
+      resource_space_id: "s1",
+      group_id: "group-1",
+      parent_run_id: "run-parent",
+      root_run_id: "run-root",
+      requesting_agent_id: "agent-manager",
+      target_agent_id: "agent-reader",
+      manager_user_id: "user-1",
+    });
+    expect(d.decision).toBe("deny");
+    expect(d.audit_code).toBe("run_spawn_child_missing_context");
+  });
+  it("run.spawn_child requires explicit budget and capacity proofs", () => {
+    const d = engineCheck(registry, {
+      action: "run.spawn_child",
+      space_id: "s1",
+      resource_space_id: "s1",
+      group_id: "group-1",
+      parent_run_id: "run-parent",
+      root_run_id: "run-root",
+      requesting_agent_id: "agent-manager",
+      target_agent_id: "agent-reader",
+      manager_user_id: "user-1",
+      group_status: "active",
+      requesting_agent_status: "active",
+      target_agent_status: "active",
+      requesting_member_status: "active",
+      target_member_status: "active",
+    });
+    expect(d.decision).toBe("deny");
+    expect(d.audit_code).toBe("run_spawn_child_missing_context");
+    expect(d.message).toContain("numeric context");
+  });
+  it("run.spawn_child allows active same-space group delegation", () => {
+    const d = engineCheck(registry, spawnChildContext({ max_depth: 2, max_fanout: 4 }));
+    expect(d.decision).toBe("allow");
+    expect(d.audit_code).toBe("run_spawn_child_allowed");
+  });
+  it("run.spawn_child denies inactive group, agent, or member proofs", () => {
+    for (const field of ["group_status", "target_agent_status", "target_member_status"]) {
+      const d = engineCheck(registry, spawnChildContext({ [field]: "paused" }));
+      expect(d.decision).toBe("deny");
+      expect(d.audit_code).toBe("run_spawn_child_inactive_context");
+    }
+  });
+  it("run.spawn_child denies authority widening", () => {
+    const d = engineCheck(registry, spawnChildContext({ context_widens_authority: true }));
+    expect(d.decision).toBe("deny");
+    expect(d.risk_level).toBe("critical");
+    expect(d.audit_code).toBe("run_spawn_child_authority_widening");
+  });
+  it("run.spawn_child denies Memory or Knowledge direct-write authority widening", () => {
+    const d = engineCheck(registry, spawnChildContext({ durable_write_scope_widens: true }));
+    expect(d.decision).toBe("deny");
+    expect(d.risk_level).toBe("critical");
+    expect(d.audit_code).toBe("run_spawn_child_authority_widening");
+  });
+  it("run.spawn_child applies depth budgets as hard ceilings", () => {
+    const atLimit = engineCheck(registry, spawnChildContext({ depth: 2, max_depth: 2 }));
+    const overLimit = engineCheck(registry, spawnChildContext({ depth: 3, max_depth: 2 }));
+    expect(atLimit.decision).toBe("allow");
+    expect(overLimit.decision).toBe("deny");
+    expect(overLimit.audit_code).toBe("run_spawn_child_depth_limit");
+  });
+  it("run.spawn_child applies fanout and concurrency budgets as inclusive current counts", () => {
+    const fanoutAtLimit = engineCheck(registry, spawnChildContext({
+      fanout_count: 2,
+      max_fanout: 2,
+    }));
+    const fanoutOverLimit = engineCheck(registry, spawnChildContext({
+      fanout_count: 3,
+      max_fanout: 2,
+    }));
+    const concurrencyAtLimit = engineCheck(registry, spawnChildContext({
+      concurrency_count: 4,
+      max_concurrency: 4,
+    }));
+    const concurrencyOverLimit = engineCheck(registry, spawnChildContext({
+      concurrency_count: 5,
+      max_concurrency: 4,
+    }));
+    expect(fanoutAtLimit.decision).toBe("allow");
+    expect(concurrencyAtLimit.decision).toBe("allow");
+    expect(fanoutOverLimit.decision).toBe("deny");
+    expect(concurrencyOverLimit.decision).toBe("deny");
+    expect(fanoutOverLimit.audit_code).toBe("run_spawn_child_capacity_limit");
+    expect(concurrencyOverLimit.audit_code).toBe("run_spawn_child_capacity_limit");
+  });
+  it("unknown delegation-like actions fail closed", () => {
+    const d = engineCheck(registry, { action: "agent.delegate" });
+    expect(d.decision).toBe("deny");
+    expect(d.audit_code).toBe("unknown_policy_action");
+  });
+  it("run.spawn_child production gate is wired and fail-closed audited", () => {
+    const r = req("run.spawn_child", {
+      space_id: "s1",
+      resource_space_id: "s1",
+      context: {
+        group_id: "group-1",
+        parent_run_id: "run-parent",
+        root_run_id: "run-root",
+        requesting_agent_id: "agent-manager",
+        target_agent_id: "agent-reader",
+        manager_user_id: "user-1",
+        group_status: "active",
+        requesting_agent_status: "active",
+        target_agent_status: "active",
+        requesting_member_status: "active",
+        target_member_status: "active",
+        depth: 1,
+        max_depth: 3,
+        fanout_count: 1,
+        max_fanout: 8,
+        concurrency_count: 1,
+        max_concurrency: 4,
+      },
+    });
+    const { defn, decision } = computeDecision(registry, r);
+    expect(decision.decision).toBe("allow");
+    expect(decision.audit_code).toBe("run_spawn_child_allowed");
+    expect(isDurableAuditRequired(defn, decision, r)).toBe(true);
+    expect(resolveFailureMode(defn, decision, r)).toBe("fail_closed");
   });
 });
 

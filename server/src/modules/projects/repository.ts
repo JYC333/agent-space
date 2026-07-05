@@ -181,12 +181,12 @@ export class PgProjectRepository {
       `UPDATE projects
           SET name = $3,
               description = $4,
-              status = $5,
+              status = $5::varchar(32),
               current_focus = $6,
               settings_json = $7::jsonb,
               archived_at = CASE
-                WHEN $5 = 'archived' AND archived_at IS NULL THEN $8::timestamptz
-                WHEN $5 = 'active' THEN NULL
+                WHEN $5::varchar(32) = 'archived' AND archived_at IS NULL THEN $8::timestamptz
+                WHEN $5::varchar(32) = 'active' THEN NULL
                 ELSE archived_at
               END,
               updated_at = $8

@@ -7,7 +7,7 @@
 export const DEFAULT_EMBED_DIMENSIONS = 2560;
 export const EMBED_DIMENSIONS = DEFAULT_EMBED_DIMENSIONS;
 
-/** Provider task policy used to route embedding generation (ADR 0010 channel). */
+/** Provider task policy used to route embedding generation (ADR 0008 channel). */
 export const RETRIEVAL_EMBEDDING_TASK = "retrieval_embedding";
 
 /** Job type for the async embedding backfill worker. */

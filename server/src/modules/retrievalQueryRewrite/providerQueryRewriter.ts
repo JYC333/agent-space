@@ -25,7 +25,7 @@ export interface ProviderQueryRewriterOptions {
 
 /**
  * Production query rewriter. Routes the rephrasing call through the
- * `retrieval_query_rewrite` provider task policy (ADR 0010 credential channel),
+ * `retrieval_query_rewrite` provider task policy (ADR 0008 credential channel),
  * exactly like the embedding and rerank auxiliary tasks. It is deliberately
  * resilient: any provider failure, missing provider, or unparseable response
  * returns `null`, so search degrades to the original query alone.

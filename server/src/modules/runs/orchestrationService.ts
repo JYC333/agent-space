@@ -14,6 +14,7 @@ import {
   executeVendorCliAdapter,
   type VendorCliAdapterDeps,
 } from "./vendorCliAdapter";
+import { AgentGroupRunLifecycleProjector } from "../agentGroups/lifecycleProjector";
 import type { CliProcessRegistry } from "./localCliExecution";
 import type {
   PgRunRepository,
@@ -56,6 +57,7 @@ import {
   summarizeOutput,
   terminalStatusFromAdapter,
   toRunPreparationError,
+  waitingForDependencyFromAdapter,
   withTimeout,
 } from "./orchestrationResults";
 
@@ -109,6 +111,12 @@ export interface RunExecutionRepositoryPort {
     message: string;
     paused_at: string;
   }): Promise<RunRecord | null>;
+  markRunWaitingForDependency(input: {
+    run_id: string;
+    space_id: string;
+    output_json: unknown;
+    paused_at: string;
+  }): Promise<RunRecord | null>;
 }
 
 export interface RunExecutionAdapterDeps {
@@ -120,6 +128,7 @@ export interface RunExecutionAdapterDeps {
   codePatchCollector?: RunCodePatchCollectorPort;
   policyEnforcer?: RunPolicyEnforcer;
   runtimeToolVersionResolver?: RunRuntimeToolVersionResolver;
+  delegationProjector?: RunDelegationLifecycleProjectorPort;
   /**
    * Shared CLI process registry. Execute registers spawned CLI processes here;
    * cancelRun terminates them through it. Must be the same instance across the
@@ -127,6 +136,11 @@ export interface RunExecutionAdapterDeps {
    * running process.
    */
   processRegistry?: CliProcessRegistry;
+}
+
+export interface RunDelegationLifecycleProjectorPort {
+  markDelegatedRunRunning(run: RunRecord): Promise<void>;
+  markDelegatedRunTerminal(run: RunRecord): Promise<void>;
 }
 
 export type RunPolicyEnforcer = (
@@ -186,11 +200,16 @@ interface ResolvedRuntimePolicy {
 }
 
 export class RunOrchestrationService {
+  private readonly delegationProjector: RunDelegationLifecycleProjectorPort | null;
+
   constructor(
     private readonly config: ServerConfig,
     private readonly repository: RunExecutionRepositoryPort | PgRunRepository,
     private readonly adapters: RunExecutionAdapterDeps = {},
-  ) {}
+  ) {
+    this.delegationProjector =
+      adapters.delegationProjector ?? AgentGroupRunLifecycleProjector.fromConfig(config);
+  }
 
   async executeRun(input: RunExecutionInput): Promise<RunJobResult> {
     const startedAt = new Date().toISOString();
@@ -209,6 +228,14 @@ export class RunOrchestrationService {
         status: run.status,
         skipped: true,
         skip_reason: "run_already_terminal",
+      };
+    }
+    if (run.status === "waiting_for_dependency") {
+      return {
+        run_id: run.id,
+        status: "waiting_for_dependency",
+        skipped: true,
+        skip_reason: "run_waiting_for_dependency",
       };
     }
 
@@ -248,6 +275,7 @@ export class RunOrchestrationService {
           skip_reason: "run_not_queued",
         };
       }
+      await this.markDelegatedRunRunningBestEffort(running);
 
       // Policy gate + server-owned adapter resolution first. The run row and
       // agent/runtime configuration own the adapter and sandbox level; request
@@ -325,8 +353,77 @@ export class RunOrchestrationService {
         effectiveRun,
         inputWithPreparedRuntime(effectiveInput, preparedRuntime),
       );
-      const adapterTerminalStatus = terminalStatusFromAdapter(adapterResult);
       const completedAt = adapterResult.completed_at ?? new Date().toISOString();
+      const waitingForDependency = waitingForDependencyFromAdapter(adapterResult);
+      if (waitingForDependency) {
+        const waitingRun = await this.repository.markRunWaitingForDependency({
+          run_id: running.id,
+          space_id: running.space_id,
+          output_json: outputJsonWithMaterialization(adapterResult.output_json, [], []),
+          paused_at: completedAt,
+        });
+        if (!waitingRun) {
+          const current = await this.repository.getRun(running.space_id, running.id);
+          const currentStatus = protocolRunStatus(current?.status ?? "cancelled");
+          if (step) await this.updateRunStepStatusBestEffort({
+            step_id: step.id,
+            run_id: running.id,
+            space_id: running.space_id,
+            status: "cancelled",
+            ended_at: completedAt,
+            error_type: "run_cancelled",
+            error_message: "Adapter paused after the run was cancelled; wait state not applied.",
+          });
+          await this.appendRunEventBestEffort({
+            run_id: running.id,
+            space_id: running.space_id,
+            event_type: "adapter_completed",
+            status: "cancelled",
+            step_id: step?.id ?? null,
+            summary: "Adapter paused after the run was cancelled; wait state not applied.",
+            error_code: "run_cancelled",
+            workspace_id: running.workspace_id,
+            metadata_json: {
+              adapter_type: adapterResult.adapter_type,
+              adapter_kind: adapterResult.adapter_kind,
+            },
+          });
+          return {
+            run_id: running.id,
+            status: currentStatus,
+            skipped: true,
+            skip_reason: "run_already_terminal",
+          };
+        }
+        if (step) await this.updateRunStepStatusBestEffort({
+          step_id: step.id,
+          run_id: running.id,
+          space_id: running.space_id,
+          status: "succeeded",
+          ended_at: completedAt,
+          output_summary: "Waiting for room agent results.",
+        });
+        await this.appendRunEventBestEffort({
+          run_id: running.id,
+          space_id: running.space_id,
+          event_type: "adapter_completed",
+          status: "warning",
+          step_id: step?.id ?? null,
+          summary: "Runtime adapter paused while waiting for room agent results.",
+          workspace_id: running.workspace_id,
+          metadata_json: {
+            adapter_type: adapterResult.adapter_type,
+            adapter_kind: adapterResult.adapter_kind,
+            waiting_for_results: waitingForDependency,
+          },
+        });
+        return {
+          run_id: waitingRun.id,
+          status: "waiting_for_dependency",
+          metadata_json: { waiting_for_results: waitingForDependency } as RunJobResult["metadata_json"],
+        };
+      }
+      const adapterTerminalStatus = terminalStatusFromAdapter(adapterResult);
       const materialization = this.adapters.materializer
         ? await this.adapters.materializer.materializeAdapterResult({
             run: running,
@@ -396,6 +493,7 @@ export class RunOrchestrationService {
           skip_reason: "run_already_terminal",
         };
       }
+      let finalTerminalRun = terminalRun;
       await this.appendMaterializationEvents(running, materialization.items);
       if (step) await this.updateRunStepStatusBestEffort({
         step_id: step.id,
@@ -442,10 +540,14 @@ export class RunOrchestrationService {
               error_code: finalization.error_code ?? "finalization_failed",
               error_message: finalization.error_message ?? "Run finalization failed.",
             });
-            if (degraded) returnedStatus = "degraded";
+            if (degraded) {
+              returnedStatus = "degraded";
+              finalTerminalRun = degraded;
+            }
           }
         }
       }
+      await this.markDelegatedRunTerminalBestEffort(finalTerminalRun);
 
       return {
         run_id: running.id,
@@ -472,7 +574,7 @@ export class RunOrchestrationService {
       }
       const errorCode =
         error instanceof RunPreparationError ? error.code : "run_orchestration_failed";
-      await this.repository.markRunTerminal({
+      const failedRun = await this.repository.markRunTerminal({
         run_id: run.id,
         space_id: run.space_id,
         status: "failed",
@@ -486,6 +588,7 @@ export class RunOrchestrationService {
         completed_at: completedAt,
         usage_json: {},
       });
+      if (failedRun) await this.markDelegatedRunTerminalBestEffort(failedRun);
       if (step) {
         await this.updateRunStepStatusBestEffort({
           step_id: step.id,
@@ -538,7 +641,7 @@ export class RunOrchestrationService {
         error: "Run not found in this space.",
       };
     }
-    // queued, running, and waiting_for_review runs are cancellable;
+    // queued, running, waiting_for_review, and waiting_for_dependency runs are cancellable;
     // hard-terminal runs are a no-op.
     if (isHardTerminalRunStatus(run.status)) {
       return {
@@ -585,6 +688,7 @@ export class RunOrchestrationService {
         skip_reason: "run_already_terminal",
       };
     }
+    await this.markDelegatedRunTerminalBestEffort(updated);
     // Cancellation evidence lives on the run row (error_json carries requester
     // + process_terminated); no run_event is appended (event_type has a closed
     // CHECK constraint with no cancel type).
@@ -661,6 +765,7 @@ export class RunOrchestrationService {
           metadata_json: {
             adapter_type: run.adapter_type,
             command_source: input.command_source,
+            trigger_origin: run.trigger_origin,
             credential_kind: "model_provider",
             provider_id: run.model_provider_id,
           },
@@ -707,6 +812,7 @@ export class RunOrchestrationService {
             metadata_json: {
               adapter_type: run.adapter_type,
               command_source: input.command_source,
+              trigger_origin: run.trigger_origin,
               credential_kind: "cli_profile",
               credential_profile_id: credentialProfileId,
             },
@@ -1042,6 +1148,24 @@ export class RunOrchestrationService {
             ...recordValue(item.metadata_json),
           },
         });
+      } else if (item.kind === "delegation") {
+        const metadata = recordValue(item.metadata_json);
+        if (metadata.service_event_written === true) continue;
+        await this.appendRunEventBestEffort({
+          run_id: run.id,
+          space_id: run.space_id,
+          event_type: "delegation_requested",
+          status: materializationEventStatus(item),
+          workspace_id: run.workspace_id,
+          error_code: item.error_code ?? null,
+          error_message: item.error_message ?? null,
+          summary: "Runtime delegation materialization failed",
+          metadata_json: {
+            source: "adapter_output",
+            kind: item.kind,
+            ...metadata,
+          },
+        });
       } else {
         await this.appendRunEventBestEffort({
           run_id: run.id,
@@ -1099,6 +1223,22 @@ export class RunOrchestrationService {
   private async appendRunEventBestEffort(input: RunEventInput): Promise<void> {
     try {
       await this.repository.appendRunEvent(input);
+    } catch {
+      return;
+    }
+  }
+
+  private async markDelegatedRunRunningBestEffort(run: RunRecord): Promise<void> {
+    try {
+      await this.delegationProjector?.markDelegatedRunRunning(run);
+    } catch {
+      return;
+    }
+  }
+
+  private async markDelegatedRunTerminalBestEffort(run: RunRecord): Promise<void> {
+    try {
+      await this.delegationProjector?.markDelegatedRunTerminal(run);
     } catch {
       return;
     }

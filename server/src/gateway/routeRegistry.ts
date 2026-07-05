@@ -38,6 +38,7 @@ import { proposalsModule } from "../modules/proposals";
 import { sessionsModule } from "../modules/sessions";
 import { agentTemplatesModule } from "../modules/agentTemplates";
 import { agentsModule } from "../modules/agents";
+import { agentGroupsModule } from "../modules/agentGroups";
 import { personalMemoryGrantsModule } from "../modules/personalMemoryGrants";
 import { memoryModule } from "../modules/memory";
 import { contextModule } from "../modules/context";
@@ -107,6 +108,7 @@ export const SERVER_MODULES: readonly ServerModule[] = [
   sessionsModule,
   agentTemplatesModule,
   agentsModule,
+  agentGroupsModule,
   personalMemoryGrantsModule,
   memoryModule,
   contextModule,

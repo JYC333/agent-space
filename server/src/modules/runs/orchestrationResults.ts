@@ -47,6 +47,22 @@ export function outputJsonWithMaterialization(
   return sanitizeEvidenceJson(output);
 }
 
+export function waitingForDependencyFromAdapter(
+  result: RunAdapterResultEnvelope,
+): Record<string, unknown> | null {
+  if (!result.success) return null;
+  const waiting = recordValue(recordValue(result.output_json).waiting_for_results);
+  if (waiting.status !== "waiting") return null;
+  const dependsOnRunIds = stringArrayValue(waiting.depends_on_run_ids);
+  if (dependsOnRunIds.length === 0) return null;
+  return sanitizeEvidenceJson({
+    ...waiting,
+    status: "waiting",
+    depends_on_run_ids: dependsOnRunIds,
+    pending_run_ids: stringArrayValue(waiting.pending_run_ids),
+  }) as Record<string, unknown>;
+}
+
 export function materializationEventStatus(
   item: RunMaterializationItemSummary,
 ): "succeeded" | "failed" | "warning" | "skipped" {
@@ -184,6 +200,7 @@ export function protocolRunStatus(status: string): RunStatus | "unknown" {
       "degraded",
       "cancelled",
       "waiting_for_review",
+      "waiting_for_dependency",
     ].includes(status)
   ) {
     return status as RunStatus;
@@ -206,4 +223,11 @@ export function recordValue(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+}
+
+function stringArrayValue(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value
+    .map((item) => typeof item === "string" ? item.trim() : "")
+    .filter((item) => item.length > 0))];
 }

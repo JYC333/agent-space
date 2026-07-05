@@ -174,6 +174,70 @@ CREATE TABLE public.agents (
 
 
 --
+-- Name: agent_run_groups; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.agent_run_groups (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    root_run_id character varying(36),
+    manager_user_id character varying(36) NOT NULL,
+    manager_agent_id character varying(36),
+    title text NOT NULL,
+    goal text NOT NULL,
+    status character varying(32) NOT NULL,
+    budget_json jsonb,
+    policy_snapshot_json jsonb,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    ended_at timestamp with time zone,
+    CONSTRAINT ck_agent_run_groups_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'paused'::character varying, 'succeeded'::character varying, 'failed'::character varying, 'cancelled'::character varying, 'archived'::character varying])::text[])))
+);
+
+
+--
+-- Name: agent_run_group_members; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.agent_run_group_members (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    group_id character varying(36) NOT NULL,
+    agent_id character varying(36) NOT NULL,
+    role character varying(32) NOT NULL,
+    status character varying(32) NOT NULL,
+    capabilities_json jsonb,
+    context_policy_json jsonb,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_agent_run_group_members_role CHECK (((role)::text = ANY ((ARRAY['manager'::character varying, 'planner'::character varying, 'worker'::character varying, 'reviewer'::character varying, 'curator'::character varying, 'observer'::character varying])::text[]))),
+    CONSTRAINT ck_agent_run_group_members_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'disabled'::character varying])::text[])))
+);
+
+
+--
+-- Name: agent_run_messages; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.agent_run_messages (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    group_id character varying(36) NOT NULL,
+    run_id character varying(36),
+    parent_message_id character varying(36),
+    sender_actor_ref_json jsonb NOT NULL,
+    sender_user_id character varying(36),
+    sender_agent_id character varying(36),
+    message_type character varying(32) NOT NULL,
+    content text NOT NULL,
+    mentions_json jsonb,
+    metadata_json jsonb,
+    created_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_agent_run_messages_message_type CHECK (((message_type)::text = ANY ((ARRAY['user_instruction'::character varying, 'agent_message'::character varying, 'delegation_request'::character varying, 'delegation_result'::character varying, 'system_event'::character varying, 'review_note'::character varying])::text[])))
+);
+
+
+--
 -- Name: artifacts; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2032,6 +2096,34 @@ CREATE TABLE public.run_evaluations (
 
 
 --
+-- Name: run_delegations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.run_delegations (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    group_id character varying(36) NOT NULL,
+    parent_run_id character varying(36) NOT NULL,
+    child_run_id character varying(36),
+    request_message_id character varying(36),
+    requesting_agent_id character varying(36) NOT NULL,
+    target_agent_id character varying(36) NOT NULL,
+    requested_by_user_id character varying(36),
+    policy_decision_record_id character varying(36),
+    status character varying(32) NOT NULL,
+    instruction text NOT NULL,
+    reason text,
+    budget_json jsonb,
+    context_policy_json jsonb,
+    result_summary text,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    completed_at timestamp with time zone,
+    CONSTRAINT ck_run_delegations_status CHECK (((status)::text = ANY ((ARRAY['requested'::character varying, 'policy_denied'::character varying, 'queued'::character varying, 'running'::character varying, 'succeeded'::character varying, 'failed'::character varying, 'cancelled'::character varying])::text[])))
+);
+
+
+--
 -- Name: run_events; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2055,7 +2147,7 @@ CREATE TABLE public.run_events (
     metadata_json jsonb,
     created_at timestamp with time zone NOT NULL,
     CONSTRAINT ck_run_events_data_exposure_level CHECK (((data_exposure_level IS NULL) OR ((data_exposure_level)::text = ANY ((ARRAY['local_only'::character varying, 'model_provider'::character varying, 'vendor_platform'::character varying, 'third_party_tools'::character varying, 'unknown'::character varying])::text[])))),
-    CONSTRAINT ck_run_events_event_type CHECK (((event_type)::text = ANY ((ARRAY['context_compiled'::character varying, 'runtime_selected'::character varying, 'credential_granted'::character varying, 'sandbox_created'::character varying, 'policy_checked'::character varying, 'adapter_invoked'::character varying, 'adapter_completed'::character varying, 'artifact_ingested'::character varying, 'patch_collected'::character varying, 'validation_started'::character varying, 'validation_completed'::character varying, 'proposal_created'::character varying, 'evaluation_created'::character varying, 'run_finalized'::character varying])::text[]))),
+    CONSTRAINT ck_run_events_event_type CHECK (((event_type)::text = ANY ((ARRAY['context_compiled'::character varying, 'runtime_selected'::character varying, 'credential_granted'::character varying, 'sandbox_created'::character varying, 'policy_checked'::character varying, 'adapter_invoked'::character varying, 'adapter_completed'::character varying, 'artifact_ingested'::character varying, 'patch_collected'::character varying, 'validation_started'::character varying, 'validation_completed'::character varying, 'proposal_created'::character varying, 'evaluation_created'::character varying, 'run_finalized'::character varying, 'delegation_requested'::character varying, 'delegation_policy_denied'::character varying, 'delegation_queued'::character varying, 'delegation_started'::character varying, 'delegation_completed'::character varying])::text[]))),
     CONSTRAINT ck_run_events_status CHECK (((status)::text = ANY ((ARRAY['pending'::character varying, 'running'::character varying, 'succeeded'::character varying, 'failed'::character varying, 'skipped'::character varying, 'warning'::character varying, 'cancelled'::character varying])::text[]))),
     CONSTRAINT ck_run_events_trust_level CHECK (((trust_level IS NULL) OR ((trust_level)::text = ANY ((ARRAY['high'::character varying, 'medium'::character varying, 'low'::character varying, 'unknown'::character varying])::text[]))))
 );
@@ -2175,8 +2267,12 @@ CREATE TABLE public.runs (
     session_id character varying(36),
     working_dir_id character varying(36),
     parent_run_id character varying(36),
+    root_run_id character varying(36),
+    run_group_id character varying(36),
+    delegation_id character varying(36),
     instructed_by character varying(128),
     instructed_by_user_id character varying(36),
+    instructed_by_agent_id character varying(36),
     run_type character varying(32) NOT NULL,
     trigger_origin character varying(32) NOT NULL,
     status character varying(32) NOT NULL,
@@ -2224,8 +2320,8 @@ CREATE TABLE public.runs (
     CONSTRAINT ck_runs_required_sandbox_level CHECK (((required_sandbox_level)::text = ANY ((ARRAY['none'::character varying, 'dry_run'::character varying, 'ephemeral'::character varying, 'worktree'::character varying, 'one_shot_docker'::character varying])::text[]))),
     CONSTRAINT ck_runs_run_type CHECK (((run_type)::text = ANY ((ARRAY['agent'::character varying, 'system'::character varying, 'workflow'::character varying, 'validation'::character varying, 'reflection'::character varying, 'export'::character varying, 'evolution'::character varying])::text[]))),
     CONSTRAINT ck_runs_source CHECK (((source IS NULL) OR ((source)::text = ANY ((ARRAY['managed'::character varying, 'ide_assist'::character varying, 'manual_import'::character varying, 'remote_import'::character varying, 'scheduled'::character varying, 'webhook'::character varying])::text[])))),
-    CONSTRAINT ck_runs_status CHECK (((status)::text = ANY ((ARRAY['queued'::character varying, 'running'::character varying, 'succeeded'::character varying, 'degraded'::character varying, 'failed'::character varying, 'cancelled'::character varying, 'waiting_for_review'::character varying])::text[]))),
-    CONSTRAINT ck_runs_trigger_origin CHECK (((trigger_origin)::text = ANY ((ARRAY['manual'::character varying, 'automation'::character varying, 'job'::character varying, 'system'::character varying])::text[]))),
+    CONSTRAINT ck_runs_status CHECK (((status)::text = ANY ((ARRAY['queued'::character varying, 'running'::character varying, 'succeeded'::character varying, 'degraded'::character varying, 'failed'::character varying, 'cancelled'::character varying, 'waiting_for_review'::character varying, 'waiting_for_dependency'::character varying])::text[]))),
+    CONSTRAINT ck_runs_trigger_origin CHECK (((trigger_origin)::text = ANY ((ARRAY['manual'::character varying, 'automation'::character varying, 'job'::character varying, 'system'::character varying, 'delegation'::character varying])::text[]))),
     CONSTRAINT ck_runs_trust_level CHECK (((trust_level IS NULL) OR ((trust_level)::text = ANY ((ARRAY['high'::character varying, 'medium'::character varying, 'low'::character varying, 'unknown'::character varying])::text[]))))
 );
 
@@ -3175,11 +3271,67 @@ ALTER TABLE ONLY public.agent_runtime_profiles
 
 
 --
+-- Name: agents uq_agents_space_id_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agents
+    ADD CONSTRAINT uq_agents_space_id_id UNIQUE (space_id, id);
+
+
+--
+-- Name: agent_run_groups uq_agent_run_groups_space_id_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_run_groups
+    ADD CONSTRAINT uq_agent_run_groups_space_id_id UNIQUE (space_id, id);
+
+
+--
+-- Name: agent_run_group_members uq_agent_run_group_members_group_agent; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_run_group_members
+    ADD CONSTRAINT uq_agent_run_group_members_group_agent UNIQUE (group_id, agent_id);
+
+
+--
+-- Name: agent_run_messages uq_agent_run_messages_space_id_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_run_messages
+    ADD CONSTRAINT uq_agent_run_messages_space_id_id UNIQUE (space_id, id);
+
+
+--
 -- Name: agents agents_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.agents
     ADD CONSTRAINT agents_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: agent_run_groups agent_run_groups_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_run_groups
+    ADD CONSTRAINT agent_run_groups_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: agent_run_group_members agent_run_group_members_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_run_group_members
+    ADD CONSTRAINT agent_run_group_members_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: agent_run_messages agent_run_messages_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_run_messages
+    ADD CONSTRAINT agent_run_messages_pkey PRIMARY KEY (id);
 
 
 --
@@ -3802,6 +3954,14 @@ ALTER TABLE ONLY public.policy_decision_records
 
 
 --
+-- Name: policy_decision_records uq_policy_decision_records_space_id_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.policy_decision_records
+    ADD CONSTRAINT uq_policy_decision_records_space_id_id UNIQUE (space_id, id);
+
+
+--
 -- Name: project_workflow_profiles project_workflow_profiles_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3882,6 +4042,22 @@ ALTER TABLE ONLY public.run_evaluations
 
 
 --
+-- Name: run_delegations run_delegations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.run_delegations
+    ADD CONSTRAINT run_delegations_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: run_delegations uq_run_delegations_space_id_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.run_delegations
+    ADD CONSTRAINT uq_run_delegations_space_id_id UNIQUE (space_id, id);
+
+
+--
 -- Name: run_events run_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3927,6 +4103,14 @@ ALTER TABLE ONLY public.run_steps
 
 ALTER TABLE ONLY public.runs
     ADD CONSTRAINT runs_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: runs uq_runs_space_id_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.runs
+    ADD CONSTRAINT uq_runs_space_id_id UNIQUE (space_id, id);
 
 
 --
@@ -4712,6 +4896,62 @@ CREATE INDEX ix_agents_space_id ON public.agents USING btree (space_id);
 --
 
 CREATE INDEX ix_agents_status ON public.agents USING btree (status);
+
+
+--
+-- Name: ix_agent_run_groups_manager_user_updated; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_agent_run_groups_manager_user_updated ON public.agent_run_groups USING btree (space_id, manager_user_id, updated_at);
+
+
+--
+-- Name: ix_agent_run_groups_root_run; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_agent_run_groups_root_run ON public.agent_run_groups USING btree (space_id, root_run_id);
+
+
+--
+-- Name: ix_agent_run_groups_status_updated; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_agent_run_groups_status_updated ON public.agent_run_groups USING btree (space_id, status, updated_at);
+
+
+--
+-- Name: ix_agent_run_group_members_agent; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_agent_run_group_members_agent ON public.agent_run_group_members USING btree (space_id, agent_id);
+
+
+--
+-- Name: ix_agent_run_group_members_group; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_agent_run_group_members_group ON public.agent_run_group_members USING btree (space_id, group_id);
+
+
+--
+-- Name: ix_agent_run_messages_group_created; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_agent_run_messages_group_created ON public.agent_run_messages USING btree (space_id, group_id, created_at);
+
+
+--
+-- Name: ix_agent_run_messages_run_created; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_agent_run_messages_run_created ON public.agent_run_messages USING btree (space_id, run_id, created_at);
+
+
+--
+-- Name: ix_agent_run_messages_sender_agent_created; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_agent_run_messages_sender_agent_created ON public.agent_run_messages USING btree (space_id, sender_agent_id, created_at);
 
 
 --
@@ -7417,6 +7657,48 @@ CREATE INDEX ix_run_evaluations_space_id ON public.run_evaluations USING btree (
 
 
 --
+-- Name: ix_run_delegations_child_run; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_run_delegations_child_run ON public.run_delegations USING btree (space_id, child_run_id);
+
+
+--
+-- Name: ix_run_delegations_group_created; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_run_delegations_group_created ON public.run_delegations USING btree (space_id, group_id, created_at);
+
+
+--
+-- Name: ix_run_delegations_parent_run; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_run_delegations_parent_run ON public.run_delegations USING btree (space_id, parent_run_id);
+
+
+--
+-- Name: ix_run_delegations_requesting_agent_created; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_run_delegations_requesting_agent_created ON public.run_delegations USING btree (space_id, requesting_agent_id, created_at);
+
+
+--
+-- Name: ix_run_delegations_status_updated; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_run_delegations_status_updated ON public.run_delegations USING btree (space_id, status, updated_at);
+
+
+--
+-- Name: ix_run_delegations_target_agent_created; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_run_delegations_target_agent_created ON public.run_delegations USING btree (space_id, target_agent_id, created_at);
+
+
+--
 -- Name: ix_run_events_actor_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -7648,6 +7930,27 @@ CREATE INDEX ix_runs_context_snapshot_id ON public.runs USING btree (context_sna
 
 
 --
+-- Name: ix_runs_delegation_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_runs_delegation_id ON public.runs USING btree (space_id, delegation_id);
+
+
+--
+-- Name: ix_runs_group_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_runs_group_id ON public.runs USING btree (space_id, run_group_id);
+
+
+--
+-- Name: ix_runs_instructed_by_agent_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_runs_instructed_by_agent_id ON public.runs USING btree (space_id, instructed_by_agent_id);
+
+
+--
 -- Name: ix_runs_instructed_by_user_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -7676,6 +7979,13 @@ CREATE INDEX ix_runs_parent_run_id ON public.runs USING btree (parent_run_id);
 
 
 --
+-- Name: ix_runs_parent_run_space; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_runs_parent_run_space ON public.runs USING btree (space_id, parent_run_id);
+
+
+--
 -- Name: ix_runs_project_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -7687,6 +7997,13 @@ CREATE INDEX ix_runs_project_id ON public.runs USING btree (project_id);
 --
 
 CREATE INDEX ix_runs_runtime_profile_id ON public.runs USING btree (runtime_profile_id);
+
+
+--
+-- Name: ix_runs_root_run_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_runs_root_run_id ON public.runs USING btree (space_id, root_run_id);
 
 
 --
@@ -8926,6 +9243,174 @@ ALTER TABLE ONLY public.agents
 
 ALTER TABLE ONLY public.agents
     ADD CONSTRAINT agents_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+
+--
+-- Name: agent_run_groups agent_run_groups_manager_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_run_groups
+    ADD CONSTRAINT agent_run_groups_manager_agent_id_fkey FOREIGN KEY (manager_agent_id) REFERENCES public.agents(id) ON DELETE SET NULL;
+
+
+--
+-- Name: agent_run_groups agent_run_groups_manager_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_run_groups
+    ADD CONSTRAINT agent_run_groups_manager_user_id_fkey FOREIGN KEY (manager_user_id) REFERENCES public.users(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: agent_run_groups agent_run_groups_root_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_run_groups
+    ADD CONSTRAINT agent_run_groups_root_run_id_fkey FOREIGN KEY (root_run_id) REFERENCES public.runs(id) ON DELETE SET NULL;
+
+
+--
+-- Name: agent_run_groups agent_run_groups_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_run_groups
+    ADD CONSTRAINT agent_run_groups_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id) ON DELETE CASCADE;
+
+
+--
+-- Name: agent_run_group_members agent_run_group_members_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_run_group_members
+    ADD CONSTRAINT agent_run_group_members_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agents(id) ON DELETE CASCADE;
+
+
+--
+-- Name: agent_run_group_members agent_run_group_members_group_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_run_group_members
+    ADD CONSTRAINT agent_run_group_members_group_id_fkey FOREIGN KEY (group_id) REFERENCES public.agent_run_groups(id) ON DELETE CASCADE;
+
+
+--
+-- Name: agent_run_group_members agent_run_group_members_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_run_group_members
+    ADD CONSTRAINT agent_run_group_members_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id) ON DELETE CASCADE;
+
+
+--
+-- Name: agent_run_messages agent_run_messages_group_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_run_messages
+    ADD CONSTRAINT agent_run_messages_group_id_fkey FOREIGN KEY (group_id) REFERENCES public.agent_run_groups(id) ON DELETE CASCADE;
+
+
+--
+-- Name: agent_run_messages agent_run_messages_parent_message_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_run_messages
+    ADD CONSTRAINT agent_run_messages_parent_message_id_fkey FOREIGN KEY (parent_message_id) REFERENCES public.agent_run_messages(id) ON DELETE SET NULL;
+
+
+--
+-- Name: agent_run_messages agent_run_messages_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_run_messages
+    ADD CONSTRAINT agent_run_messages_run_id_fkey FOREIGN KEY (run_id) REFERENCES public.runs(id) ON DELETE SET NULL;
+
+
+--
+-- Name: agent_run_messages agent_run_messages_sender_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_run_messages
+    ADD CONSTRAINT agent_run_messages_sender_agent_id_fkey FOREIGN KEY (sender_agent_id) REFERENCES public.agents(id) ON DELETE SET NULL;
+
+
+--
+-- Name: agent_run_messages agent_run_messages_sender_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_run_messages
+    ADD CONSTRAINT agent_run_messages_sender_user_id_fkey FOREIGN KEY (sender_user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: agent_run_messages agent_run_messages_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_run_messages
+    ADD CONSTRAINT agent_run_messages_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id) ON DELETE CASCADE;
+
+
+--
+-- Name: agent_run_groups fk_agent_run_groups_manager_agent_same_space; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_run_groups
+    ADD CONSTRAINT fk_agent_run_groups_manager_agent_same_space FOREIGN KEY (space_id, manager_agent_id) REFERENCES public.agents(space_id, id) ON DELETE SET NULL (manager_agent_id);
+
+
+--
+-- Name: agent_run_groups fk_agent_run_groups_root_run_same_space; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_run_groups
+    ADD CONSTRAINT fk_agent_run_groups_root_run_same_space FOREIGN KEY (space_id, root_run_id) REFERENCES public.runs(space_id, id) ON DELETE SET NULL (root_run_id);
+
+
+--
+-- Name: agent_run_group_members fk_agent_run_group_members_agent_same_space; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_run_group_members
+    ADD CONSTRAINT fk_agent_run_group_members_agent_same_space FOREIGN KEY (space_id, agent_id) REFERENCES public.agents(space_id, id) ON DELETE CASCADE;
+
+
+--
+-- Name: agent_run_group_members fk_agent_run_group_members_group_same_space; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_run_group_members
+    ADD CONSTRAINT fk_agent_run_group_members_group_same_space FOREIGN KEY (space_id, group_id) REFERENCES public.agent_run_groups(space_id, id) ON DELETE CASCADE;
+
+
+--
+-- Name: agent_run_messages fk_agent_run_messages_group_same_space; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_run_messages
+    ADD CONSTRAINT fk_agent_run_messages_group_same_space FOREIGN KEY (space_id, group_id) REFERENCES public.agent_run_groups(space_id, id) ON DELETE CASCADE;
+
+
+--
+-- Name: agent_run_messages fk_agent_run_messages_parent_same_space; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_run_messages
+    ADD CONSTRAINT fk_agent_run_messages_parent_same_space FOREIGN KEY (space_id, parent_message_id) REFERENCES public.agent_run_messages(space_id, id) ON DELETE SET NULL (parent_message_id);
+
+
+--
+-- Name: agent_run_messages fk_agent_run_messages_run_same_space; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_run_messages
+    ADD CONSTRAINT fk_agent_run_messages_run_same_space FOREIGN KEY (space_id, run_id) REFERENCES public.runs(space_id, id) ON DELETE SET NULL (run_id);
+
+
+--
+-- Name: agent_run_messages fk_agent_run_messages_sender_agent_same_space; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_run_messages
+    ADD CONSTRAINT fk_agent_run_messages_sender_agent_same_space FOREIGN KEY (space_id, sender_agent_id) REFERENCES public.agents(space_id, id) ON DELETE SET NULL (sender_agent_id);
 
 
 --
@@ -11017,6 +11502,134 @@ ALTER TABLE ONLY public.run_evaluations
 
 
 --
+-- Name: run_delegations run_delegations_child_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.run_delegations
+    ADD CONSTRAINT run_delegations_child_run_id_fkey FOREIGN KEY (child_run_id) REFERENCES public.runs(id) ON DELETE SET NULL;
+
+
+--
+-- Name: run_delegations run_delegations_group_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.run_delegations
+    ADD CONSTRAINT run_delegations_group_id_fkey FOREIGN KEY (group_id) REFERENCES public.agent_run_groups(id) ON DELETE CASCADE;
+
+
+--
+-- Name: run_delegations run_delegations_parent_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.run_delegations
+    ADD CONSTRAINT run_delegations_parent_run_id_fkey FOREIGN KEY (parent_run_id) REFERENCES public.runs(id) ON DELETE CASCADE;
+
+
+--
+-- Name: run_delegations run_delegations_policy_decision_record_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.run_delegations
+    ADD CONSTRAINT run_delegations_policy_decision_record_id_fkey FOREIGN KEY (policy_decision_record_id) REFERENCES public.policy_decision_records(id) ON DELETE SET NULL;
+
+
+--
+-- Name: run_delegations run_delegations_request_message_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.run_delegations
+    ADD CONSTRAINT run_delegations_request_message_id_fkey FOREIGN KEY (request_message_id) REFERENCES public.agent_run_messages(id) ON DELETE SET NULL;
+
+
+--
+-- Name: run_delegations run_delegations_requested_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.run_delegations
+    ADD CONSTRAINT run_delegations_requested_by_user_id_fkey FOREIGN KEY (requested_by_user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: run_delegations run_delegations_requesting_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.run_delegations
+    ADD CONSTRAINT run_delegations_requesting_agent_id_fkey FOREIGN KEY (requesting_agent_id) REFERENCES public.agents(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: run_delegations run_delegations_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.run_delegations
+    ADD CONSTRAINT run_delegations_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id) ON DELETE CASCADE;
+
+
+--
+-- Name: run_delegations run_delegations_target_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.run_delegations
+    ADD CONSTRAINT run_delegations_target_agent_id_fkey FOREIGN KEY (target_agent_id) REFERENCES public.agents(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: run_delegations fk_run_delegations_child_run_same_space; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.run_delegations
+    ADD CONSTRAINT fk_run_delegations_child_run_same_space FOREIGN KEY (space_id, child_run_id) REFERENCES public.runs(space_id, id) ON DELETE SET NULL (child_run_id);
+
+
+--
+-- Name: run_delegations fk_run_delegations_group_same_space; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.run_delegations
+    ADD CONSTRAINT fk_run_delegations_group_same_space FOREIGN KEY (space_id, group_id) REFERENCES public.agent_run_groups(space_id, id) ON DELETE CASCADE;
+
+
+--
+-- Name: run_delegations fk_run_delegations_parent_run_same_space; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.run_delegations
+    ADD CONSTRAINT fk_run_delegations_parent_run_same_space FOREIGN KEY (space_id, parent_run_id) REFERENCES public.runs(space_id, id) ON DELETE CASCADE;
+
+
+--
+-- Name: run_delegations fk_run_delegations_policy_decision_same_space; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.run_delegations
+    ADD CONSTRAINT fk_run_delegations_policy_decision_same_space FOREIGN KEY (space_id, policy_decision_record_id) REFERENCES public.policy_decision_records(space_id, id) ON DELETE SET NULL (policy_decision_record_id);
+
+
+--
+-- Name: run_delegations fk_run_delegations_request_message_same_space; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.run_delegations
+    ADD CONSTRAINT fk_run_delegations_request_message_same_space FOREIGN KEY (space_id, request_message_id) REFERENCES public.agent_run_messages(space_id, id) ON DELETE SET NULL (request_message_id);
+
+
+--
+-- Name: run_delegations fk_run_delegations_requesting_agent_same_space; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.run_delegations
+    ADD CONSTRAINT fk_run_delegations_requesting_agent_same_space FOREIGN KEY (space_id, requesting_agent_id) REFERENCES public.agents(space_id, id);
+
+
+--
+-- Name: run_delegations fk_run_delegations_target_agent_same_space; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.run_delegations
+    ADD CONSTRAINT fk_run_delegations_target_agent_same_space FOREIGN KEY (space_id, target_agent_id) REFERENCES public.agents(space_id, id);
+
+
+--
 -- Name: run_events run_events_actor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -11217,6 +11830,22 @@ ALTER TABLE ONLY public.runs
 
 
 --
+-- Name: runs runs_delegation_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.runs
+    ADD CONSTRAINT runs_delegation_id_fkey FOREIGN KEY (delegation_id) REFERENCES public.run_delegations(id) ON DELETE SET NULL;
+
+
+--
+-- Name: runs runs_instructed_by_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.runs
+    ADD CONSTRAINT runs_instructed_by_agent_id_fkey FOREIGN KEY (instructed_by_agent_id) REFERENCES public.agents(id) ON DELETE SET NULL;
+
+
+--
 -- Name: runs runs_instructed_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -11249,6 +11878,22 @@ ALTER TABLE ONLY public.runs
 
 
 --
+-- Name: runs runs_root_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.runs
+    ADD CONSTRAINT runs_root_run_id_fkey FOREIGN KEY (root_run_id) REFERENCES public.runs(id) ON DELETE SET NULL;
+
+
+--
+-- Name: runs runs_run_group_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.runs
+    ADD CONSTRAINT runs_run_group_id_fkey FOREIGN KEY (run_group_id) REFERENCES public.agent_run_groups(id) ON DELETE SET NULL;
+
+
+--
 -- Name: runs runs_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -11270,6 +11915,46 @@ ALTER TABLE ONLY public.runs
 
 ALTER TABLE ONLY public.runs
     ADD CONSTRAINT runs_workspace_id_fkey FOREIGN KEY (space_id, workspace_id) REFERENCES public.workspaces(space_id, id);
+
+
+--
+-- Name: runs fk_runs_delegation_same_space; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.runs
+    ADD CONSTRAINT fk_runs_delegation_same_space FOREIGN KEY (space_id, delegation_id) REFERENCES public.run_delegations(space_id, id) ON DELETE SET NULL (delegation_id);
+
+
+--
+-- Name: runs fk_runs_instructed_by_agent_same_space; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.runs
+    ADD CONSTRAINT fk_runs_instructed_by_agent_same_space FOREIGN KEY (space_id, instructed_by_agent_id) REFERENCES public.agents(space_id, id) ON DELETE SET NULL (instructed_by_agent_id);
+
+
+--
+-- Name: runs fk_runs_parent_run_same_space; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.runs
+    ADD CONSTRAINT fk_runs_parent_run_same_space FOREIGN KEY (space_id, parent_run_id) REFERENCES public.runs(space_id, id);
+
+
+--
+-- Name: runs fk_runs_root_run_same_space; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.runs
+    ADD CONSTRAINT fk_runs_root_run_same_space FOREIGN KEY (space_id, root_run_id) REFERENCES public.runs(space_id, id) ON DELETE SET NULL (root_run_id);
+
+
+--
+-- Name: runs fk_runs_run_group_same_space; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.runs
+    ADD CONSTRAINT fk_runs_run_group_same_space FOREIGN KEY (space_id, run_group_id) REFERENCES public.agent_run_groups(space_id, id) ON DELETE SET NULL (run_group_id);
 
 
 --

@@ -402,6 +402,15 @@ export const MODULE_REGISTRY: Module[] = [
     component: lazy(() => import('./job_queue/JobQueuePage')),
   },
   {
+    id: 'agent_groups', label: 'Rooms', path: '/agent-groups',
+    section: 'agents', group: 'agents', icon: 'messages-square',
+    description: 'Coordinate agent-to-agent group runs with manager oversight, timeline audit, and proposal review links.',
+    source: 'built_in', capabilityId: undefined,
+    enabled: true, visible: true, planned: false,
+    perspectiveType: 'space-scoped',
+    component: lazy(() => import('./agent_groups/AgentGroupsPage')),
+  },
+  {
     id: 'evolution', label: 'Evolution', path: '/evolution',
     section: 'agents', group: 'agents', icon: 'git-branch',
     description: 'Review evolution targets, signals, runs, proposals, and validation metrics.',

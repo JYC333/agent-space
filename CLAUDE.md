@@ -45,7 +45,7 @@ change.
   owner. The Compose service name remains `server`.
 - Memory writes go through proposal -> approval; agents do not directly write
   active memory.
-- Credentials follow ADR 0010 channel isolation. Do not pass provider API keys
+- Credentials follow ADR 0008 channel isolation. Do not pass provider API keys
   through ambient env or CLI subprocess env.
 - `.agent/reports/` entries are temporary reports, not source of truth.
 

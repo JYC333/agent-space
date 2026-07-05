@@ -118,6 +118,7 @@ export const RUN_STATUS_VALUES = [
   "degraded",
   "cancelled",
   "waiting_for_review",
+  "waiting_for_dependency",
 ] as const;
 export const RunStatusSchema = z.enum(RUN_STATUS_VALUES);
 export type RunStatus = z.infer<typeof RunStatusSchema>;
@@ -233,7 +234,7 @@ export type RunAdapterResultEnvelope = z.infer<
 
 export const RunMaterializationItemSummarySchema = z
   .object({
-    kind: z.enum(["artifact", "proposal", "activity", "code_patch"]),
+    kind: z.enum(["artifact", "proposal", "activity", "code_patch", "delegation"]),
     status: z.enum(["succeeded", "failed", "warning", "skipped"]),
     artifact_id: IdSchema.nullish(),
     proposal_id: IdSchema.nullish(),
@@ -305,6 +306,10 @@ export const RunJobPayloadSchema = z
     instruction: z.string().nullish(),
     set_task_in_progress: z.boolean().optional(),
     parent_run_id: IdSchema.nullish(),
+    root_run_id: IdSchema.nullish(),
+    run_group_id: IdSchema.nullish(),
+    delegation_id: IdSchema.nullish(),
+    instructed_by_agent_id: IdSchema.nullish(),
     adapter_type: z.string().nullish(),
   })
   .refine(
@@ -359,6 +364,11 @@ export const RunTraceSafeSummarySchema = z
     adapter_type: z.string().nullish(),
     model_provider_id: IdSchema.nullish(),
     required_sandbox_level: z.string().nullish(),
+    parent_run_id: IdSchema.nullish(),
+    root_run_id: IdSchema.nullish(),
+    run_group_id: IdSchema.nullish(),
+    delegation_id: IdSchema.nullish(),
+    instructed_by_agent_id: IdSchema.nullish(),
     started_at: ISODateTimeSchema.nullish(),
     completed_at: ISODateTimeSchema.nullish(),
     error_code: RunExecutionErrorCodeSchema.nullish(),

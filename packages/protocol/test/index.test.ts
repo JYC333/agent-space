@@ -50,6 +50,8 @@ describe("index smoke import", () => {
     expect(protocol.RuntimeCredentialResolveRequestSchema).toBeDefined();
     expect(protocol.RuntimeHostExecuteRequestSchema).toBeDefined();
     expect(protocol.RuntimeHostExecuteResponseSchema).toBeDefined();
+    expect(protocol.AgentRunGroupSchema).toBeDefined();
+    expect(protocol.RunDelegationSchema).toBeDefined();
     expect(protocol.ProposalOutSchema).toBeDefined();
     expect(protocol.ProposalAcceptOutSchema).toBeDefined();
     expect(protocol.SessionOutSchema).toBeDefined();

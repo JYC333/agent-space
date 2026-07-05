@@ -21,7 +21,7 @@ export interface ProviderSynthesizerOptions {
 
 /**
  * Production Context Brief synthesizer. Routes the answer-generation call through
- * the `retrieval_synthesis` provider task policy (ADR 0010 credential channel).
+ * the `retrieval_synthesis` provider task policy (ADR 0008 credential channel).
  * Resilient by design: any provider failure, missing task policy, missing provider,
  * or unparseable response returns `null` so buildBrief degrades to a
  * deterministic-only brief.

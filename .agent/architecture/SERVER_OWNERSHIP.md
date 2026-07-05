@@ -22,6 +22,7 @@ Rules:
 | Runtime adapters | `RuntimeAdapterSpec` catalog, adapter-type semantics, runtime-tool binding reads, server runtime-host/tool integration | `one_shot_docker` and managed API tool execution |
 | Agents | Agent CRUD (`/agents*`), current-version/version list/read/restore, config updates as immutable `agent_versions`, default Assistant ensure/read, Assistant settings, agent-scoped run list/read subresources, catalog-backed agent template list/version reads, and create-from-template | Template catalog persistence remains catalog-file-backed; DB-backed template authoring is not implemented |
 | Runs | Run creation via agent subresources, top-level run list/detail/status/trace, activity/artifact/proposal child read surfaces, execute/stop commands, internal execute port, deterministic post-run evaluation/finalization, `agent_run` worker dispatch, run execution evidence writes, native context.prepare consumption, and server worktree/ephemeral sandbox preparation for CLI runs | — |
+| Agent group runs | `/agent-groups*` manager-owned room creation/list/detail, natural-language room messages with server-validated structured recipient segments, timeline/trace read models, pause/resume/cancel controls, authorized agent-to-agent delegation through `agent.delegate` and `run.spawn_child`, `agent.wait_for_results` same-room dependency waits, and delegation/wait lifecycle projection back into room messages/run events | Public direct child-run spawning and unmanaged agent-to-agent execution outside a group run |
 | Jobs | Generic durable `jobs` queue (`/jobs*`), unified worker registry (`agent_run`, `memory_consolidation`, `daily_capture_report`, `context_digest_refresh`, `session_condense`), stuck-job reclaim, and stale running-run recovery at worker startup | — |
 | Scheduler | Scheduler-owned `scheduler_tasks` cursor/state store, in-process scheduler registry, background service startup composition, non-overlapping scheduler task execution, and scheduled ticks for daily capture report, automation, memory access-log retention, memory maintenance, intake extraction polling, Custom Source polling/reclaim, and backup | — |
 | Settings | Generic scoped `settings` persistence for low-frequency instance, space, user, and space-user settings via `ScopedSettingsStore`; owning product modules define typed descriptors, authorization, validation, and DTOs | Feature-specific settings tables are not allowed for new low-frequency settings |
@@ -63,7 +64,7 @@ The active route-registered server modules are: `system`, `auth`,
 `networkProfiles`, `providers`, `runtime_tool_bindings`, `runtimeHost`, `runs`,
 `artifacts`, `projects`, `policy`, `proposals`, `sessions`, `agentTemplates`, `agents`,
 `personalMemoryGrants`, `memory`, `context`, `contextOps`, `askSpace`, `activity`,
-`source_pointers`, `intake`, `knowledge`, `evolution`, `tasks`, `workspace_profiles`,
+`source_pointers`, `intake`, `knowledge`, `agentGroups`, `evolution`, `tasks`, `workspace_profiles`,
 `workspaces`, `jobs`, `automations`, `dailyReports`, `backups`, `deployment`,
 `frontendSupport`, and `plugins`.
 `runtimeAdapters` is a first-class code-only domain consumed by `runs`,

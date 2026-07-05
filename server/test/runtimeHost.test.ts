@@ -148,6 +148,44 @@ describe("runtime host internal route", () => {
     ]);
   });
 
+  it("returns provider network errors instead of a generic runtime host failure", async () => {
+    const calls: string[] = [];
+    __setProviderCommandStoreForTests(fakeStore(calls));
+    __setProviderHttpClientForTests({
+      async fetch(_url, init) {
+        calls.push(`fetch:${JSON.parse(String(init?.body)).model}`);
+        const error = new Error("fetch failed") as Error & { cause?: Error };
+        error.cause = new Error("getaddrinfo ENOTFOUND api.example.test");
+        throw error;
+      },
+    });
+    app = buildServer(config(), { logger: false });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/runtime-host/execute",
+      headers: { "x-agent-space-internal-token": "internal-token" },
+      payload: requestBody(),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      success: false,
+      error_code: "provider_network_error",
+      exit_code: 1,
+    });
+    expect(res.json().error_text).toContain("Provider network request failed");
+    expect(res.json().error_text).toContain("getaddrinfo ENOTFOUND api.example.test");
+    expect(res.json().error_text).not.toContain("server runtime host provider invocation failed");
+    expect(calls).toEqual([
+      "task:runtime_host",
+      "target:provider-1",
+      "fetch:gpt-4o-mini",
+      "fetch:gpt-4o-mini",
+      "outcome:member-1:failure",
+    ]);
+  });
+
   it("forwards native messages to the provider when supplied", async () => {
     const calls: string[] = [];
     const bodies: Array<Record<string, unknown>> = [];

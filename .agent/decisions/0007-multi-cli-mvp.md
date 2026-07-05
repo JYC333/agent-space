@@ -1,4 +1,4 @@
-# ADR 0008 - Managed Multi-CLI Runtime Usage
+# ADR 0007 - Managed Multi-CLI Runtime Usage
 
 ## Status
 

@@ -234,7 +234,7 @@ export type SkillImportRequest = z.infer<typeof SkillImportRequestSchema>;
 export const SkillConvertToCapabilityRequestSchema = z.object({
   capability_id: z.string().min(1).optional(),
   namespace: z.string().min(1).optional(),
-  // Reserved for the future proposal-gated enablement flow (ADR 0011).
+  // Reserved for the future proposal-gated enablement flow (ADR 0009).
   // Conversion currently only produces a disabled draft; supplying this field
   // is rejected until capability enablement goes through proposal review.
   enable_for_project_id: IdSchema.nullish(),

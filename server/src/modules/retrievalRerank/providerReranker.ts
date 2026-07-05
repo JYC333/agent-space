@@ -23,7 +23,7 @@ export interface ProviderRerankerOptions {
 
 /**
  * Production reranker. Routes the relevance-judging call through the
- * `retrieval_rerank` provider task policy (ADR 0010 credential channel), exactly
+ * `retrieval_rerank` provider task policy (ADR 0008 credential channel), exactly
  * like the embedding and public-summary auxiliary tasks. It is deliberately
  * resilient: any provider failure, missing provider, or unparseable response
  * returns `null` so search degrades to the deterministic fused order.

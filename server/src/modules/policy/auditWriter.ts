@@ -37,6 +37,7 @@ const INSERT_SQL = `
     $11, $12, $13, $14, $15,
     $16, $17, $18, $19
   )
+  RETURNING id
 `;
 
 /**
@@ -47,9 +48,9 @@ const INSERT_SQL = `
 export async function writePolicyAudit(
   databaseUrl: string,
   env: PolicyAuditEnvelope,
-): Promise<void> {
+): Promise<string> {
   const pool = getDbPool(databaseUrl);
-  await pool.query(INSERT_SQL, [
+  const result = await pool.query<{ id: string }>(INSERT_SQL, [
     env.space_id ?? null,
     env.actor_type ?? null,
     env.actor_id ?? null,
@@ -70,4 +71,9 @@ export async function writePolicyAudit(
     env.metadata_json ?? null,
     env.created_at,
   ]);
+  const row = result.rows[0];
+  if (!row) {
+    throw new PolicyAuditPersistError(env.action, env.actor_id ?? null);
+  }
+  return row.id;
 }

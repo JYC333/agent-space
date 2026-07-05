@@ -193,11 +193,17 @@ Not wired to business code. The registry is **not** full RBAC/ABAC.
 
 **Actions NOT in the registry at all** (no placeholder yet — must fail-closed as unknown):
 - `agent.delegate`
+- `agent.wait_for_results`
 
-`agent.delegate` is not registered. Agent-to-agent delegation is deferred; future
-design should use a server child-run concept such as `run.spawn_child` or
-`run.create_child`. `runtime.execute` is separate from delegation and only controls
-adapter execution.
+`agent.delegate` is not registered. Agent-to-agent delegation uses the server
+child-run action `run.spawn_child` inside `AgentGroupRunService`. Public callers
+cannot directly spawn agent-origin child runs; the service proves same-space
+group membership, active statuses, parent-run agent identity, root lineage, and
+capacity before calling `PolicyGateway.enforce()`. `agent.wait_for_results` is
+also not a registry action; it can only reference same-space, same-room runs
+from the currently executing room run and parks that run until dependencies are
+terminal. `runtime.execute` is separate from delegation/waiting and only
+controls adapter execution.
 
 ## Approval Resolver
 
@@ -345,7 +351,7 @@ return DENY with `audit_code="unknown_policy_action"`. `BUILTIN_RULES` evaluated
 1. `rule_space_boundary` — deny cross-space access
 2. `rule_agent_status` — deny `runtime.execute` and `memory.*` for non-active agents
 3. `rule_memory_scope` — `require_approval` for `memory.create/update/archive` to protected scopes
-4. `rule_use_credential` — same-space manual ALLOW; cross-space DENY (CRITICAL); automation REQUIRE_APPROVAL
+4. `rule_use_credential` — same-space manual/api/delegation ALLOW; cross-space DENY (CRITICAL); automation REQUIRE_APPROVAL
 5. `rule_tool_permission` — deny `runtime.execute` if tool/adapter not in agent allowlist
 6. `rule_workspace_write_patch` — `require_approval` without proposal_id; `allow` with valid proposal
 7. `rule_automation` — allow automation.create/update/fire for admin/owner; deny lower roles
@@ -366,5 +372,6 @@ Falls through to registry default only for **known** registered actions when no 
 - `memory.create/update/archive` are WIRED_VIA_PROPOSAL — enforced only through `proposal.apply`.
 - Extend approval resolver with per-user/per-project approval capabilities when needed.
 - Space-level policy row overrides (currently domain-specific only).
-- Future multi-agent child-run creation: design as `run.spawn_child` / `run.create_child`
-  with explicit server policy and evaluation gates.
+- Extend multi-agent child-run lifecycle projection so `RunDelegation.status`
+  follows child run terminal states directly, rather than only through read-time
+  active-run joins.

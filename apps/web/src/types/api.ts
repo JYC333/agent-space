@@ -678,6 +678,7 @@ export type RunLifecycleStatus =
   | 'cancelled'
   | 'degraded'
   | 'waiting_for_review'
+  | 'waiting_for_dependency'
 
 export type MessageRole      = 'user' | 'assistant' | 'system' | 'tool'
 export type WorkspaceStatus  = 'active' | 'archived'
@@ -2138,6 +2139,143 @@ export interface RunStatusOut {
   started_at: string | null
   ended_at: string | null
   error_message: string | null
+}
+
+export interface AgentRunMention {
+  agent_id: string
+  handle?: string | null
+  display_name?: string | null
+}
+
+export interface AgentRunGroup {
+  id: string
+  space_id: string
+  root_run_id: string | null
+  manager_user_id: string
+  manager_agent_id: string | null
+  title: string
+  goal: string
+  status: string
+  budget_json: Record<string, unknown> | null
+  policy_snapshot_json: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+  ended_at: string | null
+}
+
+export interface AgentRunGroupMember {
+  id: string
+  space_id: string
+  group_id: string
+  agent_id: string
+  role: string
+  status: string
+  capabilities_json: Record<string, unknown> | null
+  context_policy_json: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
+export interface AgentRunMessage {
+  id: string
+  space_id: string
+  group_id: string
+  run_id: string | null
+  parent_message_id: string | null
+  sender_actor_ref_json: Record<string, unknown>
+  sender_user_id: string | null
+  sender_agent_id: string | null
+  message_type: string
+  content: string
+  mentions_json: AgentRunMention[]
+  metadata_json: Record<string, unknown> | null
+  created_at: string
+}
+
+export interface RunDelegation {
+  id: string
+  space_id: string
+  group_id: string
+  parent_run_id: string
+  child_run_id: string | null
+  request_message_id: string | null
+  requesting_agent_id: string
+  target_agent_id: string
+  requested_by_user_id: string | null
+  policy_decision_record_id: string | null
+  status: string
+  instruction: string
+  reason: string | null
+  budget_json: Record<string, unknown> | null
+  context_policy_json: Record<string, unknown> | null
+  result_summary: string | null
+  created_at: string
+  updated_at: string
+  completed_at: string | null
+}
+
+export interface CreateAgentRunGroupRequest {
+  space_id: string
+  title: string
+  goal?: string
+  manager_agent_id: string
+  member_agent_ids: string[]
+  budget_json?: Record<string, unknown> | null
+  context_policy_json?: Record<string, unknown> | null
+}
+
+export interface CreateAgentRunGroupResponse {
+  group: AgentRunGroup
+  members: AgentRunGroupMember[]
+}
+
+export interface UpdateAgentRunGroupRequest {
+  space_id: string
+  title?: string
+  goal?: string
+}
+
+export interface UpdateAgentRunGroupResponse {
+  group: AgentRunGroup
+}
+
+export type AgentRunMessageRoutingMode = 'direct' | 'agent_coordination'
+
+export interface AgentRunMessageRecipientSegment {
+  recipient_agent_ids: string[]
+  content: string
+}
+
+export interface SendAgentRunGroupMessageRequest {
+  space_id: string
+  group_id: string
+  content: string
+  parent_message_id?: string | null
+  routing_mode?: AgentRunMessageRoutingMode
+  recipient_segments?: AgentRunMessageRecipientSegment[] | null
+  metadata_json?: Record<string, unknown> | null
+}
+
+export interface SendAgentRunGroupMessageResponse {
+  message: AgentRunMessage
+}
+
+export interface AgentRunGroupTimeline {
+  group: AgentRunGroup
+  members: AgentRunGroupMember[]
+  messages: AgentRunMessage[]
+  delegations: RunDelegation[]
+}
+
+export interface AgentRunGroupTrace {
+  group: AgentRunGroup
+  members: AgentRunGroupMember[]
+  root_run_id: string | null
+  timeline: AgentRunGroupTimeline
+  child_run_ids: string[]
+  artifact_ids: string[]
+  proposal_ids: string[]
+  policy_decision_record_ids: string[]
 }
 
 export interface ArtifactSummary {

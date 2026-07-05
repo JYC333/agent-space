@@ -234,9 +234,9 @@ export class PgActivityRepository {
     const now = new Date().toISOString();
     const result = await this.db.query<ActivityRow>(
       `UPDATE activity_records
-          SET status = $3,
-              processed_at = CASE WHEN $3 = 'processed' THEN $4::timestamptz ELSE processed_at END,
-              discarded_at = CASE WHEN $3 = 'archived' THEN $4::timestamptz ELSE discarded_at END,
+          SET status = $3::varchar(32),
+              processed_at = CASE WHEN $3::varchar(32) = 'processed' THEN $4::timestamptz ELSE processed_at END,
+              discarded_at = CASE WHEN $3::varchar(32) = 'archived' THEN $4::timestamptz ELSE discarded_at END,
               updated_at = $4
         WHERE id = $1 AND space_id = $2
         RETURNING ${ACTIVITY_COLUMNS}`,

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { loadConfig } from "../src/config";
 import {
   RunOrchestrationService,
+  type RunDelegationLifecycleProjectorPort,
   type RunExecutionRepositoryPort,
   type RunPolicyEnforcer,
 } from "../src/modules/runs/orchestrationService";
@@ -140,6 +141,23 @@ class FakeRepo implements RunExecutionRepositoryPort {
     this.calls.push(`waiting_for_review:${input.approval_code}`);
     if (!this.run || this.run.status !== "running") return null;
     this.run = { ...this.run, status: "waiting_for_review" };
+    return this.run;
+  }
+
+  async markRunWaitingForDependency(input: {
+    run_id: string;
+    space_id: string;
+    output_json: unknown;
+    paused_at: string;
+  }): Promise<RunRecord | null> {
+    this.calls.push(`waiting_for_dependency:${input.run_id}`);
+    if (!this.run || this.run.status !== "running") return null;
+    this.run = {
+      ...this.run,
+      status: "waiting_for_dependency",
+      output_json: input.output_json,
+      updated_at: input.paused_at,
+    };
     return this.run;
   }
 
@@ -283,6 +301,22 @@ class FakeWorkspaceManager implements RunWorkspaceManagerPort {
   }
 }
 
+class FakeDelegationProjector implements RunDelegationLifecycleProjectorPort {
+  running: RunRecord[] = [];
+  terminal: RunRecord[] = [];
+  fail = false;
+
+  async markDelegatedRunRunning(run: RunRecord): Promise<void> {
+    if (this.fail) throw new Error("delegation projection failed");
+    this.running.push(run);
+  }
+
+  async markDelegatedRunTerminal(run: RunRecord): Promise<void> {
+    if (this.fail) throw new Error("delegation projection failed");
+    this.terminal.push(run);
+  }
+}
+
 describe("RunOrchestrationService", () => {
   it("executes a managed API run with setup writes before adapter invocation and terminal writes after", async () => {
     const repo = new FakeRepo();
@@ -349,6 +383,123 @@ describe("RunOrchestrationService", () => {
       output_text: "done",
       usage_json: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
     });
+  });
+
+  it("marks a managed API run waiting when the adapter pauses for agent results", async () => {
+    const repo = new FakeRepo();
+    repo.run = run({
+      run_group_id: "group-1",
+      root_run_id: "run-root",
+      parent_run_id: "run-root",
+      system_prompt: "You are the manager.",
+    });
+    const service = new RunOrchestrationService(config(), repo, {
+      policyEnforcer: allowPolicy,
+      managedApi: {
+        executeRuntimeHost: async () => ({
+          success: true,
+          stdout: "",
+          stderr: "",
+          output_text: "",
+          output_json: {
+            waiting_for_results: {
+              status: "waiting",
+              scope: "current_turn",
+              depends_on_run_ids: ["run-reviewer"],
+              pending_run_ids: ["run-reviewer"],
+            },
+          },
+          exit_code: 0,
+          error_text: null,
+          error_code: null,
+          started_at: "2026-06-12T10:00:00.000Z",
+          completed_at: "2026-06-12T10:00:01.000Z",
+          model: "gpt-4o-mini",
+          usage: null,
+          events: [],
+          adapter_metadata: { adapter_type: "ts_agent_host" },
+          adapter_log_json: null,
+        }),
+      },
+    });
+
+    await expect(
+      service.executeRun({
+        run_id: "run-1",
+        space_id: "space-1",
+        worker_id: "worker-1",
+        job_id: "job-1",
+        command_source: "job",
+      }),
+    ).resolves.toMatchObject({ run_id: "run-1", status: "waiting_for_dependency" });
+
+    expect(repo.terminalUpdates).toEqual([]);
+    expect(repo.calls).toEqual([
+      "get:space-1:run-1",
+      "lock:run-1:worker-1:job-1",
+      "running:run-1",
+      "actor:job",
+      "step:adapter_started:running",
+      "event:adapter_invoked:running",
+      "waiting_for_dependency:run-1",
+      "step_done:succeeded",
+      "event:adapter_completed:warning",
+      "unlock:run-1",
+    ]);
+    expect(repo.run).toMatchObject({
+      status: "waiting_for_dependency",
+      output_json: {
+        waiting_for_results: {
+          depends_on_run_ids: ["run-reviewer"],
+        },
+      },
+    });
+  });
+
+  it("projects delegated child run running and final terminal status", async () => {
+    const repo = new FakeRepo();
+    repo.run = run({
+      parent_run_id: "run-parent",
+      root_run_id: "run-root",
+      run_group_id: "group-1",
+      delegation_id: "delegation-1",
+    });
+    const delegationProjector = new FakeDelegationProjector();
+    const service = new RunOrchestrationService(config(), repo, {
+      policyEnforcer: allowPolicy,
+      delegationProjector,
+      managedApi: {
+        executeRuntimeHost: async () => ({
+          success: true,
+          stdout: "done",
+          stderr: "",
+          output_text: "done",
+          output_json: { adapter_type: "ts_agent_host" },
+          exit_code: 0,
+          error_text: null,
+          error_code: null,
+          started_at: "2026-06-12T10:00:00.000Z",
+          completed_at: "2026-06-12T10:00:01.000Z",
+          model: "gpt-4o-mini",
+          usage: null,
+          events: [],
+          adapter_metadata: { adapter_type: "ts_agent_host" },
+          adapter_log_json: null,
+        }),
+      },
+    });
+
+    await expect(
+      service.executeRun({
+        run_id: "run-1",
+        space_id: "space-1",
+        worker_id: "worker-1",
+        command_source: "job",
+      }),
+    ).resolves.toMatchObject({ run_id: "run-1", status: "succeeded" });
+
+    expect(delegationProjector.running.map((item) => item.status)).toEqual(["running"]);
+    expect(delegationProjector.terminal.map((item) => item.status)).toEqual(["succeeded"]);
   });
 
   it("passes prepared digest context to managed API system context", async () => {
@@ -763,6 +914,68 @@ describe("RunOrchestrationService", () => {
     expect(finalizations).toEqual([{ runId: "run-1", spaceId: "space-1" }]);
   });
 
+  it("projects delegated child run terminal status after finalization degradation", async () => {
+    const repo = new FakeRepo();
+    repo.run = run({
+      parent_run_id: "run-parent",
+      root_run_id: "run-root",
+      run_group_id: "group-1",
+      delegation_id: "delegation-1",
+    });
+    const delegationProjector = new FakeDelegationProjector();
+    const materializer = {
+      async materializeAdapterResult() {
+        return { items: [], errors: [] };
+      },
+      async finalizeRun() {
+        return {
+          kind: "activity",
+          status: "failed",
+          activity_id: "finalization-1",
+          error_code: "finalization_failed",
+          error_message: "finalizer failed",
+          metadata_json: { operation: "finalization.finalize" },
+        };
+      },
+    } as unknown as RunMaterializationService;
+    const service = new RunOrchestrationService(config(), repo, {
+      policyEnforcer: allowPolicy,
+      delegationProjector,
+      materializer,
+      managedApi: {
+        executeRuntimeHost: async () => ({
+          success: true,
+          stdout: "done",
+          stderr: "",
+          output_text: "done",
+          output_json: { adapter_type: "ts_agent_host" },
+          exit_code: 0,
+          error_text: null,
+          error_code: null,
+          started_at: "2026-06-12T10:00:00.000Z",
+          completed_at: "2026-06-12T10:00:01.000Z",
+          model: "gpt-4o-mini",
+          usage: null,
+          events: [],
+          adapter_metadata: { adapter_type: "ts_agent_host" },
+          adapter_log_json: null,
+        }),
+      },
+    });
+
+    await expect(
+      service.executeRun({
+        run_id: "run-1",
+        space_id: "space-1",
+        worker_id: "worker-1",
+        command_source: "job",
+      }),
+    ).resolves.toMatchObject({ status: "degraded" });
+
+    expect(repo.calls).toContain("degraded:finalization_failed");
+    expect(delegationProjector.terminal.map((item) => item.status)).toEqual(["degraded"]);
+  });
+
   it("marks a successful adapter run degraded when materialization partially fails", async () => {
     const repo = new FakeRepo();
     const materializer = {
@@ -824,6 +1037,72 @@ describe("RunOrchestrationService", () => {
       status: "degraded",
       output_json: {
         materialization_errors: ["artifact:output_artifact_materialization_error:artifact denied"],
+      },
+    });
+  });
+
+  it("records failed runtime delegation materialization as run event evidence", async () => {
+    const repo = new FakeRepo();
+    const materializer = {
+      async materializeAdapterResult() {
+        return {
+          items: [
+            {
+              kind: "delegation",
+              status: "failed",
+              error_code: "invalid_runtime_delegations",
+              error_message: "invalid delegations",
+              metadata_json: { label: "output_delegations", operation: "run.spawn_child" },
+            },
+          ],
+          errors: ["delegation:invalid_runtime_delegations:invalid delegations"],
+        };
+      },
+      async finalizeRun() {
+        return {
+          kind: "activity",
+          status: "succeeded",
+          activity_id: "finalization-1",
+          metadata_json: { operation: "finalization.finalize" },
+        };
+      },
+    } as unknown as RunMaterializationService;
+    const service = new RunOrchestrationService(config(), repo, {
+      policyEnforcer: allowPolicy,
+      managedApi: {
+        executeRuntimeHost: async () => ({
+          success: true,
+          stdout: "done",
+          stderr: "",
+          output_text: "done",
+          output_json: { adapter_type: "ts_agent_host" },
+          exit_code: 0,
+          error_text: null,
+          error_code: null,
+          started_at: "2026-06-12T10:00:00.000Z",
+          completed_at: "2026-06-12T10:00:01.000Z",
+          model: "gpt-4o-mini",
+          usage: null,
+          events: [],
+          adapter_metadata: { adapter_type: "ts_agent_host" },
+          adapter_log_json: null,
+        }),
+      },
+      materializer,
+    });
+
+    await expect(
+      service.executeRun({
+        run_id: "run-1",
+        space_id: "space-1",
+        worker_id: "worker-1",
+        command_source: "job",
+      }),
+    ).resolves.toMatchObject({ status: "degraded" });
+    expect(repo.calls).toContain("event:delegation_requested:failed");
+    expect(repo.terminalUpdates[0]).toMatchObject({
+      output_json: {
+        materialization_errors: ["delegation:invalid_runtime_delegations:invalid delegations"],
       },
     });
   });

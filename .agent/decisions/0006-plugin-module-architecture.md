@@ -1,4 +1,4 @@
-# ADR 0007 — Module Architecture and Official Optional Modules
+# ADR 0006 — Module Architecture and Official Optional Modules
 
 **Status:** Accepted
 **First accepted:** 2026-05-06 (module structure)
@@ -212,5 +212,4 @@ Deferred. The package format (`plugin.json`, installer-managed migrations) and s
 ## Related
 
 - [0001](0001-space-model.md) — space isolation affects all modules
-- [0006](0006-open-source-readiness.md) — module structure enables selective open-sourcing per module
-- [0010](0010-credential-channel-isolation.md) — credential channel isolation applies to plugin runtime as well
+- [0008](0008-credential-channel-isolation.md) — credential channel isolation applies to plugin runtime as well

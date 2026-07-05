@@ -544,6 +544,65 @@
   },
   {
     "request": {
+      "action": "run.spawn_child",
+      "space_id": "s1",
+      "resource_space_id": "s1"
+    },
+    "decision": {
+      "decision": "deny",
+      "risk_level": "high",
+      "reason_code": "run_spawn_child_missing_context",
+      "required_approver_role": null,
+      "policy_rule_id": "run_spawn_child_missing_context",
+      "policy_source": "builtin",
+      "approval_capability": null,
+      "audit_code": "run_spawn_child_missing_context",
+      "resource_type": "run",
+      "message": "run.spawn_child missing required context 'group_id'",
+      "action": null
+    }
+  },
+  {
+    "request": {
+      "action": "run.spawn_child",
+      "space_id": "s1",
+      "resource_space_id": "s1",
+      "context": {
+        "group_id": "group-1",
+        "parent_run_id": "run-parent",
+        "root_run_id": "run-root",
+        "requesting_agent_id": "agent-manager",
+        "target_agent_id": "agent-reader",
+        "manager_user_id": "user-1",
+        "group_status": "active",
+        "requesting_agent_status": "active",
+        "target_agent_status": "active",
+        "requesting_member_status": "active",
+        "target_member_status": "active",
+        "depth": 1,
+        "max_depth": 3,
+        "fanout_count": 1,
+        "max_fanout": 8,
+        "concurrency_count": 1,
+        "max_concurrency": 4
+      }
+    },
+    "decision": {
+      "decision": "allow",
+      "risk_level": "medium",
+      "reason_code": "run_spawn_child_allowed",
+      "required_approver_role": null,
+      "policy_rule_id": "run_spawn_child_allowed",
+      "policy_source": "builtin",
+      "approval_capability": null,
+      "audit_code": "run_spawn_child_allowed",
+      "resource_type": "run",
+      "message": "run.spawn_child allowed for active same-space group delegation.",
+      "action": null
+    }
+  },
+  {
+    "request": {
       "action": "proposal.create",
       "space_id": "s1"
     },

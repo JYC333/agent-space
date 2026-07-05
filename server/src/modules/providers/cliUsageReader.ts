@@ -9,7 +9,7 @@
  * usage (and an estimated cost) without any network call.
  *
  * This is offline and read-only; it never touches OAuth/API credentials, so it
- * stays inside the CLI channel per ADR 0010. Note: Claude Code's JSONL logs are
+ * stays inside the CLI channel per ADR 0008. Note: Claude Code's JSONL logs are
  * known to undercount (thinking tokens are excluded), so totals are a floor, not
  * an exact bill.
  */

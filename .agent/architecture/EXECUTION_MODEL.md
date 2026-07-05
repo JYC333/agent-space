@@ -12,6 +12,19 @@
 
 **Job** — background system task (import, consolidation, backup, agent-run dispatch). Separate from Run. Job handlers create or dispatch Runs; jobs themselves are not product execution records.
 
+**AgentRunGroup** — manager-owned multi-agent room for grouped runs. A group has
+members, messages, delegations, one root run, and optional child runs. Human
+users manage/review the group; child-run creation is server-owned and policy
+gated through `run.spawn_child`. Managed API grouped runs can request child
+runs through the authorized `agent.delegate` runtime tool and can pause on
+other room results through `agent.wait_for_results`; frontend room
+messages remain natural-language instructions, but the Tiptap composer resolves
+structured `@agent` tokens into traceable recipient segments. No structured
+mention defaults to the manager, adjacent mentions can fan out one segment to
+multiple agents, separated mention groups create separate prompts, and the user
+can explicitly choose Agent coordination to route the full turn to the manager
+for decomposition/delegation instead of direct fan-out.
+
 **Artifact** — durable output produced by a run. Stored under `artifact_storage_root`. Exportable within the owning space. `storage_path` is always relative to `artifact_storage_root`.
 
 **Proposal** — requested durable change. Created by runs; reviewed by humans; applied by `ProposalApplyService`.
@@ -51,6 +64,11 @@ RunEvent records the structured phase-level evidence spine of a run:
 | `proposal_created` | Proposal created from run output |
 | `evaluation_created` | RunEvaluation appended |
 | `run_finalized` | RunFinalization completed or failed |
+| `delegation_requested` | Agent group child-run delegation requested |
+| `delegation_policy_denied` | `run.spawn_child` blocked a child-run delegation |
+| `delegation_queued` | Child run created and queued for dispatch |
+| `delegation_started` | Delegated child run started and the group delegation moved to running |
+| `delegation_completed` | Delegated child run reached a terminal state and the group delegation result was projected |
 
 RunEvent statuses: `pending`, `running`, `succeeded`, `failed`, `skipped`, `warning`, `cancelled`.
 
@@ -121,11 +139,19 @@ Policy gates run in this order inside server run orchestration:
    space. Active-space grant resolution happens before secret/profile material
    is loaded; missing or disabled grants fail closed. Cross-space credential →
    hard DENY (CRITICAL). Automation origin → REQUIRE_APPROVAL. Same-space
-   manual/api → ALLOW. DENY → `error_code=policy_denied_runtime_use_credential`.
+   manual/api/delegation → ALLOW. DENY → `error_code=policy_denied_runtime_use_credential`.
 
 3. **`context.inject_memory`** — called by server `ContextPrepareService` **before** memory context retrieval. Cross-space without grant → hard DENY. DENY → run context preparation fails closed.
 
 4. **`context.render_for_runtime`** — called after context snapshot is assembled, **before** `adapter.execute()`. Cross-space without grant → hard DENY. DENY → `error_code=policy_denied_context_render_for_runtime`.
+
+5. **`run.spawn_child`** — called by `AgentGroupRunService` before creating a
+   delegated child run. The service proves same-space group membership, active
+   group/member/agent status, parent-run agent identity, root lineage, and
+   capacity limits. Public HTTP callers may post room messages, but child-run
+   creation is initiated by authorized agent runtime output such as
+   `agent.delegate`; callers may not directly forge agent-origin child-run
+   spawns. Audit write failure is fail-closed and rolls back child-run creation.
 
 None of these gates may be bypassed. No secret material is resolved before `runtime.use_credential` passes. No context is injected before `context.inject_memory` passes. No adapter is invoked before both `runtime.execute` and `context.render_for_runtime` pass.
 
@@ -178,9 +204,15 @@ RunSteps are retained indefinitely (no auto-purge).
 
 ```
 queued → running → terminal → finalized
+queued → running → waiting_for_dependency → queued → running → terminal
 ```
 
 **Terminal** means runtime execution has ended (status: `succeeded`, `failed`, `degraded`, or `cancelled`).
+
+`waiting_for_dependency` is a non-terminal parked state for AgentRunGroup runs
+that called `agent.wait_for_results`. The worker releases the execution lock and
+the lifecycle projector requeues the same run after every declared dependency
+run reaches a hard terminal state.
 
 **Finalized** means `PostRunFinalizationService` has performed deterministic post-run evaluation and, when applicable, task-level evaluation bridging.
 

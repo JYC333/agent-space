@@ -1422,10 +1422,10 @@ export class PgKnowledgeRepository {
          UPDATE space_objects
             SET title = COALESCE($3, title),
                 summary = CASE WHEN $10::boolean THEN $11 ELSE summary END,
-                status = COALESCE($12, status),
+                status = COALESCE($12::varchar(32), status),
                 primary_project_id = CASE WHEN $13::boolean THEN $14 ELSE primary_project_id END,
-                archived_at = CASE WHEN $12 = 'archived' THEN $15::timestamptz ELSE archived_at END,
-                deleted_at = CASE WHEN $12 = 'deleted' THEN $15::timestamptz ELSE deleted_at END,
+                archived_at = CASE WHEN $12::varchar(32) = 'archived' THEN $15::timestamptz ELSE archived_at END,
+                deleted_at = CASE WHEN $12::varchar(32) = 'deleted' THEN $15::timestamptz ELSE deleted_at END,
                 updated_at = $15
           WHERE id = $1 AND space_id = $2 AND object_type = 'note'
           RETURNING id

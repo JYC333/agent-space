@@ -85,7 +85,7 @@ export class CapabilitiesService {
     body: Record<string, unknown>,
   ) {
     // Enablement mutates active runtime behavior and must go through proposal
-    // review (ADR 0011). Conversion only ever produces a disabled draft.
+    // review (ADR 0009). Conversion only ever produces a disabled draft.
     if (optionalString(body.enable_for_project_id)) {
       throw new HttpError(422, "capability_enablement_requires_proposal_review");
     }

@@ -6,7 +6,7 @@ import type { RetrievalEmbedder } from "./service";
 
 /**
  * Production embedder. Routes through the `retrieval_embedding` provider task
- * policy (ADR 0010 credential channel) with the configured provider as the
+ * policy (ADR 0008 credential channel) with the configured provider as the
  * safety net, exactly like the other auxiliary model tasks.
  */
 export class ProviderEmbedder implements RetrievalEmbedder {

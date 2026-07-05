@@ -2,12 +2,12 @@
  * Hybrid-retrieval (Phase 2, step 8) reranking configuration.
  *
  * The reranker is a space-setting-gated, skippable LLM stage. It routes through the same
- * provider task-policy + credential channel (ADR 0010) as the other auxiliary
+ * provider task-policy + credential channel (ADR 0008) as the other auxiliary
  * model tasks, under a dedicated task name so a space can point it at a cheaper
  * / faster model than chat.
  */
 
-/** Provider task policy used to route reranking (ADR 0010 channel). */
+/** Provider task policy used to route reranking (ADR 0008 channel). */
 export const RETRIEVAL_RERANK_TASK = "retrieval_rerank";
 
 /** Max tokens for the reranker's JSON scoring response. */

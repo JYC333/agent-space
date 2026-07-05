@@ -436,7 +436,7 @@ leak hidden claim existence, counts, or text, and neither writes canonical state
 - `scanClaimContradictions` runs a deterministic judge (negation / numeric
   opposition) over source-policy-filtered visible active claims, groups by
   subject, and emits batched, clustered, confidence-tiered findings. It also has
-  a request-gated LLM judge hook for future provider wiring. Until the ADR 0010
+  a request-gated LLM judge hook for future provider wiring. Until the ADR 0008
   provider adapter is connected, the public HTTP route rejects
   `llm_judge_enabled=true` with 422; the service-level hook remains injectable
   for tests and internal callers. Any enabled implementation receives only

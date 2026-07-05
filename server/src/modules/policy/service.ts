@@ -36,6 +36,7 @@ import type { PolicyCheckRequest } from "@agent-space/protocol" with {
 export interface EnforceResult {
   status: "allow" | "blocked" | "error";
   decision?: PolicyDecision;
+  policy_decision_record_id?: string | null;
   error_code?:
     | "policy_denied"
     | "policy_requires_approval"
@@ -56,11 +57,11 @@ function blockedErrorCode(
 async function persistAudit(
   config: PolicyEnforcementConfig,
   envelope: ReturnType<typeof buildAuditEnvelope>,
-): Promise<void> {
+): Promise<string> {
   if (!config.databaseUrl) {
     throw new Error("policy enforcement requires SERVER_DATABASE_URL");
   }
-  await writePolicyAudit(config.databaseUrl, envelope);
+  return writePolicyAudit(config.databaseUrl, envelope);
 }
 
 /**
@@ -82,14 +83,16 @@ export async function enforce(
     // failed write does not grant access (the action is already denied), so we
     // log-and-continue rather than fail open.
     const envelope = buildAuditEnvelope(req, decision, defn, nowIso);
+    let policyDecisionRecordId: string | null = null;
     try {
-      await persistAudit(config, envelope);
+      policyDecisionRecordId = await persistAudit(config, envelope);
     } catch {
       // best-effort: the denial stands regardless of audit-write outcome.
     }
     return {
       status: "blocked",
       decision,
+      policy_decision_record_id: policyDecisionRecordId,
       error_code: blockedErrorCode(decision),
       message: decision.message,
     };
@@ -99,8 +102,9 @@ export async function enforce(
   if (isDurableAuditRequired(defn, decision, req)) {
     const envelope = buildAuditEnvelope(req, decision, defn, nowIso);
     const failureMode = resolveFailureMode(defn, decision, req);
+    let policyDecisionRecordId: string | null = null;
     try {
-      await persistAudit(config, envelope);
+      policyDecisionRecordId = await persistAudit(config, envelope);
     } catch {
       if (failureMode === "fail_closed") {
         return {
@@ -111,6 +115,7 @@ export async function enforce(
       }
       // best-effort: continue.
     }
+    return { status: "allow", decision, policy_decision_record_id: policyDecisionRecordId };
   }
 
   return { status: "allow", decision };

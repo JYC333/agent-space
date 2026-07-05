@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, stat } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, relative, resolve } from "node:path";
 import type {
   RunAdapterResultEnvelope,
@@ -22,6 +22,10 @@ import { loadProtocol } from "../providers/protocolRuntime";
 import { insertProposalRow } from "../proposals/reviewPackets";
 import { EvolutionRepository } from "../evolution/repository";
 import { EvolutionSolidifier } from "../evolution/solidifier";
+import {
+  AgentGroupRuntimeDelegationMaterializer,
+  type RuntimeDelegationMaterializerPort,
+} from "../agentGroups/runtimeDelegationMaterializer";
 
 export interface RunMaterializationResult {
   items: RunMaterializationItemSummary[];
@@ -69,6 +73,8 @@ export class RunMaterializationService {
       new EvolutionSolidifier(new EvolutionRepository(db)),
     ),
     policyEnforcer?: MaterializationPolicyEnforcer,
+    private readonly runtimeDelegationMaterializer: RuntimeDelegationMaterializerPort =
+      AgentGroupRuntimeDelegationMaterializer.fromConfig(config),
   ) {
     this.policyEnforcer =
       policyEnforcer ??
@@ -91,11 +97,6 @@ export class RunMaterializationService {
   }): Promise<RunMaterializationResult> {
     const items: RunMaterializationItemSummary[] = [];
     const errors: string[] = [];
-
-    if (input.adapterResult.success && input.adapterResult.output_text) {
-      const item = await this.persistRuntimeOutput(input.run, input.adapterResult);
-      collect(item, items, errors);
-    }
 
     for (const [index, entry] of arrayValue(
       (input.adapterResult as { produced_artifact_paths?: unknown }).produced_artifact_paths,
@@ -141,6 +142,13 @@ export class RunMaterializationService {
       collect(item, items, errors);
     }
 
+    const delegationResult = await this.runtimeDelegationMaterializer.materialize({
+      run: input.run,
+      output_json: output,
+    });
+    items.push(...delegationResult.items);
+    errors.push(...delegationResult.errors);
+
     return { items, errors };
   }
 
@@ -167,43 +175,6 @@ export class RunMaterializationService {
         error_message: error instanceof Error ? error.message : "Run finalization failed.",
         metadata_json: { operation: "finalization.finalize" },
       };
-    }
-  }
-
-  private async persistRuntimeOutput(
-    run: RunRecord,
-    result: RunAdapterResultEnvelope,
-  ): Promise<RunMaterializationItemSummary> {
-    try {
-      const fileId = randomUUID();
-      const relativePath = `${safeSegment(run.space_id)}/runs/${safeSegment(run.id)}/${fileId}.txt`;
-      const absolutePath = resolve(this.config.artifactStorageRoot, relativePath);
-      await mkdir(dirname(absolutePath), { recursive: true });
-      await writeFile(absolutePath, result.output_text, "utf8");
-      const info = await stat(absolutePath);
-      const artifactId = await this.insertArtifact({
-        run,
-        artifactType: "runtime_output",
-        title: `Run output (${result.adapter_type})`,
-        content: null,
-        storagePath: relativePath,
-        mimeType: "text/plain; charset=utf-8",
-        preview: run.mode === "dry_run",
-        metadata: {
-          source: "runtime_output",
-          adapter_type: result.adapter_type,
-          size_bytes: info.size,
-          sha256: createHash("sha256").update(result.output_text).digest("hex"),
-        },
-      });
-      return {
-        kind: "artifact",
-        status: "succeeded",
-        artifact_id: artifactId,
-        metadata_json: { label: "runtime_output", operation: "artifact.persist" },
-      };
-    } catch (error) {
-      return materializationError("artifact", "runtime_output", "output_artifact_materialization_error", error);
     }
   }
 

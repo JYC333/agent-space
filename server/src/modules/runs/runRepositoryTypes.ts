@@ -14,6 +14,7 @@ export interface RunRecord {
   id: string;
   space_id: string;
   agent_id: string;
+  agent_name?: string | null;
   agent_version_id: string;
   runtime_profile_id?: string | null;
   system_prompt?: string | null;
@@ -26,6 +27,9 @@ export interface RunRecord {
   workspace_id: string | null;
   session_id: string | null;
   parent_run_id?: string | null;
+  root_run_id?: string | null;
+  run_group_id?: string | null;
+  delegation_id?: string | null;
   project_id: string | null;
   scheduled_at?: string | null;
   adapter_type: string | null;
@@ -39,6 +43,7 @@ export interface RunRecord {
   required_sandbox_level: string;
   trigger_origin: string;
   instructed_by_user_id?: string | null;
+  instructed_by_agent_id?: string | null;
   error_message?: string | null;
   error_json?: unknown;
   output_json?: unknown;
@@ -248,6 +253,30 @@ export interface RunCreateInput {
   capabilities_json?: unknown[] | null;
   model_override_json?: Record<string, unknown> | null;
   context_artifact_ids?: string[] | null;
+}
+
+export interface DelegatedChildRunCreateInput {
+  agent_id: string;
+  space_id: string;
+  user_id: string;
+  parent_run_id: string;
+  root_run_id: string;
+  run_group_id: string;
+  delegation_id: string;
+  instructed_by_agent_id: string;
+  session_id?: string | null;
+  workspace_id?: string | null;
+  project_id?: string | null;
+  prompt?: string | null;
+  instruction?: string | null;
+  scheduled_at?: string | null;
+  runtime_profile_id?: string | null;
+  capability_id?: string | null;
+  capabilities_json?: unknown[] | null;
+  model_override_json?: Record<string, unknown> | null;
+  context_artifact_ids?: string[] | null;
+  budget_json?: Record<string, unknown> | null;
+  context_policy_json?: Record<string, unknown> | null;
 }
 
 export class RunCreateValidationError extends Error {

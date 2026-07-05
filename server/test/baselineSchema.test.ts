@@ -42,6 +42,10 @@ const REPRESENTATIVE_TABLES = [
   "model_providers",
   "source_recipe_versions",
   "policy_decision_records",
+  "agent_run_groups",
+  "agent_run_group_members",
+  "agent_run_messages",
+  "run_delegations",
   "evolution_strategy_assets",
   "evolution_experiences",
   "evolution_selector_decisions",
@@ -215,6 +219,42 @@ describe("server runner applies the baseline schema", () => {
     expect(sourceHandlerVersions).toContain("'declarative_pipeline_v1'::character varying");
     expect(baseline).toContain("source_connections_active_recipe_version_id_fkey");
     expect(baseline).toContain("'source_recipe'::character varying");
+  });
+
+  it("keeps Agent Room delegation schema in the consolidated baseline", () => {
+    const baseline = readFileSync(join(MIGRATIONS_DIR, "0001_baseline.sql"), "utf8");
+    const runs = tableDefinition(baseline, "runs");
+    const groups = tableDefinition(baseline, "agent_run_groups");
+    const members = tableDefinition(baseline, "agent_run_group_members");
+    const messages = tableDefinition(baseline, "agent_run_messages");
+    const delegations = tableDefinition(baseline, "run_delegations");
+
+    expect(baseline).toContain("CREATE TABLE public.agent_run_groups");
+    expect(baseline).toContain("CREATE TABLE public.agent_run_group_members");
+    expect(baseline).toContain("CREATE TABLE public.agent_run_messages");
+    expect(baseline).toContain("CREATE TABLE public.run_delegations");
+    expect(runs).toContain("root_run_id character varying(36)");
+    expect(runs).toContain("run_group_id character varying(36)");
+    expect(runs).toContain("delegation_id character varying(36)");
+    expect(runs).toContain("instructed_by_agent_id character varying(36)");
+    expect(runs).toContain("'delegation'::character varying");
+    expect(groups).toContain("manager_user_id character varying(36) NOT NULL");
+    expect(members).toContain("CONSTRAINT ck_agent_run_group_members_role");
+    expect(messages).toContain("sender_actor_ref_json jsonb NOT NULL");
+    expect(delegations).toContain("policy_decision_record_id character varying(36)");
+    expect(delegations).toContain("CONSTRAINT ck_run_delegations_status");
+    expect(baseline).toContain("uq_agent_run_group_members_group_agent");
+    expect(baseline).toContain("uq_agents_space_id_id");
+    expect(baseline).toContain("uq_runs_space_id_id");
+    expect(baseline).toContain("uq_agent_run_groups_space_id_id");
+    expect(baseline).toContain("uq_run_delegations_space_id_id");
+    expect(baseline).toContain("ix_run_delegations_status_updated");
+    expect(baseline).toContain("runs_delegation_id_fkey");
+    expect(baseline).toContain("fk_runs_delegation_same_space");
+    expect(baseline).toContain("fk_run_delegations_group_same_space");
+    expect(baseline).toContain("fk_agent_run_group_members_agent_same_space");
+    expect(baseline).toContain("run_delegations_policy_decision_record_id_fkey");
+    expect(baseline).toContain("'delegation_policy_denied'::character varying");
   });
 
   it("applies the baseline and creates representative server-owned tables", async () => {

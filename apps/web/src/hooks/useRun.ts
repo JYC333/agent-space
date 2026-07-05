@@ -10,6 +10,7 @@ export const RUN_TERMINAL_STATUSES = new Set<string>([
   'cancelled',
   'degraded',
   'waiting_for_review',
+  'waiting_for_dependency',
 ])
 
 const POLL_INTERVAL_MS = 2000

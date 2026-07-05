@@ -1,0 +1,310 @@
+import { describe, expect, it } from "vitest";
+import { loadConfig } from "../src/config";
+import type { Pool } from "../src/db/pool";
+import {
+  executeWithAgentDelegationTools,
+  resolveAgentDelegationToolBinding,
+  type RuntimeHostExecutor,
+} from "../src/modules/runs/managedAgentDelegationTools";
+import type { RunRecord } from "../src/modules/runs/repository";
+import type {
+  RuntimeHostExecuteRequest,
+  RuntimeHostExecuteResponse,
+} from "@agent-space/protocol" with { "resolution-mode": "import" };
+
+function run(overrides: Partial<RunRecord> = {}): RunRecord {
+  return {
+    id: "run-manager-turn",
+    space_id: "space-1",
+    agent_id: "agent-manager",
+    agent_version_id: "version-manager",
+    runtime_profile_id: "profile-manager",
+    context_snapshot_id: "snapshot-1",
+    run_type: "agent",
+    status: "running",
+    mode: "live",
+    prompt: "Ask two reviewers.",
+    instruction: "Coordinate review work.",
+    workspace_id: null,
+    session_id: null,
+    parent_run_id: "run-root",
+    root_run_id: "run-root",
+    run_group_id: "group-1",
+    delegation_id: null,
+    project_id: null,
+    scheduled_at: null,
+    adapter_type: "model_api",
+    capability_id: null,
+    capabilities_json: [],
+    model_provider_id: "provider-1",
+    model_override_json: null,
+    runtime_profile_snapshot_json: {},
+    required_sandbox_level: "none",
+    trigger_origin: "manual",
+    instructed_by_user_id: "user-1",
+    instructed_by_agent_id: null,
+    error_message: null,
+    error_json: null,
+    output_json: null,
+    usage_json: null,
+    started_at: "2026-07-05T00:00:00.000Z",
+    ended_at: null,
+    created_at: "2026-07-05T00:00:00.000Z",
+    updated_at: "2026-07-05T00:00:00.000Z",
+    visibility: "space_shared",
+    ...overrides,
+  };
+}
+
+function response(input: Partial<RuntimeHostExecuteResponse>): RuntimeHostExecuteResponse {
+  return {
+    success: true,
+    stdout: input.output_text ?? "",
+    stderr: "",
+    output_text: "",
+    output_json: {},
+    exit_code: 0,
+    error_text: null,
+    error_code: null,
+    started_at: "2026-07-05T00:00:00.000Z",
+    completed_at: "2026-07-05T00:00:01.000Z",
+    model: "gpt-test",
+    usage: null,
+    events: [],
+    adapter_metadata: {},
+    adapter_log_json: null,
+    ...input,
+  };
+}
+
+function request(): RuntimeHostExecuteRequest {
+  return {
+    run_id: "run-manager-turn",
+    space_id: "space-1",
+    model_provider_id: "provider-1",
+    model: "gpt-test",
+    system_prompt: "You are the manager.",
+    prompt: "Ask two code reviewers to answer 1+1 independently.",
+    mode: "live",
+    instruction: "Coordinate review work.",
+    project_id: null,
+    workspace_id: null,
+    capability_id: null,
+    context_snapshot_id: "snapshot-1",
+    tool_mode: "disabled",
+    tool_bindings: [],
+  };
+}
+
+describe("managed agent delegation tools", () => {
+  it("turns model agent.delegate calls into auditable child-run requests", async () => {
+    const spawnCalls: unknown[] = [];
+    const managerRun = run();
+    const binding = await resolveAgentDelegationToolBinding(
+      loadConfig({ SERVER_DATABASE_URL: "postgresql://server@db:5432/agent_space" }),
+      managerRun,
+      {
+        targets: [
+          {
+            agent_id: "agent-reviewer-a",
+            name: "Reviewer A",
+            role: "worker",
+            capabilities_json: { capabilities: ["code_review"], description: "Reviews code changes." },
+          },
+          {
+            agent_id: "agent-reviewer-b",
+            name: "Reviewer B",
+            role: "worker",
+            capabilities_json: { capabilities: ["test_review"], description: "Reviews test coverage." },
+          },
+        ],
+        service: {
+          async spawnChildRun(identity, input) {
+            spawnCalls.push({ identity, input });
+            const suffix = input.target_agent_id.endsWith("a") ? "a" : "b";
+            return {
+              delegation: {
+                id: `delegation-${suffix}`,
+                space_id: input.space_id,
+                group_id: input.group_id,
+                parent_run_id: input.parent_run_id,
+                child_run_id: `run-child-${suffix}`,
+                request_message_id: null,
+                requesting_agent_id: input.requesting_agent_id,
+                target_agent_id: input.target_agent_id,
+                requested_by_user_id: identity.userId,
+                policy_decision_record_id: `policy-${suffix}`,
+                status: "queued",
+                instruction: input.instruction,
+                reason: input.reason ?? null,
+                budget_json: input.budget_json ?? null,
+                context_policy_json: input.context_policy_json ?? null,
+                result_summary: null,
+                created_at: "2026-07-05T00:00:00.000Z",
+                updated_at: "2026-07-05T00:00:00.000Z",
+                completed_at: null,
+              },
+              child_run_id: `run-child-${suffix}`,
+              policy_decision_record_id: `policy-${suffix}`,
+            };
+          },
+        },
+      },
+    );
+    expect(binding).not.toBeNull();
+    expect(binding?.toolDefinitions[0].input_schema).toMatchObject({
+      properties: {
+        target_agent_id: { enum: ["agent-reviewer-a", "agent-reviewer-b"] },
+      },
+    });
+
+    const hostRequests: RuntimeHostExecuteRequest[] = [];
+    const execute: RuntimeHostExecutor = async (_config, hostRequest) => {
+      hostRequests.push(hostRequest);
+      if (hostRequests.length === 1) {
+        return response({
+          output_json: {
+            tool_calls: [
+              {
+                id: "tool-call-a",
+                name: "agent.delegate",
+                arguments_json: JSON.stringify({
+                  target_agent_id: "agent-reviewer-a",
+                  instruction: "Answer 1+1 independently.",
+                }),
+              },
+              {
+                id: "tool-call-b",
+                name: "agent.delegate",
+                arguments_json: JSON.stringify({
+                  target_agent_id: "agent-reviewer-b",
+                  instruction: "Answer 1+1 independently.",
+                }),
+              },
+            ],
+          },
+        });
+      }
+      return response({
+        output_text: "Delegated both reviewer checks and will wait for their results.",
+        output_json: {},
+      });
+    };
+
+    const result = await executeWithAgentDelegationTools(
+      loadConfig({ SERVER_DATABASE_URL: "postgresql://server@db:5432/agent_space" }),
+      managerRun,
+      request(),
+      execute,
+      binding!,
+    );
+
+    expect(spawnCalls).toHaveLength(2);
+    expect(spawnCalls[0]).toMatchObject({
+      identity: { spaceId: "space-1", userId: "user-1" },
+      input: {
+        parent_run_id: "run-manager-turn",
+        root_run_id: "run-root",
+        requesting_agent_id: "agent-manager",
+        target_agent_id: "agent-reviewer-a",
+      },
+    });
+    expect(hostRequests[0]).toMatchObject({
+      tool_mode: "authorized_bindings",
+      tools: expect.arrayContaining([expect.objectContaining({ name: "agent.delegate" })]),
+    });
+    expect(hostRequests[0].system_prompt).toContain("available to every active room agent");
+    expect(hostRequests[0].system_prompt).toContain("capabilities: code_review");
+    expect(hostRequests[0].system_prompt).toContain("multiple agent.delegate calls in one turn");
+    expect(hostRequests[1].messages?.filter((message) => message.role === "tool")).toHaveLength(2);
+    expect(result.output_json).toMatchObject({
+      agent_room_tool_calls: [
+        expect.objectContaining({ ok: true, target_agent_id: "agent-reviewer-a", child_run_id: "run-child-a" }),
+        expect.objectContaining({ ok: true, target_agent_id: "agent-reviewer-b", child_run_id: "run-child-b" }),
+      ],
+    });
+  });
+
+  it("pauses the current run when agent.wait_for_results finds unfinished dependencies", async () => {
+    const managerRun = run();
+    const dependencyRun = run({
+      id: "run-reviewer",
+      agent_id: "agent-reviewer-a",
+      agent_name: "Reviewer A",
+      status: "running",
+      parent_run_id: "run-root",
+      root_run_id: "run-root",
+      run_group_id: "group-1",
+      prompt: "Answer 1+1.",
+    });
+    const pool = {
+      async query<Row = Record<string, unknown>>(sql: string, params: readonly unknown[] = []) {
+        if (sql.includes("FROM runs r") && sql.includes("WHERE r.space_id = $1 AND r.id = $2")) {
+          const row = params[1] === "run-reviewer" ? dependencyRun : null;
+          return { rows: row ? [row as Row] : [], rowCount: row ? 1 : 0 };
+        }
+        throw new Error(`Unexpected SQL: ${sql}`);
+      },
+    } as unknown as Pool;
+    const binding = await resolveAgentDelegationToolBinding(
+      loadConfig({ SERVER_DATABASE_URL: "postgresql://server@db:5432/agent_space" }),
+      managerRun,
+      {
+        pool,
+        targets: [],
+        service: {
+          async spawnChildRun() {
+            throw new Error("delegate should not be called");
+          },
+        },
+      },
+    );
+    expect(binding).not.toBeNull();
+    expect(binding?.toolDefinitions.map((tool) => tool.name)).toEqual(["agent.wait_for_results"]);
+
+    const hostRequests: RuntimeHostExecuteRequest[] = [];
+    const execute: RuntimeHostExecutor = async (_config, hostRequest) => {
+      hostRequests.push(hostRequest);
+      return response({
+        output_json: {
+          tool_calls: [{
+            id: "wait-call-1",
+            name: "agent.wait_for_results",
+            arguments_json: JSON.stringify({
+              scope: "run_ids",
+              run_ids: ["run-reviewer"],
+              reason: "Need reviewer result before summarizing.",
+              resume_instruction: "Summarize the reviewer result.",
+            }),
+          }],
+        },
+      });
+    };
+
+    const result = await executeWithAgentDelegationTools(
+      loadConfig({ SERVER_DATABASE_URL: "postgresql://server@db:5432/agent_space" }),
+      managerRun,
+      request(),
+      execute,
+      binding!,
+    );
+
+    expect(hostRequests).toHaveLength(1);
+    expect(result.output_json).toMatchObject({
+      waiting_for_results: {
+        status: "waiting",
+        scope: "run_ids",
+        depends_on_run_ids: ["run-reviewer"],
+        pending_run_ids: ["run-reviewer"],
+      },
+      agent_room_tool_calls: [
+        expect.objectContaining({
+          tool_name: "agent.wait_for_results",
+          ok: true,
+          status: "waiting",
+        }),
+      ],
+    });
+    expect(result.output_text).toBe("");
+  });
+});

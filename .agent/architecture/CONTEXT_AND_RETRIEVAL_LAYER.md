@@ -57,7 +57,7 @@ Per-module current-state lives in `.agent/modules/knowledge-base.md` and
    automatic; accepted `ObjectRelation` and Memory create/update/archive
    stay on the proposal/approval flow. Maintenance emits *batched review
    candidates*, never one proposal per finding, never silent canonical writes.
-7. **Provider calls use the ADR 0010 channel.** Embeddings, rerank, rewrite, and
+7. **Provider calls use the ADR 0008 channel.** Embeddings, rerank, rewrite, and
    synthesis route through `provider_task_policies` + the credential channel, and
    record pointer-only `policy_decision_records` audit (task, model, counts,
    surface — never content).
@@ -153,7 +153,7 @@ projection's own reindex time) so freshness signals are real.
 ## LLM stages (gated, skippable, audited)
 
 All run only over the already-revalidated visible set (invariant 2), route through
-ADR 0010 task policies, degrade to deterministic behavior on any failure, and
+ADR 0008 task policies, degrade to deterministic behavior on any failure, and
 write pointer-only audit.
 
 - **Reranker** — post-fusion relevance judge over the visible top-N; space-setting
@@ -342,7 +342,7 @@ no child write action because they are evidence surfaces, not governed graph
 endpoints. Optional LLM extraction is request-gated and injectable; without a
 provider adapter the public HTTP route rejects `llm_extraction_enabled=true`
 with 422 rather than producing a misleading empty LLM pass. The service hook
-remains injectable for tests and future ADR 0010 provider wiring. Any enabled
+remains injectable for tests and future ADR 0008 provider wiring. Any enabled
 extractor receives only the already-visible/source-policy-allowed source set
 plus source-policy snapshots and returns review-packet candidates, not canonical
 writes. Scan responses and packets distinguish `candidate_count` from
@@ -738,6 +738,6 @@ Load-bearing boundaries:
   [`ROADMAP_AND_FUTURE_RISKS.md`](ROADMAP_AND_FUTURE_RISKS.md#retrieval-and-context-layer-stabilization).
 - Module current-state: `.agent/modules/knowledge-base.md`,
   `.agent/modules/memory.md`.
-- Credential channel for all provider calls: ADR 0010.
+- Credential channel for all provider calls: ADR 0008.
 - Cross-module boundary for engine/adapter ownership: `BOUNDARIES.md` B33/B34.
 - Memory-side evolution interplay: `MEMORY_EVOLUTION_PLAN.md`.

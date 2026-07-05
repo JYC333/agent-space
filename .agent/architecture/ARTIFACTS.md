@@ -38,6 +38,8 @@ artifact's production context remains unchanged.
 
 - Content-backed artifacts come from `output_json.artifacts`.
 - File-backed artifacts come from `produced_artifact_paths`.
+- Plain run `output_text` is display/conversation output and does not create an
+  Artifact by itself.
 - Intake raw snapshots and reader documents are server-produced artifacts.
   `intake_reader_document` artifacts use
   `canonical_format="reader_document_json"` and store structured Reader JSON

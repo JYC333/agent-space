@@ -64,7 +64,7 @@ resolver. It first resolves an enabled `model_provider_space_grants` row for
 the active run space, then loads the `Credential` → `resolveApiKeyFromSecretRef`
 → AES-GCM decrypt with the on-disk master key → returns plaintext. The
 decrypted key is passed to provider invocation **as a parameter** and is never
-written to `process.env` — per [ADR 0010](../decisions/0010-credential-channel-isolation.md)
+written to `process.env` — per [ADR 0008](../decisions/0008-credential-channel-isolation.md)
 it cannot leak into a CLI subprocess environment. The server store draws keys
 from the credential pool with rotation/cooldown state and the same master-key
 file. Exactly one side decides credential release: the server.

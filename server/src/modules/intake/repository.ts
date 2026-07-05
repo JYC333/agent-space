@@ -221,7 +221,7 @@ export class PgIntakeRepository {
     const result = await this.db.query<SourceConnectionRow>(
       `UPDATE source_connections SET
          name = COALESCE($3, name),
-         status = COALESCE($4, status),
+         status = COALESCE($4::varchar(32), status),
          credential_id = CASE WHEN $5::boolean THEN $6 ELSE credential_id END,
          fetch_frequency = COALESCE($7, fetch_frequency),
          capture_policy = COALESCE($8, capture_policy),
@@ -231,7 +231,7 @@ export class PgIntakeRepository {
          policy_json = CASE WHEN $14::boolean THEN $15::jsonb ELSE policy_json END,
          config_json = CASE WHEN $16::boolean THEN $17::jsonb ELSE config_json END,
          schedule_rule_json = $18::jsonb,
-         deleted_at = CASE WHEN $4 = 'archived' THEN $19::timestamptz ELSE deleted_at END,
+         deleted_at = CASE WHEN $4::varchar(32) = 'archived' THEN $19::timestamptz ELSE deleted_at END,
          updated_at = $19
        WHERE space_id = $1 AND id = $2
        RETURNING ${CONNECTION_COLUMNS}`,

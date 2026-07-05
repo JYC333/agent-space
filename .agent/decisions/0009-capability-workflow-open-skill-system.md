@@ -1,4 +1,4 @@
-# ADR 0011: Capability, Workflow, And Open Skill Framework
+# ADR 0009: Capability, Workflow, And Open Skill Framework
 
 Date: 2026-06-20
 

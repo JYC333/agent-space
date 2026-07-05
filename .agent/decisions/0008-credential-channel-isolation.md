@@ -1,13 +1,13 @@
-# ADR 0010 - Credential Channel Isolation (supersedes 0009)
+# ADR 0008 - Credential Channel Isolation
 
 ## Status
 
-Accepted - 2026-06-02. Supersedes ADR 0009 (Anthropic Is CLI-Only).
+Accepted - 2026-06-02.
 
 ## Context
 
-ADR 0009 stated "Anthropic/Claude execution must use `adapter_type=claude_code`" and
-was widely read as "Anthropic may only be used via the CLI." That framing was too
+An earlier internal policy required all Anthropic/Claude execution to go through
+`adapter_type=claude_code`, framed as "Anthropic is CLI-only." That framing was too
 broad. The real concern was never to forbid the Anthropic API — it was to prevent a
 specific operational failure: an Anthropic API key leaking into the environment of a
 **Claude Code CLI** subprocess, which conflicts with Claude Code's own auth (OAuth /
@@ -44,7 +44,7 @@ Consequences of this reframing:
   configured `ModelProvider` + model, Anthropic included. It must obey the invariant:
   resolve via `resolveProviderApiKey`, pass as a litellm parameter, never via env.
 
-## Retained invariants (unchanged from 0009)
+## Invariants
 
 - `claude_code` remains a `local_cli` `RuntimeAdapterSpec` using `cli_profile`
   credentials granted by `CredentialBroker`; it is the path for agentic / tool-using /

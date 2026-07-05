@@ -220,7 +220,7 @@ fail closed via `unknown_policy_action` DENY if ever passed to `PolicyEngine` or
 | Action | File | Gate |
 |--------|------|------|
 | `runtime.execute` | `server/src/modules/runs/orchestrationService.ts` | Uses `enforce()` before credentials, context snapshot, and adapter execution. Decision fields are in `context`; safe duplicates are in `metadata_json`. |
-| `runtime.use_credential` | `server/src/modules/providers/providerCommandStore.ts`, provider invocation, and run orchestration | Uses `enforce()` before ModelProvider API-key secret fetch; `resource_space_id` comes from the credential row. CLI-profile runtimes use the CLI CredentialBroker path. **fail_closed**. |
+| `runtime.use_credential` | `server/src/modules/providers/providerCommandStore.ts`, provider invocation, and run orchestration | Uses `enforce()` before ModelProvider API-key secret fetch; `resource_space_id` comes from the credential row. Same-space manual/api/delegation origins allow; automation requires approval. CLI-profile runtimes use the CLI CredentialBroker path. **fail_closed**. |
 | `context.inject_memory` | `server/src/modules/context/` and `server/src/modules/runs/` | Uses `enforce()` before context assembly/persistence; cross-space access hard denies. |
 | `context.render_for_runtime` | `server/src/modules/runs/` | Before adapter execution — cross-space hard DENY. `has_personal_grant_context` in `context`. |
 | `workspace.write_patch` | `server/src/modules/workspaces/` and proposal appliers | Uses `enforce()` before workspace file writes. **fail_closed**. |

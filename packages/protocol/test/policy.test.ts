@@ -32,6 +32,18 @@ describe("policy action registry", () => {
     expect(new Set(names).size).toBe(names.length);
   });
 
+  it("registers run.spawn_child as the canonical wired delegation action only", () => {
+    const names = POLICY_ACTION_REGISTRY.map((d) => d.action);
+    expect(names).toContain("run.spawn_child");
+    expect(names).not.toContain("agent.delegate");
+    const spawnChild = POLICY_ACTION_REGISTRY.find(
+      (d) => d.action === "run.spawn_child",
+    );
+    expect(spawnChild?.lifecycle_status).toBe("wired_direct");
+    expect(spawnChild?.default_decision).not.toBe("allow");
+    expect(spawnChild?.record_failure_mode).toBe("fail_closed");
+  });
+
   it("matches the frozen registry fixture 1:1 (count, order, and every field)", () => {
     expect(POLICY_ACTION_REGISTRY.length).toBe(registryFixture.length);
     // Deep, order-sensitive equality — registries must be byte-identical data.
@@ -108,6 +120,7 @@ describe("policy enforcement request/decision contracts", () => {
       PolicyEnforceResultSchema.parse({
         status: "blocked",
         error_code: "policy_requires_approval",
+        policy_decision_record_id: "decision-1",
       }).status,
     ).toBe("blocked");
   });

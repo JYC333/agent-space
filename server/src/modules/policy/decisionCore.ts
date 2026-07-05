@@ -34,6 +34,9 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     ? (value as Record<string, unknown>)
     : null;
 }
+function num(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
 
 // ---------------------------------------------------------------------------
 // roles.py
@@ -397,11 +400,12 @@ const ruleUseCredential: Rule = (ctx) => {
     triggerOrigin === "manual" ||
     triggerOrigin === "user" ||
     triggerOrigin === "api" ||
+    triggerOrigin === "delegation" ||
     !triggerOrigin
   ) {
     return makeDecision({
       decision: "allow",
-      message: "Same-space manual credential use allowed.",
+      message: "Same-space user-mediated credential use allowed.",
       risk_level: "high",
       reason_code: "credential_same_space_manual",
       policy_rule_id: "credential_same_space_manual_allow",
@@ -506,6 +510,158 @@ const ruleRuntimeExecuteRiskLevel: Rule = (ctx) => {
     reason_code: "runtime_execute_risk_level",
     policy_rule_id: "runtime_execute_risk_level",
     audit_code: "runtime_execute_risk_level",
+  });
+};
+
+const RUN_SPAWN_CHILD_REQUIRED_CONTEXT = [
+  "space_id",
+  "resource_space_id",
+  "group_id",
+  "parent_run_id",
+  "root_run_id",
+  "requesting_agent_id",
+  "target_agent_id",
+  "manager_user_id",
+  "group_status",
+  "requesting_agent_status",
+  "target_agent_status",
+  "requesting_member_status",
+  "target_member_status",
+] as const;
+
+const RUN_SPAWN_CHILD_REQUIRED_NUMERIC_CONTEXT = [
+  "depth",
+  "max_depth",
+  "fanout_count",
+  "max_fanout",
+  "concurrency_count",
+  "max_concurrency",
+] as const;
+
+const ruleRunSpawnChild: Rule = (ctx) => {
+  const action = str(ctx.action);
+  if (action !== "run.spawn_child") return null;
+
+  for (const field of RUN_SPAWN_CHILD_REQUIRED_CONTEXT) {
+    if (!str(ctx[field])) {
+      return makeDecision({
+        decision: "deny",
+        message: `run.spawn_child missing required context '${field}'`,
+        risk_level: "high",
+        reason_code: "run_spawn_child_missing_context",
+        policy_rule_id: "run_spawn_child_missing_context",
+        audit_code: "run_spawn_child_missing_context",
+      });
+    }
+  }
+  for (const field of RUN_SPAWN_CHILD_REQUIRED_NUMERIC_CONTEXT) {
+    if (num(ctx[field]) === null) {
+      return makeDecision({
+        decision: "deny",
+        message: `run.spawn_child missing required numeric context '${field}'`,
+        risk_level: "high",
+        reason_code: "run_spawn_child_missing_context",
+        policy_rule_id: "run_spawn_child_missing_context",
+        audit_code: "run_spawn_child_missing_context",
+      });
+    }
+  }
+
+  if (str(ctx.requesting_agent_id) === str(ctx.target_agent_id)) {
+    return makeDecision({
+      decision: "deny",
+      message: "run.spawn_child requires a distinct target agent.",
+      risk_level: "medium",
+      reason_code: "run_spawn_child_self_target",
+      policy_rule_id: "run_spawn_child_self_target",
+      audit_code: "run_spawn_child_self_target",
+    });
+  }
+
+  const statusChecks: Array<[string, string]> = [
+    ["group_status", "Agent group is not active."],
+    ["requesting_agent_status", "Requesting agent is not active."],
+    ["target_agent_status", "Target agent is not active."],
+    ["requesting_member_status", "Requesting agent is not an active group member."],
+    ["target_member_status", "Target agent is not an active group member."],
+  ];
+  for (const [field, message] of statusChecks) {
+    const value = str(ctx[field]);
+    if (value && value !== "active") {
+      return makeDecision({
+        decision: "deny",
+        message,
+        risk_level: "high",
+        reason_code: "run_spawn_child_inactive_context",
+        policy_rule_id: "run_spawn_child_inactive_context",
+        audit_code: "run_spawn_child_inactive_context",
+      });
+    }
+  }
+
+  if (
+    ctx.context_widens_authority === true ||
+    ctx.credential_scope_widens === true ||
+    ctx.workspace_scope_widens === true ||
+    ctx.project_scope_widens === true ||
+    ctx.memory_scope_widens === true ||
+    ctx.durable_write_scope_widens === true
+  ) {
+    return makeDecision({
+      decision: "deny",
+      message: "run.spawn_child cannot widen the parent/root authority envelope.",
+      risk_level: "critical",
+      reason_code: "run_spawn_child_authority_widening",
+      policy_rule_id: "run_spawn_child_authority_widening",
+      audit_code: "run_spawn_child_authority_widening",
+    });
+  }
+
+  const depth = num(ctx.depth);
+  const maxDepth = num(ctx.max_depth);
+  if (
+    ctx.depth_limit_exceeded === true ||
+    (depth !== null && maxDepth !== null && depth > maxDepth)
+  ) {
+    return makeDecision({
+      decision: "deny",
+      message: "run.spawn_child depth limit exceeded.",
+      risk_level: "high",
+      reason_code: "run_spawn_child_depth_limit",
+      policy_rule_id: "run_spawn_child_depth_limit",
+      audit_code: "run_spawn_child_depth_limit",
+    });
+  }
+
+  const fanout = num(ctx.fanout_count);
+  const maxFanout = num(ctx.max_fanout);
+  const concurrency = num(ctx.concurrency_count);
+  const maxConcurrency = num(ctx.max_concurrency);
+  if (
+    ctx.fanout_limit_exceeded === true ||
+    ctx.concurrency_limit_exceeded === true ||
+    (fanout !== null && maxFanout !== null && fanout > maxFanout) ||
+    (concurrency !== null &&
+      maxConcurrency !== null &&
+      concurrency > maxConcurrency)
+  ) {
+    return makeDecision({
+      decision: "deny",
+      message: "run.spawn_child fanout or concurrency limit exceeded.",
+      risk_level: "high",
+      reason_code: "run_spawn_child_capacity_limit",
+      policy_rule_id: "run_spawn_child_capacity_limit",
+      audit_code: "run_spawn_child_capacity_limit",
+    });
+  }
+
+  return makeDecision({
+    decision: "allow",
+    message: "run.spawn_child allowed for active same-space group delegation.",
+    risk_level: "medium",
+    reason_code: "run_spawn_child_allowed",
+    policy_rule_id: "run_spawn_child_allowed",
+    audit_code: "run_spawn_child_allowed",
   });
 };
 
@@ -626,6 +782,7 @@ const BUILTIN_RULES: readonly Rule[] = [
   ruleWorkspaceWritePatch,
   ruleAutomation,
   ruleRuntimeExecuteRiskLevel,
+  ruleRunSpawnChild,
   ruleRuntimeSkillRenderEnabled,
   ruleRetrievalToolCall,
 ];

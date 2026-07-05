@@ -54,6 +54,9 @@ export * from "./runtimeHost.js";
 // Run orchestration contracts
 export * from "./runOrchestration.js";
 
+// Agent group run / delegation contracts
+export * from "./agentGroupRuns.js";
+
 // Policy enforcement contracts
 export * from "./policy.js";
 

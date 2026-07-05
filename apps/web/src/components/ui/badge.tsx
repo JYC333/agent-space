@@ -44,6 +44,7 @@ const STATUS_VARIANT: Record<string, BadgeProps['variant']> = {
   cancelled:  'muted',
   degraded:   'warning',
   waiting_for_review: 'warning',
+  waiting_for_dependency: 'warning',
   archived:   'muted',
   superseded: 'muted',
   inactive:   'muted',

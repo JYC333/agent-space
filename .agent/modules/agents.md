@@ -197,7 +197,10 @@ Run:
   runtime_profile_snapshot_json — immutable selected runtime profile snapshot for this run
   status (queued|running|succeeded|failed|cancelled|degraded|waiting_for_review)
   mode (live|dry_run)
-  parent_run_id               — user-created run lineage (follow-up, retry, continuation)
+  parent_run_id               — lineage link (follow-up/retry/manual continuation or delegated child run)
+  root_run_id                 — root of an AgentRunGroup run tree when grouped
+  run_group_id                — owning AgentRunGroup when grouped
+  delegation_id               — RunDelegation that created a delegated child run
   instructed_by_agent_id      — internal-only ORM field for actor resolution; not settable via public API
   prompt, instruction, output_json, error_json, sandbox metadata fields
 ```
@@ -215,12 +218,46 @@ Run:
 
 `parent_run_id` supports user-created lineage: follow-up runs, retries, manual continuations, and
 external run imports. `trigger_origin="parent_run"` is not a valid trigger origin — parent lineage
-is a structural link, not a trigger type. Valid trigger origins: `manual`, `automation`, `job`, `system`.
+is a structural link, not a trigger type. Valid trigger origins: `manual`, `automation`, `job`,
+`system`, `delegation`.
 
-Agent-to-agent delegation is not a current canonical capability and is deferred.
-Future multi-agent child-run creation must be designed as `run.spawn_child` / `run.create_child`
-with explicit server policy and evaluation gates. `runtime.execute` controls adapter
-execution only; it is not a delegation replacement.
+Agent-to-agent child-run creation is represented by `run.spawn_child` inside
+`AgentRunGroup`. The backend route surface lets a human manager create rooms,
+post messages, and audit timeline/trace state. Direct public child-run spawning
+is not exposed; child-run creation goes through `AgentGroupRunService`, active
+same-space group membership checks, parent-run agent identity checks, and the
+`run.spawn_child` policy gate. `runtime.execute` controls adapter execution
+only; it is not a delegation replacement.
+
+Agent Room budgets may shrink the default delegation depth, parent fanout, and
+group concurrency ceilings; they cannot expand those server defaults. The
+`run.spawn_child` policy request fails closed unless these budget/capacity
+proofs are present.
+
+Delegated child-run lifecycle is projected back into the group room after the
+run state changes. Started child runs update `run_delegations.status` to
+`running` and write `delegation_started` trace events. Terminal child runs write
+the terminal delegation status, a bounded result summary, a
+`delegation_result` group message, and `delegation_completed` trace events on
+both the child run and root run. Child proposals stay proposals; the group flow
+does not auto-apply them.
+
+Room agents can explicitly wait for other room results through
+`agent.wait_for_results`. A waiting run uses status `waiting_for_dependency`;
+the worker is released, and the lifecycle projector requeues the same run with
+dependency summaries once all declared dependency runs are terminal. Delegation
+completion alone does not create an inferred follow-up run.
+
+The web Agent Rooms surface is space-scoped at `/agent-groups` under the Agents
+scene. It creates manager-led rooms, reads group timeline/trace, posts
+natural-language room messages, and exposes room settings separately from the
+chat surface. The default recipient is the manager. Structured Tiptap `@`
+mentions route direct segments to selected room members, adjacent mentions fan
+out one segment in parallel, and Agent coordination routes the whole message to
+the manager for decomposition. Room members define the `agent.delegate` target
+pool and `agent.wait_for_results` can wait on sibling or delegated runs.
+Child artifacts and proposals link to the existing Artifacts and Review
+surfaces instead of creating a separate approval path.
 
 **Agent execution config changes**
 

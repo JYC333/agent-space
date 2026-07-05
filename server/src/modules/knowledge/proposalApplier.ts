@@ -868,10 +868,10 @@ async function applyClaimCreateProposal(
          created_by_agent_id, created_by_run_id, created_at, updated_at,
          archived_at
        ) VALUES (
-         $1, $2, 'claim', $3, $4, $5, $6,
+         $1, $2, 'claim', $3, $4, $5::varchar(32), $6,
          $7, $8, $9, $10,
          NULL, $11, $12, $12,
-         CASE WHEN $5 = 'archived' THEN $12::timestamptz ELSE NULL END
+         CASE WHEN $5::varchar(32) = 'archived' THEN $12::timestamptz ELSE NULL END
        )
      )
      INSERT INTO claims (
@@ -1019,9 +1019,9 @@ async function applyClaimUpdateProposal(
        UPDATE space_objects
           SET title = $3,
               summary = CASE WHEN $4::boolean THEN $5 ELSE summary END,
-              status = $6,
+              status = $6::varchar(32),
               visibility = $7,
-              archived_at = CASE WHEN $6 = 'archived' THEN $24::timestamptz ELSE archived_at END,
+              archived_at = CASE WHEN $6::varchar(32) = 'archived' THEN $24::timestamptz ELSE archived_at END,
               updated_at = $24
         WHERE id = $1 AND space_id = $2 AND object_type = 'claim'
         RETURNING id

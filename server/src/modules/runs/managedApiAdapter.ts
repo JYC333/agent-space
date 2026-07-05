@@ -14,6 +14,11 @@ import {
   type ManagedApiRetrievalToolDeps,
 } from "./managedRetrievalTools";
 import {
+  executeWithAgentDelegationTools,
+  resolveAgentDelegationToolBinding,
+  type AgentDelegationToolDeps,
+} from "./managedAgentDelegationTools";
+import {
   redactEvidenceText,
   sanitizeEvidenceJson,
 } from "./evidenceRedaction";
@@ -42,6 +47,7 @@ export interface ManagedApiNoToolAdapterInput {
 
 export interface ManagedApiNoToolAdapterDeps extends ManagedApiRetrievalToolDeps {
   executeRuntimeHost?: RuntimeHostExecutor;
+  agentDelegationTools?: AgentDelegationToolDeps;
 }
 
 export async function executeManagedApiNoToolAdapter(
@@ -75,10 +81,20 @@ export async function executeManagedApiNoToolAdapter(
 
   const request = runtimeHostRequest(input, adapterType, modelProviderId);
   const execute = deps.executeRuntimeHost ?? executeRuntimeHost;
+  const agentDelegationTools = await resolveAgentDelegationToolBinding(
+    config,
+    input.run,
+    deps.agentDelegationTools,
+  );
   const retrievalTools = await resolveRetrievalToolBinding(config, input.run, deps);
-  const response = retrievalTools
-    ? await executeWithRetrievalTools(config, input.run, request, execute, retrievalTools)
-    : await execute(config, request);
+  let response: RuntimeHostExecuteResponse;
+  if (agentDelegationTools) {
+    response = await executeWithAgentDelegationTools(config, input.run, request, execute, agentDelegationTools);
+  } else if (retrievalTools) {
+    response = await executeWithRetrievalTools(config, input.run, request, execute, retrievalTools);
+  } else {
+    response = await execute(config, request);
+  }
   return envelopeFromRuntimeHost(input, adapterType, response, startedAt);
 }
 
@@ -94,6 +110,7 @@ function runtimeHostRequest(
 ): RuntimeHostExecuteRequest {
   const systemPrompt =
     input.system_prompt ?? input.run.system_prompt ?? input.run.instruction ?? null;
+  const groupedAgentIdentity = groupedAgentIdentityContext(input.run);
   const override = recordOrEmpty(input.run.model_override_json);
   const messages = canonicalMessages(override.messages);
   const chatContextPreamble = typeof override.chat_context_preamble === "string"
@@ -105,9 +122,10 @@ function runtimeHostRequest(
     model_provider_id: modelProviderId,
     model: input.model ?? null,
     system_prompt: composeSystemContext(
+      groupedAgentIdentity,
       systemPrompt,
       input.context_text ?? null,
-      messages ? chatContextPreamble : null,
+      chatContextPreamble,
     ),
     prompt: input.prompt ?? input.run.prompt ?? "",
     ...(messages ? { messages } : {}),
@@ -121,6 +139,19 @@ function runtimeHostRequest(
     tool_mode: "disabled",
     tool_bindings: [],
   };
+}
+
+function groupedAgentIdentityContext(run: RunRecord): string | null {
+  if (!run.run_group_id) return null;
+  const name = stringValue(run.agent_name);
+  const label = name ?? "the current room agent";
+  return [
+    "Agent room execution context:",
+    `- You are ${label} for this run.`,
+    "- If the user message includes a structured @mention matching your name, treat it as addressing you directly.",
+    "- Do not claim to be the room manager or another room member unless this run's agent identity is that agent.",
+    "- Internal agent IDs, run IDs, UUIDs, and tool identifiers are system details. Do not include them in user-facing replies unless the user explicitly asks for audit/debug identifiers.",
+  ].join("\n");
 }
 
 function composeSystemContext(
@@ -223,6 +254,12 @@ function recordOrEmpty(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+}
+
+function stringValue(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 function normalizeUsage(value: CanonicalUsage | null | undefined): CanonicalUsage | null {

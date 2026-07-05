@@ -217,14 +217,14 @@ async function updateJobAfterRun(
 ): Promise<MemoryMaintenanceJob> {
   const result = await db.query<MemoryMaintenanceJobRow>(
     `UPDATE memory_maintenance_jobs
-        SET status = $3,
+        SET status = $3::varchar(32),
             cursor = $4,
             total_scanned = total_scanned + $5,
             total_findings = total_findings + $6,
             last_report_artifact_id = COALESCE($7, last_report_artifact_id),
             last_packet_proposal_id = COALESCE($8, last_packet_proposal_id),
             updated_at = now(),
-            completed_at = CASE WHEN $3 = 'completed' THEN now() ELSE completed_at END
+            completed_at = CASE WHEN $3::varchar(32) = 'completed' THEN now() ELSE completed_at END
       WHERE id = $1 AND space_id = $2
       RETURNING id, space_id, owner_user_id, status, review_scope, scan_options_json,
                 cursor, total_scanned, total_findings, last_report_artifact_id,

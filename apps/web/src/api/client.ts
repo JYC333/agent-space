@@ -11,6 +11,10 @@ import type {
   SpaceRetrievalSettings, SpaceRetrievalSettingsUpdate,
   Job, JobEvent, ActivityInboxRecord,
   Board, TaskRunCreateBody, Run, RunStatusOut, TaskRunListItem,
+  AgentRunGroup, AgentRunGroupTimeline, AgentRunGroupTrace,
+  CreateAgentRunGroupRequest, CreateAgentRunGroupResponse,
+  UpdateAgentRunGroupRequest, UpdateAgentRunGroupResponse,
+  SendAgentRunGroupMessageRequest, SendAgentRunGroupMessageResponse,
   TaskArtifact, TaskProposal, Artifact, Proposal, ProposalAcceptOut, AgentOut, AgentCreateBody, AgentUpdateBody, RunCreateBody,
   AgentRuntimeProfileCreateBody, AgentRuntimeProfileOut, AgentRuntimeProfileUpdateBody,
   AgentTemplateOut, AgentTemplateVersionOut, CreateAgentFromTemplateBody,
@@ -512,6 +516,34 @@ export const runsApi = {
     get<Page<Artifact>>(`/runs/${id}/artifacts?` + new URLSearchParams(params)),
   proposals: (id: string, params: Record<string, string> = {}) =>
     get<Page<Proposal>>(`/runs/${id}/proposals?` + new URLSearchParams(params)),
+}
+
+// ── Agent Rooms / group runs ──────────────────────────────────────────────
+export const agentGroupsApi = {
+  list: (params: { status?: string; limit?: number; offset?: number } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.status !== undefined) q.status = params.status
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    return get<Page<AgentRunGroup>>('/agent-groups?' + new URLSearchParams(q))
+  },
+  create: (body: CreateAgentRunGroupRequest) =>
+    post<CreateAgentRunGroupResponse>('/agent-groups', body),
+  update: (groupId: string, body: UpdateAgentRunGroupRequest) =>
+    patch<UpdateAgentRunGroupResponse>(`/agent-groups/${groupId}`, body),
+  timeline: (groupId: string, params: { limit?: number; offset?: number } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    return get<AgentRunGroupTimeline>(`/agent-groups/${groupId}/timeline?` + new URLSearchParams(q))
+  },
+  trace: (groupId: string) =>
+    get<AgentRunGroupTrace>(`/agent-groups/${groupId}/trace`),
+  sendMessage: (groupId: string, body: SendAgentRunGroupMessageRequest) =>
+    post<SendAgentRunGroupMessageResponse>(`/agent-groups/${groupId}/messages`, body),
+  pause: (groupId: string) => post<AgentRunGroup>(`/agent-groups/${groupId}/pause`, {}),
+  resume: (groupId: string) => post<AgentRunGroup>(`/agent-groups/${groupId}/resume`, {}),
+  cancel: (groupId: string) => post<AgentRunGroup>(`/agent-groups/${groupId}/cancel`, {}),
 }
 
 // ── Personal Memory Grants ─────────────────────────────────────────────────

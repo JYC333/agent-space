@@ -39,6 +39,7 @@ function run(overrides: Partial<RunRecord> = {}): RunRecord {
 }
 
 class FakeDb implements Queryable {
+  calls: Array<{ sql: string; params: readonly unknown[] }> = [];
   artifacts: unknown[][] = [];
   proposals: unknown[][] = [];
 
@@ -48,6 +49,7 @@ class FakeDb implements Queryable {
     sql: string,
     params: readonly unknown[] = [],
   ): Promise<QueryResult<Row>> {
+    this.calls.push({ sql, params });
     if (sql.includes("FROM projects")) {
       const id = String(params[0] ?? "");
       return {
@@ -89,6 +91,67 @@ class FakeDb implements Queryable {
 }
 
 describe("RunMaterializationService", () => {
+  it("materializes structured runtime delegations through the agent group materializer", async () => {
+    const db = new FakeDb();
+    const config = loadConfig({
+      SERVER_DATABASE_URL: "postgresql://server@localhost:5432/agent_space",
+    });
+    const seen: unknown[] = [];
+    const service = new RunMaterializationService(
+      config,
+      db,
+      undefined,
+      async () => ({ status: "allow" }),
+      {
+        async materialize(input) {
+          seen.push(input);
+          return {
+            items: [
+              {
+                kind: "delegation",
+                status: "succeeded",
+                metadata_json: {
+                  operation: "run.spawn_child",
+                  delegation_id: "delegation-1",
+                  child_run_id: "run-child",
+                },
+              },
+            ],
+            errors: [],
+          };
+        },
+      },
+    );
+
+    const result = await service.materializeAdapterResult({
+      run: run({ run_group_id: "group-1", root_run_id: "run-root" }),
+      adapterResult: {
+        adapter_type: "model_api",
+        adapter_kind: "managed_api",
+        success: true,
+        output_text: "",
+        output_json: {
+          delegations: [
+            {
+              target_agent_id: "agent-reader",
+              instruction: "Summarize the packet.",
+            },
+          ],
+        },
+        exit_code: 0,
+      },
+    });
+
+    expect(seen).toHaveLength(1);
+    expect(result.errors).toEqual([]);
+    expect(result.items).toEqual([
+      expect.objectContaining({
+        kind: "delegation",
+        metadata_json: expect.objectContaining({ delegation_id: "delegation-1" }),
+      }),
+    ]);
+  });
+
   it("materializes artifacts and supported proposals natively", async () => {
     const artifactRoot = await mkdtemp(join(tmpdir(), "aspace-artifacts-"));
     const sandboxRoot = await mkdtemp(join(tmpdir(), "aspace-sandbox-"));
@@ -159,7 +222,6 @@ describe("RunMaterializationService", () => {
     expect(result.items).toMatchObject([
       { kind: "artifact", status: "succeeded" },
       { kind: "artifact", status: "succeeded" },
-      { kind: "artifact", status: "succeeded" },
       { kind: "proposal", status: "succeeded" },
       {
         kind: "proposal",
@@ -172,25 +234,19 @@ describe("RunMaterializationService", () => {
         error_code: "output_activity_materialization_error",
       },
     ]);
-    expect(db.artifacts).toHaveLength(3);
+    expect(db.artifacts).toHaveLength(2);
     expect(db.proposals).toHaveLength(1);
 
-    const runtimeStoragePath = db.artifacts[0][6] as string;
-    expect(await readFile(join(artifactRoot, runtimeStoragePath), "utf8")).toBe(
-      "hello token=secret",
-    );
-
-    const copiedStoragePath = db.artifacts[1][6] as string;
+    const copiedStoragePath = db.artifacts[0][6] as string;
     expect(await readFile(join(artifactRoot, copiedStoragePath), "utf8")).toBe(
       "file artifact",
     );
 
-    expect(db.artifacts[2][5]).toBe("ok");
-    expect(db.artifacts[2][7]).toBe("text/markdown");
+    expect(db.artifacts[1][5]).toBe("ok");
+    expect(db.artifacts[1][7]).toBe("text/markdown");
     expect(db.artifacts[0][12]).toBe("space_shared");
-    expect(db.artifacts[1][12]).toBe("space_shared");
-    expect(db.artifacts[2][12]).toBe("private");
-    expect(db.artifacts[2][13]).toBe("user-1");
+    expect(db.artifacts[1][12]).toBe("private");
+    expect(db.artifacts[1][13]).toBe("user-1");
 
     const proposalPayload = JSON.parse(db.proposals[0][10] as string) as Record<string, unknown>;
     expect(proposalPayload.project_id).toBe("project-1");
@@ -210,6 +266,39 @@ describe("RunMaterializationService", () => {
       'proposal:output_proposal_materialization_error:unsupported proposal_type "deployment_job"',
       "activity:output_activity_materialization_error:Activity materialization is intentionally deferred in the server backend.",
     ]);
+  });
+
+  it("keeps plain output_text as run display output instead of creating an artifact", async () => {
+    const db = new FakeDb();
+    const config = loadConfig({
+      SERVER_DATABASE_URL: "postgresql://server@localhost:5432/agent_space",
+    });
+    const service = new RunMaterializationService(
+      config,
+      db,
+      undefined,
+      async () => ({ status: "allow" }),
+    );
+
+    const result = await service.materializeAdapterResult({
+      run: run(),
+      adapterResult: {
+        adapter_type: "model_api",
+        adapter_kind: "managed_api",
+        success: true,
+        output_text: "A normal chat reply.",
+        output_json: {},
+        exit_code: 0,
+        error_code: null,
+        error_message: null,
+        started_at: "2026-06-12T10:00:00.000Z",
+        completed_at: "2026-06-12T10:00:01.000Z",
+        usage: null,
+      },
+    });
+
+    expect(result).toEqual({ items: [], errors: [] });
+    expect(db.artifacts).toHaveLength(0);
   });
 
   it("does not materialize proposals for projects outside the run space", async () => {
@@ -265,6 +354,76 @@ describe("RunMaterializationService", () => {
     expect(db.proposals).toHaveLength(0);
   });
 
+  it("keeps Memory and Knowledge run outputs as pending proposals, not active writes", async () => {
+    const db = new FakeDb();
+    const config = loadConfig({
+      SERVER_DATABASE_URL: "postgresql://server@localhost:5432/agent_space",
+    });
+    const service = new RunMaterializationService(
+      config,
+      db,
+      undefined,
+      async () => ({ status: "allow" }),
+    );
+
+    const result = await service.materializeAdapterResult({
+      run: run(),
+      adapterResult: {
+        adapter_type: "model_api",
+        adapter_kind: "managed_api",
+        success: true,
+        output_text: "",
+        output_json: {
+          proposed_changes: [
+            {
+              proposal_type: "memory_create",
+              title: "Remember preference",
+              payload_json: {
+                memory_type: "semantic",
+                content: "User prefers concise summaries.",
+                provenance_entries: [
+                  {
+                    source_type: "run",
+                    source_id: "run-1",
+                    memory_source_trust: "internal_system",
+                  },
+                ],
+              },
+            },
+            {
+              proposal_type: "knowledge_create",
+              title: "Create knowledge item",
+              payload_json: {
+                operation: "knowledge_create",
+                knowledge_kind: "concept",
+                title: "Agent group review",
+                content: "Agent group outputs require proposal review.",
+              },
+            },
+          ],
+        },
+        exit_code: 0,
+        error_code: null,
+        error_message: null,
+        started_at: "2026-06-12T10:00:00.000Z",
+        completed_at: "2026-06-12T10:00:01.000Z",
+        usage: null,
+      },
+    });
+
+    expect(result.items).toMatchObject([
+      { kind: "proposal", status: "succeeded" },
+      { kind: "proposal", status: "succeeded" },
+    ]);
+    expect(db.proposals.map((params) => [params[3], params[4]])).toEqual([
+      ["memory_create", "pending"],
+      ["knowledge_create", "pending"],
+    ]);
+    const sql = db.calls.map((call) => call.sql).join("\n");
+    expect(sql).not.toContain("INSERT INTO memory_entries");
+    expect(sql).not.toContain("INSERT INTO knowledge_items");
+  });
+
   it("enforces artifact.persist before inserting artifacts", async () => {
     const artifactRoot = await mkdtemp(join(tmpdir(), "aspace-artifacts-"));
     tempRoots.push(artifactRoot);
@@ -289,7 +448,9 @@ describe("RunMaterializationService", () => {
         adapter_kind: "managed_api",
         success: true,
         output_text: "blocked artifact",
-        output_json: {},
+        output_json: {
+          artifacts: [{ title: "Blocked", content: "blocked artifact" }],
+        },
         exit_code: 0,
         error_code: null,
         error_message: null,

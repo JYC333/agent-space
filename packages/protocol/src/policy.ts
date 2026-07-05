@@ -103,6 +103,20 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     record_failure_mode: "best_effort",
   },
   {
+    action: "run.spawn_child",
+    resource_type: "run",
+    default_risk_level: "medium",
+    default_decision: "require_approval",
+    audit_required: true,
+    approval_capability: null,
+    default_required_approver_role: null,
+    current_enforcement_point: "server/src/modules/agentGroups/service.ts",
+    description:
+      "Create a policy-gated child run requested by one agent for another agent inside an active agent group run.",
+    lifecycle_status: "wired_direct",
+    record_failure_mode: "fail_closed",
+  },
+  {
     action: "runtime.use_credential",
     resource_type: "credential",
     default_risk_level: "high",
@@ -1349,6 +1363,7 @@ export const PolicyEnforceResultSchema = z
   .object({
     status: z.enum(["allow", "blocked", "error"]),
     decision: PolicyDecisionSchema.nullish(),
+    policy_decision_record_id: IdSchema.nullish(),
     error_code: PolicyEnforceErrorCodeEnum.nullish(),
     message: z.string().nullish(),
     ...SecretResponseGuards,

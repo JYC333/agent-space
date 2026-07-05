@@ -2,14 +2,14 @@
  * Context Brief synthesis (W6) configuration.
  *
  * Synthesis is a skippable LLM stage routed through the provider task-policy +
- * credential channel (ADR 0010) under its own task name, so a space can point it
+ * credential channel (ADR 0008) under its own task name, so a space can point it
  * at a capable chat model independent of the reranker/rewriter. When no
  * `retrieval_synthesis` policy is configured the provider call fails and the
  * brief degrades to the deterministic gap analysis (no LLM answer) — the task
  * policy is therefore the gate; no extra space-setting flag is required.
  */
 
-/** Provider task policy used to route synthesis (ADR 0010 channel). */
+/** Provider task policy used to route synthesis (ADR 0008 channel). */
 export const RETRIEVAL_SYNTHESIS_TASK = "retrieval_synthesis";
 
 /** Max tokens for the synthesized answer + gap JSON. */

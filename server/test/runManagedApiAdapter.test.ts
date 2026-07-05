@@ -222,6 +222,106 @@ describe("executeManagedApiNoToolAdapter", () => {
     ]);
   });
 
+  it("passes chat context preamble even when native messages are absent", async () => {
+    const calls: unknown[] = [];
+    const executor: RuntimeHostExecutor = async (_config, request) => {
+      calls.push(request);
+      return {
+        success: true,
+        stdout: "ok",
+        stderr: "",
+        output_text: "ok",
+        output_json: { adapter_type: "ts_agent_host" },
+        exit_code: 0,
+        error_text: null,
+        error_code: null,
+        started_at: "2026-06-12T10:00:00.000Z",
+        completed_at: "2026-06-12T10:00:01.000Z",
+        model: "gpt-4o-mini",
+        usage: null,
+        events: [],
+        adapter_metadata: { adapter_type: "ts_agent_host" },
+        adapter_log_json: null,
+      };
+    };
+
+    await executeManagedApiNoToolAdapter(
+      config(),
+      {
+        run: run({
+          model_override_json: {
+            chat_context_preamble: "Room turn routing context.",
+          },
+        }),
+        model: "gpt-4o-mini",
+      },
+      { executeRuntimeHost: executor },
+    );
+
+    expect(calls).toEqual([
+      expect.objectContaining({
+        system_prompt: "Be concise.\n\nRoom turn routing context.",
+        prompt: "Say hello",
+      }),
+    ]);
+    expect(calls[0]).not.toHaveProperty("messages");
+  });
+
+  it("adds the current room agent identity to grouped managed API runs", async () => {
+    const calls: unknown[] = [];
+    const executor: RuntimeHostExecutor = async (_config, request) => {
+      calls.push(request);
+      return {
+        success: true,
+        stdout: "ok",
+        stderr: "",
+        output_text: "ok",
+        output_json: { adapter_type: "ts_agent_host" },
+        exit_code: 0,
+        error_text: null,
+        error_code: null,
+        started_at: "2026-06-12T10:00:00.000Z",
+        completed_at: "2026-06-12T10:00:01.000Z",
+        model: "gpt-4o-mini",
+        usage: null,
+        events: [],
+        adapter_metadata: { adapter_type: "ts_agent_host" },
+        adapter_log_json: null,
+      };
+    };
+
+    await executeManagedApiNoToolAdapter(
+      config(),
+      {
+        run: run({
+          agent_id: "agent-reviewer",
+          agent_name: "Coding Reviewer",
+          run_group_id: "group-1",
+          root_run_id: "run-root",
+          prompt: "@Coding Reviewer 56456*56456=?",
+          system_prompt: "Answer as the coding reviewer.",
+        }),
+        model: "gpt-4o-mini",
+      },
+      {
+        executeRuntimeHost: executor,
+        agentDelegationTools: { targets: [] },
+      },
+    );
+
+    expect(calls).toEqual([
+      expect.objectContaining({
+        prompt: "@Coding Reviewer 56456*56456=?",
+        system_prompt: expect.stringContaining("You are Coding Reviewer for this run."),
+      }),
+    ]);
+    const systemPrompt = (calls[0] as { system_prompt?: string }).system_prompt ?? "";
+    expect(systemPrompt).toContain("Answer as the coding reviewer.");
+    expect(systemPrompt).toContain("Do not claim to be the room manager");
+    expect(systemPrompt).toContain("Do not include them in user-facing replies");
+    expect(systemPrompt).not.toContain("agent_id: agent-reviewer");
+  });
+
   it("executes governed retrieval brief tool calls under the instructing user and emits a brief artifact", async () => {
     const calls: unknown[] = [];
     const toolActors: unknown[] = [];
@@ -1394,7 +1494,7 @@ class DomainRetrievalToolFakePool implements Queryable {
     }
     if (sql.includes("INSERT INTO policy_decision_records")) {
       (this.auditWrites as unknown[][]).push([...params]);
-      return rows([]);
+      return rows([{ id: `policy-${this.auditWrites.length}` }] as Row[]);
     }
     if (sql.includes("FROM retrieval_aliases ra")) {
       return rows(this.exactAliasRows(params) as Row[]);

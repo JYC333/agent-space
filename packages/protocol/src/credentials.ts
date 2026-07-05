@@ -2,7 +2,7 @@
  * CLI credential-channel contracts.
  *
  * These schemas mirror the public `/api/v1/credentials/cli/*` API. CLI login
- * state is the second credential channel under ADR 0010: it is
+ * state is the second credential channel under ADR 0008: it is
  * a distinct class from ModelProvider API-key credentials and is never pooled
  * or rotated. Profile paths are storage locations, not secret material; the
  * login files themselves never appear in any response. Contracts only: no

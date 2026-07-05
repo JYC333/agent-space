@@ -102,6 +102,55 @@ CREATE TABLE public.agents (
     CONSTRAINT ck_agents_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'inactive'::character varying, 'archived'::character varying, 'disabled'::character varying])::text[])))
 );
 
+CREATE TABLE public.agent_run_groups (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    root_run_id character varying(36),
+    manager_user_id character varying(36) NOT NULL,
+    manager_agent_id character varying(36),
+    title text NOT NULL,
+    goal text NOT NULL,
+    status character varying(32) NOT NULL,
+    budget_json jsonb,
+    policy_snapshot_json jsonb,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    ended_at timestamp with time zone,
+    CONSTRAINT ck_agent_run_groups_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'paused'::character varying, 'succeeded'::character varying, 'failed'::character varying, 'cancelled'::character varying, 'archived'::character varying])::text[])))
+);
+
+CREATE TABLE public.agent_run_group_members (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    group_id character varying(36) NOT NULL,
+    agent_id character varying(36) NOT NULL,
+    role character varying(32) NOT NULL,
+    status character varying(32) NOT NULL,
+    capabilities_json jsonb,
+    context_policy_json jsonb,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_agent_run_group_members_role CHECK (((role)::text = ANY ((ARRAY['manager'::character varying, 'planner'::character varying, 'worker'::character varying, 'reviewer'::character varying, 'curator'::character varying, 'observer'::character varying])::text[]))),
+    CONSTRAINT ck_agent_run_group_members_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'disabled'::character varying])::text[])))
+);
+
+CREATE TABLE public.agent_run_messages (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    group_id character varying(36) NOT NULL,
+    run_id character varying(36),
+    parent_message_id character varying(36),
+    sender_actor_ref_json jsonb NOT NULL,
+    sender_user_id character varying(36),
+    sender_agent_id character varying(36),
+    message_type character varying(32) NOT NULL,
+    content text NOT NULL,
+    mentions_json jsonb,
+    metadata_json jsonb,
+    created_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_agent_run_messages_message_type CHECK (((message_type)::text = ANY ((ARRAY['user_instruction'::character varying, 'agent_message'::character varying, 'delegation_request'::character varying, 'delegation_result'::character varying, 'system_event'::character varying, 'review_note'::character varying])::text[])))
+);
+
 CREATE TABLE public.context_snapshots (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
@@ -182,6 +231,29 @@ CREATE TABLE public.artifacts (
     created_at timestamp with time zone NOT NULL
 );
 
+CREATE TABLE public.run_delegations (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    group_id character varying(36) NOT NULL,
+    parent_run_id character varying(36) NOT NULL,
+    child_run_id character varying(36),
+    request_message_id character varying(36),
+    requesting_agent_id character varying(36) NOT NULL,
+    target_agent_id character varying(36) NOT NULL,
+    requested_by_user_id character varying(36),
+    policy_decision_record_id character varying(36),
+    status character varying(32) NOT NULL,
+    instruction text NOT NULL,
+    reason text,
+    budget_json jsonb,
+    context_policy_json jsonb,
+    result_summary text,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    completed_at timestamp with time zone,
+    CONSTRAINT ck_run_delegations_status CHECK (((status)::text = ANY ((ARRAY['requested'::character varying, 'policy_denied'::character varying, 'queued'::character varying, 'running'::character varying, 'succeeded'::character varying, 'failed'::character varying, 'cancelled'::character varying])::text[])))
+);
+
 CREATE TABLE public.run_events (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
@@ -202,7 +274,7 @@ CREATE TABLE public.run_events (
     metadata_json jsonb,
     created_at timestamp with time zone NOT NULL,
     CONSTRAINT ck_run_events_data_exposure_level CHECK (((data_exposure_level IS NULL) OR ((data_exposure_level)::text = ANY ((ARRAY['local_only'::character varying, 'model_provider'::character varying, 'vendor_platform'::character varying, 'third_party_tools'::character varying, 'unknown'::character varying])::text[])))),
-    CONSTRAINT ck_run_events_event_type CHECK (((event_type)::text = ANY ((ARRAY['context_compiled'::character varying, 'runtime_selected'::character varying, 'credential_granted'::character varying, 'sandbox_created'::character varying, 'policy_checked'::character varying, 'adapter_invoked'::character varying, 'adapter_completed'::character varying, 'artifact_ingested'::character varying, 'patch_collected'::character varying, 'validation_started'::character varying, 'validation_completed'::character varying, 'proposal_created'::character varying, 'evaluation_created'::character varying, 'run_finalized'::character varying])::text[]))),
+    CONSTRAINT ck_run_events_event_type CHECK (((event_type)::text = ANY ((ARRAY['context_compiled'::character varying, 'runtime_selected'::character varying, 'credential_granted'::character varying, 'sandbox_created'::character varying, 'policy_checked'::character varying, 'adapter_invoked'::character varying, 'adapter_completed'::character varying, 'artifact_ingested'::character varying, 'patch_collected'::character varying, 'validation_started'::character varying, 'validation_completed'::character varying, 'proposal_created'::character varying, 'evaluation_created'::character varying, 'run_finalized'::character varying, 'delegation_requested'::character varying, 'delegation_policy_denied'::character varying, 'delegation_queued'::character varying, 'delegation_started'::character varying, 'delegation_completed'::character varying])::text[]))),
     CONSTRAINT ck_run_events_status CHECK (((status)::text = ANY ((ARRAY['pending'::character varying, 'running'::character varying, 'succeeded'::character varying, 'failed'::character varying, 'skipped'::character varying, 'warning'::character varying, 'cancelled'::character varying])::text[]))),
     CONSTRAINT ck_run_events_trust_level CHECK (((trust_level IS NULL) OR ((trust_level)::text = ANY ((ARRAY['high'::character varying, 'medium'::character varying, 'low'::character varying, 'unknown'::character varying])::text[]))))
 );
@@ -294,8 +366,12 @@ CREATE TABLE public.runs (
     workspace_id character varying(36),
     session_id character varying(36),
     parent_run_id character varying(36),
+    root_run_id character varying(36),
+    run_group_id character varying(36),
+    delegation_id character varying(36),
     instructed_by character varying(128),
     instructed_by_user_id character varying(36),
+    instructed_by_agent_id character varying(36),
     run_type character varying(32) NOT NULL,
     trigger_origin character varying(32) NOT NULL,
     status character varying(32) NOT NULL,
@@ -345,7 +421,7 @@ CREATE TABLE public.runs (
     CONSTRAINT ck_runs_run_type CHECK (((run_type)::text = ANY ((ARRAY['agent'::character varying, 'system'::character varying, 'workflow'::character varying, 'validation'::character varying, 'reflection'::character varying, 'export'::character varying, 'evolution'::character varying])::text[]))),
     CONSTRAINT ck_runs_source CHECK (((source IS NULL) OR ((source)::text = ANY ((ARRAY['managed'::character varying, 'ide_assist'::character varying, 'manual_import'::character varying, 'remote_import'::character varying, 'scheduled'::character varying, 'webhook'::character varying])::text[])))),
     CONSTRAINT ck_runs_status CHECK (((status)::text = ANY ((ARRAY['queued'::character varying, 'running'::character varying, 'succeeded'::character varying, 'degraded'::character varying, 'failed'::character varying, 'cancelled'::character varying, 'waiting_for_review'::character varying])::text[]))),
-    CONSTRAINT ck_runs_trigger_origin CHECK (((trigger_origin)::text = ANY ((ARRAY['manual'::character varying, 'automation'::character varying, 'job'::character varying, 'system'::character varying])::text[]))),
+    CONSTRAINT ck_runs_trigger_origin CHECK (((trigger_origin)::text = ANY ((ARRAY['manual'::character varying, 'automation'::character varying, 'job'::character varying, 'system'::character varying, 'delegation'::character varying])::text[]))),
     CONSTRAINT ck_runs_trust_level CHECK (((trust_level IS NULL) OR ((trust_level)::text = ANY ((ARRAY['high'::character varying, 'medium'::character varying, 'low'::character varying, 'unknown'::character varying])::text[]))))
 );
 
@@ -401,6 +477,24 @@ ALTER TABLE ONLY public.agent_runtime_profiles
 ALTER TABLE ONLY public.agents
     ADD CONSTRAINT agents_pkey PRIMARY KEY (id);
 
+ALTER TABLE ONLY public.agents
+    ADD CONSTRAINT uq_agents_space_id_id UNIQUE (space_id, id);
+
+ALTER TABLE ONLY public.agent_run_groups
+    ADD CONSTRAINT agent_run_groups_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY public.agent_run_groups
+    ADD CONSTRAINT uq_agent_run_groups_space_id_id UNIQUE (space_id, id);
+
+ALTER TABLE ONLY public.agent_run_group_members
+    ADD CONSTRAINT agent_run_group_members_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY public.agent_run_messages
+    ADD CONSTRAINT agent_run_messages_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY public.agent_run_messages
+    ADD CONSTRAINT uq_agent_run_messages_space_id_id UNIQUE (space_id, id);
+
 ALTER TABLE ONLY public.artifacts
     ADD CONSTRAINT artifacts_pkey PRIMARY KEY (id);
 
@@ -422,6 +516,12 @@ ALTER TABLE ONLY public.run_execution_locks
 ALTER TABLE ONLY public.run_evaluations
     ADD CONSTRAINT run_evaluations_pkey PRIMARY KEY (id);
 
+ALTER TABLE ONLY public.run_delegations
+    ADD CONSTRAINT run_delegations_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY public.run_delegations
+    ADD CONSTRAINT uq_run_delegations_space_id_id UNIQUE (space_id, id);
+
 ALTER TABLE ONLY public.run_finalizations
     ADD CONSTRAINT run_finalizations_pkey PRIMARY KEY (id);
 
@@ -430,6 +530,9 @@ ALTER TABLE ONLY public.run_steps
 
 ALTER TABLE ONLY public.runs
     ADD CONSTRAINT runs_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY public.runs
+    ADD CONSTRAINT uq_runs_space_id_id UNIQUE (space_id, id);
 
 ALTER TABLE ONLY public.tasks
     ADD CONSTRAINT tasks_pkey PRIMARY KEY (id);
@@ -448,6 +551,9 @@ ALTER TABLE ONLY public.run_steps
 
 ALTER TABLE ONLY public.run_finalizations
     ADD CONSTRAINT uq_run_finalizations_run_version UNIQUE (run_id, finalizer_version);
+
+ALTER TABLE ONLY public.agent_run_group_members
+    ADD CONSTRAINT uq_agent_run_group_members_group_agent UNIQUE (group_id, agent_id);
 
 ALTER TABLE ONLY public.task_runs
     ADD CONSTRAINT uq_task_runs_task_run UNIQUE (task_id, run_id);
@@ -481,6 +587,18 @@ CREATE INDEX ix_jobs_type_claim_pending ON public.jobs USING btree (job_type, pr
 CREATE INDEX ix_jobs_user_id ON public.jobs USING btree (user_id);
 
 CREATE INDEX ix_jobs_workspace_id ON public.jobs USING btree (workspace_id);
+
+CREATE INDEX ix_run_delegations_child_run ON public.run_delegations USING btree (space_id, child_run_id);
+
+CREATE INDEX ix_run_delegations_group_created ON public.run_delegations USING btree (space_id, group_id, created_at);
+
+CREATE INDEX ix_run_delegations_parent_run ON public.run_delegations USING btree (space_id, parent_run_id);
+
+CREATE INDEX ix_run_delegations_requesting_agent_created ON public.run_delegations USING btree (space_id, requesting_agent_id, created_at);
+
+CREATE INDEX ix_run_delegations_status_updated ON public.run_delegations USING btree (space_id, status, updated_at);
+
+CREATE INDEX ix_run_delegations_target_agent_created ON public.run_delegations USING btree (space_id, target_agent_id, created_at);
 
 CREATE INDEX ix_run_events_actor_id ON public.run_events USING btree (actor_id);
 
@@ -538,11 +656,33 @@ CREATE INDEX ix_agent_runtime_profiles_space_id ON public.agent_runtime_profiles
 
 CREATE UNIQUE INDEX uq_agent_runtime_profiles_default_per_agent ON public.agent_runtime_profiles USING btree (agent_id) WHERE (is_default = true);
 
+CREATE INDEX ix_agent_run_groups_manager_user_updated ON public.agent_run_groups USING btree (space_id, manager_user_id, updated_at);
+
+CREATE INDEX ix_agent_run_groups_root_run ON public.agent_run_groups USING btree (space_id, root_run_id);
+
+CREATE INDEX ix_agent_run_groups_status_updated ON public.agent_run_groups USING btree (space_id, status, updated_at);
+
+CREATE INDEX ix_agent_run_group_members_agent ON public.agent_run_group_members USING btree (space_id, agent_id);
+
+CREATE INDEX ix_agent_run_group_members_group ON public.agent_run_group_members USING btree (space_id, group_id);
+
+CREATE INDEX ix_agent_run_messages_group_created ON public.agent_run_messages USING btree (space_id, group_id, created_at);
+
+CREATE INDEX ix_agent_run_messages_run_created ON public.agent_run_messages USING btree (space_id, run_id, created_at);
+
+CREATE INDEX ix_agent_run_messages_sender_agent_created ON public.agent_run_messages USING btree (space_id, sender_agent_id, created_at);
+
 CREATE INDEX ix_runs_agent_id ON public.runs USING btree (agent_id);
 
 CREATE INDEX ix_runs_agent_version_id ON public.runs USING btree (agent_version_id);
 
 CREATE INDEX ix_runs_context_snapshot_id ON public.runs USING btree (context_snapshot_id);
+
+CREATE INDEX ix_runs_delegation_id ON public.runs USING btree (space_id, delegation_id);
+
+CREATE INDEX ix_runs_group_id ON public.runs USING btree (space_id, run_group_id);
+
+CREATE INDEX ix_runs_instructed_by_agent_id ON public.runs USING btree (space_id, instructed_by_agent_id);
 
 CREATE INDEX ix_runs_instructed_by_user_id ON public.runs USING btree (instructed_by_user_id);
 
@@ -552,9 +692,13 @@ CREATE INDEX ix_runs_model_provider_id ON public.runs USING btree (model_provide
 
 CREATE INDEX ix_runs_parent_run_id ON public.runs USING btree (parent_run_id);
 
+CREATE INDEX ix_runs_parent_run_space ON public.runs USING btree (space_id, parent_run_id);
+
 CREATE INDEX ix_runs_project_id ON public.runs USING btree (project_id);
 
 CREATE INDEX ix_runs_runtime_profile_id ON public.runs USING btree (runtime_profile_id);
+
+CREATE INDEX ix_runs_root_run_id ON public.runs USING btree (space_id, root_run_id);
 
 CREATE INDEX ix_runs_run_type ON public.runs USING btree (run_type);
 

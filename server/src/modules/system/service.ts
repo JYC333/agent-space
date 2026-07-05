@@ -16,7 +16,7 @@
  *   GET /api/v1/catalog (catalog module) lists CAPABILITY manifests — agent AI skill
  *   descriptors. Also NOT product plugins.
  *
- *   See .agent/architecture/OFFICIAL_OPTIONAL_MODULES.md and ADR 0007.
+ *   See .agent/architecture/OFFICIAL_OPTIONAL_MODULES.md and ADR 0006.
  */
 
 import { createRequire } from "node:module";

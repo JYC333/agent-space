@@ -176,7 +176,7 @@ Steps:
 10. Use `useEffectivePlugins()` hook to show/hide UI elements based on backend state.
 11. Add core migrations only for control-plane tables shared by all plugins; plugin-owned
     domain tables belong to installer-managed plugin migrations.
-12. See `.agent/architecture/OFFICIAL_OPTIONAL_MODULES.md` and ADR 0007 for full context.
+12. See `.agent/architecture/OFFICIAL_OPTIONAL_MODULES.md` and ADR 0006 for full context.
 
 Implemented contribution points:
 - Routes through `ctx.fastify` plus `ctx.http.pluginGuard()`.
