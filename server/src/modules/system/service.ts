@@ -88,6 +88,7 @@ export function computeFeatures(config: ServerConfig): string[] {
     "evolution_server_authority",
     "source_pointers_server_authority",
     "workspace_profiles_server_authority",
+    "graph_projection_server_authority",
     "server_agent_runtime_host",
     "config_semantic_validation",
     "notification_webhook_egress_policy_gate",

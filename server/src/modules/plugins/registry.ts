@@ -1,6 +1,7 @@
 import type { OfficialPluginDescriptor } from "@agent-space/protocol" with { "resolution-mode": "import" };
 import { diaryDescriptor } from "./official/diary";
 import { financeLedgerDescriptor } from "./official/financeLedger";
+import { researchAtlasDescriptor } from "./official/researchAtlas";
 
 /**
  * Static in-memory registry of official optional modules bundled with this
@@ -17,6 +18,7 @@ import { financeLedgerDescriptor } from "./official/financeLedger";
 const OFFICIAL_PLUGINS: readonly OfficialPluginDescriptor[] = [
   diaryDescriptor,
   financeLedgerDescriptor,
+  researchAtlasDescriptor,
 ];
 
 /** All registered official plugin descriptors, indexed by id for O(1) lookup. */

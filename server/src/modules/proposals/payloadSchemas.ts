@@ -272,6 +272,13 @@ const customSourceRepairActivation = z
   })
   .passthrough();
 
+const researchAtlasCuration = z
+  .object({
+    proposal_type: z.literal("research_atlas_curation"),
+    action: z.enum(["create_group", "add_group_membership"]),
+  })
+  .passthrough();
+
 export const ProposalPayloadSchema = z.discriminatedUnion("proposal_type", [
   memoryCreate,
   memoryUpdate,
@@ -306,6 +313,7 @@ export const ProposalPayloadSchema = z.discriminatedUnion("proposal_type", [
   customSourceCredentialedSource,
   customSourceRepairActivation,
   sourceRecipeActivation,
+  researchAtlasCuration,
 ]);
 
 export type ProposalPayload = z.infer<typeof ProposalPayloadSchema>;

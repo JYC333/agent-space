@@ -73,6 +73,7 @@ import type {
   ReaderCreateEvidenceRequest, ReaderCreatedEvidence,
   ReaderCreateProposalRequest, ReaderCreatedProposal,
 } from '../types/api'
+import type { GraphProjection, GraphProjectionViewMode } from '@agent-space/protocol'
 
 const BASE = '/api/v1'
 
@@ -141,11 +142,38 @@ async function request<T = unknown>(method: string, path: string, body?: unknown
   return r.json() as Promise<T>
 }
 
+async function requestText(method: string, path: string, options: RequestOptions = {}): Promise<string> {
+  const headers: Record<string, string> = {}
+  if (_apiKey) headers['Authorization'] = `Bearer ${_apiKey}`
+  if (options.includeSpaceContext ?? true) headers['X-Agent-Space-Id'] = options.spaceId ?? _spaceId
+
+  const r = await fetch(BASE + path, { method, headers })
+
+  if (r.status === 401) {
+    window.dispatchEvent(new CustomEvent('auth:required'))
+  }
+
+  if (!r.ok) {
+    let msg = `${r.status} ${r.statusText}`
+    try {
+      const err = await r.json() as ApiError
+      msg = formatApiErrorMessage(err, msg)
+    } catch {
+      const text = await r.text().catch(() => '')
+      if (text) msg = text
+    }
+    throw new Error(msg)
+  }
+
+  return r.text()
+}
+
 const get   = <T>(path: string, options?: RequestOptions)                => request<T>('GET',    path, undefined, options)
 const post  = <T>(path: string, body?: unknown, options?: RequestOptions) => request<T>('POST',   path, body, options)
 const put   = <T>(path: string, body?: unknown, options?: RequestOptions) => request<T>('PUT',    path, body, options)
 const patch = <T>(path: string, body?: unknown, options?: RequestOptions) => request<T>('PATCH',  path, body, options)
 const del   = <T>(path: string, options?: RequestOptions)                => request<T>('DELETE', path, undefined, options)
+const getText = (path: string, options?: RequestOptions) => requestText('GET', path, options)
 
 // ── Memory ────────────────────────────────────────────────────────────────
 export const memoryApi = {
@@ -273,6 +301,45 @@ export const knowledgeApi = {
     post<RetrievalExplainResponse>('/knowledge/retrieval/explain', data),
   feedback: (data: RetrievalFeedbackRequest) =>
     post<RetrievalFeedbackResponse>('/knowledge/retrieval/feedback', data),
+}
+
+export interface GraphProjectionQuery {
+  mode?: Exclude<GraphProjectionViewMode, 'debug'>
+  root_id?: string
+  depth?: number
+  node_kinds?: string[]
+  edge_kinds?: string[]
+  q?: string
+  limit?: number
+  include_clusters?: boolean
+}
+
+export interface GraphViewStateRecord {
+  scope_key: string
+  state_json: Record<string, unknown>
+  updated_at: string | null
+}
+
+export const graphApi = {
+  projection: (params: GraphProjectionQuery = {}) => {
+    const q = new URLSearchParams()
+    if (params.mode) q.set('mode', params.mode)
+    if (params.root_id) q.set('root_id', params.root_id)
+    if (params.depth !== undefined) q.set('depth', String(params.depth))
+    if (params.node_kinds?.length) q.set('node_kinds', params.node_kinds.join(','))
+    if (params.edge_kinds?.length) q.set('edge_kinds', params.edge_kinds.join(','))
+    if (params.q) q.set('q', params.q)
+    if (params.limit !== undefined) q.set('limit', String(params.limit))
+    if (params.include_clusters !== undefined) q.set('include_clusters', String(params.include_clusters))
+    return get<GraphProjection>(`/graph/projection${q.size ? '?' + q : ''}`)
+  },
+  getViewState: (scopeKey: string) =>
+    get<GraphViewStateRecord>(`/graph/view-state?scope_key=${encodeURIComponent(scopeKey)}`),
+  saveViewState: (scopeKey: string, stateJson: Record<string, unknown>) =>
+    put<GraphViewStateRecord>('/graph/view-state', {
+      scope_key: scopeKey,
+      state_json: stateJson,
+    }),
 }
 
 export const objectSchemaApi = {
@@ -1714,4 +1781,208 @@ export const diaryApi = {
     get<{ date: string; entries: DiaryEntry[] }>(`/diary/on-this-day?date=${encodeURIComponent(date)}`),
   reflections: (date: string) =>
     get<{ entry_date: string; reflections: DiaryReflection[] }>(`/diary/entries/${encodeURIComponent(date)}/reflections`),
+}
+
+export interface ResearchAtlasStatus {
+  ok: boolean
+  plugin_id: string
+  version: string
+  scope: 'space'
+  space_id: string
+}
+
+export interface ResearchAtlasPaper {
+  id: string
+  space_id: string
+  title: string
+  abstract: string | null
+  publication_date: string | null
+  publication_year: number | null
+  paper_type: string
+  venue_id: string | null
+  doi: string | null
+  arxiv_id: string | null
+  oa_status: string
+  best_oa_url: string | null
+  raw_author_names: string[]
+  merged_into_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ResearchAtlasAuthorship {
+  id: string
+  paper_id: string
+  scholar_id: string | null
+  author_position: number
+  raw_author_name: string
+  raw_affiliation_text: string | null
+  confidence: number | null
+}
+
+export interface ResearchAtlasExternalId {
+  id_type: string
+  id_value: string
+  is_primary: boolean
+}
+
+export interface ResearchAtlasPaperDetail {
+  paper: ResearchAtlasPaper
+  authorships: ResearchAtlasAuthorship[]
+  external_ids: ResearchAtlasExternalId[]
+  provenance: Array<{ connector: string; fetched_at: string; fetch_status: string }>
+}
+
+export interface ResearchAtlasScholar {
+  id: string
+  display_name: string
+  orcid: string | null
+  h_index: number | null
+  works_count: number | null
+}
+
+export interface ResearchAtlasScholarDetail {
+  scholar: ResearchAtlasScholar
+  papers: ResearchAtlasPaper[]
+  external_ids: ResearchAtlasExternalId[]
+  coauthors: Array<{ id: string; display_name: string; shared_paper_count: number }>
+  affiliations: Array<{
+    id: string
+    role: string | null
+    institution: { id: string; name: string } | null
+    department: { id: string; name: string } | null
+  }>
+}
+
+export interface ResearchAtlasSearchResult {
+  entity_type: string
+  id: string
+  label: string
+  detail: string | null
+}
+
+export interface ResearchAtlasSyncStatus {
+  cursors: Array<{
+    cursor_key: string
+    watermark_json: Record<string, unknown>
+    last_run_at: string | null
+    last_error: string | null
+    updated_at: string
+  }>
+  due_refresh_count: number
+}
+
+export interface ResearchAtlasProjectPaper {
+  id: string
+  project_id: string
+  paper_id: string
+  status: 'candidate' | 'shortlist' | 'reading' | 'done' | 'rejected'
+  read_status: 'unread' | 'skimmed' | 'read'
+  rating: number | null
+  tags: string[]
+  note: string | null
+  pinned: boolean
+  source: string
+  intake_item_id: string | null
+  paper: ResearchAtlasPaper
+}
+
+export interface ResearchAtlasTopic {
+  id: string
+  label: string
+  kind: string
+  taxonomy: string
+}
+
+export interface ResearchAtlasGroup {
+  id: string
+  name: string
+  aliases: string[]
+  pi_scholar_id: string | null
+  confidence: number | null
+  member_count?: number
+}
+
+export interface ResearchAtlasGroupMembership {
+  id: string
+  group_id: string
+  scholar_id: string
+  role: string
+  source: string
+  confidence: number | null
+  scholar?: ResearchAtlasScholar
+}
+
+export interface ResearchAtlasPaperRelated {
+  references: ResearchAtlasPaper[]
+  citations: ResearchAtlasPaper[]
+  coauthors: Array<{ id: string; display_name: string }>
+}
+
+export const researchAtlasApi = {
+  status: () => get<ResearchAtlasStatus>('/atlas/status'),
+  listPapers: (params: { q?: string; year?: number; cursor?: string; limit?: number } = {}) => {
+    const q = new URLSearchParams()
+    if (params.q) q.set('q', params.q)
+    if (params.year) q.set('year', String(params.year))
+    if (params.cursor) q.set('cursor', params.cursor)
+    if (params.limit) q.set('limit', String(params.limit))
+    return get<{ papers: ResearchAtlasPaper[]; next_cursor: string | null }>(`/atlas/papers${q.size ? '?' + q : ''}`)
+  },
+  importPaper: (input: { doi?: string; arxiv_id?: string }) =>
+    post<{ paper: ResearchAtlasPaper; status: 'created' | 'matched'; job_id: string | null }>('/atlas/papers/import', input),
+  importFile: (input: { format: 'bibtex' | 'ris' | 'csl_json'; content: string | unknown }) =>
+    post<{ imported: Array<{ paper: ResearchAtlasPaper; status: 'created' | 'matched'; job_id: string | null }>; count: number }>('/atlas/papers/import-file', input),
+  getPaper: (paperId: string) =>
+    get<ResearchAtlasPaperDetail>(`/atlas/papers/${encodeURIComponent(paperId)}`),
+  patchPaper: (paperId: string, input: Partial<Pick<ResearchAtlasPaper, 'title' | 'abstract' | 'publication_year' | 'paper_type' | 'doi' | 'arxiv_id'>>) =>
+    patch<{ paper: ResearchAtlasPaper }>(`/atlas/papers/${encodeURIComponent(paperId)}`, input),
+  search: (query: string) =>
+    get<{ results: ResearchAtlasSearchResult[] }>(`/atlas/search?q=${encodeURIComponent(query)}`),
+  getScholar: (scholarId: string) =>
+    get<ResearchAtlasScholarDetail>(`/atlas/scholars/${encodeURIComponent(scholarId)}`),
+  getPaperReferences: (paperId: string) =>
+    get<{ papers: ResearchAtlasPaper[] }>(`/atlas/papers/${encodeURIComponent(paperId)}/references`),
+  getPaperCitations: (paperId: string) =>
+    get<{ papers: ResearchAtlasPaper[] }>(`/atlas/papers/${encodeURIComponent(paperId)}/citations`),
+  getPaperRelated: (paperId: string) =>
+    get<ResearchAtlasPaperRelated>(`/atlas/papers/${encodeURIComponent(paperId)}/related`),
+  getGraph: (params: { mode?: 'global' | 'library'; paper_id?: string }) => {
+    const q = new URLSearchParams()
+    if (params.mode) q.set('mode', params.mode)
+    if (params.paper_id) q.set('paper_id', params.paper_id)
+    return get<GraphProjection>(`/atlas/graph?${q}`)
+  },
+  listTopics: () => get<{ topics: ResearchAtlasTopic[] }>('/atlas/topics'),
+  listGroups: () => get<{ groups: ResearchAtlasGroup[] }>('/atlas/groups'),
+  createGroup: (input: { name: string; aliases?: string[]; pi_scholar_id?: string | null; confidence?: number | null }) =>
+    post<{ group: ResearchAtlasGroup }>('/atlas/groups', input),
+  addGroupMembership: (groupId: string, input: { scholar_id: string; role?: string; confidence?: number | null }) =>
+    post<{ membership: ResearchAtlasGroupMembership }>(`/atlas/groups/${encodeURIComponent(groupId)}/members`, input),
+  exportEntities: (params: { type: string; since?: string; cursor?: string; limit?: number; include_merged?: boolean; active_only?: boolean }) => {
+    const q = new URLSearchParams()
+    q.set('type', params.type)
+    if (params.since) q.set('since', params.since)
+    if (params.cursor) q.set('cursor', params.cursor)
+    if (params.limit) q.set('limit', String(params.limit))
+    if (params.include_merged !== undefined) q.set('include_merged', String(params.include_merged))
+    if (params.active_only) q.set('active_only', 'true')
+    return getText(`/atlas/export/entities?${q}`)
+  },
+  settings: () => get<ResearchAtlasSyncStatus>('/atlas/settings'),
+  syncIntake: () => post<{ imported: number; scanned: number; last_error: string | null }>('/atlas/sync/intake'),
+  listProjectPapers: (projectId: string) =>
+    get<{ project_id: string; papers: ResearchAtlasProjectPaper[] }>(`/atlas/projects/${encodeURIComponent(projectId)}/papers`),
+  addProjectPaper: (projectId: string, input: { paper_id: string; status?: ResearchAtlasProjectPaper['status'] }) =>
+    post<{ project_paper: ResearchAtlasProjectPaper }>(`/atlas/projects/${encodeURIComponent(projectId)}/papers`, input),
+  updateProjectPaper: (projectId: string, paperId: string, input: Partial<Pick<ResearchAtlasProjectPaper, 'status' | 'read_status' | 'rating' | 'tags' | 'note' | 'pinned'>>) =>
+    patch<{ project_paper: ResearchAtlasProjectPaper }>(`/atlas/projects/${encodeURIComponent(projectId)}/papers/${encodeURIComponent(paperId)}`, input),
+  removeProjectPaper: (projectId: string, paperId: string) =>
+    del<{ deleted: boolean }>(`/atlas/projects/${encodeURIComponent(projectId)}/papers/${encodeURIComponent(paperId)}`),
+  getPluginSettings: async () => {
+    const item = await pluginsApi.get('research_atlas') as { effective?: { settings?: Record<string, unknown> } }
+    return item.effective?.settings ?? {}
+  },
+  patchPluginSettings: (settings: Record<string, unknown>) =>
+    pluginsApi.patchSettings('research_atlas', settings),
 }

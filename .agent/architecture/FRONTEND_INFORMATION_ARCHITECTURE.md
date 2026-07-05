@@ -166,11 +166,13 @@ not be navigable.
 | **Intake** | Enabled | Space-scoped information stream control plane at `/intake`; owns RSS/Atom/web page connections, candidate items, evidence, scan state, and source governance. Project pages consume Intake summaries and link back here for management. |
 | **Review** (Proposals + Memory) | Enabled | Governance area (rail label "Review"; routes `/proposals` and `/memory`). The scene sidebar links real surfaces; proposal-type filters live inside `/proposals`. |
 | **Knowledge** | Enabled | First-level unified module (rail label "Knowledge"; route `/knowledge`). `/knowledge` redirects to the last-used workspace (default `/knowledge/notes`); `/knowledge/home` is an optional overview hub, never the forced landing. Sub-areas switch via an in-header breadcrumb (no scene sidebar): **Notes** (working-knowledge workspace — configurable collection tree + open-note tabs), **Wiki** (canonical, KnowledgeItem-backed, `/knowledge/wiki`), **Sources** (backend source CRUD exists; current frontend is list-only evidence browsing), **Cards** |
+| **Graph** | Enabled | Space-scoped relationship projection at `/graph`; renders the shared `GraphProjection` contract through `apps/web/src/components/graph/`, reads core `/api/v1/graph/*`, persists per-user view state under `scope_key='core:graph'`, and remains read-only over visible `space_objects` / `object_relations`. |
 | **Cards** | `enabled: false, visible: false` | Standalone module hidden; surfaced as the Knowledge › Cards placeholder until the spaced-repetition model exists |
 | Time | `planned: true` | Shows "soon" badge |
 
-Future modules (Editor, Calendar, Automation, Knowledge Graph) should only be enabled when
-backend support exists. Do not add them to the registry as clickable modules before that.
+Future modules (Editor, Calendar, Automation, and domain-specific graph surfaces beyond the
+core Graph page) should only be enabled when backend support exists. Do not add them to the
+registry as clickable modules before that.
 
 ---
 

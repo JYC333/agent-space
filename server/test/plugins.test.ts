@@ -27,6 +27,7 @@ import { installOfficialPlugin } from "../src/modules/plugins/installer";
 import { BUILT_IN_PLUGINS } from "../src/modules/plugins/builtInPlugins";
 import { DIARY_PLUGIN_ID } from "../src/modules/plugins/official/diary";
 import { FINANCE_LEDGER_PLUGIN_ID } from "../src/modules/plugins/official/financeLedger";
+import { RESEARCH_ATLAS_PLUGIN_ID } from "../src/modules/plugins/official/researchAtlas";
 import type {
   AgentSpacePlugin,
   PluginHostContext,
@@ -199,6 +200,28 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+  await pool!.query("DROP TABLE IF EXISTS research_atlas_saved_views CASCADE");
+  await pool!.query("DROP TABLE IF EXISTS research_atlas_project_groups CASCADE");
+  await pool!.query("DROP TABLE IF EXISTS research_atlas_project_scholars CASCADE");
+  await pool!.query("DROP TABLE IF EXISTS research_atlas_scholar_topics CASCADE");
+  await pool!.query("DROP TABLE IF EXISTS research_atlas_paper_topics CASCADE");
+  await pool!.query("DROP TABLE IF EXISTS research_atlas_group_memberships CASCADE");
+  await pool!.query("DROP TABLE IF EXISTS research_atlas_citation_edges CASCADE");
+  await pool!.query("DROP TABLE IF EXISTS research_atlas_affiliations CASCADE");
+  await pool!.query("DROP TABLE IF EXISTS research_atlas_research_groups CASCADE");
+  await pool!.query("DROP TABLE IF EXISTS research_atlas_topics CASCADE");
+  await pool!.query("DROP TABLE IF EXISTS research_atlas_departments CASCADE");
+  await pool!.query("DROP TABLE IF EXISTS research_atlas_project_papers CASCADE");
+  await pool!.query("DROP TABLE IF EXISTS research_atlas_sync_cursors CASCADE");
+  await pool!.query("DROP TABLE IF EXISTS research_atlas_curation_events CASCADE");
+  await pool!.query("DROP TABLE IF EXISTS research_atlas_entity_sources CASCADE");
+  await pool!.query("DROP TABLE IF EXISTS research_atlas_external_ids CASCADE");
+  await pool!.query("DROP TABLE IF EXISTS research_atlas_authorships CASCADE");
+  await pool!.query("DROP TABLE IF EXISTS research_atlas_source_records CASCADE");
+  await pool!.query("DROP TABLE IF EXISTS research_atlas_papers CASCADE");
+  await pool!.query("DROP TABLE IF EXISTS research_atlas_scholars CASCADE");
+  await pool!.query("DROP TABLE IF EXISTS research_atlas_institutions CASCADE");
+  await pool!.query("DROP TABLE IF EXISTS research_atlas_venues CASCADE");
   await pool!.query("DROP TABLE IF EXISTS finance_books CASCADE");
   await pool!.query("DROP TABLE IF EXISTS diary_reflections");
   await pool!.query("DROP TABLE IF EXISTS diary_entries");
@@ -217,6 +240,13 @@ async function installDiary(): Promise<void> {
 
 async function installFinanceLedger(): Promise<void> {
   await installOfficialPlugin(db, FINANCE_LEDGER_PLUGIN_ID, BUILT_IN_PLUGINS, {
+    actorUserId: USER_1,
+    source: "official",
+  });
+}
+
+async function installResearchAtlas(): Promise<void> {
+  await installOfficialPlugin(db, RESEARCH_ATLAS_PLUGIN_ID, BUILT_IN_PLUGINS, {
     actorUserId: USER_1,
     source: "official",
   });
@@ -348,6 +378,38 @@ describe("pluginService.installPlugin", () => {
          (space_id, name, base_currency, operating_currency, created_by_user_id)
        VALUES ($1, $2, $3, $4, $5)`,
       [SPACE_A, "Household", "USD", "USD", USER_1],
+    );
+  });
+
+  it("installs research_atlas and creates base scholarly graph tables through plugin migrations", async () => {
+    await installResearchAtlas();
+
+    const tables = await pool!.query<{ table_name: string }>(
+      `SELECT table_name
+         FROM information_schema.tables
+        WHERE table_schema = 'public'
+          AND table_name IN (
+            'research_atlas_papers',
+            'research_atlas_scholars',
+            'research_atlas_institutions',
+            'research_atlas_venues',
+            'research_atlas_source_records'
+          )
+        ORDER BY table_name`,
+    );
+    expect(tables.rows.map((row) => row.table_name)).toEqual([
+      "research_atlas_institutions",
+      "research_atlas_papers",
+      "research_atlas_scholars",
+      "research_atlas_source_records",
+      "research_atlas_venues",
+    ]);
+
+    await pool!.query(
+      `INSERT INTO research_atlas_papers
+         (id, space_id, title, paper_type, oa_status)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [randomUUID(), SPACE_A, "A test paper", "article", "unknown"],
     );
   });
 

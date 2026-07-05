@@ -47,6 +47,7 @@ import { activityModule } from "../modules/activity";
 import { sourcePointersModule } from "../modules/sourcePointers";
 import { intakeModule } from "../modules/intake";
 import { knowledgeModule } from "../modules/knowledge";
+import { graphModule } from "../modules/graph";
 import { evolutionModule } from "../modules/evolution";
 import { tasksModule } from "../modules/tasks";
 import { workspaceProfilesModule } from "../modules/workspaceProfiles";
@@ -115,6 +116,7 @@ export const SERVER_MODULES: readonly ServerModule[] = [
   sourcePointersModule,
   intakeModule,
   knowledgeModule,
+  graphModule,
   evolutionModule,
   tasksModule,
   workspaceProfilesModule,

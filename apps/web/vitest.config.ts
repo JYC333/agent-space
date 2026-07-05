@@ -4,6 +4,11 @@ import react from '@vitejs/plugin-react'
 // Dedicated test config — avoids the Tailwind/PWA plugins used by the app build.
 export default defineConfig({
   plugins: [react()],
+  server: {
+    fs: {
+      allow: ['../..'],
+    },
+  },
   test: {
     environment: 'jsdom',
     globals: true,

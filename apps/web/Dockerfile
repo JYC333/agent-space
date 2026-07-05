@@ -20,7 +20,11 @@ ENV NPM_CONFIG_FETCH_RETRIES=5 \
 WORKDIR /repo/apps/web
 
 COPY apps/web/package.json apps/web/package-lock.json ./
-RUN npm ci
+RUN npm ci \
+    && mkdir -p node_modules/.cache/agent-space \
+    && sha256sum package.json package-lock.json \
+      | sha256sum \
+      | awk '{print $1}' > node_modules/.cache/agent-space/package-inputs.sha256
 
 # ---- dev: Vite dev server -------------------------------------------------
 # Source is bind-mounted by docker-compose, so we don't COPY it here. The PWA
@@ -28,9 +32,13 @@ RUN npm ci
 # default), matching how the dev/test environments run.
 FROM base AS dev
 
+COPY apps/web/docker/dev-entrypoint.sh /usr/local/bin/web-dev-entrypoint
+RUN chmod +x /usr/local/bin/web-dev-entrypoint
+
 EXPOSE 5173
 
 # The Vite proxy defaults to http://server:8010 inside the compose network.
+ENTRYPOINT ["web-dev-entrypoint"]
 CMD ["node_modules/.bin/vite"]
 
 # ---- build: produce the static production bundle --------------------------

@@ -87,6 +87,9 @@ export * from "./claimReviewLoop.js";
 // Candidate-relation discovery pipeline contracts (Slice F)
 export * from "./relationDiscovery.js";
 
+// Graph projection rendering contract
+export * from "./graphProjection.js";
+
 // Object schema / Object Schema Registry contracts
 export * from "./objectSchema.js";
 

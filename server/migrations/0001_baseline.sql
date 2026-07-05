@@ -1067,6 +1067,22 @@ CREATE TABLE public.jobs (
 
 
 --
+-- Name: graph_view_states; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.graph_view_states (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    user_id character varying(36) NOT NULL,
+    scope_key character varying(128) NOT NULL,
+    state_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_graph_view_states_state_object CHECK ((jsonb_typeof(state_json) = 'object'::text))
+);
+
+
+--
 -- Name: space_objects; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3461,6 +3477,22 @@ ALTER TABLE ONLY public.job_events
 
 ALTER TABLE ONLY public.jobs
     ADD CONSTRAINT jobs_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: graph_view_states graph_view_states_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.graph_view_states
+    ADD CONSTRAINT graph_view_states_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: graph_view_states uq_graph_view_states_scope; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.graph_view_states
+    ADD CONSTRAINT uq_graph_view_states_scope UNIQUE (space_id, user_id, scope_key);
 
 
 --
@@ -6071,6 +6103,20 @@ CREATE INDEX ix_jobs_user_id ON public.jobs USING btree (user_id);
 --
 
 CREATE INDEX ix_jobs_workspace_id ON public.jobs USING btree (workspace_id);
+
+
+--
+-- Name: ix_graph_view_states_scope_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_graph_view_states_scope_key ON public.graph_view_states USING btree (scope_key);
+
+
+--
+-- Name: ix_graph_view_states_space_user; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_graph_view_states_space_user ON public.graph_view_states USING btree (space_id, user_id);
 
 
 
@@ -9907,6 +9953,22 @@ ALTER TABLE ONLY public.jobs
 
 ALTER TABLE ONLY public.jobs
     ADD CONSTRAINT jobs_workspace_id_fkey FOREIGN KEY (space_id, workspace_id) REFERENCES public.workspaces(space_id, id);
+
+
+--
+-- Name: graph_view_states graph_view_states_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.graph_view_states
+    ADD CONSTRAINT graph_view_states_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id) ON DELETE CASCADE;
+
+
+--
+-- Name: graph_view_states graph_view_states_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.graph_view_states
+    ADD CONSTRAINT graph_view_states_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
 
 
 --

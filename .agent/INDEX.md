@@ -125,6 +125,7 @@ are source of truth for active nav and routes. For UI decisions, see the module 
 | [modules/frontend-layout.md](modules/frontend-layout.md) | Responsive layout, mobile variants |
 | [modules/client-server-protocol.md](modules/client-server-protocol.md) | REST, WebSocket, SSE, offline queue protocol |
 | [modules/activity-inbox.md](modules/activity-inbox.md) | Activity inbox UI and quick capture |
+| [modules/graph-view.md](modules/graph-view.md) | Shared GraphProjection contract, graph renderer boundary, core Graph page, plugin GraphView consumption |
 
 ### Testing Strategy
 
@@ -160,6 +161,7 @@ Load only the module docs relevant to your task.
 | Knowledge Base / knowledge items | [modules/knowledge-base.md](modules/knowledge-base.md) |
 | Spaced repetition / cards | [modules/spaced-repetition.md](modules/spaced-repetition.md) |
 | Media cards | [modules/media-cards.md](modules/media-cards.md) |
+| Graph view / relationship visualization | [modules/graph-view.md](modules/graph-view.md) |
 | Sync and conflict model | [modules/sync-and-conflicts.md](modules/sync-and-conflicts.md) |
 | Mobile client | [modules/mobile-client.md](modules/mobile-client.md) |
 | Server status bar | [modules/server-status.md](modules/server-status.md) |

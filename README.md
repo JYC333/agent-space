@@ -37,6 +37,10 @@ agent-space/
 ├── catalog/          # Built-in system definitions
 │   ├── agent_templates/
 │   └── capabilities/
+├── plugins/official/ # Official optional plugins (installed via PluginHost)
+│   ├── diary/
+│   ├── finance_ledger/
+│   └── research_atlas/
 ├── apps/web/         # React/Vite web frontend (PWA)
 ├── deployer/         # Host-side deployer (holds the Docker socket; spawns sandbox containers)
 └── sandbox/          # Dockerfile for the agent execution sandbox image
@@ -167,9 +171,25 @@ templates below are the public library:
 Memory reflection is also exposed as an internal service (`MemoryReflector` via the
 `memory.reflect` capability, `POST /sessions/{id}/reflect`).
 
+## Official Plugins
+
+Beyond the core product, optional feature packages ship as **official plugins** — installed
+and enabled per space through the `PluginHost` control plane, each bringing its own backend
+module, frontend page, and migrations:
+
+| Plugin | Purpose |
+|--------|---------|
+| `diary` | Personal journaling |
+| `finance_ledger` | Personal finance / ledger tracking |
+| `research_atlas` | Research note graph, built on the shared graph view |
+
 ## Documentation
 
 - [Documentation Index](docs/README.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Backup and Restore](docs/BACKUP_AND_RESTORE.md)
 - [Threat Model](docs/THREAT_MODEL.md)
+
+## License
+
+MIT — see [LICENSE](LICENSE).

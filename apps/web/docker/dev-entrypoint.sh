@@ -1,0 +1,43 @@
+#!/bin/sh
+set -eu
+
+cd /repo/apps/web
+
+STAMP_DIR="node_modules/.cache/agent-space"
+STAMP_FILE="$STAMP_DIR/package-inputs.sha256"
+
+dependency_hash() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum package.json package-lock.json | sha256sum | awk '{print $1}'
+    return
+  fi
+  shasum -a 256 package.json package-lock.json | shasum -a 256 | awk '{print $1}'
+}
+
+if [ ! -f package.json ] || [ ! -f package-lock.json ]; then
+  echo "[web-dev] package.json and package-lock.json are required in /repo/apps/web" >&2
+  exit 1
+fi
+
+current_hash="$(dependency_hash)"
+installed_hash="$(cat "$STAMP_FILE" 2>/dev/null || true)"
+install_reason=""
+
+if [ ! -d node_modules ]; then
+  install_reason="node_modules is missing"
+elif [ ! -x node_modules/.bin/vite ]; then
+  install_reason="node_modules is incomplete"
+elif [ "$installed_hash" != "$current_hash" ]; then
+  install_reason="package inputs changed"
+fi
+
+if [ -n "$install_reason" ]; then
+  echo "[web-dev] $install_reason; running npm ci"
+  npm ci
+  mkdir -p "$STAMP_DIR"
+  printf '%s\n' "$current_hash" > "$STAMP_FILE"
+else
+  echo "[web-dev] node_modules is current"
+fi
+
+exec "$@"

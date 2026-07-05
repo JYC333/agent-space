@@ -35,4 +35,19 @@ describe('module registry official plugin overlay', () => {
     expect(today?.enabled).toBe(original?.enabled)
     expect(today?.visible).toBe(original?.visible)
   })
+
+  it('registers the built-in Graph module as a lazy space-scoped Knowledge route', () => {
+    const graph = MODULE_REGISTRY.find(module => module.id === 'graph')
+
+    expect(graph).toMatchObject({
+      label: 'Graph',
+      path: '/graph',
+      source: 'built_in',
+      group: 'knowledge',
+      perspectiveType: 'space-scoped',
+      enabled: true,
+      visible: true,
+      planned: false,
+    })
+  })
 })

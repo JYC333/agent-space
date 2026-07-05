@@ -112,6 +112,11 @@ npm run preview
 # npm run lint
 ```
 
+Docker dev/test frontend services keep `node_modules` inside a container volume.
+Their dev entrypoint compares `apps/web/package.json` and
+`apps/web/package-lock.json` against a stored hash and runs `npm ci`
+automatically when dependency inputs change.
+
 ## Runtime CLI tools
 
 Vendor CLIs are installed as instance runtime tools, not into Docker images.
