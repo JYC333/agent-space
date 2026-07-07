@@ -53,7 +53,9 @@ afterAll(async () => {
 
 beforeEach(async () => {
   if (!available || !pool) return;
-  await pool.query("TRUNCATE proposals, memory_entries, projects");
+  await pool.query(
+    "TRUNCATE retrieval_edges, retrieval_chunks, retrieval_aliases, retrieval_objects, extracted_evidence, source_snapshots, intake_items, provenance_links, proposals, memory_entries, projects",
+  );
 });
 
 async function insertMemory(over: Record<string, unknown>): Promise<void> {

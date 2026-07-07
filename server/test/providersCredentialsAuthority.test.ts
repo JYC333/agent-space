@@ -192,6 +192,23 @@ describe("providers and credentials server authority", () => {
     });
     expect(supported.statusCode).toBe(200);
     expect(supported.json()).toContain("anthropic");
+
+    const presetCreate = await app.inject({
+      method: "POST",
+      url: "/api/v1/providers/from-preset?space_id=space-1",
+      headers: { "content-type": "application/json" },
+      payload: JSON.stringify({
+        preset_id: "minimax",
+        api_key: "request-only-preset",
+        name: "MiniMax Test",
+      }),
+    });
+    expect(presetCreate.statusCode).toBe(201);
+    expect(presetCreate.json().provider).toMatchObject({
+      name: "MiniMax Test",
+      provider_type: "anthropic",
+    });
+    expect(presetCreate.payload).not.toContain("request-only-preset");
   });
 
   it("serves the credential pool and task-policy surfaces", async () => {

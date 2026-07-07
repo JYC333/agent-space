@@ -3,6 +3,7 @@ import { loadConfig } from "../src/config";
 import { IntakeExtractionWorker } from "../src/modules/intake/extractionWorker";
 import type { Queryable } from "../src/modules/routeUtils/common";
 import { simplePdfBytes } from "./fixtures/simplePdf";
+import { handleIntakeRetrievalTestSql } from "./helpers/intakeRetrievalTestSql";
 
 class FakeDb implements Queryable {
   readonly calls: Array<{ sql: string; params: readonly unknown[] }> = [];
@@ -16,6 +17,8 @@ class FakeDb implements Queryable {
 
   async query<Row = Record<string, unknown>>(sql: string, params: readonly unknown[] = []) {
     this.calls.push({ sql, params });
+    const retrievalResult = handleIntakeRetrievalTestSql<Row>(sql, params);
+    if (retrievalResult) return retrievalResult;
     if (sql.includes("SET status = 'running'")) {
       return { rows: [jobRow(this.jobType)], rowCount: 1 } as { rows: Row[]; rowCount: number };
     }

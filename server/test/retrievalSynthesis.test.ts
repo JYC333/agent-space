@@ -6,10 +6,10 @@ import {
   type BriefCandidate,
   type SynthesisResult,
 } from "../src/modules/retrieval/synthesis";
-import type { ProviderCommandStore } from "../src/modules/providers/providerCommandStore";
-import { RETRIEVAL_SYNTHESIS_TASK, SYNTHESIS_TOTAL_TEXT_MAX_CHARS } from "../src/modules/retrievalSynthesis/config";
-import { buildSynthesisPrompt, parseSynthesis } from "../src/modules/retrievalSynthesis/prompt";
-import { ProviderSynthesizer } from "../src/modules/retrievalSynthesis/providerSynthesizer";
+import type { ProviderCommandStore } from "../src/modules/providers/commands/store";
+import { RETRIEVAL_SYNTHESIS_TASK, SYNTHESIS_TOTAL_TEXT_MAX_CHARS } from "../src/modules/retrieval/synthesisProvider/config";
+import { buildSynthesisPrompt, parseSynthesis } from "../src/modules/retrieval/synthesisProvider/prompt";
+import { ProviderSynthesizer } from "../src/modules/retrieval/synthesisProvider/providerSynthesizer";
 import type { RevalidatedObject, ScoredCandidate } from "../src/modules/retrieval/types";
 
 const NOW = Date.parse("2026-06-23T00:00:00.000Z");

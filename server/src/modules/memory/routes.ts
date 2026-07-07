@@ -27,12 +27,12 @@ import { readSpaceRetrievalSettings, resolveRetrievalSearchControls } from "../r
 import { canInitiateContextOpsScan, canReviewSpaceOpsPackets } from "../contextOps/reviewPolicy";
 import { withDbTransaction } from "../routeUtils/common";
 import { requireSpaceOwnerOrAdmin } from "../routeUtils/access";
-import { enqueueRetrievalEmbeddingBackfill } from "../retrievalEmbedding/job";
-import { ProviderQueryEmbedder } from "../retrievalEmbedding/queryEmbedder";
-import { ProviderReranker } from "../retrievalRerank/providerReranker";
-import { ProviderQueryRewriter } from "../retrievalQueryRewrite/providerQueryRewriter";
-import { ProviderSynthesizer } from "../retrievalSynthesis/providerSynthesizer";
-import { resolveProviderCommandStore } from "../providers/providerCommandStore";
+import { enqueueRetrievalEmbeddingBackfill } from "../retrieval/embedding/job";
+import { ProviderQueryEmbedder } from "../retrieval/embedding/queryEmbedder";
+import { ProviderReranker } from "../retrieval/rerankProvider/providerReranker";
+import { ProviderQueryRewriter } from "../retrieval/queryRewriteProvider/providerQueryRewriter";
+import { ProviderSynthesizer } from "../retrieval/synthesisProvider/providerSynthesizer";
+import { resolveProviderCommandStore } from "../providers/commands/store";
 import { memoryRetrievalRegistry } from "./retrievalAdapter";
 import { MemoryMaintenanceService } from "./maintenance";
 import {

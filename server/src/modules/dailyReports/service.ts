@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import type { ServerConfig } from "../../config";
 import { getDbPool } from "../../db/pool";
 import { withTransaction } from "../../db/tx";
-import { resolveProviderCommandStore } from "../providers/providerCommandStore";
-import { completeProviderText } from "../providers/providerInvocation";
+import { resolveProviderCommandStore } from "../providers/commands/store";
+import { completeProviderText } from "../providers/invocation/invocation";
 import type { Queryable } from "../routeUtils/common";
 import { insertProposalRow } from "../proposals/reviewPackets";
 import {

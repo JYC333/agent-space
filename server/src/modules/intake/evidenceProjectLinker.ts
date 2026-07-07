@@ -61,3 +61,61 @@ export async function linkEvidenceToBoundProjects(
   );
   return result.rowCount ?? 0;
 }
+
+/**
+ * Backfill project-context evidence links for one existing source binding.
+ *
+ * This is the historical counterpart to `linkEvidenceToBoundProjects`: creating
+ * a binding starts routing future evidence, while this scans already-extracted
+ * intake evidence for the bound source and materializes the same project
+ * `context_candidate` links.
+ */
+export async function backfillEvidenceForWorkspaceSourceBinding(
+  db: Queryable,
+  input: { spaceId: string; bindingId: string },
+): Promise<number> {
+  const now = new Date().toISOString();
+  const result = await db.query(
+    `INSERT INTO evidence_links (
+       id, space_id, evidence_id, target_type, target_id, link_type,
+       status, reason, created_at, updated_at
+     )
+     SELECT DISTINCT ON (ev.id, wsb.project_id)
+            gen_random_uuid()::varchar, ev.space_id, ev.id, 'project', wsb.project_id, 'context_candidate',
+            'active', 'workspace_source_binding:' || wsb.id, $3, $3
+       FROM workspace_source_bindings wsb
+       JOIN intake_items ii
+         ON ii.space_id = wsb.space_id
+        AND ii.deleted_at IS NULL
+        AND (
+          ii.connection_id = wsb.source_connection_id
+          OR EXISTS (
+            SELECT 1
+              FROM source_snapshots ss
+             WHERE ss.space_id = ii.space_id
+               AND ss.intake_item_id = ii.id
+               AND ss.connection_id = wsb.source_connection_id
+          )
+        )
+       JOIN extracted_evidence ev
+         ON ev.space_id = ii.space_id
+        AND ev.intake_item_id = ii.id
+        AND ev.deleted_at IS NULL
+      WHERE wsb.space_id = $1
+        AND wsb.id = $2
+        AND wsb.status = 'active'
+        AND EXISTS (
+         SELECT 1
+           FROM project_workspaces pw
+          WHERE pw.space_id = wsb.space_id
+            AND pw.project_id = wsb.project_id
+            AND pw.workspace_id = wsb.workspace_id
+       )
+      ORDER BY ev.id, wsb.project_id, wsb.priority DESC, wsb.id
+     ON CONFLICT (space_id, evidence_id, target_type, target_id, link_type)
+       WHERE status = 'active'
+     DO NOTHING`,
+    [input.spaceId, input.bindingId, now],
+  );
+  return result.rowCount ?? 0;
+}

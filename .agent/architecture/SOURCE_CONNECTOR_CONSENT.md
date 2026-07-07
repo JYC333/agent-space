@@ -7,7 +7,7 @@ connections before broad ingestion-heavy context work expands. Code remains the
 source of truth; active enforcement points are
 `server/src/modules/intake/sourceConsent.ts`,
 `server/src/modules/retrieval/sourcePolicy.ts`, and
-`server/src/modules/retrievalEgress/egressPolicy.ts`.
+`server/src/modules/retrieval/egress/egressPolicy.ts`.
 
 ## Model Choice
 

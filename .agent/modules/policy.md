@@ -310,12 +310,12 @@ preflight.
 | `workspace.write_patch` | `server/src/modules/workspaces/` and proposal appliers via `enforce()` | Before any workspace file writes |
 | `policy.change` | `server/src/modules/proposals/applyService.ts` via `enforceProposalApply()` | Protected by the `proposal.apply` gate for `policy_change` proposals |
 | `runtime_skill.render` | `server/src/modules/context/prepareService.ts` via `enforce()` | Before enabled runtime-skill content is rendered into a context snapshot |
-| `retrieval.search` | `server/src/modules/retrievalTool/service.ts` via `enforce()` | Before managed-run Knowledge search execution |
-| `retrieval.brief` | `server/src/modules/retrievalTool/service.ts` via `enforce()` | Before managed-run Knowledge Context Brief execution |
-| `memory.retrieval.search` | `server/src/modules/retrievalTool/service.ts` + `server/src/modules/runs/managedRetrievalTools.ts` via `enforce()` | Before explicitly opted-in managed-run Memory search execution; disabled-domain calls are denied/audited |
-| `memory.retrieval.brief` | `server/src/modules/retrievalTool/service.ts` + `server/src/modules/runs/managedRetrievalTools.ts` via `enforce()` | Before explicitly opted-in managed-run Memory Context Brief execution; disabled-domain calls are denied/audited |
-| `project_public_summary.search` | `server/src/modules/retrievalTool/service.ts` + `server/src/modules/runs/managedRetrievalTools.ts` via `enforce()` | Before explicitly opted-in managed-run Project public-summary search execution; disabled-domain calls are denied/audited |
-| `project_public_summary.brief` | `server/src/modules/retrievalTool/service.ts` + `server/src/modules/runs/managedRetrievalTools.ts` via `enforce()` | Before explicitly opted-in managed-run Project public-summary Context Brief execution; disabled-domain calls are denied/audited |
+| `retrieval.search` | `server/src/modules/retrieval/tool/service.ts` via `enforce()` | Before managed-run Knowledge search execution |
+| `retrieval.brief` | `server/src/modules/retrieval/tool/service.ts` via `enforce()` | Before managed-run Knowledge Context Brief execution |
+| `memory.retrieval.search` | `server/src/modules/retrieval/tool/service.ts` + `server/src/modules/runs/managedRetrievalTools.ts` via `enforce()` | Before explicitly opted-in managed-run Memory search execution; disabled-domain calls are denied/audited |
+| `memory.retrieval.brief` | `server/src/modules/retrieval/tool/service.ts` + `server/src/modules/runs/managedRetrievalTools.ts` via `enforce()` | Before explicitly opted-in managed-run Memory Context Brief execution; disabled-domain calls are denied/audited |
+| `project_public_summary.search` | `server/src/modules/retrieval/tool/service.ts` + `server/src/modules/runs/managedRetrievalTools.ts` via `enforce()` | Before explicitly opted-in managed-run Project public-summary search execution; disabled-domain calls are denied/audited |
+| `project_public_summary.brief` | `server/src/modules/retrieval/tool/service.ts` + `server/src/modules/runs/managedRetrievalTools.ts` via `enforce()` | Before explicitly opted-in managed-run Project public-summary Context Brief execution; disabled-domain calls are denied/audited |
 
 **runtime.execute context fields**: Rule-relevant fields (`agent_status`, `agent_tool_permissions`,
 `tool_name`, `adapter_type`, `trigger_origin`, `risk_level`, etc.) are passed in

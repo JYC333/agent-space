@@ -6,7 +6,7 @@ import {
   executeManagedApiNoToolAdapter,
   type RuntimeHostExecutor,
 } from "../src/modules/runs/managedApiAdapter";
-import type { RetrievalToolService } from "../src/modules/retrievalTool/service";
+import type { RetrievalToolService } from "../src/modules/retrieval/tool/service";
 import type { RunRecord } from "../src/modules/runs/repository";
 import {
   __setProviderCommandStoreForTests,

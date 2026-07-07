@@ -1,0 +1,277 @@
+import type { RetrievalObjectType } from "@agent-space/protocol" with { "resolution-mode": "import" };
+import type { EvidenceRow, IntakeItemRow, SourceConnectionRow } from "../intakeRepositoryRows";
+import {
+  ARXIV_NEW_PAPERS_CONTENT_PROFILE,
+  ARXIV_NEW_PAPERS_PROFILE_GUIDANCE,
+  arxivPostProcessingItemMetadataLines,
+} from "../sourcePresets/arxivPostProcessingProfile";
+import {
+  isRelevanceScreeningEnabled,
+  type SourcePostProcessingActions,
+  type SourcePostProcessingInputConfig,
+  type SourcePostProcessingRetrievalDomain,
+  type SourcePostProcessingTriggerConfig,
+} from "./repository";
+import { joinText, stringList } from "./textUtils";
+
+export interface SourcePostProcessingRetrievalContextRef {
+  ref: string;
+  domain: SourcePostProcessingRetrievalDomain;
+  object_type: RetrievalObjectType;
+  object_id: string;
+  title: string;
+  snippet: string | null;
+  score?: number;
+  source_refs?: Record<string, unknown>[];
+}
+
+export interface SourcePostProcessingRetrievalContextSnapshot {
+  enabled: boolean;
+  query: string | null;
+  domains: SourcePostProcessingRetrievalDomain[];
+  pinned: SourcePostProcessingRetrievalContextRef[];
+  items: SourcePostProcessingRetrievalContextRef[];
+  errors?: Array<{ domain: SourcePostProcessingRetrievalDomain | "project"; message: string }>;
+}
+
+export function renderInstruction(input: {
+  connection: SourceConnectionRow;
+  items: IntakeItemRow[];
+  evidence: EvidenceRow[];
+  actions: SourcePostProcessingActions;
+  inputConfig: SourcePostProcessingInputConfig;
+  triggerConfig: SourcePostProcessingTriggerConfig;
+  retrievalContext: SourcePostProcessingRetrievalContextSnapshot;
+  extractedTextSnippets?: Map<string, string>;
+  candidatePrefilter?: Record<string, unknown> | null;
+}): string {
+  const actionLabels = Object.entries(input.actions)
+    .filter(([, enabled]) => enabled)
+    .map(([key]) => key)
+    .join(", ");
+  const lines = [
+    "Source intake post-processing run.",
+    "",
+    "Output contract:",
+    "- Your entire final response must be exactly one valid JSON object.",
+    "- The first non-whitespace character must be { and the last non-whitespace character must be }.",
+    "- Do not output Markdown fences, prose introductions, explanations, or notes outside the JSON object.",
+    "- Markdown is allowed only inside JSON string fields such as digest_markdown, summary_markdown, content_excerpt, and proposal_markdown.",
+    "- Use empty strings or empty arrays for fields that do not apply.",
+    "",
+    `Source: ${input.connection.name}`,
+    `Actions: ${actionLabels}`,
+    `Input window: ${input.inputConfig.window}`,
+    `Processing strategy: ${input.inputConfig.processing_strategy}`,
+    `Content source: ${input.inputConfig.content_source}`,
+    `Timezone: ${input.inputConfig.timezone}`,
+    `Minimum new items: ${input.triggerConfig.min_new_items}`,
+  ];
+  if (input.inputConfig.summary_goal) {
+    lines.push(`Post-processing goal: ${input.inputConfig.summary_goal}`);
+  }
+  const profileGuidance = contentProfileGuidance(input.inputConfig.content_profile);
+  if (profileGuidance.length > 0) {
+    lines.push("", "Preset-specific guidance:", ...profileGuidance);
+  }
+  if (input.inputConfig.output_instructions) {
+    lines.push("", "Output instructions:", input.inputConfig.output_instructions);
+  }
+  if (isRelevanceScreeningEnabled(input.actions, input.inputConfig)) {
+    lines.push("", ...relevanceScreeningGuidance(input.inputConfig.relevance_profile));
+  }
+  if (input.inputConfig.processing_strategy === "screen_then_digest") {
+    lines.push(
+      "",
+      "Two-stage output:",
+      "- First make an item_decisions judgment for every input item.",
+      "- Then write digest_markdown only for relevant and maybe items, with a short ignored/not relevant count.",
+    );
+  }
+  if (input.candidatePrefilter?.enabled === true) {
+    lines.push(
+      "",
+      "Candidate prefilter:",
+      `- Mode: ${String(input.candidatePrefilter.mode ?? "unknown")}`,
+      `- Selected items in prompt: ${String(input.candidatePrefilter.selected_item_count ?? input.items.length)}`,
+      `- Filtered before LLM: ${String(input.candidatePrefilter.filtered_item_count ?? 0)}`,
+      "- Only judge the intake items listed below; items filtered before the LLM are recorded separately by the system.",
+    );
+  }
+  if (input.inputConfig.deep_analysis.enabled) {
+    lines.push(
+      "",
+      "Optional deep analysis:",
+      `- Enabled after this screening run for: ${input.inputConfig.deep_analysis.trigger_relevance.join(", ")}`,
+      `- Minimum confidence: ${input.inputConfig.deep_analysis.min_confidence}`,
+      "- If an item is relevant enough, the system may queue full-text extraction and run a later deep-analysis pass.",
+      "- This run should still decide from the content supplied here; do not assume future full text is available now.",
+    );
+  }
+  if (input.inputConfig.processing_strategy === "screen_extract_digest") {
+    lines.push(
+      "",
+      "Screen + extraction output:",
+      "- First make an item_decisions judgment for every input item.",
+      "- Use extracted text snippets only where they are supplied below.",
+      "- Write digest_markdown for relevant and maybe items only.",
+      "- Prefer evidence_candidates from supplied extracted text snippets or excerpts; do not invent citable passages.",
+    );
+  }
+  if (!input.actions.create_proposals) {
+    lines.push("", "Do not write this as a proposal unless create_proposals is enabled.");
+  }
+  lines.push(
+    "",
+    "Return exactly one JSON object matching this schema. Do not wrap it in Markdown fences and do not add prose outside JSON.",
+    "The JSON schema is:",
+    JSON.stringify({
+      schema: "source_post_processing.result.v1",
+      digest_markdown: "Markdown digest for the batch, or empty string when batch_digest is disabled.",
+      item_summaries: [
+        {
+          intake_item_id: "input intake item id",
+          summary_markdown: "Markdown summary for this item.",
+        },
+      ],
+      item_decisions: [
+        {
+          intake_item_id: "input intake item id",
+          relevance: "relevant | maybe | not_relevant",
+          confidence: 0.8,
+          reason: "Short reason using provided intake content and retrieval context.",
+          matched_context_refs: ["domain:object_type:object_id"],
+        },
+      ],
+      evidence_candidates: [
+        {
+          intake_item_id: "input intake item id",
+          title: "Evidence title",
+          content_excerpt: "Citable excerpt or concise evidence statement derived from the input item.",
+          confidence: 0.7,
+          matched_context_refs: ["domain:object_type:object_id"],
+        },
+      ],
+      proposal_markdown: "Markdown proposal body, or empty string when create_proposals is disabled.",
+    }, null, 2),
+    "",
+    "Only use the supplied intake item title, metadata, excerpt, extracted text snippet, evidence excerpt, and retrieval context. Do not claim to have read full text unless an extracted text snippet is supplied for that item.",
+    "For mark_items, decide every input intake item as relevant, maybe, or not_relevant.",
+    "For per_item_summary, include one item_summaries entry for every input intake item.",
+    "For extract_evidence, return only evidence candidates worth keeping; an empty array is valid.",
+    "Keep source titles and URLs visible inside Markdown fields when they are available.",
+    "Final response reminder: output only the JSON object, with no surrounding text.",
+    "",
+    "Retrieval context:",
+  );
+  if (!input.retrievalContext.enabled) {
+    lines.push("- disabled");
+  } else {
+    lines.push(`Query: ${input.retrievalContext.query ?? "(none)"}`);
+    if (input.retrievalContext.pinned.length === 0 && input.retrievalContext.items.length === 0) {
+      lines.push("- none");
+    }
+    for (const ref of input.retrievalContext.pinned) {
+      lines.push(`- ${ref.ref} [pinned] ${ref.title}`);
+      if (ref.snippet) lines.push(`  Snippet: ${ref.snippet.slice(0, 1200)}`);
+    }
+    for (const ref of input.retrievalContext.items) {
+      lines.push(`- ${ref.ref} ${ref.title}`);
+      if (ref.snippet) lines.push(`  Snippet: ${ref.snippet.slice(0, 1200)}`);
+    }
+  }
+  lines.push(
+    "",
+    "Intake items:",
+  );
+  if (input.items.length === 0) lines.push("- none");
+  for (const item of input.items) {
+    lines.push(`- id: ${item.id}`);
+    lines.push(`  Title: ${item.title}`);
+    if (item.source_uri) lines.push(`  URL: ${item.source_uri}`);
+    if (item.author) lines.push(`  Author: ${item.author}`);
+    for (const metadataLine of itemMetadataLines(item, input.inputConfig.content_profile)) {
+      lines.push(`  ${metadataLine}`);
+    }
+    if (item.excerpt) lines.push(`  Excerpt: ${item.excerpt.slice(0, 1200)}`);
+    if (input.inputConfig.content_source !== "excerpt_only") {
+      const snippet = input.extractedTextSnippets?.get(item.id);
+      lines.push(`  Extracted text: ${snippet ? snippet.slice(0, 2400) : "(not available)"}`);
+    }
+  }
+  if (input.evidence.length > 0) {
+    lines.push("", "Evidence:");
+    for (const row of input.evidence) {
+      lines.push(`- id: ${row.id}`);
+      if (row.intake_item_id) lines.push(`  Intake item id: ${row.intake_item_id}`);
+      lines.push(`  Title: ${row.title}`);
+      if (row.content_excerpt) lines.push(`  Excerpt: ${row.content_excerpt.slice(0, 1200)}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+export function buildRetrievalContextQuery(
+  connection: SourceConnectionRow,
+  inputConfig: SourcePostProcessingInputConfig,
+  summaryGoal: string | null,
+  pinned: SourcePostProcessingRetrievalContextRef[],
+): string {
+  const explicit = inputConfig.retrieval_context.query?.trim();
+  if (explicit) return explicit.slice(0, 1024);
+  const relevanceProfile = inputConfig.relevance_profile;
+  const objectiveText = relevanceProfile?.enabled
+    ? joinText([relevanceProfile.objective, ...relevanceProfile.include_criteria])
+    : null;
+  return joinText([
+    objectiveText,
+    summaryGoal,
+    inputConfig.summary_goal,
+    connection.name,
+    ...stringList(connection.topic_hints_json),
+    ...pinned.flatMap((ref) => [ref.title, ref.snippet]),
+  ]).slice(0, 1024);
+}
+
+const DEFAULT_DECISION_POLICY = {
+  relevant: "Strong match to the objective or project context.",
+  maybe: "Potentially useful but indirect, speculative, or missing detail.",
+  not_relevant: "No clear connection to the objective.",
+};
+
+function relevanceScreeningGuidance(
+  profile: SourcePostProcessingInputConfig["relevance_profile"],
+): string[] {
+  const lines = ["Relevance screening:"];
+  lines.push(`- Objective: ${profile?.objective ?? "(none provided — use general judgment against the source stream)"}`);
+  if (profile?.include_criteria.length) lines.push(`- Include: ${profile.include_criteria.join("; ")}`);
+  if (profile?.exclude_criteria.length) lines.push(`- Exclude: ${profile.exclude_criteria.join("; ")}`);
+  if (profile?.must_have.length) lines.push(`- Must have: ${profile.must_have.join("; ")}`);
+  if (profile?.nice_to_have.length) lines.push(`- Nice to have: ${profile.nice_to_have.join("; ")}`);
+  const policy = profile?.decision_policy;
+  lines.push(
+    `- relevant: ${policy?.relevant ?? DEFAULT_DECISION_POLICY.relevant}`,
+    `- maybe: ${policy?.maybe ?? DEFAULT_DECISION_POLICY.maybe}`,
+    `- not_relevant: ${policy?.not_relevant ?? DEFAULT_DECISION_POLICY.not_relevant}`,
+    "- Every input intake item must get exactly one item_decisions entry.",
+    "- matched_context_refs must only reference the retrieval context refs supplied below.",
+    "- When batch_digest is enabled, group the digest into Relevant / Maybe / Not relevant sections.",
+    "- For Relevant items include title, a short reason, and matched context refs.",
+    "- For Maybe items include a short reason and what would make them worth follow-up.",
+    "- Do not write long summaries for Not relevant items.",
+  );
+  return lines;
+}
+
+function contentProfileGuidance(profile: SourcePostProcessingInputConfig["content_profile"]): string[] {
+  if (profile === ARXIV_NEW_PAPERS_CONTENT_PROFILE) return ARXIV_NEW_PAPERS_PROFILE_GUIDANCE;
+  return [];
+}
+
+function itemMetadataLines(
+  item: IntakeItemRow,
+  profile: SourcePostProcessingInputConfig["content_profile"],
+): string[] {
+  if (profile === ARXIV_NEW_PAPERS_CONTENT_PROFILE) return arxivPostProcessingItemMetadataLines(item);
+  return [];
+}

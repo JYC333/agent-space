@@ -3,6 +3,7 @@ import { loadConfig } from "../src/config";
 import type { ApplyProposal } from "../src/modules/memory/memoryApplyRepository";
 import { ProposalApplierRegistry } from "../src/modules/proposals/applierRegistry";
 import { registerKnowledgeProposalAppliers } from "../src/modules/knowledge/proposalApplier";
+import { handleIntakeRetrievalTestSql } from "./helpers/intakeRetrievalTestSql";
 
 const NOW = "2026-06-24T10:00:00.000Z";
 
@@ -38,6 +39,8 @@ class ClaimApplyFakeDb {
     if (norm.startsWith("SAVEPOINT") || norm.startsWith("RELEASE SAVEPOINT") || norm.startsWith("ROLLBACK TO SAVEPOINT")) {
       return { rows: [], rowCount: 0 };
     }
+    const retrievalResult = handleIntakeRetrievalTestSql(sql, params);
+    if (retrievalResult) return retrievalResult;
     if (norm.includes("FROM claims c JOIN space_objects so")) {
       const row = this.claims.get(String(params[0]));
       return { rows: row ? [row] : [], rowCount: row ? 1 : 0 };

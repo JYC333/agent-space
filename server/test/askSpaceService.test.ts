@@ -5,7 +5,7 @@ import type {
 } from "@agent-space/protocol" with { "resolution-mode": "import" };
 import type { ServerConfig } from "../src/config";
 import { AskSpaceService } from "../src/modules/askSpace";
-import { __setProviderCommandStoreForTests } from "../src/modules/providers/providerCommandStore";
+import { __setProviderCommandStoreForTests } from "../src/modules/providers/commands/store";
 import type { BriefCandidate } from "../src/modules/retrieval";
 
 const CONFIG = { databaseUrl: "postgres://test", agentSpaceHome: "/tmp" } as unknown as ServerConfig;

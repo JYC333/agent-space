@@ -206,6 +206,10 @@ space.
   It also supports saving a URL into the project through an already-bound
   source and changing the source for manually saved URL items. Source creation,
   scans, and advanced source management remain on the Intake surface.
+- Project Detail also shows recent Intake recommendations from project-linked
+  source post-processing decisions. These are selected/maybe candidate items for
+  review and follow-up; accepting durable Knowledge still goes through proposal
+  review.
 - **Publishing a public summary** (`review_status` other than `draft`) requires
   project-**owner**-level authority — the project `owner_user_id` or a space
   `owner`/`admin`. A project `member` (writer) can stage drafts but cannot

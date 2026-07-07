@@ -3,15 +3,15 @@ import {
   retrievalEgressAllowed,
   ALLOW_ALL_EGRESS,
   retrievalProviderEgressDestination,
-} from "../src/modules/retrievalEgress/egressPolicy";
-import type { ProviderCommandStore } from "../src/modules/providers/providerCommandStore";
+} from "../src/modules/retrieval/egress/egressPolicy";
+import type { ProviderCommandStore } from "../src/modules/providers/commands/store";
 import {
   __setProviderHttpClientForTests,
   completeProviderText,
   type ProviderHttpClient,
-} from "../src/modules/providers/providerInvocation";
-import { ProviderReranker } from "../src/modules/retrievalRerank/providerReranker";
-import { ProviderSynthesizer } from "../src/modules/retrievalSynthesis/providerSynthesizer";
+} from "../src/modules/providers/invocation/invocation";
+import { ProviderReranker } from "../src/modules/retrieval/rerankProvider/providerReranker";
+import { ProviderSynthesizer } from "../src/modules/retrieval/synthesisProvider/providerSynthesizer";
 
 // W9 egress governance. The per-space switch is enforced at the shared seam:
 // when external egress is disabled, external model providers are blocked, while

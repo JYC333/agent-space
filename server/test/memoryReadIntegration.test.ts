@@ -87,7 +87,9 @@ async function insertMemory(over: Record<string, unknown>): Promise<void> {
 
 beforeEach(async () => {
   if (!available || !pool) return;
-  await pool.query("TRUNCATE memory_entries, projects, project_members, spaces, memory_access_logs");
+  await pool.query(
+    "TRUNCATE retrieval_edges, retrieval_chunks, retrieval_aliases, retrieval_objects, extracted_evidence, source_snapshots, intake_items, provenance_links, memory_entries, projects, project_members, spaces, memory_access_logs",
+  );
 });
 
 async function accessLogs(memoryId: string): Promise<Array<Record<string, unknown>>> {

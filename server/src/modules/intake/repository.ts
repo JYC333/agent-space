@@ -43,6 +43,7 @@ import {
   EVIDENCE_LINK_COLUMNS,
   ITEM_COLUMNS,
   JOB_COLUMNS,
+  connectionColumnsWithConnectorForAlias,
   type EvidenceLinkRow,
   type EvidenceRow,
   type ExtractionJobRow,
@@ -64,6 +65,11 @@ import {
   normalizeSourceConnectionReadGovernance,
   normalizeSourceConnectionUpdateGovernance,
 } from "./sourceConsent";
+import {
+  reindexExtractedEvidenceAndParentForRetrieval,
+  reindexIntakeItemAndEvidenceForRetrieval,
+} from "./retrievalIndexing";
+import { backfillEvidenceForWorkspaceSourceBinding } from "./evidenceProjectLinker";
 
 const EVIDENCE_LINK_TYPES = new Set([
   "supports",
@@ -183,7 +189,10 @@ export class PgIntakeRepository {
 
   async getConnection(identity: SpaceUserIdentity, connectionId: string) {
     const result = await this.db.query<SourceConnectionRow>(
-      `SELECT ${CONNECTION_COLUMNS} FROM source_connections WHERE space_id = $1 AND id = $2 AND deleted_at IS NULL`,
+      `SELECT ${connectionColumnsWithConnectorForAlias("sc", "c")}
+         FROM source_connections sc
+         JOIN source_connectors c ON c.id = sc.connector_id
+        WHERE sc.space_id = $1 AND sc.id = $2 AND sc.deleted_at IS NULL`,
       [identity.spaceId, connectionId],
     );
     return result.rows[0] ? connectionOut(await this.withConnectionSchedule(result.rows[0])) : null;
@@ -437,6 +446,7 @@ export class PgIntakeRepository {
     if (body.queue_content === true) {
       await this.createJob({ identity, connectionId: row.connection_id, intakeItemId: row.id, jobType: "manual_url", metadata: { url: canonical } });
     }
+    await this.reindexItemForRetrieval(identity.spaceId, row.id, "intake_manual_url");
     return itemOut(row);
   }
 
@@ -465,6 +475,7 @@ export class PgIntakeRepository {
         `UPDATE intake_items SET status = $3, read_status = $4, updated_at = $5 WHERE space_id = $1 AND id = $2`,
         [identity.spaceId, itemId, status, readStatus, new Date().toISOString()],
       );
+      await this.reindexItemForRetrieval(identity.spaceId, itemId, "intake_item_status_update");
       return this.getItem(identity, itemId);
     }
     if (action === "extract_evidence") {
@@ -517,8 +528,9 @@ export class PgIntakeRepository {
         WHERE space_id = $1
           AND intake_item_id = $2
           AND status IN ('pending', 'queued')`,
-      [identity.spaceId, itemId, connectionId],
-    );
+        [identity.spaceId, itemId, connectionId],
+      );
+    await this.reindexItemForRetrieval(identity.spaceId, itemId, "intake_item_source_update");
     return this.getItem(identity, itemId);
   }
 
@@ -721,7 +733,9 @@ export class PgIntakeRepository {
         now,
       ],
     );
-    return evidenceOut(result.rows[0]!);
+    const row = result.rows[0]!;
+    await this.reindexEvidenceForRetrieval(identity.spaceId, row.id, "intake_evidence_create");
+    return evidenceOut(row);
   }
 
   async getEvidence(identity: SpaceUserIdentity, evidenceId: string) {
@@ -752,7 +766,9 @@ export class PgIntakeRepository {
         now,
       ],
     );
-    return evidenceOut(result.rows[0]!);
+    const row = result.rows[0]!;
+    await this.reindexEvidenceForRetrieval(identity.spaceId, row.id, "intake_evidence_update");
+    return evidenceOut(row);
   }
 
   async listEvidenceLinks(identity: SpaceUserIdentity, filters: {
@@ -913,7 +929,52 @@ export class PgIntakeRepository {
         now,
       ],
     );
-    return bindingOut(result.rows[0]!);
+    const row = result.rows[0]!;
+    const out = bindingOut(row);
+    if (!booleanBody(body.backfill_history, "backfill_history", false)) return out;
+    return {
+      ...out,
+      backfill_result: await this.backfillWorkspaceBindingRow(identity, row),
+    };
+  }
+
+  async backfillWorkspaceBinding(identity: SpaceUserIdentity, bindingId: string) {
+    const row = await this.getWorkspaceBindingRow(identity.spaceId, bindingId);
+    if (!row) throw new HttpError(404, "Workspace source binding not found");
+    await assertProjectWriter(this.db, identity.spaceId, row.project_id, identity.userId);
+    await assertWorkspaceLinkedToProject(this.db, identity.spaceId, row.project_id, row.workspace_id);
+    return this.backfillWorkspaceBindingRow(identity, row);
+  }
+
+  private async getWorkspaceBindingRow(spaceId: string, bindingId: string): Promise<WorkspaceBindingRow | null> {
+    const rows = await this.db.query<WorkspaceBindingRow>(
+      `SELECT ${BINDING_COLUMNS}
+         FROM workspace_source_bindings
+        WHERE space_id = $1
+          AND id = $2`,
+      [spaceId, bindingId],
+    );
+    return rows.rows[0] ?? null;
+  }
+
+  private async backfillWorkspaceBindingRow(
+    identity: SpaceUserIdentity,
+    row: WorkspaceBindingRow,
+  ): Promise<Record<string, unknown>> {
+    if (row.status !== "active") {
+      throw new HttpError(422, "Only active workspace source bindings can backfill history");
+    }
+    const createdLinks = await backfillEvidenceForWorkspaceSourceBinding(this.db, {
+      spaceId: identity.spaceId,
+      bindingId: row.id,
+    });
+    return {
+      binding_id: row.id,
+      workspace_id: row.workspace_id,
+      project_id: row.project_id,
+      source_connection_id: row.source_connection_id,
+      created_links: createdLinks,
+    };
   }
 
   async createSummaryRun(identity: SpaceUserIdentity, body: Record<string, unknown>) {
@@ -1036,7 +1097,10 @@ export class PgIntakeRepository {
 
   private async getConnectionRow(identity: SpaceUserIdentity, connectionId: string) {
     const result = await this.db.query<SourceConnectionRow>(
-      `SELECT ${CONNECTION_COLUMNS} FROM source_connections WHERE space_id = $1 AND id = $2 AND deleted_at IS NULL`,
+      `SELECT ${connectionColumnsWithConnectorForAlias("sc", "c")}
+         FROM source_connections sc
+         JOIN source_connectors c ON c.id = sc.connector_id
+        WHERE sc.space_id = $1 AND sc.id = $2 AND sc.deleted_at IS NULL`,
       [identity.spaceId, connectionId],
     );
     return result.rows[0] ? this.withConnectionSchedule(result.rows[0]) : null;
@@ -1121,6 +1185,22 @@ export class PgIntakeRepository {
     return Boolean(result.rows[0]);
   }
 
+  private async reindexItemForRetrieval(spaceId: string, itemId: string, trigger: string): Promise<void> {
+    await reindexIntakeItemAndEvidenceForRetrieval(this.db, { spaceId, itemId, trigger }).catch((error) => {
+      process.stderr.write(
+        `[intake.retrieval] item reindex failed (${itemId}): ${String((error as Error)?.message ?? error)}\n`,
+      );
+    });
+  }
+
+  private async reindexEvidenceForRetrieval(spaceId: string, evidenceId: string, trigger: string): Promise<void> {
+    await reindexExtractedEvidenceAndParentForRetrieval(this.db, { spaceId, evidenceId, trigger }).catch((error) => {
+      process.stderr.write(
+        `[intake.retrieval] evidence reindex failed (${evidenceId}): ${String((error as Error)?.message ?? error)}\n`,
+      );
+    });
+  }
+
   private async insertSummaryProposal(identity: SpaceUserIdentity, proposalType: string, title: string, summary: string, artifactId: string, evidenceIds: string[], intakeItemIds: string[]) {
     const sourceRefs = [
       { source_type: "artifact", source_id: artifactId, source_trust: "internal_system" },
@@ -1160,4 +1240,10 @@ export class PgIntakeRepository {
     });
     return row.id;
   }
+}
+
+function booleanBody(value: unknown, field: string, fallback: boolean): boolean {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value === "boolean") return value;
+  throw new HttpError(422, `${field} must be a boolean`);
 }

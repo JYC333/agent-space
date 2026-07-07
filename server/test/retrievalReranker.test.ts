@@ -11,10 +11,10 @@ import {
   type RerankScore,
 } from "../src/modules/retrieval/reranker";
 import type { ScoredCandidate } from "../src/modules/retrieval/types";
-import { buildRerankPrompt, parseRerankScores } from "../src/modules/retrievalRerank/prompt";
-import { ProviderReranker } from "../src/modules/retrievalRerank/providerReranker";
-import { __setProviderHttpClientForTests } from "../src/modules/providers/providerInvocation";
-import type { ProviderCommandStore } from "../src/modules/providers/providerCommandStore";
+import { buildRerankPrompt, parseRerankScores } from "../src/modules/retrieval/rerankProvider/prompt";
+import { ProviderReranker } from "../src/modules/retrieval/rerankProvider/providerReranker";
+import { __setProviderHttpClientForTests } from "../src/modules/providers/invocation/invocation";
+import type { ProviderCommandStore } from "../src/modules/providers/commands/store";
 import type { RerankCandidate } from "../src/modules/retrieval";
 import { writePolicyAudit } from "../src/modules/policy/auditWriter";
 

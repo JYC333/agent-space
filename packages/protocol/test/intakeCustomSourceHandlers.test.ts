@@ -10,7 +10,7 @@ import {
 
 const policyEnvelope = {
   allowed_network_origins: ["https://example.com"],
-  capture_policy: "auto_extract_relevant",
+  capture_policy: "extract_text",
   retention_policy: "full_text",
   credential_ref: null,
   language: "typescript_node",
@@ -120,7 +120,7 @@ describe("CustomSourceHandlerInputSchema", () => {
       },
       policy: {
         allowed_network_origins: ["https://example.com"],
-        capture_policy: "auto_extract_relevant",
+        capture_policy: "extract_text",
         retention_policy: "full_text",
         credential_ref: null,
         limits: policyEnvelope.limits,
@@ -142,7 +142,7 @@ describe("CustomSourceHandlerInputSchema", () => {
       source: { name: "x", config: {} },
       policy: {
         allowed_network_origins: [],
-        capture_policy: "auto_extract_relevant",
+        capture_policy: "extract_text",
         retention_policy: "full_text",
         limits: policyEnvelope.limits,
       },
@@ -229,9 +229,10 @@ describe("CustomSourceSpacePolicyDTOSchema", () => {
     const defaults = {
       space_id: "space1",
       creator_roles: ["owner", "admin"],
-      default_capture_policy: "auto_extract_relevant",
+      default_capture_policy: "extract_text",
       default_retention_policy: "full_text",
       allowed_domains: [],
+      download_bytes_max: 5242880,
       credentialed_sources_allowed: false,
       same_envelope_repair_auto_apply: false,
       created_at: null,
@@ -244,9 +245,10 @@ describe("CustomSourceSpacePolicyDTOSchema", () => {
     const configured = {
       space_id: "space1",
       creator_roles: ["owner"],
-      default_capture_policy: "excerpt_only",
+      default_capture_policy: "reference_only",
       default_retention_policy: "full_text",
       allowed_domains: ["example.com"],
+      download_bytes_max: 2097152,
       credentialed_sources_allowed: true,
       same_envelope_repair_auto_apply: true,
       created_at: "2026-01-01T00:00:00.000Z",

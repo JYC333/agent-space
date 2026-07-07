@@ -52,7 +52,9 @@ afterAll(async () => {
 
 beforeEach(async () => {
   if (!available || !pool) return;
-  await pool.query("TRUNCATE memory_entries, provenance_links, memory_relations, spaces, projects, proposals");
+  await pool.query(
+    "TRUNCATE retrieval_edges, retrieval_chunks, retrieval_aliases, retrieval_objects, extracted_evidence, source_snapshots, intake_items, memory_entries, provenance_links, memory_relations, spaces, projects, proposals",
+  );
   await pool.query("INSERT INTO spaces (id, type) VALUES ($1, 'personal')", [SPACE]);
 });
 

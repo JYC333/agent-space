@@ -3,6 +3,7 @@ import type { ServerConfig } from "../../config";
 import { getDbPool } from "../../db/pool";
 import {
   redactEvidenceText,
+  redactSecretPatterns,
   sanitizeErrorJson,
   sanitizeEvidenceJson,
 } from "./evidenceRedaction";
@@ -11,7 +12,6 @@ import {
   type RuntimeAdapterType,
 } from "../runtimeAdapters/specs";
 import { assertProjectInSpace } from "../projects/access";
-import { advanceAutomationIntakeCursor } from "../automations/intakeCursor";
 import {
   addOptionalFilter,
   extractErrorMessage,
@@ -104,10 +104,6 @@ export class PgRunRepository {
       throw new Error("Run repository requires SERVER_DATABASE_URL");
     }
     return new PgRunRepository(getDbPool(config.databaseUrl));
-  }
-
-  async advanceAutomationIntakeCursorForRun(spaceId: string, runId: string): Promise<boolean> {
-    return advanceAutomationIntakeCursor(this.db, { spaceId, runId });
   }
 
   async recoverStaleRuns(staleAfterSeconds = 3600, now = new Date()): Promise<number> {
@@ -1475,11 +1471,16 @@ export class PgRunRepository {
 
   async markRunTerminal(input: RunTerminalUpdate): Promise<RunRecord | null> {
     // The public run read model surfaces output through output_json.output_text,
-    // so the terminal write folds it in before sanitization.
-    const outputJson = sanitizeEvidenceJson({
-      ...(recordValue(input.output_json)),
-      ...(input.output_text ? { output_text: input.output_text } : {}),
-    });
+    // so the terminal write folds it in before sanitization. output_text is
+    // bounded (or not) by the adapter that produced it — e.g. the CLI adapter
+    // already truncates its own stdout, while the model-API adapter needs the
+    // full text intact for downstream JSON-schema parsing — so only the
+    // secret-pattern scrub runs here; the length cap in sanitizeEvidenceJson
+    // only applies to the rest of output_json.
+    const outputJson = {
+      ...(sanitizeEvidenceJson(recordValue(input.output_json)) as Record<string, unknown>),
+      ...(input.output_text ? { output_text: redactSecretPatterns(input.output_text) } : {}),
+    };
     const errorJson = sanitizeErrorJson(input.error_json ?? {});
     const usageJson = sanitizeEvidenceJson(input.usage_json ?? {});
     const result = await this.db.query<RunRecord>(

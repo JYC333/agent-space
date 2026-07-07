@@ -7,7 +7,10 @@ import {
   type StartedPostgreSqlContainer,
 } from "@testcontainers/postgresql";
 import { migrate } from "../src/db/migrator";
-import { linkEvidenceToBoundProjects } from "../src/modules/intake/evidenceProjectLinker";
+import {
+  backfillEvidenceForWorkspaceSourceBinding,
+  linkEvidenceToBoundProjects,
+} from "../src/modules/intake/evidenceProjectLinker";
 import { PgRunContextRepository } from "../src/modules/context/repository";
 
 // Real-PostgreSQL tests for evidence→project auto-linking on materialization:
@@ -194,6 +197,32 @@ describe("Evidence→project auto-link (real Postgres)", () => {
     ]);
 
     const again = await linkEvidenceToBoundProjects(pool!, { spaceId: SPACE, intakeItemId: itemId });
+    expect(again).toBe(0);
+  });
+
+  it("backfills historical evidence after a source binding is created", async () => {
+    if (!available) return;
+    const { evidenceId } = await seedItemWithEvidence();
+    const bindingId = await seedBinding(PROJECT);
+
+    const created = await backfillEvidenceForWorkspaceSourceBinding(pool!, { spaceId: SPACE, bindingId });
+    expect(created).toBe(1);
+
+    const links = await pool!.query(
+      `SELECT target_type, target_id, link_type, status, reason FROM evidence_links WHERE evidence_id = $1`,
+      [evidenceId],
+    );
+    expect(links.rows).toEqual([
+      {
+        target_type: "project",
+        target_id: PROJECT,
+        link_type: "context_candidate",
+        status: "active",
+        reason: `workspace_source_binding:${bindingId}`,
+      },
+    ]);
+
+    const again = await backfillEvidenceForWorkspaceSourceBinding(pool!, { spaceId: SPACE, bindingId });
     expect(again).toBe(0);
   });
 

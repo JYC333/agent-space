@@ -13,21 +13,22 @@ import { getDbPool } from "../../db/pool";
 import { knowledgeRetrievalRegistry } from "../knowledge/retrievalAdapter";
 import { memoryRetrievalRegistry } from "../memory/retrievalAdapter";
 import { projectRetrievalRegistry } from "../projects/retrievalAdapter";
-import { resolveProviderCommandStore } from "../providers/providerCommandStore";
+import { intakeRetrievalRegistry } from "../intake/retrievalAdapter";
+import { resolveProviderCommandStore } from "../providers/commands/store";
 import {
   buildRetrievalBriefArtifactSpec,
   RetrievalSearchService,
 } from "../retrieval";
 import type { RetrievalObjectType, RetrievalSearchMode } from "../retrieval";
 import { readSpaceRetrievalSettings } from "../retrieval/settings";
-import { ProviderQueryEmbedder } from "../retrievalEmbedding/queryEmbedder";
-import { ProviderReranker } from "../retrievalRerank/providerReranker";
-import { ProviderSynthesizer } from "../retrievalSynthesis/providerSynthesizer";
-import { RetrievalToolService } from "../retrievalTool/service";
+import { ProviderQueryEmbedder } from "../retrieval/embedding/queryEmbedder";
+import { ProviderReranker } from "../retrieval/rerankProvider/providerReranker";
+import { ProviderSynthesizer } from "../retrieval/synthesisProvider/providerSynthesizer";
+import { RetrievalToolService } from "../retrieval/tool/service";
 import {
   enforceRetrievalToolCallPolicy,
   type RetrievalToolPolicyAction,
-} from "../retrievalTool/policy";
+} from "../retrieval/tool/policy";
 import type { RunRecord } from "./repository";
 
 export type RuntimeHostExecutor = (
@@ -53,6 +54,7 @@ export interface ResolvedRetrievalToolBinding {
 const RETRIEVAL_TOOL_OBJECT_TYPES = ["knowledge_item", "note", "source", "claim"] as const;
 const MEMORY_RETRIEVAL_TOOL_OBJECT_TYPES = ["memory_entry"] as const;
 const PROJECT_RETRIEVAL_TOOL_OBJECT_TYPES = ["project_public_summary"] as const;
+const INTAKE_RETRIEVAL_TOOL_OBJECT_TYPES = ["intake_item", "extracted_evidence"] as const;
 const RETRIEVAL_TOOL_MODES = ["exact", "lexical", "hybrid", "hybrid_rerank"] as const;
 const MAX_TOOL_TURNS = 4;
 const MAX_MODEL_RESULT_ITEMS = 8;
@@ -60,7 +62,7 @@ const MAX_MODEL_SNIPPET_CHARS = 500;
 // Mirrors the runtime-host error code for a provider that cannot do tool calls.
 const RUNTIME_TOOL_PROVIDER_UNSUPPORTED = "runtime_tool_provider_unsupported";
 
-type RetrievalToolDomain = "knowledge" | "memory" | "project_public_summary";
+type RetrievalToolDomain = "knowledge" | "memory" | "project_public_summary" | "intake";
 
 interface RetrievalToolDomainSpec {
   domain: RetrievalToolDomain;
@@ -122,7 +124,22 @@ const PROJECT_TOOL_SPEC: RetrievalToolDomainSpec = {
   persistTrace: false,
 };
 
-const OPTIONAL_DOMAIN_TOOL_SPECS = [MEMORY_TOOL_SPEC, PROJECT_TOOL_SPEC] as const;
+const INTAKE_TOOL_SPEC: RetrievalToolDomainSpec = {
+  domain: "intake",
+  registry: intakeRetrievalRegistry,
+  searchTool: "intake.retrieval.search",
+  briefTool: "intake.retrieval.brief",
+  searchDescription: "Search Intake items and extracted evidence under the instructing user's read access. Requires explicit Intake tool opt-in.",
+  briefDescription: "Build a cited Intake Context Brief under the instructing user's read access. Requires explicit Intake tool opt-in.",
+  objectTypes: INTAKE_RETRIEVAL_TOOL_OBJECT_TYPES,
+  objectTypeLabel: "intake_item or extracted_evidence",
+  requiredScopes: ["intake.read"],
+  serviceSurface: "managed_run_intake",
+  artifactSurface: "managed_run_intake_retrieval_tool",
+  persistTrace: false,
+};
+
+const OPTIONAL_DOMAIN_TOOL_SPECS = [MEMORY_TOOL_SPEC, PROJECT_TOOL_SPEC, INTAKE_TOOL_SPEC] as const;
 
 export async function resolveRetrievalToolBinding(
   config: ServerConfig,
@@ -707,12 +724,13 @@ function addDomainsFromRecord(domains: Set<RetrievalToolDomain>, record: Record<
   for (const value of arrayOfStrings(retrievalTools.domains)) {
     addDomainAlias(domains, value);
   }
-  for (const key of ["memory", "project_public_summary"]) {
+  for (const key of ["memory", "project_public_summary", "intake"]) {
     const nested = recordOrEmpty(retrievalTools[key]);
     if (retrievalTools[key] === true || nested.enabled === true) addDomainAlias(domains, key);
   }
   if (record.memory_retrieval_tools_enabled === true) domains.add("memory");
   if (record.project_public_summary_retrieval_tools_enabled === true) domains.add("project_public_summary");
+  if (record.intake_retrieval_tools_enabled === true) domains.add("intake");
 }
 
 function addDomainsFromCapabilities(domains: Set<RetrievalToolDomain>, value: unknown): void {
@@ -734,6 +752,14 @@ function addDomainsFromCapabilities(domains: Set<RetrievalToolDomain>, value: un
   ) {
     domains.add("project_public_summary");
   }
+  if (
+    capabilities.has("intake.retrieval_tools") ||
+    capabilities.has("intake.retrieval.tools") ||
+    capabilities.has("intake.retrieval.search") ||
+    capabilities.has("intake.retrieval.brief")
+  ) {
+    domains.add("intake");
+  }
 }
 
 function addDomainAlias(domains: Set<RetrievalToolDomain>, value: string): void {
@@ -746,6 +772,13 @@ function addDomainAlias(domains: Set<RetrievalToolDomain>, value: string): void 
     value === "project_public_summaries"
   ) {
     domains.add("project_public_summary");
+  } else if (
+    value === "intake" ||
+    value === "intake_item" ||
+    value === "extracted_evidence" ||
+    value === "intake_items"
+  ) {
+    domains.add("intake");
   }
 }
 

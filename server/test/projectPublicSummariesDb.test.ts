@@ -12,8 +12,8 @@ import { projectRetrievalRegistry } from "../src/modules/projects/retrievalAdapt
 import {
   RetrievalEmbeddingBackfillService,
   type RetrievalEmbedder,
-} from "../src/modules/retrievalEmbedding/service";
-import { EMBED_DIMENSIONS } from "../src/modules/retrievalEmbedding/config";
+} from "../src/modules/retrieval/embedding/service";
+import { EMBED_DIMENSIONS } from "../src/modules/retrieval/embedding/config";
 
 function oneHot(slot: number): number[] {
   const v = new Array<number>(EMBED_DIMENSIONS).fill(0);

@@ -13,6 +13,7 @@ import { REQUEST_ID_HEADER, resolveRequestId } from "../../gateway/requestContex
 import { resolveProvidersDbPort } from "./dbReader";
 import { introspectIdentity } from "../auth/identity";
 import { loadProtocol } from "./protocolRuntime";
+import { listProviderPresets as listProviderPresetCatalog } from "./presets";
 
 function configIdFromRequest(request: FastifyRequest): string | undefined {
   const params = request.params as Record<string, unknown> | undefined;
@@ -132,6 +133,14 @@ export function getProviderCatalogInfo(
     const { PROVIDER_CATALOG_INFO } = await loadProtocol();
     return PROVIDER_CATALOG_INFO;
   });
+}
+
+export function listProviderPresets(
+  config: ServerConfig,
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<FastifyReply> {
+  return serveProviderRead(config, request, reply, async () => listProviderPresetCatalog());
 }
 
 /** Supported-provider catalog served by the server. */

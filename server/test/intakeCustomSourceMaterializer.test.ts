@@ -110,7 +110,8 @@ beforeEach(async () => {
   await writeFile(join(sandboxFilesRoot, "article-1.html"), "<html>hi</html>", "utf8");
   if (!available || !pool) return;
   await pool.query(
-    `TRUNCATE extracted_evidence, source_snapshots, intake_items, artifacts, source_handler_runs, source_connections`,
+    `TRUNCATE jobs, retrieval_edges, retrieval_chunks, retrieval_aliases, retrieval_objects,
+      extracted_evidence, source_snapshots, intake_items, artifacts, source_handler_runs, source_connections`,
   );
 });
 

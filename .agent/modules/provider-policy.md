@@ -24,9 +24,9 @@ is a normalized space setting; provider adapters map it to request parameters
 where supported and validate the returned vector length.
 
 Retrieval task policies are capability-filtered. `retrieval_embedding` accepts
-embedding-capable providers (OpenAI-compatible, Ollama, ZeroEntropy, or local
+embedding-capable providers (OpenAI-compatible, Ollama, ZeroEntropy, Cohere, or local
 `other`), `retrieval_rerank` is reserved for native rerank providers
-(ZeroEntropy first), and `retrieval_query_rewrite` uses ordinary chat providers.
+(ZeroEntropy or Cohere), and `retrieval_query_rewrite` uses ordinary chat providers.
 The provider task-policy route enforces the same compatibility rules as the UI.
 Query rewrite prompt text is not stored in the provider policy; it is
 space-scoped in `space_retrieval_prompts` and rendered before the chat provider
@@ -34,9 +34,19 @@ call.
 
 The Providers page remains the single place to create and maintain provider
 credentials, but it labels provider capabilities explicitly (`Chat`,
-`Embeddings`, `Native rerank`). ZeroEntropy is presented as a retrieval provider:
-`zembed-*` models are for embeddings, while `zerank-*` models are for native
-rerank task policies.
+`Embeddings`, `Native rerank`) and has separate add flows for ordinary chat
+providers, embedding providers, and rerank providers. ZeroEntropy and Cohere
+are presented as separate embedding and rerank presets: `zembed-*` /
+`embed-v4.0` models configure `retrieval_embedding` and embedding dimensions,
+while `zerank-*` / `rerank-v4.0-pro` models configure native rerank task
+policies. Embedding and rerank creation do not expose the chat provider
+`API protocol` selector; the selected preset owns the backend adapter type.
+Provider presets are server-owned under `server/src/modules/providers/presets/`
+and exposed through `GET /api/v1/providers/presets`. Frontend code consumes
+this catalog but does not hardcode vendor preset facts. Creating a provider
+from a preset goes through `POST /api/v1/providers/from-preset`; for embedding
+and rerank presets the server also configures the corresponding retrieval task
+policy and retrieval settings.
 
 `model_providers.base_url` is required and represents the Provider's managed API
 endpoint for server-side model calls. Provider records may additionally carry CLI bridge endpoints in

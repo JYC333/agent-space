@@ -4,17 +4,17 @@ import {
   DEFAULT_EMBED_BATCH,
   EMBED_DIMENSIONS,
   RETRIEVAL_EMBEDDING_JOB,
-} from "../src/modules/retrievalEmbedding/config";
-import { enqueueRetrievalEmbeddingBackfillWithQueue } from "../src/modules/retrievalEmbedding/job";
+} from "../src/modules/retrieval/embedding/config";
+import { enqueueRetrievalEmbeddingBackfillWithQueue } from "../src/modules/retrieval/embedding/job";
 import {
   RetrievalEmbeddingBackfillService,
   type RetrievalEmbedder,
   type RetrievalEmbeddingAuditEvent,
-} from "../src/modules/retrievalEmbedding/service";
-import { QueryEmbeddingCache } from "../src/modules/retrievalEmbedding/queryEmbeddingCache";
-import { ProviderQueryEmbedder } from "../src/modules/retrievalEmbedding/queryEmbedder";
-import { __setProviderHttpClientForTests } from "../src/modules/providers/providerInvocation";
-import type { ProviderCommandStore } from "../src/modules/providers/providerCommandStore";
+} from "../src/modules/retrieval/embedding/service";
+import { QueryEmbeddingCache } from "../src/modules/retrieval/embedding/queryEmbeddingCache";
+import { ProviderQueryEmbedder } from "../src/modules/retrieval/embedding/queryEmbedder";
+import { __setProviderHttpClientForTests } from "../src/modules/providers/invocation/invocation";
+import type { ProviderCommandStore } from "../src/modules/providers/commands/store";
 
 class FakeEmbeddingDb implements Queryable {
   readonly calls: Array<{ sql: string; params: readonly unknown[] }> = [];

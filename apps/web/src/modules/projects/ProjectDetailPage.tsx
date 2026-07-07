@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom'
 import { useSpaceNavigate as useNavigate, SpaceLink as Link } from '../../core/spaceNav'
 import {
   FolderKanban, Target, Edit2, Archive, Plus, Trash2, ChevronLeft,
-  Activity, Package, CheckCircle, Folder, Cpu, Database, Radio, Link2, FileText,
+  Activity, Package, CheckCircle, Folder, Cpu, Database, Radio, Link2, FileText, RefreshCw,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { projectsApi, workspacesApi, activityApi, artifactsApi, proposalsApi, runsApi, memoryApi, intakeApi, intakeReaderApi, automationsApi } from '../../api/client'
@@ -13,7 +13,7 @@ import type {
   Project, ProjectSummary, ProjectWorkspaceLinkOut, Workspace,
   ActivityInboxRecord, Artifact, Proposal, Run, Memory,
   SourceConnection, WorkspaceSourceBinding, IntakeItem, ExtractedEvidence,
-  ReaderAnnotation, AutomationOut,
+  ReaderAnnotation, AutomationOut, SourcePostProcessingItemDecision,
 } from '../../types/api'
 import { Card } from '../../components/ui/card'
 import { Button } from '../../components/ui/button'
@@ -256,6 +256,7 @@ function LinkIntakeSourceDialog({
 }: LinkIntakeSourceDialogProps) {
   const [workspaceId, setWorkspaceId] = useState('')
   const [connectionId, setConnectionId] = useState('')
+  const [backfillHistory, setBackfillHistory] = useState(true)
   const [linking, setLinking] = useState(false)
 
   const workspaceOptions = workspaceLinks.map(link => {
@@ -284,6 +285,7 @@ function LinkIntakeSourceDialog({
     const nextWorkspaceId = workspaceOptions[0]?.value ?? ''
     setWorkspaceId(nextWorkspaceId)
     setConnectionId(sourceOptionsForWorkspace(nextWorkspaceId)[0]?.value ?? '')
+    setBackfillHistory(true)
   }, [open, workspaceLinks, workspaceMap, connections, bindings])
 
   const sourceOptions = sourceOptionsForWorkspace(workspaceId)
@@ -304,12 +306,17 @@ function LinkIntakeSourceDialog({
     }
     setLinking(true)
     try {
-      await intakeApi.createWorkspaceBinding({
+      const binding = await intakeApi.createWorkspaceBinding({
         project_id: projectId,
         workspace_id: workspaceId,
         source_connection_id: connectionId,
+        backfill_history: backfillHistory,
       })
-      toast.success('Source linked')
+      if (binding.backfill_result) {
+        toast.success(`Source linked; ${binding.backfill_result.created_links} historical evidence links added`)
+      } else {
+        toast.success('Source linked')
+      }
       onLinked()
       onOpenChange(false)
     } catch (e) {
@@ -355,6 +362,18 @@ function LinkIntakeSourceDialog({
               />
             )}
           </div>
+          <label className="flex items-start gap-2 rounded-md border border-border px-3 py-2 text-xs">
+            <input
+              type="checkbox"
+              className="mt-0.5 accent-primary"
+              checked={backfillHistory}
+              onChange={event => setBackfillHistory(event.target.checked)}
+            />
+            <span>
+              <span className="block font-medium text-foreground">Include historical evidence</span>
+              <span className="text-muted-foreground">Link already extracted source evidence into this project.</span>
+            </span>
+          </label>
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
@@ -507,6 +526,7 @@ export default function ProjectDetailPage() {
   const [intakeBindings, setIntakeBindings] = useState<WorkspaceSourceBinding[]>([])
   const [recentIntakeItems, setRecentIntakeItems] = useState<IntakeItem[]>([])
   const [recentEvidence, setRecentEvidence] = useState<ExtractedEvidence[]>([])
+  const [intakeRecommendations, setIntakeRecommendations] = useState<SourcePostProcessingItemDecision[]>([])
   const [readerAnnotations, setReaderAnnotations] = useState<ReaderAnnotation[]>([])
   const [automations, setAutomations] = useState<AutomationOut[]>([])
   const [loading, setLoading] = useState(true)
@@ -516,6 +536,7 @@ export default function ProjectDetailPage() {
   const [intakeLinkOpen, setIntakeLinkOpen] = useState(false)
   const [saveUrlOpen, setSaveUrlOpen] = useState(false)
   const [updatingItemSourceId, setUpdatingItemSourceId] = useState<string | null>(null)
+  const [backfillingBindingId, setBackfillingBindingId] = useState<string | null>(null)
   const [archiving, setArchiving] = useState(false)
 
   const loadAll = useCallback(async () => {
@@ -539,7 +560,7 @@ export default function ProjectDetailPage() {
       allWs.items.forEach(w => { map[w.id] = w })
       setWorkspaceMap(map)
 
-      const [acts, arts, props, runs, mems, sourceConnections, sourceBindings, intakeItems, evidenceItems, readerAnns, allAutomations] = await Promise.all([
+      const [acts, arts, props, runs, mems, sourceConnections, sourceBindings, intakeItems, evidenceItems, recommendations, readerAnns, allAutomations] = await Promise.all([
         activityApi.list({ project_id: projectId, limit: 5 }),
         artifactsApi.list({ project_id: projectId, limit: 5 }),
         proposalsApi.list({ project_id: projectId, status: 'pending', limit: 5 }),
@@ -549,6 +570,7 @@ export default function ProjectDetailPage() {
         intakeApi.workspaceBindings({ project_id: projectId }),
         intakeApi.items({ project_id: projectId, limit: 5 }),
         intakeApi.evidence({ project_id: projectId, status: 'active', limit: 5 }),
+        intakeApi.postProcessingDecisions({ project_id: projectId, limit: 20 }).catch(() => ({ items: [] as SourcePostProcessingItemDecision[], total: 0, limit: 20, offset: 0 })),
         intakeReaderApi.listByProject(projectId, 5).catch(() => ({ items: [] as ReaderAnnotation[] })),
         automationsApi.list().catch(() => [] as AutomationOut[]),
       ])
@@ -561,6 +583,7 @@ export default function ProjectDetailPage() {
       setIntakeBindings(sourceBindings)
       setRecentIntakeItems(intakeItems.items)
       setRecentEvidence(evidenceItems.items)
+      setIntakeRecommendations(recommendations.items.filter(item => item.relevance !== 'not_relevant').slice(0, 5))
       setReaderAnnotations(readerAnns.items)
       setAutomations(allAutomations.filter(a => a.project_id === projectId && a.status !== 'archived'))
     } catch (e) {
@@ -612,6 +635,19 @@ export default function ProjectDetailPage() {
       toast.error(errMsg(e))
     } finally {
       setUpdatingItemSourceId(null)
+    }
+  }
+
+  async function backfillIntakeBinding(binding: WorkspaceSourceBinding) {
+    setBackfillingBindingId(binding.id)
+    try {
+      const result = await intakeApi.backfillWorkspaceBinding(binding.id)
+      toast.success(`Backfilled ${result.created_links} historical evidence links`)
+      await loadAll()
+    } catch (e) {
+      toast.error(errMsg(e))
+    } finally {
+      setBackfillingBindingId(null)
     }
   }
 
@@ -792,9 +828,22 @@ export default function ProjectDetailPage() {
                 {intakeBindings.slice(0, 4).map(binding => {
                   const connection = intakeConnectionById[binding.source_connection_id]
                   return (
-                    <div key={binding.id} className="min-w-0">
-                      <p className="text-sm font-medium truncate">{connection?.name ?? binding.source_connection_id}</p>
-                      <p className="text-xs text-muted-foreground truncate">{connection?.endpoint_url ?? binding.binding_key}</p>
+                    <div key={binding.id} className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate">{connection?.name ?? binding.source_connection_id}</p>
+                        <p className="text-xs text-muted-foreground truncate">{connection?.endpoint_url ?? binding.binding_key}</p>
+                      </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="shrink-0 gap-1.5"
+                        disabled={project.status !== 'active' || binding.status !== 'active' || backfillingBindingId === binding.id}
+                        onClick={() => backfillIntakeBinding(binding)}
+                      >
+                        <RefreshCw className="size-3.5" />
+                        {backfillingBindingId === binding.id ? 'Backfilling…' : 'Backfill history'}
+                      </Button>
                     </div>
                   )
                 })}
@@ -850,6 +899,39 @@ export default function ProjectDetailPage() {
                     <p className="text-xs text-muted-foreground line-clamp-2">{row.content_excerpt ?? row.source_uri ?? row.evidence_type}</p>
                   </div>
                 ))}
+              </div>
+            )}
+          </Card>
+
+          <Card className="p-4">
+            <div className="flex items-center gap-2 text-muted-foreground mb-3">
+              <Target className="size-3.5" />
+              <span className="text-xs font-medium uppercase tracking-wide">Intake recommendations</span>
+            </div>
+            {intakeRecommendations.length === 0 ? (
+              <p className="text-xs text-muted-foreground">No post-processing recommendations for this project yet.</p>
+            ) : (
+              <div className="space-y-2">
+                {intakeRecommendations.map(decision => {
+                  const connection = intakeConnectionById[decision.source_connection_id]
+                  return (
+                    <div key={decision.id} className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <Badge variant={decision.relevance === 'relevant' ? 'default' : decision.relevance === 'maybe' ? 'outline' : 'muted'}>
+                          {decision.relevance}
+                        </Badge>
+                        {decision.confidence !== null && <Badge variant="muted">{Math.round(decision.confidence * 100)}%</Badge>}
+                      </div>
+                      <p className="mt-1 text-sm font-medium truncate">{decision.item.title ?? decision.intake_item_id}</p>
+                      <p className="text-xs text-muted-foreground line-clamp-2">{decision.reason ?? decision.item.source_domain ?? decision.review_status}</p>
+                      {connection && (
+                        <Link to={`/intake/sources/${connection.id}`} className="mt-1 block text-xs text-accent-foreground hover:underline">
+                          {connection.name}
+                        </Link>
+                      )}
+                    </div>
+                  )
+                })}
               </div>
             )}
           </Card>

@@ -156,15 +156,29 @@ describe("server runner applies the baseline schema", () => {
     expect(baseline).toContain("memory_entries_created_from_proposal_id_fkey");
   });
 
-  it("adds object kind registry without changing retrieval object types", () => {
+  it("keeps retrieval base object types centralized in a database domain", () => {
     const baseline = readFileSync(join(MIGRATIONS_DIR, "0001_baseline.sql"), "utf8");
+    expect(baseline).toContain("CREATE DOMAIN public.retrieval_object_type AS character varying(64)");
+    expect(baseline).toContain("CONSTRAINT retrieval_object_type_allowed CHECK");
     expect(baseline).toContain("CREATE TABLE public.space_object_kinds");
     expect(baseline).toContain("CREATE TABLE public.space_object_kind_relation_hints");
-    expect(baseline).toContain("ck_space_object_kinds_base_object_type");
+    expect(baseline).toContain("base_object_type public.retrieval_object_type NOT NULL");
+    expect(baseline).toContain("endpoint_object_type public.retrieval_object_type NOT NULL");
+    expect(baseline).toContain("object_type public.retrieval_object_type NOT NULL");
+    expect(baseline).toContain("from_object_type public.retrieval_object_type NOT NULL");
+    expect(baseline).toContain("to_object_type public.retrieval_object_type NOT NULL");
+    expect(baseline).not.toContain("ck_space_object_kinds_base_object_type");
+    expect(baseline).not.toContain("ck_space_object_kind_relation_hints_endpoint_type");
+    expect(baseline).not.toContain("ck_note_links_endpoint_type");
+    expect(baseline).not.toContain("ck_retrieval_objects_object_type");
+    expect(baseline).not.toContain("ck_retrieval_aliases_object_type");
+    expect(baseline).not.toContain("ck_retrieval_chunks_object_type");
+    expect(baseline).not.toContain("ck_retrieval_edges_from_object_type");
+    expect(baseline).not.toContain("ck_retrieval_edges_to_object_type");
+    expect(baseline).not.toContain("ck_retrieval_feedback_events_object_type");
     expect(baseline).toContain("ck_space_object_kind_relation_hints_relation_type");
     expect(baseline).toContain("'project_public_summary'::character varying");
-    expect(baseline).toContain("ck_retrieval_objects_object_type");
-    expect(baseline).toContain("'knowledge_item'::character varying, 'note'::character varying, 'source'::character varying, 'claim'::character varying, 'memory_entry'::character varying, 'project_public_summary'::character varying");
+    expect(baseline).toContain("'knowledge_item'::character varying, 'note'::character varying, 'source'::character varying, 'claim'::character varying, 'memory_entry'::character varying, 'project_public_summary'::character varying, 'intake_item'::character varying, 'extracted_evidence'::character varying");
   });
 
   it("keeps note collection trees and memberships space-scoped in the baseline", () => {

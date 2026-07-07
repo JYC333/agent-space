@@ -7,11 +7,11 @@ import {
   type Queryable,
   type SpaceUserIdentity,
 } from "../routeUtils/common";
-import { resolveProviderCommandStore, type ProviderCommandStore } from "../providers/providerCommandStore";
+import { resolveProviderCommandStore, type ProviderCommandStore } from "../providers/commands/store";
 import {
   ProviderInvocationError,
   completeProviderText,
-} from "../providers/providerInvocation";
+} from "../providers/invocation/invocation";
 import {
   canReadMemory,
   type MemoryAuthFields,

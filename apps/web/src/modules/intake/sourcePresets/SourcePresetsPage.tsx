@@ -23,6 +23,11 @@ import {
   sourceCapturePolicyValue,
   type ScheduleFormValue,
 } from '../intakePageModel'
+import {
+  sourcePostProcessingRuleForConnection,
+  type SourcePostProcessingPreset,
+} from '../sourcePostProcessingPresets'
+import { arxivPostProcessingPresetConfig } from './academic/arxivPostProcessing'
 import { ArxivSourceForm } from './academic/ArxivSourceForm'
 
 const CATEGORY_ORDER = ['academic']
@@ -70,6 +75,11 @@ export default function SourcePresetsPage() {
   const [arxivFetchFrequency, setArxivFetchFrequency] = useState('daily')
   const [arxivSchedule, setArxivSchedule] = useState<ScheduleFormValue>(() => emptyScheduleFormValue())
   const [arxivCapturePolicy, setArxivCapturePolicy] = useState<SourceCapturePolicy>('extract_text')
+  const [arxivPostProcessingEnabled, setArxivPostProcessingEnabled] = useState(false)
+  const [arxivPostProcessingPreset, setArxivPostProcessingPreset] = useState<SourcePostProcessingPreset>('batch_digest')
+  const [arxivPostProcessingCreateProposals, setArxivPostProcessingCreateProposals] = useState(false)
+  const [arxivPostProcessingScreeningObjective, setArxivPostProcessingScreeningObjective] = useState('')
+  const [arxivPostProcessingDeepAnalysis, setArxivPostProcessingDeepAnalysis] = useState(false)
   const [arxivPreview, setArxivPreview] = useState<ArxivPresetPreviewResponse | null>(null)
   const [createdConnection, setCreatedConnection] = useState<SourceConnection | null>(null)
 
@@ -151,16 +161,47 @@ export default function SourcePresetsPage() {
         capture_policy: arxivCapturePolicy,
       })
       setCreatedConnection(row)
+      await createPostProcessingPreset(row)
       toast.success(`arXiv source created: ${row.name}`)
       setArxivName('')
       setArxivSchedule(emptyScheduleFormValue())
       if (arxivMode === 'search') setArxivQuery('')
       setArxivPreview(null)
+      resetArxivPostProcessingPreset()
     } catch (e) {
       toast.error(errMsg(e))
     } finally {
       setBusy(null)
     }
+  }
+
+  async function createPostProcessingPreset(connection: SourceConnection): Promise<boolean> {
+    const rule = sourcePostProcessingRuleForConnection(connection, arxivPostProcessingPresetConfig({
+      enabled: arxivPostProcessingEnabled,
+      preset: arxivPostProcessingPreset,
+      createProposals: arxivPostProcessingCreateProposals,
+      mode: arxivMode,
+      categories: arxivCategories,
+      searchQuery: arxivQuery,
+      screeningObjective: arxivPostProcessingScreeningObjective,
+      deepAnalysis: arxivPostProcessingDeepAnalysis,
+    }))
+    if (!rule) return false
+    try {
+      await intakeApi.createPostProcessingRule(connection.id, rule)
+      toast.success('Post-processing preset added')
+      return true
+    } catch (e) {
+      toast.error(`Source created, post-processing setup failed: ${errMsg(e)}`)
+      return false
+    }
+  }
+
+  function resetArxivPostProcessingPreset() {
+    setArxivPostProcessingEnabled(false)
+    setArxivPostProcessingPreset('batch_digest')
+    setArxivPostProcessingCreateProposals(false)
+    setArxivPostProcessingScreeningObjective('')
   }
 
   function changeArxivFetchFrequency(value: string) {
@@ -269,6 +310,11 @@ export default function SourcePresetsPage() {
                 fetchFrequency={arxivFetchFrequency}
                 schedule={arxivSchedule}
                 capturePolicy={arxivCapturePolicy}
+                postProcessingEnabled={arxivPostProcessingEnabled}
+                postProcessingPreset={arxivPostProcessingPreset}
+                postProcessingCreateProposals={arxivPostProcessingCreateProposals}
+                postProcessingScreeningObjective={arxivPostProcessingScreeningObjective}
+                postProcessingDeepAnalysis={arxivPostProcessingDeepAnalysis}
                 preview={arxivPreview}
                 busy={busy}
                 onModeChange={changeArxivMode}
@@ -287,6 +333,11 @@ export default function SourcePresetsPage() {
                 onFetchFrequencyChange={changeArxivFetchFrequency}
                 onScheduleChange={setArxivSchedule}
                 onCapturePolicyChange={value => setArxivCapturePolicy(sourceCapturePolicyValue(value, arxivCapturePolicy))}
+                onPostProcessingEnabledChange={setArxivPostProcessingEnabled}
+                onPostProcessingPresetChange={setArxivPostProcessingPreset}
+                onPostProcessingCreateProposalsChange={setArxivPostProcessingCreateProposals}
+                onPostProcessingScreeningObjectiveChange={setArxivPostProcessingScreeningObjective}
+                onPostProcessingDeepAnalysisChange={setArxivPostProcessingDeepAnalysis}
                 onPreview={previewArxivSource}
                 onCreate={createArxivSource}
               />

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ProjectPublicSummaryGenerator } from "../src/modules/projects/publicSummaryGenerator";
 import { PgProjectRepository } from "../src/modules/projects/repository";
-import type { ProviderCommandStore } from "../src/modules/providers/providerCommandStore";
+import type { ProviderCommandStore } from "../src/modules/providers/commands/store";
 import type { QueryResult, Queryable, SpaceUserIdentity } from "../src/modules/routeUtils/common";
 
 const SPACE = "11111111-1111-4111-8111-111111111111";

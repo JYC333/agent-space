@@ -10,6 +10,8 @@ import {
   ProviderChatRequestSchema,
   ProviderChatResponseSchema,
   ProviderConnectionTestResultSchema,
+  ProviderFromPresetCreateRequestSchema,
+  ProviderPresetDTOSchema,
   isCredentialChannel,
   isProviderType,
   type ModelProviderDTO,
@@ -160,6 +162,42 @@ describe("provider contracts", () => {
     expect(LitellmProvidersResponseSchema.safeParse([{ id: "openai" }]).success).toBe(false);
   });
 
+  it("parses provider preset catalog entries and create-from-preset requests", () => {
+    expect(
+      ProviderPresetDTOSchema.parse({
+        id: "cohere_embedding",
+        mode: "embedding",
+        label: "Cohere Embed",
+        name: "Cohere Embeddings",
+        provider_type: "cohere",
+        base_url: "https://api.cohere.com",
+        default_model: "embed-v4.0",
+        available_models: ["embed-v4.0"],
+        embedding_dimensions: 1536,
+        embedding_dimension_options: [1536, 1024, 512, 256],
+        api_key_required: true,
+        task: "retrieval_embedding",
+      }).provider_type,
+    ).toBe("cohere");
+    expect(ProviderPresetDTOSchema.safeParse({
+      id: "bad",
+      mode: "embedding",
+      label: "Bad",
+      name: "Bad",
+      provider_type: "unknown",
+      base_url: "https://example.test",
+      available_models: [],
+      api_key_required: false,
+    }).success).toBe(false);
+    expect(
+      ProviderFromPresetCreateRequestSchema.parse({
+        preset_id: "cohere_embedding",
+        api_key: "request-only",
+        embedding_dimensions: 1024,
+      }).embedding_dimensions,
+    ).toBe(1024);
+  });
+
   it("documents provider and credential-channel value sets without constraining provider_type", () => {
     expect(ModelProviderDTOSchema.safeParse({
       id: "mp1",
@@ -178,6 +216,7 @@ describe("provider contracts", () => {
       updated_at: "2026-06-11T12:00:00+00:00",
     }).success).toBe(true);
     expect(isProviderType("anthropic")).toBe(true);
+    expect(isProviderType("cohere")).toBe(true);
     expect(isProviderType("future_provider")).toBe(false);
     expect(isCredentialChannel("model_provider_api_key")).toBe(true);
     expect(isCredentialChannel("other")).toBe(false);

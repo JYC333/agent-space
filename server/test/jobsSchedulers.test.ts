@@ -797,43 +797,6 @@ describe("AutomationService policy preflight", () => {
     expect(fakePool.runPrompts).toEqual(["Analyze the newly collected papers."]);
   });
 
-  it("records intake event payloads in automation run trigger context", async () => {
-    vi.mocked(enforce).mockResolvedValue({ status: "allow" });
-    const fakePool = new AgentAutomationFireFakePool();
-    dbPoolMock.current = fakePool;
-    const automation = sampleAutomation({
-      trigger_type: "event",
-      config_json: {
-        target_type: "agent_run",
-        event: { type: "intake.items_materialized", cooldown_seconds: 0 },
-      },
-    });
-    const repo = new FakeAutomationRepository(
-      automation,
-      "owner",
-      [],
-      { status: "active", current_version_id: "agent-version-1", version_id: "agent-version-1" },
-      true,
-      [automation],
-    );
-    const service = new AutomationService(config, repo);
-
-    const result = await service.fireIntakeEventAutomations({
-      spaceId: "space-1",
-      sourceConnectionId: "source-connection-1",
-      newItemCount: 3,
-    });
-
-    expect(result.fired).toBe(1);
-    expect(fakePool.automationRunTriggerContexts).toHaveLength(1);
-    expect(JSON.parse(String(fakePool.automationRunTriggerContexts[0]))).toMatchObject({
-      event: {
-        type: "intake.items_materialized",
-        source_connection_id: "source-connection-1",
-        new_item_count: 3,
-      },
-    });
-  });
 });
 
 describe("DailyCaptureReport settings validation", () => {
@@ -1177,8 +1140,8 @@ class AgentAutomationFireFakePool implements Queryable {
       return { rowCount: 1, rows: [] };
     }
     if (sql.includes("INSERT INTO runs")) {
-      this.runPrompts.push(params[13]);
-      this.runInstructions.push(params[14]);
+      this.runPrompts.push(params[17]);
+      this.runInstructions.push(params[18]);
       return {
         rowCount: 1,
         rows: [
@@ -1342,7 +1305,6 @@ function sampleAutomation(overrides: Partial<AutomationRow> = {}): AutomationRow
     status: "active",
     preflight_snapshot_json: { executable: true },
     config_json: null,
-    cursor_json: null,
     next_run_at: null,
     last_fired_at: null,
     created_at: "2026-06-16T00:00:00.000Z",

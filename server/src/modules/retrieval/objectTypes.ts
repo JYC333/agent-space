@@ -9,6 +9,8 @@ export const RETRIEVAL_OBJECT_TYPE_VALUES = [
   "claim",
   "memory_entry",
   "project_public_summary",
+  "intake_item",
+  "extracted_evidence",
 ] as const satisfies readonly RetrievalObjectType[];
 
 const RETRIEVAL_OBJECT_TYPE_SET = new Set<string>(RETRIEVAL_OBJECT_TYPE_VALUES);

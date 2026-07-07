@@ -1,5 +1,10 @@
 import { ProxyAgent, fetch as undiciFetch } from "undici";
 
+// See invocation.ts's PROVIDER_KEEPALIVE_INITIAL_DELAY_MS: undici's default
+// 60s keepalive initial delay can lose the race against a NAT/idle-connection
+// timeout in front of a provider while a proxied request is still in flight.
+const PROXY_KEEPALIVE_INITIAL_DELAY_MS = 15_000;
+
 export type NetworkProfileMode = "direct" | "http_proxy";
 
 export interface ResolvedNetworkProfile {
@@ -82,7 +87,11 @@ export function fetchWithNetworkProfile(
     if (shouldBypassProxy(target, profile.no_proxy)) {
       return globalThis.fetch(url, init);
     }
-    const dispatcher = new ProxyAgent(proxyUrl);
+    const dispatcher = new ProxyAgent({
+      uri: proxyUrl,
+      requestTls: { keepAlive: true, keepAliveInitialDelay: PROXY_KEEPALIVE_INITIAL_DELAY_MS },
+      proxyTls: { keepAlive: true, keepAliveInitialDelay: PROXY_KEEPALIVE_INITIAL_DELAY_MS },
+    });
     return undiciFetch(url, { ...(init ?? {}), dispatcher } as Parameters<typeof undiciFetch>[1]);
   }) as typeof fetch;
 }

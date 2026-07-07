@@ -5,7 +5,7 @@ export type EvidenceFilter = 'candidate' | 'active' | 'all'
 
 export interface IntakeSummaryResult {
   run_id: string
-  artifact_id: string
+  artifact_id: string | null
   preview: string
   proposal_ids: string[]
 }

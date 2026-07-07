@@ -19,6 +19,8 @@ import { PreviewBadge, DryRunBanner } from '../../components/PreviewBadge'
 import { ScopeBadge } from '../../components/ScopeBadge'
 import { ContextArtifactPicker } from '../artifacts/ContextArtifactPicker'
 
+type TaskDetailTab = 'overview' | 'runs' | 'artifacts' | 'proposals'
+
 function fmt(dt: string | null | undefined) {
   return dt ? new Date(dt).toLocaleString() : '—'
 }
@@ -45,6 +47,7 @@ export default function TaskDetailPage() {
   const [agentPick, setAgentPick] = useState<string>('')
   const [contextArtifactIds, setContextArtifactIds] = useState<string[]>([])
   const [creatingRun, setCreatingRun] = useState(false)
+  const [activeTab, setActiveTab] = useState<TaskDetailTab>('overview')
 
   const load = useCallback(async () => {
     if (!taskId) return
@@ -80,6 +83,7 @@ export default function TaskDetailPage() {
   }, [taskId, activeSpaceId])
 
   useEffect(() => { load() }, [load])
+  useEffect(() => { setActiveTab('overview') }, [taskId])
 
   async function createRun() {
     if (!taskId || !task) return
@@ -207,7 +211,7 @@ export default function TaskDetailPage() {
         />
       </div>
 
-      <Tabs defaultValue="overview">
+      <Tabs value={activeTab} onValueChange={value => setActiveTab(value as TaskDetailTab)}>
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="runs">Runs</TabsTrigger>

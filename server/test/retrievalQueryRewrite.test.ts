@@ -3,10 +3,10 @@ import { mergeRewriteVariants, MAX_REWRITE_VARIANTS } from "../src/modules/retri
 import {
   buildQueryRewritePrompt,
   parseQueryRewriteVariants,
-} from "../src/modules/retrievalQueryRewrite/prompt";
-import { ProviderQueryRewriter } from "../src/modules/retrievalQueryRewrite/providerQueryRewriter";
-import { __setProviderHttpClientForTests } from "../src/modules/providers/providerInvocation";
-import type { ProviderCommandStore } from "../src/modules/providers/providerCommandStore";
+} from "../src/modules/retrieval/queryRewriteProvider/prompt";
+import { ProviderQueryRewriter } from "../src/modules/retrieval/queryRewriteProvider/providerQueryRewriter";
+import { __setProviderHttpClientForTests } from "../src/modules/providers/invocation/invocation";
+import type { ProviderCommandStore } from "../src/modules/providers/commands/store";
 
 describe("mergeRewriteVariants", () => {
   it("always keeps the original query first", () => {

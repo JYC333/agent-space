@@ -197,7 +197,7 @@
       "approval_capability": null,
       "audit_code": "credential_same_space_manual",
       "resource_type": "credential",
-      "message": "Same-space manual credential use allowed.",
+      "message": "Same-space user-mediated credential use allowed.",
       "action": null
     }
   },

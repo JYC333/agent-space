@@ -14,7 +14,7 @@ import {
   type SpaceFailure,
 } from "./repository";
 import { loadProtocol } from "../providers/protocolRuntime";
-import { enqueueRetrievalEmbeddingBackfill } from "../retrievalEmbedding/job";
+import { enqueueRetrievalEmbeddingBackfill } from "../retrieval/embedding/job";
 
 function isFailure(value: unknown): value is AuthFailure {
   return Boolean(value && typeof value === "object" && "statusCode" in value);

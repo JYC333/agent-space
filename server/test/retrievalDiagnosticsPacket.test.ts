@@ -4,7 +4,7 @@ import {
   createRetrievalDiagnosticsProposalPacket,
   registerRetrievalDiagnosticsProposalAppliers,
   RETRIEVAL_DIAGNOSTICS_PACKET_PROPOSAL_TYPE,
-} from "../src/modules/retrieval/diagnosticsArtifacts";
+} from "../src/modules/retrieval/artifacts/diagnostics";
 import type { Queryable } from "../src/modules/routeUtils/common";
 
 interface CapturedQuery {

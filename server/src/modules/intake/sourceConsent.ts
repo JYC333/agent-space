@@ -12,6 +12,13 @@ const TRUST_LEVELS = ["trusted", "normal", "untrusted"] as const;
 const SOURCE_EGRESS_CLASSES = ["internal_only", "local_provider_allowed", "external_provider_allowed"] as const;
 const DERIVED_WRITE_POLICIES = ["proposal_required", "disabled"] as const;
 const IMPORT_TARGETS = ["activity", "knowledge", "memory_proposal", "source_artifact"] as const;
+const PUBLIC_EXTERNAL_CONNECTOR_KEYS = new Set(["rss", "atom", "web_page", "arxiv"]);
+
+interface SourceEgressDefaults {
+  allowLocalProviderEgress?: boolean;
+  allowExternalModelEgress?: boolean;
+  preferEgressDefaults?: boolean;
+}
 
 type CapturePolicy = SourceCapturePolicy;
 type TrustLevel = (typeof TRUST_LEVELS)[number];
@@ -34,6 +41,7 @@ interface SourceConnectionConsent {
 interface SourceConnectionPolicy {
   schema_version: 1;
   source_egress_class: SourceEgressClass;
+  source_egress_configured?: boolean;
   retention_policy: RetentionPolicy;
   import_trust_level: TrustLevel;
   derived_write_policy: DerivedWritePolicy;
@@ -56,11 +64,24 @@ export function normalizeSourceConnectionReadGovernance(row: SourceConnectionRow
   policy: SourceConnectionPolicy;
 } {
   const identity = { spaceId: row.space_id, userId: row.owner_user_id };
-  const consent = normalizeConsent(identity, {}, sourceRecord(row.consent_json));
+  const existingPolicy = sourceRecord(row.policy_json);
+  const egressConfigured = existingPolicy.source_egress_configured === true;
+  const defaults: SourceEgressDefaults = egressConfigured
+    ? {}
+    : sourceConnectionGovernanceDefaults({
+        connector_key: row.connector_key,
+        connector_type: row.connector_type,
+        credential_id: row.credential_id,
+      });
+  const consent = normalizeConsent(identity, {}, sourceRecord(row.consent_json), {
+    ...defaults,
+    preferEgressDefaults: !egressConfigured && defaults.allowExternalModelEgress === true,
+  });
   const capturePolicy = safeEnumValue(row.capture_policy, SOURCE_CAPTURE_POLICIES, "reference_only");
   const trustLevel = safeEnumValue(row.trust_level, TRUST_LEVELS, "normal");
   const policy = normalizePolicyForRead({
-    existing: sourceRecord(row.policy_json),
+    existing: existingPolicy,
+    egressConfigured,
     capturePolicy,
     trustLevel,
     consent,
@@ -110,9 +131,11 @@ export function normalizeSourceConnectionCreateGovernance(
 ): SourceConnectionGovernance {
   const capturePolicy = enumValue(body.capture_policy, SOURCE_CAPTURE_POLICIES, "capture_policy", "reference_only");
   const trustLevel = enumValue(body.trust_level, TRUST_LEVELS, "trust_level", "normal");
-  const consent = normalizeConsent(identity, objectValue(body.consent));
+  const defaults = sourceConnectionGovernanceDefaults(body);
+  const consent = normalizeConsent(identity, objectValue(body.consent), {}, defaults);
   const policy = normalizePolicy({
     raw: objectValue(body.policy),
+    egressConfigured: sourceEgressConfiguredByRequest(body),
     capturePolicy,
     trustLevel,
     consent,
@@ -147,6 +170,7 @@ export function normalizeSourceConnectionUpdateGovernance(
     ? normalizePolicy({
         raw: Object.hasOwn(body, "policy") ? objectValue(body.policy) : {},
         existing: sourceRecord(existing.policy_json),
+        egressConfigured: sourceEgressConfiguredByRequest(body) || sourceRecord(existing.policy_json).source_egress_configured === true,
         capturePolicy: capturePolicy ?? enumValue(existing.capture_policy, SOURCE_CAPTURE_POLICIES, "capture_policy", "reference_only"),
         trustLevel: trustLevel ?? enumValue(existing.trust_level, TRUST_LEVELS, "trust_level", "normal"),
         consent: consent ?? normalizeConsent(identity, {}, sourceRecord(existing.consent_json)),
@@ -160,10 +184,17 @@ function normalizeConsent(
   identity: SpaceUserIdentity,
   raw: Record<string, unknown>,
   existing: Record<string, unknown> = {},
+  defaults: SourceEgressDefaults = {},
 ): SourceConnectionConsent {
   const ownerUserId = identity.userId;
   const existingSubjects = strings(existing.subject_user_ids);
   const existingReaders = strings(existing.allowed_reader_user_ids);
+  const localProviderFallback = defaults.preferEgressDefaults
+    ? defaults.allowLocalProviderEgress ?? false
+    : booleanValue(existing.allow_local_provider_egress, defaults.allowLocalProviderEgress ?? false);
+  const externalModelFallback = defaults.preferEgressDefaults
+    ? defaults.allowExternalModelEgress ?? false
+    : booleanValue(existing.allow_external_model_egress, defaults.allowExternalModelEgress ?? false);
   return {
     schema_version: 1,
     owner_user_id: ownerUserId,
@@ -178,18 +209,49 @@ function normalizeConsent(
     allow_space_admins: booleanValue(raw.allow_space_admins, booleanValue(existing.allow_space_admins, true)),
     allow_local_provider_egress: booleanValue(
       raw.allow_local_provider_egress,
-      booleanValue(existing.allow_local_provider_egress, false),
+      localProviderFallback,
     ),
     allow_external_model_egress: booleanValue(
       raw.allow_external_model_egress,
-      booleanValue(existing.allow_external_model_egress, false),
+      externalModelFallback,
     ),
   };
+}
+
+function sourceConnectionGovernanceDefaults(body: Record<string, unknown>): {
+  allowLocalProviderEgress: boolean;
+  allowExternalModelEgress: boolean;
+} {
+  const connectorKey = optionalString(body.connector_key);
+  const connectorType = optionalString(body.connector_type);
+  const hasCredential = Boolean(optionalString(body.credential_id));
+  const publicExternalSource = Boolean(
+    !hasCredential &&
+    (
+      (connectorKey && PUBLIC_EXTERNAL_CONNECTOR_KEYS.has(connectorKey)) ||
+      connectorType === "external_feed"
+    ),
+  );
+  return {
+    allowLocalProviderEgress: publicExternalSource,
+    allowExternalModelEgress: publicExternalSource,
+  };
+}
+
+function sourceEgressConfiguredByRequest(body: Record<string, unknown>): boolean {
+  const consent = objectValue(body.consent);
+  const policy = objectValue(body.policy);
+  return (
+    Object.hasOwn(consent, "allow_local_provider_egress") ||
+    Object.hasOwn(consent, "allow_external_model_egress") ||
+    Object.hasOwn(policy, "source_egress_class")
+  );
 }
 
 function normalizePolicy(input: {
   raw: Record<string, unknown>;
   existing?: Record<string, unknown>;
+  egressConfigured: boolean;
   capturePolicy: CapturePolicy;
   trustLevel: TrustLevel;
   consent: SourceConnectionConsent;
@@ -217,6 +279,7 @@ function normalizePolicy(input: {
   return {
     schema_version: 1,
     source_egress_class: sourceEgressClass,
+    ...(input.egressConfigured ? { source_egress_configured: true } : {}),
     retention_policy: retentionPolicy,
     import_trust_level: input.trustLevel,
     derived_write_policy: enumValue(
@@ -241,6 +304,7 @@ function normalizePolicy(input: {
 
 function normalizePolicyForRead(input: {
   existing: Record<string, unknown>;
+  egressConfigured: boolean;
   capturePolicy: CapturePolicy;
   trustLevel: TrustLevel;
   consent: SourceConnectionConsent;
@@ -251,11 +315,14 @@ function normalizePolicyForRead(input: {
     ? minimumRetention
     : rawRetention;
   const fallbackEgress = egressClassForConsent(input.consent);
-  const rawEgress = safeEnumValue(input.existing.source_egress_class, SOURCE_EGRESS_CLASSES, fallbackEgress);
+  const rawEgress = input.egressConfigured
+    ? safeEnumValue(input.existing.source_egress_class, SOURCE_EGRESS_CLASSES, fallbackEgress)
+    : fallbackEgress;
   const sourceEgressClass = egressAllowedByConsent(rawEgress, input.consent) ? rawEgress : fallbackEgress;
   return {
     schema_version: 1,
     source_egress_class: sourceEgressClass,
+    ...(input.egressConfigured ? { source_egress_configured: true } : {}),
     retention_policy: retentionPolicy,
     import_trust_level: input.trustLevel,
     derived_write_policy: safeEnumValue(

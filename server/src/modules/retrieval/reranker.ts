@@ -1,5 +1,5 @@
 import type { RetrievalObjectType } from "@agent-space/protocol" with { "resolution-mode": "import" };
-import type { RetrievalEgressPolicy } from "../retrievalEgress/egressPolicy";
+import type { RetrievalEgressPolicy } from "./egress/egressPolicy";
 import type { ScoredCandidate } from "./types";
 
 /**
@@ -19,7 +19,7 @@ import type { ScoredCandidate } from "./types";
  *    graceful-degradation signal.
  *
  * The engine owns only the access-safe seam + the deterministic apply step; the
- * provider call, prompt, and audit live in the app layer (`modules/retrievalRerank`).
+ * provider call, prompt, and audit live in the app layer (`modules/retrieval/rerankProvider`).
  */
 export interface RerankCandidate {
   objectType: RetrievalObjectType;

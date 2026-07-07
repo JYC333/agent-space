@@ -107,6 +107,8 @@ export const OBJECT_KIND_KEY_VALUES_BY_BASE_OBJECT_TYPE = {
   claim: ["fact", "hypothesis", "belief", "preference", "commitment", "question", "interpretation", "instruction", "metric", "relationship", "event"],
   memory_entry: ["preference", "semantic", "episodic", "procedural", "project"],
   project_public_summary: ["project_public_summary"],
+  intake_item: ["external_url", "feed_entry", "activity_record", "artifact", "run_event", "file", "document", "log"],
+  extracted_evidence: ["document", "excerpt", "event", "log", "artifact", "claim", "summary"],
 } as const satisfies Record<SpaceObjectKindBaseObjectType, readonly string[]>;
 
 export const OBJECT_SCHEMA_RELATION_TYPE_VALUES = [

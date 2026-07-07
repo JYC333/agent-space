@@ -4,7 +4,7 @@ import type { Queryable } from "../routeUtils/common";
  * Engine-owned access to the `retrieval_chunks` embedding columns. Like the rest
  * of the engine it touches only `retrieval_*` tables and never a domain table or
  * a model provider — the provider call and any domain egress policy live in the
- * app-layer backfill orchestrator (`modules/retrievalEmbedding`). This keeps the
+ * app-layer backfill orchestrator (`modules/retrieval/embedding`). This keeps the
  * embedding *store* domain-agnostic while the embedding *generation* is wired to
  * credentials/policy outside the engine.
  */

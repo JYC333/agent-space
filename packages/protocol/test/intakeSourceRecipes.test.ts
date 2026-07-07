@@ -25,7 +25,7 @@ const limits = {
 
 const envelope = {
   allowed_network_origins: ["https://example.com"],
-  capture_policy: "auto_extract_relevant",
+  capture_policy: "extract_text",
   retention_policy: "full_text",
   credential_ref: null,
   limits,

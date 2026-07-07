@@ -1,13 +1,13 @@
 import { join } from "node:path";
 import type { ServerConfig } from "../../config";
-import type { CredentialGrant } from "../providers/cliCredentialBroker";
+import type { CredentialGrant } from "../providers/cli/credentialBroker";
 import { resolveProvidersDbPort } from "../providers/dbReader";
 import {
   providerProxyLeaseBaseUrl,
   providerProxyLeases,
   type ProviderProxyLeaseRegistry,
   type ProviderProxyRoute,
-} from "../providers/providerProxyLease";
+} from "../providers/proxy/lease";
 import type { LocalCliRuntimeAdapterSpec } from "../runtimeAdapters";
 import type { RunRecord } from "./repository";
 import {

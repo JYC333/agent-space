@@ -20,7 +20,11 @@ describe("object schema / object kind protocol contracts", () => {
       "claim",
       "memory_entry",
       "project_public_summary",
+      "intake_item",
+      "extracted_evidence",
     ]);
+    expect(RetrievalObjectTypeSchema.parse("intake_item")).toBe("intake_item");
+    expect(RetrievalObjectTypeSchema.parse("extracted_evidence")).toBe("extracted_evidence");
     expect(RetrievalObjectTypeSchema.safeParse("object_kind").success).toBe(false);
     expect(RetrievalObjectTypeSchema.safeParse("schema_pack").success).toBe(false);
   });
@@ -42,6 +46,22 @@ describe("object schema / object kind protocol contracts", () => {
       retrieval_policy: {},
       ui_config: {},
     });
+  });
+
+  it("parses intake object kind create proposals under fixed intake base types", () => {
+    const itemKind = SpaceObjectKindCreateProposalRequestSchema.parse({
+      key: "feed_entry",
+      label: "Feed entry",
+      base_object_type: "intake_item",
+    });
+    const evidenceKind = SpaceObjectKindCreateProposalRequestSchema.parse({
+      key: "excerpt",
+      label: "Excerpt",
+      base_object_type: "extracted_evidence",
+    });
+
+    expect(itemKind.base_object_type).toBe("intake_item");
+    expect(evidenceKind.base_object_type).toBe("extracted_evidence");
   });
 
   it("parses relation hints as declarative object schema config", () => {

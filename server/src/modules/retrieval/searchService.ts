@@ -44,7 +44,7 @@ import {
   type RerankScore,
 } from "./reranker";
 import { mergeRewriteVariants, type QueryRewriter } from "./queryRewrite";
-import { ALLOW_ALL_EGRESS, type RetrievalEgressPolicy } from "../retrievalEgress/egressPolicy";
+import { ALLOW_ALL_EGRESS, type RetrievalEgressPolicy } from "./egress/egressPolicy";
 import {
   assembleBrief,
   buildBriefCandidates,

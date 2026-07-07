@@ -120,13 +120,13 @@ type TaskSelections = Partial<Record<RetrievalTask, TaskSelection>>
 type TaskPolicyMap = Partial<Record<RetrievalTask, ProviderTaskPolicyOut>>
 
 function embeddingProviderFilter(provider: ModelProviderOut): string | null {
-  return ['openai', 'openrouter', 'ollama', 'zeroentropy', 'other'].includes(provider.provider_type)
+  return ['openai', 'openrouter', 'ollama', 'zeroentropy', 'cohere', 'other'].includes(provider.provider_type)
     ? null
     : 'no embeddings endpoint'
 }
 
 function rerankProviderFilter(provider: ModelProviderOut): string | null {
-  return provider.provider_type === 'zeroentropy' ? null : 'no native rerank endpoint'
+  return provider.provider_type === 'zeroentropy' || provider.provider_type === 'cohere' ? null : 'no native rerank endpoint'
 }
 
 function chatProviderFilter(provider: ModelProviderOut): string | null {
@@ -144,7 +144,9 @@ function providerFilterFor(kind: RetrievalTaskKind): ((provider: ModelProviderOu
 
 function defaultModelForTask(kind: RetrievalTaskKind, provider: ModelProviderOut): string | null | undefined {
   if (kind === 'embedding' && provider.provider_type === 'zeroentropy') return 'zembed-1'
+  if (kind === 'embedding' && provider.provider_type === 'cohere') return 'embed-v4.0'
   if (kind === 'rerank' && provider.provider_type === 'zeroentropy') return 'zerank-2'
+  if (kind === 'rerank' && provider.provider_type === 'cohere') return 'rerank-v4.0-pro'
   return provider.default_model
 }
 
@@ -600,6 +602,7 @@ export default function RetrievalSettingsPage() {
                   disabled={readOnly || saving}
                   onChange={event => setEmbeddingDimensions(event.target.value)}
                 />
+                <p className="text-xs text-muted-foreground">Cohere embed-v4 supports 1536, 1024, 512, or 256 dimensions.</p>
               </div>
             </div>
             <div className="mt-3 flex flex-wrap gap-2">

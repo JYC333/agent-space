@@ -8,9 +8,9 @@ import { registerMemoryConsolidationHandler } from "../activity/consolidationJob
 import { registerDailyCaptureReportHandler } from "../dailyReports/jobHandler";
 import { registerContextDigestRefreshHandler } from "../context/digestJob";
 import { registerIntakeExtractionHandler } from "../intake/extractionJob";
+import { registerSourcePostProcessingHandler } from "../intake/postProcessing/job";
 import { registerSessionCondenseHandler } from "../sessions/condenseJob";
-import { registerRetrievalEmbeddingHandler } from "../retrievalEmbedding/job";
-import { registerAutomationIntakeEventHandler } from "../automations/intakeEventHandler";
+import { registerRetrievalEmbeddingHandler } from "../retrieval/embedding/job";
 import type { PluginHost } from "../plugins/host";
 import { PgRunRepository } from "../runs/repository";
 
@@ -41,9 +41,9 @@ export function buildJobHandlerRegistry(
   registerDailyCaptureReportHandler(registry, config);
   registerContextDigestRefreshHandler(registry, config);
   registerIntakeExtractionHandler(registry, config);
+  registerSourcePostProcessingHandler(registry, config);
   registerSessionCondenseHandler(registry, config);
   registerRetrievalEmbeddingHandler(registry, config);
-  registerAutomationIntakeEventHandler(registry, config);
   // Plugin-contributed job handlers (enablement-gated by the host context).
   pluginHost?.applyJobHandlers(registry);
   return registry;

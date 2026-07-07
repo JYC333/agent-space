@@ -16,8 +16,8 @@ import { knowledgeRetrievalRegistry } from "../src/modules/knowledge/retrievalAd
 import {
   RetrievalEmbeddingBackfillService,
   type RetrievalEmbedder,
-} from "../src/modules/retrievalEmbedding/service";
-import { EMBED_DIMENSIONS } from "../src/modules/retrievalEmbedding/config";
+} from "../src/modules/retrieval/embedding/service";
+import { EMBED_DIMENSIONS } from "../src/modules/retrieval/embedding/config";
 import { insertKnowledgeItem } from "./support/knowledgeFixtures";
 
 // W5 ANN path: the default embedding dimension (2560) has a halfvec HNSW partial

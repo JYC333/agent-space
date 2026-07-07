@@ -19,6 +19,8 @@ import { useSpace } from '../../contexts/SpaceContext'
 import { PersonalContextPanel } from './PersonalContextPanel'
 import { isGrantDerivedProposal } from '../memory/EgressReviewNotice'
 
+type RunDetailTab = 'activities' | 'artifacts' | 'proposals'
+
 function fmt(dt: string | null | undefined) {
   return dt ? new Date(dt).toLocaleString() : '—'
 }
@@ -33,6 +35,7 @@ export default function RunDetailPage() {
   const [artifacts, setArtifacts] = useState<Artifact[]>([])
   const [proposals, setProposals] = useState<Proposal[]>([])
   const [tabLoading, setTabLoading] = useState(true)
+  const [activeTab, setActiveTab] = useState<RunDetailTab>('activities')
 
   const loadSubs = useCallback(async () => {
     if (!runId) return
@@ -63,6 +66,10 @@ export default function RunDetailPage() {
   useEffect(() => {
     void loadSubs()
   }, [loadSubs])
+
+  useEffect(() => {
+    setActiveTab('activities')
+  }, [runId])
 
   useEffect(() => {
     setReloadKey(k => k + 1)
@@ -257,7 +264,7 @@ export default function RunDetailPage() {
         )}
       </div>
 
-      <Tabs defaultValue="activities">
+      <Tabs value={activeTab} onValueChange={value => setActiveTab(value as RunDetailTab)}>
         <TabsList>
           <TabsTrigger value="activities">Activities</TabsTrigger>
           <TabsTrigger value="artifacts">Artifacts</TabsTrigger>

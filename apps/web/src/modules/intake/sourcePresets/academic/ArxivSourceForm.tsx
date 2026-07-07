@@ -5,9 +5,14 @@ import { Button } from '../../../../components/ui/button'
 import { Input } from '../../../../components/ui/input'
 import { Label } from '../../../../components/ui/label'
 import { Select } from '../../../../components/ui/select'
+import { Textarea } from '../../../../components/ui/textarea'
 import type { ArxivPresetMode, ArxivPresetPreviewResponse, SourceCapturePolicy, SourcePreset } from '../../../../types/api'
 import { ScheduleRuleFields } from '../../IntakePageSections'
 import { CAPTURE_POLICIES, capturePolicyDescription, FREQUENCIES, fmt, isScheduleFormComplete, preview, type ScheduleFormValue } from '../../intakePageModel'
+import {
+  SOURCE_POST_PROCESSING_PRESET_OPTIONS,
+  type SourcePostProcessingPreset,
+} from '../../sourcePostProcessingPresets'
 
 const ARXIV_MODE_OPTIONS = [
   { value: 'recent_by_category', label: 'Recent by category' },
@@ -29,6 +34,11 @@ export function ArxivSourceForm(props: {
   fetchFrequency: string
   schedule: ScheduleFormValue
   capturePolicy: SourceCapturePolicy
+  postProcessingEnabled: boolean
+  postProcessingPreset: SourcePostProcessingPreset
+  postProcessingCreateProposals: boolean
+  postProcessingScreeningObjective: string
+  postProcessingDeepAnalysis: boolean
   preview: ArxivPresetPreviewResponse | null
   busy: string | null
   onModeChange: (value: ArxivPresetMode) => void
@@ -39,6 +49,11 @@ export function ArxivSourceForm(props: {
   onFetchFrequencyChange: (value: string) => void
   onScheduleChange: (value: ScheduleFormValue) => void
   onCapturePolicyChange: (value: string) => void
+  onPostProcessingEnabledChange: (value: boolean) => void
+  onPostProcessingPresetChange: (value: SourcePostProcessingPreset) => void
+  onPostProcessingCreateProposalsChange: (value: boolean) => void
+  onPostProcessingScreeningObjectiveChange: (value: string) => void
+  onPostProcessingDeepAnalysisChange: (value: boolean) => void
   onPreview: (event: FormEvent<HTMLFormElement>) => void
   onCreate: () => void
 }) {
@@ -177,6 +192,66 @@ export function ArxivSourceForm(props: {
           <Select options={CAPTURE_POLICIES} value={props.capturePolicy} onChange={props.onCapturePolicyChange} />
           <p className="text-xs text-muted-foreground">{capturePolicyDescription(props.capturePolicy)}</p>
         </div>
+        <details className="rounded-md border border-border bg-muted/20 p-3">
+          <summary className="cursor-pointer text-sm font-medium">Advanced</summary>
+          <div className="mt-3 space-y-3">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="size-4 rounded border-border"
+                checked={props.postProcessingEnabled}
+                onChange={event => props.onPostProcessingEnabledChange(event.target.checked)}
+              />
+              <span>Enable post-processing after intake</span>
+            </label>
+            {props.postProcessingEnabled && (
+              <>
+                <div className="space-y-1.5">
+                  <Label>Preset</Label>
+                  <Select
+                    options={SOURCE_POST_PROCESSING_PRESET_OPTIONS}
+                    value={props.postProcessingPreset}
+                    onChange={value => props.onPostProcessingPresetChange(value as SourcePostProcessingPreset)}
+                  />
+                </div>
+                {props.postProcessingPreset === 'screen_relevant_papers' && (
+                  <>
+                    <div className="space-y-1.5">
+                      <Label>Screening objective</Label>
+                      <Textarea
+                        value={props.postProcessingScreeningObjective}
+                        onChange={event => props.onPostProcessingScreeningObjectiveChange(event.target.value)}
+                        placeholder="e.g. Papers on retrieval-augmented agent memory and context selection"
+                        rows={3}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Decisions use title, abstract, and metadata first. Leave blank to screen broadly against this stream.
+                      </p>
+                    </div>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        className="size-4 rounded border-border"
+                        checked={props.postProcessingDeepAnalysis}
+                        onChange={event => props.onPostProcessingDeepAnalysisChange(event.target.checked)}
+                      />
+                      <span>Deep analysis after screening</span>
+                    </label>
+                  </>
+                )}
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="size-4 rounded border-border"
+                    checked={props.postProcessingCreateProposals}
+                    onChange={event => props.onPostProcessingCreateProposalsChange(event.target.checked)}
+                  />
+                  <span>Create proposals</span>
+                </label>
+              </>
+            )}
+          </div>
+        </details>
         <div className="grid gap-2 sm:grid-cols-2">
           <Button type="submit" variant="outline" disabled={props.busy === 'arxiv:preview' || !hasRequiredInput}>
             <Sparkles className="size-4" />

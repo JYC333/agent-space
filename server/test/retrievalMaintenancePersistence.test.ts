@@ -6,7 +6,7 @@ import {
   registerRetrievalMaintenanceProposalAppliers,
   RETRIEVAL_MAINTENANCE_PACKET_PROPOSAL_TYPE,
   RETRIEVAL_MAINTENANCE_REPORT_ARTIFACT_TYPE,
-} from "../src/modules/retrieval/maintenanceArtifacts";
+} from "../src/modules/retrieval/maintenance/artifacts";
 import type { MaintenanceReport } from "../src/modules/retrieval";
 import type { Queryable } from "../src/modules/routeUtils/common";
 

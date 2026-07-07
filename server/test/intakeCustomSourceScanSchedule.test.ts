@@ -70,7 +70,8 @@ afterAll(async () => {
 beforeEach(async () => {
   if (!available || !pool) return;
   await pool.query(
-    `TRUNCATE source_handler_runs, source_handler_versions, source_recipe_versions, source_connections, source_connectors,
+    `TRUNCATE jobs, retrieval_edges, retrieval_chunks, retrieval_aliases, retrieval_objects,
+              source_handler_runs, source_handler_versions, source_recipe_versions, source_connections, source_connectors,
               scheduler_tasks, settings, artifacts, extraction_jobs, intake_items,
               source_snapshots, extracted_evidence`,
   );

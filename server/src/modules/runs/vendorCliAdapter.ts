@@ -5,8 +5,8 @@ import type { ServerConfig } from "../../config";
 import {
   CliCredentialBroker,
   type CredentialGrant,
-} from "../providers/cliCredentialBroker";
-import type { ProviderProxyLeaseRegistry } from "../providers/providerProxyLease";
+} from "../providers/cli/credentialBroker";
+import type { ProviderProxyLeaseRegistry } from "../providers/proxy/lease";
 import {
   RuntimeToolError,
   RuntimeToolRegistry,

@@ -77,6 +77,8 @@ function defaultBaseUrlFor(providerType: string): string | null {
   if (providerType === "openai") return "https://api.openai.com/v1";
   if (providerType === "anthropic") return "https://api.anthropic.com";
   if (providerType === "openrouter") return "https://openrouter.ai/api/v1";
+  if (providerType === "zeroentropy") return "https://api.zeroentropy.dev/v1";
+  if (providerType === "cohere") return "https://api.cohere.com";
   return null;
 }
 

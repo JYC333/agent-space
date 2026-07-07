@@ -67,12 +67,12 @@ import {
 import { readSpaceRetrievalPrompt } from "../retrieval/prompts";
 import { readSpaceRetrievalSettings, resolveRetrievalSearchControls } from "../retrieval/settings";
 import { canInitiateContextOpsScan, canReviewSpaceOpsPackets } from "../contextOps/reviewPolicy";
-import { enqueueRetrievalEmbeddingBackfill } from "../retrievalEmbedding/job";
-import { ProviderQueryEmbedder } from "../retrievalEmbedding/queryEmbedder";
-import { ProviderReranker } from "../retrievalRerank/providerReranker";
-import { ProviderQueryRewriter } from "../retrievalQueryRewrite/providerQueryRewriter";
-import { ProviderSynthesizer } from "../retrievalSynthesis/providerSynthesizer";
-import { resolveProviderCommandStore } from "../providers/providerCommandStore";
+import { enqueueRetrievalEmbeddingBackfill } from "../retrieval/embedding/job";
+import { ProviderQueryEmbedder } from "../retrieval/embedding/queryEmbedder";
+import { ProviderReranker } from "../retrieval/rerankProvider/providerReranker";
+import { ProviderQueryRewriter } from "../retrieval/queryRewriteProvider/providerQueryRewriter";
+import { ProviderSynthesizer } from "../retrieval/synthesisProvider/providerSynthesizer";
+import { resolveProviderCommandStore } from "../providers/commands/store";
 import { knowledgeRetrievalRegistry } from "./retrievalAdapter";
 import { loadProtocol } from "../providers/protocolRuntime";
 

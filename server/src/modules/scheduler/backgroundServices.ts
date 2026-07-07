@@ -6,6 +6,7 @@ import { scanAutomationsAndFire } from "../automations/scheduler";
 import { runScheduledBackup } from "../backups/service";
 import { IntakeExtractionWorker } from "../intake/extractionWorker";
 import { enqueueDueSourceConnectionScans } from "../intake/scanSchedule";
+import { enqueueDueSourcePostProcessingRules } from "../intake/postProcessing/scheduler";
 import {
   enqueueDueCustomSourceHandlerRuns,
   reclaimStuckCustomSourceHandlerRuns,
@@ -111,6 +112,12 @@ export function startBackgroundServices(
         if (recipeEnqueued > 0) log?.info(`[scheduler] source recipe enqueued ${recipeEnqueued} scan job(s)`);
         const recipeProcessed = await runPendingSourceRecipeScans(customDb, config);
         if (recipeProcessed > 0) log?.info(`[scheduler] source recipe processed ${recipeProcessed} scan job(s)`);
+        if (worker) {
+          const postProcessingEnqueued = await enqueueDueSourcePostProcessingRules(config, worker.queue);
+          if (postProcessingEnqueued > 0) {
+            log?.info(`[scheduler] intake enqueued ${postProcessingEnqueued} post-processing job(s)`);
+          }
+        }
       },
       runOnStart: true,
     });

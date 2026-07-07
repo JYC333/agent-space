@@ -20,6 +20,7 @@ import {
 } from "./managedAgentDelegationTools";
 import {
   redactEvidenceText,
+  redactSecretPatterns,
   sanitizeEvidenceJson,
 } from "./evidenceRedaction";
 
@@ -201,7 +202,12 @@ function envelopeFromRuntimeHost(
     adapter_type: adapterType,
     adapter_kind: "managed_api",
     success: response.success,
-    output_text: redactEvidenceText(response.output_text || response.stdout || "") ?? "",
+    // Model chat output is consumed downstream as structured data (e.g.
+    // source_post_processing's JSON result contract) and is bounded by the
+    // request's max_tokens rather than by arbitrary CLI stdout/patch size, so
+    // it must not be cut with the fixed 4000-char evidence-display limit that
+    // redactEvidenceText applies — only the secret-pattern redaction applies.
+    output_text: redactSecretPatterns(response.output_text || response.stdout || ""),
     output_json: sanitizeEvidenceJson({
       ...(recordOrEmpty(response.output_json)),
       adapter_type: adapterType,

@@ -35,6 +35,17 @@ CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
 
 
 --
+-- Name: retrieval_object_type; Type: DOMAIN; Schema: public; Owner: -
+--
+-- Fixed retrieval base object types. This domain is the database source of
+-- truth for retrieval projection/object-schema endpoint columns; ordinary
+-- subtype expansion belongs in object_kind / metadata, not new base types.
+
+CREATE DOMAIN public.retrieval_object_type AS character varying(64)
+    CONSTRAINT retrieval_object_type_allowed CHECK (((VALUE)::text = ANY ((ARRAY['knowledge_item'::character varying, 'note'::character varying, 'source'::character varying, 'claim'::character varying, 'memory_entry'::character varying, 'project_public_summary'::character varying, 'intake_item'::character varying, 'extracted_evidence'::character varying])::text[])));
+
+
+--
 -- Name: activity_records; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -168,7 +179,7 @@ CREATE TABLE public.agents (
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     visibility character varying(32) NOT NULL,
-    CONSTRAINT ck_agents_agent_kind CHECK (((agent_kind)::text = ANY ((ARRAY['standard'::character varying, 'system_assistant'::character varying, 'system_evolver'::character varying])::text[]))),
+    CONSTRAINT ck_agents_agent_kind CHECK (((agent_kind)::text = ANY ((ARRAY['standard'::character varying, 'system_assistant'::character varying, 'system_evolver'::character varying, 'system_intake_post_processor'::character varying])::text[]))),
     CONSTRAINT ck_agents_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'inactive'::character varying, 'archived'::character varying, 'disabled'::character varying])::text[])))
 );
 
@@ -355,11 +366,10 @@ CREATE TABLE public.automations (
     status character varying(32) DEFAULT 'active'::character varying NOT NULL,
     preflight_snapshot_json jsonb,
     config_json jsonb,
-    cursor_json jsonb,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     CONSTRAINT ck_automations_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'paused'::character varying, 'archived'::character varying])::text[]))),
-    CONSTRAINT ck_automations_trigger_type CHECK (((trigger_type)::text = ANY ((ARRAY['manual'::character varying, 'schedule'::character varying, 'event'::character varying])::text[])))
+    CONSTRAINT ck_automations_trigger_type CHECK (((trigger_type)::text = ANY ((ARRAY['manual'::character varying, 'schedule'::character varying])::text[])))
 );
 
 
@@ -1185,7 +1195,7 @@ CREATE TABLE public.space_object_kinds (
     key character varying(64) NOT NULL,
     label character varying(160) NOT NULL,
     description text,
-    base_object_type character varying(64) NOT NULL,
+    base_object_type public.retrieval_object_type NOT NULL,
     status character varying(32) DEFAULT 'active'::character varying NOT NULL,
     version integer DEFAULT 1 NOT NULL,
     field_schema_json jsonb DEFAULT '{}'::jsonb NOT NULL,
@@ -1197,11 +1207,10 @@ CREATE TABLE public.space_object_kinds (
     updated_from_proposal_id character varying(36),
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
-    CONSTRAINT ck_space_object_kinds_base_object_type CHECK (((base_object_type)::text = ANY ((ARRAY['knowledge_item'::character varying, 'note'::character varying, 'source'::character varying, 'claim'::character varying, 'memory_entry'::character varying, 'project_public_summary'::character varying])::text[]))),
     CONSTRAINT ck_space_object_kinds_extraction_policy_object CHECK ((jsonb_typeof(extraction_policy_json) = 'object'::text)),
     CONSTRAINT ck_space_object_kinds_field_schema_object CHECK ((jsonb_typeof(field_schema_json) = 'object'::text)),
     CONSTRAINT ck_space_object_kinds_key CHECK (((key)::text ~ '^[a-z][a-z0-9_]{0,63}$'::text)),
-    CONSTRAINT ck_space_object_kinds_key_by_base_object_type CHECK (CASE (base_object_type)::text WHEN 'knowledge_item'::text THEN ((key)::text = ANY ((ARRAY['concept'::character varying, 'lesson'::character varying, 'procedure'::character varying, 'decision'::character varying, 'question'::character varying, 'answer'::character varying, 'summary'::character varying])::text[])) WHEN 'note'::text THEN ((key)::text = 'note'::text) WHEN 'source'::text THEN ((key)::text = ANY ((ARRAY['activity_record'::character varying, 'chat_capture'::character varying, 'webpage'::character varying, 'article'::character varying, 'paper'::character varying, 'pdf'::character varying, 'file'::character varying, 'email'::character varying, 'manual_reference'::character varying, 'external_note'::character varying])::text[])) WHEN 'claim'::text THEN ((key)::text = ANY ((ARRAY['fact'::character varying, 'hypothesis'::character varying, 'belief'::character varying, 'preference'::character varying, 'commitment'::character varying, 'question'::character varying, 'interpretation'::character varying, 'instruction'::character varying, 'metric'::character varying, 'relationship'::character varying, 'event'::character varying])::text[])) WHEN 'memory_entry'::text THEN ((key)::text = ANY ((ARRAY['preference'::character varying, 'semantic'::character varying, 'episodic'::character varying, 'procedural'::character varying, 'project'::character varying])::text[])) WHEN 'project_public_summary'::text THEN ((key)::text = 'project_public_summary'::text) ELSE false END),
+    CONSTRAINT ck_space_object_kinds_key_by_base_object_type CHECK (CASE (base_object_type)::text WHEN 'knowledge_item'::text THEN ((key)::text = ANY ((ARRAY['concept'::character varying, 'lesson'::character varying, 'procedure'::character varying, 'decision'::character varying, 'question'::character varying, 'answer'::character varying, 'summary'::character varying])::text[])) WHEN 'note'::text THEN ((key)::text = 'note'::text) WHEN 'source'::text THEN ((key)::text = ANY ((ARRAY['activity_record'::character varying, 'chat_capture'::character varying, 'webpage'::character varying, 'article'::character varying, 'paper'::character varying, 'pdf'::character varying, 'file'::character varying, 'email'::character varying, 'manual_reference'::character varying, 'external_note'::character varying])::text[])) WHEN 'claim'::text THEN ((key)::text = ANY ((ARRAY['fact'::character varying, 'hypothesis'::character varying, 'belief'::character varying, 'preference'::character varying, 'commitment'::character varying, 'question'::character varying, 'interpretation'::character varying, 'instruction'::character varying, 'metric'::character varying, 'relationship'::character varying, 'event'::character varying])::text[])) WHEN 'memory_entry'::text THEN ((key)::text = ANY ((ARRAY['preference'::character varying, 'semantic'::character varying, 'episodic'::character varying, 'procedural'::character varying, 'project'::character varying])::text[])) WHEN 'project_public_summary'::text THEN ((key)::text = 'project_public_summary'::text) WHEN 'intake_item'::text THEN ((key)::text = ANY ((ARRAY['external_url'::character varying, 'feed_entry'::character varying, 'activity_record'::character varying, 'artifact'::character varying, 'run_event'::character varying, 'file'::character varying, 'document'::character varying, 'log'::character varying])::text[])) WHEN 'extracted_evidence'::text THEN ((key)::text = ANY ((ARRAY['document'::character varying, 'excerpt'::character varying, 'event'::character varying, 'log'::character varying, 'artifact'::character varying, 'claim'::character varying, 'summary'::character varying])::text[])) ELSE false END),
     CONSTRAINT ck_space_object_kinds_retrieval_policy_object CHECK ((jsonb_typeof(retrieval_policy_json) = 'object'::text)),
     CONSTRAINT ck_space_object_kinds_status CHECK (((status)::text = ANY ((ARRAY['draft'::character varying, 'active'::character varying, 'deprecated'::character varying, 'archived'::character varying])::text[]))),
     CONSTRAINT ck_space_object_kinds_ui_config_object CHECK ((jsonb_typeof(ui_config_json) = 'object'::text)),
@@ -1217,7 +1226,7 @@ CREATE TABLE public.space_object_kind_relation_hints (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
     object_kind_id character varying(36) NOT NULL,
-    endpoint_object_type character varying(64) NOT NULL,
+    endpoint_object_type public.retrieval_object_type NOT NULL,
     endpoint_object_kind_id character varying(36),
     relation_type character varying(64) NOT NULL,
     direction character varying(16) DEFAULT 'from'::character varying NOT NULL,
@@ -1226,7 +1235,6 @@ CREATE TABLE public.space_object_kind_relation_hints (
     created_at timestamp with time zone NOT NULL,
     CONSTRAINT ck_space_object_kind_relation_hints_confidence CHECK (((confidence_default >= (0)::double precision) AND (confidence_default <= (1)::double precision))),
     CONSTRAINT ck_space_object_kind_relation_hints_direction CHECK (((direction)::text = ANY ((ARRAY['from'::character varying, 'to'::character varying, 'either'::character varying])::text[]))),
-    CONSTRAINT ck_space_object_kind_relation_hints_endpoint_type CHECK (((endpoint_object_type)::text = ANY ((ARRAY['knowledge_item'::character varying, 'note'::character varying, 'source'::character varying, 'claim'::character varying, 'memory_entry'::character varying, 'project_public_summary'::character varying])::text[]))),
     CONSTRAINT ck_space_object_kind_relation_hints_relation_type CHECK (((relation_type)::text = ANY ((ARRAY['related_to'::character varying, 'explains'::character varying, 'depends_on'::character varying, 'prerequisite_of'::character varying, 'part_of'::character varying, 'example_of'::character varying, 'applies_to'::character varying, 'supports'::character varying, 'contradicts'::character varying, 'derived_from'::character varying, 'summarizes'::character varying, 'updates'::character varying, 'references'::character varying, 'source_for'::character varying, 'about'::character varying, 'supersedes'::character varying, 'refines'::character varying, 'same_as'::character varying])::text[])))
 );
 
@@ -1657,9 +1665,9 @@ CREATE TABLE public.note_links (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
     from_object_id character varying(36) NOT NULL,
-    from_object_type character varying(64) NOT NULL,
+    from_object_type public.retrieval_object_type NOT NULL,
     to_object_id character varying(36) NOT NULL,
-    to_object_type character varying(64) NOT NULL,
+    to_object_type public.retrieval_object_type NOT NULL,
     link_type character varying(64) NOT NULL,
     status character varying(32) DEFAULT 'active'::character varying NOT NULL,
     confidence double precision,
@@ -1668,7 +1676,6 @@ CREATE TABLE public.note_links (
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     CONSTRAINT ck_note_links_confidence CHECK (((confidence IS NULL) OR ((confidence >= (0)::double precision) AND (confidence <= (1)::double precision)))),
-    CONSTRAINT ck_note_links_endpoint_type CHECK ((((from_object_type)::text = ANY ((ARRAY['knowledge_item'::character varying, 'note'::character varying, 'source'::character varying, 'claim'::character varying, 'memory_entry'::character varying, 'project_public_summary'::character varying])::text[])) AND ((to_object_type)::text = ANY ((ARRAY['knowledge_item'::character varying, 'note'::character varying, 'source'::character varying, 'claim'::character varying, 'memory_entry'::character varying, 'project_public_summary'::character varying])::text[])))),
     CONSTRAINT ck_note_links_has_note_endpoint CHECK ((((from_object_type)::text = 'note'::text) OR ((to_object_type)::text = 'note'::text))),
     CONSTRAINT ck_note_links_link_type CHECK (((link_type)::text = ANY ((ARRAY['related_to'::character varying, 'references'::character varying, 'depends_on'::character varying, 'part_of'::character varying, 'source_for'::character varying, 'derived_from'::character varying, 'about'::character varying, 'supports'::character varying, 'contradicts'::character varying, 'supersedes'::character varying, 'refines'::character varying, 'same_as'::character varying, 'explains'::character varying, 'prerequisite_of'::character varying, 'example_of'::character varying, 'applies_to'::character varying, 'summarizes'::character varying, 'updates'::character varying])::text[]))),
     CONSTRAINT ck_note_links_metadata_object CHECK ((jsonb_typeof(metadata_json) = 'object'::text)),
@@ -2530,6 +2537,98 @@ CREATE TABLE public.source_connections (
     CONSTRAINT ck_source_connections_repair_status CHECK (((repair_status)::text = ANY ((ARRAY['ok'::character varying, 'repair_required'::character varying, 'repair_pending'::character varying, 'disabled'::character varying])::text[])))
 );
 
+
+--
+-- Name: source_post_processing_rules; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.source_post_processing_rules (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    source_connection_id character varying(36) NOT NULL,
+    agent_id character varying(36) NOT NULL,
+    project_id character varying(36),
+    name character varying(256) NOT NULL,
+    status character varying(32) DEFAULT 'active'::character varying NOT NULL,
+    trigger_type character varying(32) DEFAULT 'items_materialized'::character varying NOT NULL,
+    trigger_config_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    input_config_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    actions_json jsonb DEFAULT '{"batch_digest": true}'::jsonb NOT NULL,
+    cursor_json jsonb,
+    last_fired_at timestamp with time zone,
+    created_by_user_id character varying(36) NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT source_post_processing_rules_pkey PRIMARY KEY (id),
+    CONSTRAINT ck_source_post_processing_rules_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'paused'::character varying, 'archived'::character varying])::text[]))),
+    CONSTRAINT ck_source_post_processing_rules_trigger_type CHECK (((trigger_type)::text = ANY ((ARRAY['items_materialized'::character varying, 'schedule'::character varying, 'manual'::character varying])::text[])))
+);
+
+
+--
+-- Name: source_post_processing_runs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.source_post_processing_runs (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    rule_id character varying(36),
+    source_connection_id character varying(36) NOT NULL,
+    agent_id character varying(36) NOT NULL,
+    project_id character varying(36),
+    agent_run_id character varying(36),
+    triggered_by_user_id character varying(36),
+    trigger_type character varying(32) NOT NULL,
+    status character varying(32) NOT NULL,
+    input_item_ids_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    input_evidence_ids_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    output_artifact_ids_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    output_proposal_ids_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    output_job_ids_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    cursor_before_json jsonb,
+    cursor_after_json jsonb,
+    retrieval_context_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    item_decisions_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    summary text,
+    error_json jsonb,
+    started_at timestamp with time zone,
+    completed_at timestamp with time zone,
+    created_at timestamp with time zone NOT NULL,
+    CONSTRAINT source_post_processing_runs_pkey PRIMARY KEY (id),
+    CONSTRAINT ck_source_post_processing_runs_status CHECK (((status)::text = ANY ((ARRAY['queued'::character varying, 'running'::character varying, 'succeeded'::character varying, 'failed'::character varying, 'skipped'::character varying])::text[]))),
+    CONSTRAINT ck_source_post_processing_runs_trigger_type CHECK (((trigger_type)::text = ANY ((ARRAY['items_materialized'::character varying, 'schedule'::character varying, 'manual'::character varying])::text[])))
+);
+
+--
+-- Name: source_post_processing_item_decisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.source_post_processing_item_decisions (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    source_connection_id character varying(36) NOT NULL,
+    rule_id character varying(36),
+    run_id character varying(36) NOT NULL,
+    project_id character varying(36),
+    intake_item_id character varying(36) NOT NULL,
+    relevance character varying(32) NOT NULL,
+    confidence double precision,
+    reason text,
+    matched_context_refs_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    applied_item_status character varying(32),
+    review_status character varying(32) DEFAULT 'pending'::character varying NOT NULL,
+    action_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT source_post_processing_item_decisions_pkey PRIMARY KEY (id),
+    CONSTRAINT ck_source_post_processing_item_decisions_action_object CHECK ((jsonb_typeof(action_json) = 'object'::text)),
+    CONSTRAINT ck_source_post_processing_item_decisions_applied_status CHECK (((applied_item_status IS NULL) OR ((applied_item_status)::text = ANY ((ARRAY['new'::character varying, 'triaged'::character varying, 'selected'::character varying, 'ignored'::character varying, 'archived'::character varying])::text[])))),
+    CONSTRAINT ck_source_post_processing_item_decisions_confidence CHECK (((confidence IS NULL) OR ((confidence >= (0)::double precision) AND (confidence <= (1)::double precision)))),
+    CONSTRAINT ck_source_post_processing_item_decisions_refs_array CHECK ((jsonb_typeof(matched_context_refs_json) = 'array'::text)),
+    CONSTRAINT ck_source_post_processing_item_decisions_relevance CHECK (((relevance)::text = ANY ((ARRAY['relevant'::character varying, 'maybe'::character varying, 'not_relevant'::character varying])::text[]))),
+    CONSTRAINT ck_source_post_processing_item_decisions_review_status CHECK (((review_status)::text = ANY ((ARRAY['pending'::character varying, 'accepted'::character varying, 'ignored'::character varying, 'queued'::character varying, 'proposed'::character varying, 'rerun'::character varying, 'dismissed'::character varying])::text[])))
+);
+
 --
 -- Name: source_handler_versions; Type: TABLE; Schema: public; Owner: -
 --
@@ -2738,7 +2837,7 @@ CREATE TABLE public.sources (
 CREATE TABLE public.retrieval_objects (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
-    object_type character varying(32) NOT NULL,
+    object_type public.retrieval_object_type NOT NULL,
     object_id character varying(36) NOT NULL,
     workspace_id character varying(36),
     owner_user_id character varying(36),
@@ -2752,8 +2851,7 @@ CREATE TABLE public.retrieval_objects (
     indexed_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     source_updated_at timestamp with time zone,
-    CONSTRAINT ck_retrieval_objects_source_connections_array CHECK ((jsonb_typeof(source_connection_ids_json) = 'array'::text)),
-    CONSTRAINT ck_retrieval_objects_object_type CHECK (((object_type)::text = ANY ((ARRAY['knowledge_item'::character varying, 'note'::character varying, 'source'::character varying, 'claim'::character varying, 'memory_entry'::character varying, 'project_public_summary'::character varying])::text[])))
+    CONSTRAINT ck_retrieval_objects_source_connections_array CHECK ((jsonb_typeof(source_connection_ids_json) = 'array'::text))
 );
 
 
@@ -2765,15 +2863,14 @@ CREATE TABLE public.retrieval_aliases (
     id character varying(36) NOT NULL,
     retrieval_object_id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
-    object_type character varying(32) NOT NULL,
+    object_type public.retrieval_object_type NOT NULL,
     object_id character varying(36) NOT NULL,
     alias text NOT NULL,
     normalized_alias text NOT NULL,
     alias_kind character varying(32) NOT NULL,
     confidence double precision NOT NULL,
     created_at timestamp with time zone NOT NULL,
-    CONSTRAINT ck_retrieval_aliases_confidence CHECK (((confidence >= (0)::double precision) AND (confidence <= (1)::double precision))),
-    CONSTRAINT ck_retrieval_aliases_object_type CHECK (((object_type)::text = ANY ((ARRAY['knowledge_item'::character varying, 'note'::character varying, 'source'::character varying, 'claim'::character varying, 'memory_entry'::character varying, 'project_public_summary'::character varying])::text[])))
+    CONSTRAINT ck_retrieval_aliases_confidence CHECK (((confidence >= (0)::double precision) AND (confidence <= (1)::double precision)))
 );
 
 
@@ -2785,7 +2882,7 @@ CREATE TABLE public.retrieval_chunks (
     id character varying(36) NOT NULL,
     retrieval_object_id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
-    object_type character varying(32) NOT NULL,
+    object_type public.retrieval_object_type NOT NULL,
     object_id character varying(36) NOT NULL,
     chunk_index integer NOT NULL,
     plain_text text NOT NULL,
@@ -2800,8 +2897,7 @@ CREATE TABLE public.retrieval_chunks (
     embedding_attempts integer DEFAULT 0 NOT NULL,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
-    CONSTRAINT ck_retrieval_chunks_embedding_dimensions CHECK ((((embedding IS NULL) AND (embedding_dimensions IS NULL)) OR ((embedding IS NOT NULL) AND (embedding_dimensions = public.vector_dims(embedding)) AND (embedding_dimensions >= 1) AND (embedding_dimensions <= 4096)))),
-    CONSTRAINT ck_retrieval_chunks_object_type CHECK (((object_type)::text = ANY ((ARRAY['knowledge_item'::character varying, 'note'::character varying, 'source'::character varying, 'claim'::character varying, 'memory_entry'::character varying, 'project_public_summary'::character varying])::text[])))
+    CONSTRAINT ck_retrieval_chunks_embedding_dimensions CHECK ((((embedding IS NULL) AND (embedding_dimensions IS NULL)) OR ((embedding IS NOT NULL) AND (embedding_dimensions = public.vector_dims(embedding)) AND (embedding_dimensions >= 1) AND (embedding_dimensions <= 4096))))
 );
 
 
@@ -2812,9 +2908,9 @@ CREATE TABLE public.retrieval_chunks (
 CREATE TABLE public.retrieval_edges (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
-    from_object_type character varying(32) NOT NULL,
+    from_object_type public.retrieval_object_type NOT NULL,
     from_object_id character varying(36) NOT NULL,
-    to_object_type character varying(32) NOT NULL,
+    to_object_type public.retrieval_object_type NOT NULL,
     to_object_id character varying(36) NOT NULL,
     relation_type character varying(64) NOT NULL,
     edge_origin character varying(64) NOT NULL,
@@ -2824,8 +2920,6 @@ CREATE TABLE public.retrieval_edges (
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     CONSTRAINT ck_retrieval_edges_confidence CHECK (((confidence >= (0)::double precision) AND (confidence <= (1)::double precision))),
-    CONSTRAINT ck_retrieval_edges_from_object_type CHECK (((from_object_type)::text = ANY ((ARRAY['knowledge_item'::character varying, 'note'::character varying, 'source'::character varying, 'claim'::character varying, 'memory_entry'::character varying, 'project_public_summary'::character varying])::text[]))),
-    CONSTRAINT ck_retrieval_edges_to_object_type CHECK (((to_object_type)::text = ANY ((ARRAY['knowledge_item'::character varying, 'note'::character varying, 'source'::character varying, 'claim'::character varying, 'memory_entry'::character varying, 'project_public_summary'::character varying])::text[]))),
     CONSTRAINT ck_retrieval_edges_status CHECK (((edge_status)::text = ANY ((ARRAY['derived'::character varying, 'suggested'::character varying])::text[])))
 );
 
@@ -2840,14 +2934,13 @@ CREATE TABLE public.retrieval_feedback_events (
     actor_user_id character varying(36) NOT NULL,
     surface character varying(64) NOT NULL,
     query_hash character varying(64) NOT NULL,
-    object_type character varying(32) NOT NULL,
+    object_type public.retrieval_object_type NOT NULL,
     object_id character varying(36) NOT NULL,
     signal_type character varying(32) NOT NULL,
     dwell_ms integer,
     metadata_json jsonb NOT NULL,
     created_at timestamp with time zone NOT NULL,
     CONSTRAINT ck_retrieval_feedback_events_dwell_ms CHECK (((dwell_ms IS NULL) OR (dwell_ms >= 0))),
-    CONSTRAINT ck_retrieval_feedback_events_object_type CHECK (((object_type)::text = ANY ((ARRAY['knowledge_item'::character varying, 'note'::character varying, 'source'::character varying, 'claim'::character varying, 'memory_entry'::character varying, 'project_public_summary'::character varying])::text[]))),
     CONSTRAINT ck_retrieval_feedback_events_signal_type CHECK (((signal_type)::text = ANY ((ARRAY['opened'::character varying, 'dwell'::character varying, 'used'::character varying, 'explicit_relevant'::character varying, 'accepted'::character varying, 'pinned'::character varying])::text[])))
 );
 
@@ -8331,6 +8424,90 @@ CREATE INDEX ix_source_connections_status ON public.source_connections USING btr
 
 
 --
+-- Name: ix_source_post_processing_rules_agent_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_source_post_processing_rules_agent_id ON public.source_post_processing_rules USING btree (agent_id);
+
+
+--
+-- Name: ix_source_post_processing_rules_project_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_source_post_processing_rules_project_id ON public.source_post_processing_rules USING btree (project_id);
+
+
+--
+-- Name: ix_source_post_processing_rules_source_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_source_post_processing_rules_source_status ON public.source_post_processing_rules USING btree (space_id, source_connection_id, status);
+
+
+--
+-- Name: ix_source_post_processing_rules_trigger_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_source_post_processing_rules_trigger_status ON public.source_post_processing_rules USING btree (space_id, trigger_type, status);
+
+
+--
+-- Name: ix_source_post_processing_runs_agent_run_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_source_post_processing_runs_agent_run_id ON public.source_post_processing_runs USING btree (agent_run_id);
+
+
+--
+-- Name: ix_source_post_processing_runs_rule_created; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_source_post_processing_runs_rule_created ON public.source_post_processing_runs USING btree (space_id, rule_id, created_at DESC);
+
+
+--
+-- Name: ix_source_post_processing_runs_source_created; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_source_post_processing_runs_source_created ON public.source_post_processing_runs USING btree (space_id, source_connection_id, created_at DESC);
+
+
+--
+-- Name: ix_source_post_processing_runs_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_source_post_processing_runs_status ON public.source_post_processing_runs USING btree (space_id, status);
+
+
+--
+-- Name: ix_source_post_processing_item_decisions_connection_review; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_source_post_processing_item_decisions_connection_review ON public.source_post_processing_item_decisions USING btree (space_id, source_connection_id, review_status, created_at DESC);
+
+
+--
+-- Name: ix_source_post_processing_item_decisions_item; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_source_post_processing_item_decisions_item ON public.source_post_processing_item_decisions USING btree (space_id, intake_item_id, created_at DESC);
+
+
+--
+-- Name: ix_source_post_processing_item_decisions_project_review; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_source_post_processing_item_decisions_project_review ON public.source_post_processing_item_decisions USING btree (space_id, project_id, review_status, relevance, created_at DESC);
+
+
+--
+-- Name: ix_source_post_processing_item_decisions_rule_run; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_source_post_processing_item_decisions_rule_run ON public.source_post_processing_item_decisions USING btree (space_id, rule_id, run_id);
+
+
+--
 -- Name: ix_source_connectors_connector_key; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -9064,6 +9241,13 @@ CREATE UNIQUE INDEX uq_agents_system_evolver_per_space ON public.agents USING bt
 
 
 --
+-- Name: uq_agents_system_intake_post_processor_per_space; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_agents_system_intake_post_processor_per_space ON public.agents USING btree (space_id) WHERE (((agent_kind)::text = 'system_intake_post_processor'::text) AND ((status)::text = 'active'::text));
+
+
+--
 -- Name: uq_agent_runtime_profiles_default_per_agent; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -9089,6 +9273,20 @@ CREATE UNIQUE INDEX uq_intake_items_active_source_uri ON public.intake_items USI
 --
 
 CREATE UNIQUE INDEX uq_source_connections_active_endpoint ON public.source_connections USING btree (space_id, connector_id, endpoint_url) WHERE ((endpoint_url IS NOT NULL) AND (deleted_at IS NULL) AND ((status)::text <> 'archived'::text));
+
+
+--
+-- Name: uq_source_post_processing_rules_active_name; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_source_post_processing_rules_active_name ON public.source_post_processing_rules USING btree (space_id, source_connection_id, project_id, name) WHERE ((status)::text <> 'archived'::text);
+
+
+--
+-- Name: uq_source_post_processing_item_decisions_run_item; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_source_post_processing_item_decisions_run_item ON public.source_post_processing_item_decisions USING btree (space_id, run_id, intake_item_id);
 
 
 --
@@ -12107,6 +12305,150 @@ ALTER TABLE ONLY public.source_connections
 
 ALTER TABLE ONLY public.source_connections
     ADD CONSTRAINT source_connections_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+
+--
+-- Name: source_post_processing_rules source_post_processing_rules_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_post_processing_rules
+    ADD CONSTRAINT source_post_processing_rules_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agents(id);
+
+
+--
+-- Name: source_post_processing_rules source_post_processing_rules_created_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_post_processing_rules
+    ADD CONSTRAINT source_post_processing_rules_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public.users(id);
+
+
+--
+-- Name: source_post_processing_rules source_post_processing_rules_project_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_post_processing_rules
+    ADD CONSTRAINT source_post_processing_rules_project_id_fkey FOREIGN KEY (space_id, project_id) REFERENCES public.projects(space_id, id);
+
+
+--
+-- Name: source_post_processing_rules source_post_processing_rules_source_connection_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_post_processing_rules
+    ADD CONSTRAINT source_post_processing_rules_source_connection_id_fkey FOREIGN KEY (source_connection_id) REFERENCES public.source_connections(id) ON DELETE CASCADE;
+
+
+--
+-- Name: source_post_processing_rules source_post_processing_rules_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_post_processing_rules
+    ADD CONSTRAINT source_post_processing_rules_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+
+--
+-- Name: source_post_processing_runs source_post_processing_runs_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_post_processing_runs
+    ADD CONSTRAINT source_post_processing_runs_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agents(id);
+
+
+--
+-- Name: source_post_processing_runs source_post_processing_runs_agent_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_post_processing_runs
+    ADD CONSTRAINT source_post_processing_runs_agent_run_id_fkey FOREIGN KEY (agent_run_id) REFERENCES public.runs(id);
+
+
+--
+-- Name: source_post_processing_runs source_post_processing_runs_project_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_post_processing_runs
+    ADD CONSTRAINT source_post_processing_runs_project_id_fkey FOREIGN KEY (space_id, project_id) REFERENCES public.projects(space_id, id);
+
+
+--
+-- Name: source_post_processing_runs source_post_processing_runs_rule_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_post_processing_runs
+    ADD CONSTRAINT source_post_processing_runs_rule_id_fkey FOREIGN KEY (rule_id) REFERENCES public.source_post_processing_rules(id) ON DELETE SET NULL;
+
+
+--
+-- Name: source_post_processing_runs source_post_processing_runs_source_connection_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_post_processing_runs
+    ADD CONSTRAINT source_post_processing_runs_source_connection_id_fkey FOREIGN KEY (source_connection_id) REFERENCES public.source_connections(id) ON DELETE CASCADE;
+
+
+--
+-- Name: source_post_processing_runs source_post_processing_runs_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_post_processing_runs
+    ADD CONSTRAINT source_post_processing_runs_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+
+--
+-- Name: source_post_processing_runs source_post_processing_runs_triggered_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_post_processing_runs
+    ADD CONSTRAINT source_post_processing_runs_triggered_by_user_id_fkey FOREIGN KEY (triggered_by_user_id) REFERENCES public.users(id);
+
+
+--
+-- Name: source_post_processing_item_decisions source_post_processing_item_decisions_intake_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_post_processing_item_decisions
+    ADD CONSTRAINT source_post_processing_item_decisions_intake_item_id_fkey FOREIGN KEY (intake_item_id) REFERENCES public.intake_items(id);
+
+
+--
+-- Name: source_post_processing_item_decisions source_post_processing_item_decisions_project_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_post_processing_item_decisions
+    ADD CONSTRAINT source_post_processing_item_decisions_project_id_fkey FOREIGN KEY (space_id, project_id) REFERENCES public.projects(space_id, id);
+
+
+--
+-- Name: source_post_processing_item_decisions source_post_processing_item_decisions_rule_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_post_processing_item_decisions
+    ADD CONSTRAINT source_post_processing_item_decisions_rule_id_fkey FOREIGN KEY (rule_id) REFERENCES public.source_post_processing_rules(id) ON DELETE SET NULL;
+
+
+--
+-- Name: source_post_processing_item_decisions source_post_processing_item_decisions_run_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_post_processing_item_decisions
+    ADD CONSTRAINT source_post_processing_item_decisions_run_id_fkey FOREIGN KEY (run_id) REFERENCES public.source_post_processing_runs(id) ON DELETE CASCADE;
+
+
+--
+-- Name: source_post_processing_item_decisions source_post_processing_item_decisions_source_connection_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_post_processing_item_decisions
+    ADD CONSTRAINT source_post_processing_item_decisions_source_connection_id_fkey FOREIGN KEY (source_connection_id) REFERENCES public.source_connections(id) ON DELETE CASCADE;
+
+
+--
+-- Name: source_post_processing_item_decisions source_post_processing_item_decisions_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_post_processing_item_decisions
+    ADD CONSTRAINT source_post_processing_item_decisions_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
 
 
 --

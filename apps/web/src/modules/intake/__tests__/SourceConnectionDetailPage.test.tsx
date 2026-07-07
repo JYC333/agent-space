@@ -4,8 +4,15 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import type { ReactNode } from 'react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import SourceConnectionDetailPage from '../SourceConnectionDetailPage'
-import { intakeApi } from '../../../api/client'
-import type { CustomSourceHandlerVersion, ExtractionJob, SourceConnection, SourceRecipeVersion } from '../../../types/api'
+import { agentsApi, intakeApi, projectsApi } from '../../../api/client'
+import type {
+  CustomSourceHandlerVersion,
+  ExtractionJob,
+  SourceConnection,
+  SourcePostProcessingRule,
+  SourcePostProcessingRun,
+  SourceRecipeVersion,
+} from '../../../types/api'
 import { scheduleRuleFromForm } from '../intakePageModel'
 
 vi.mock('sonner', () => ({
@@ -39,6 +46,21 @@ vi.mock('../../../api/client', () => ({
     updateConnection: vi.fn(),
     scanConnection: vi.fn(),
     runJob: vi.fn(),
+    postProcessingRules: vi.fn(),
+    postProcessingRuns: vi.fn(),
+    postProcessingBacklog: vi.fn(),
+    postProcessingConnectionDecisions: vi.fn(),
+    createPostProcessingRule: vi.fn(),
+    updatePostProcessingRule: vi.fn(),
+    runPostProcessingRule: vi.fn(),
+    drainPostProcessingRule: vi.fn(),
+    postProcessingDecisionAction: vi.fn(),
+  },
+  agentsApi: {
+    list: vi.fn(),
+  },
+  projectsApi: {
+    list: vi.fn(),
   },
 }))
 
@@ -149,6 +171,100 @@ function setupCommonMocks() {
     updated_at: '2026-07-01T00:00:00.000Z',
   }]))
   vi.mocked(intakeApi.jobs).mockResolvedValue(page([]))
+  vi.mocked(intakeApi.postProcessingRules).mockResolvedValue([])
+  vi.mocked(intakeApi.postProcessingRuns).mockResolvedValue(page([]))
+  vi.mocked(intakeApi.postProcessingBacklog).mockResolvedValue({ source_connection_id: 'conn-1', rules: [] })
+  vi.mocked(intakeApi.postProcessingConnectionDecisions).mockResolvedValue(page([]))
+  vi.mocked(agentsApi.list).mockResolvedValue([])
+  vi.mocked(projectsApi.list).mockResolvedValue(page([]))
+  vi.mocked(intakeApi.createPostProcessingRule).mockResolvedValue({
+    id: 'rule-1',
+    space_id: 'space-1',
+    source_connection_id: 'conn-1',
+    agent_id: 'agent-1',
+    project_id: null,
+    name: 'Recipe Feed post-processing',
+    status: 'active',
+    trigger_type: 'items_materialized',
+    trigger_config_json: { min_new_items: 1, cooldown_seconds: 900, timezone: 'UTC', skip_when_no_new_items: true },
+    input_config_json: {
+      window: 'new_since_last_success',
+      item_limit: 10,
+      max_batches_per_event: 10,
+      processing_strategy: 'batch_digest',
+      content_source: 'excerpt_only',
+      include_excerpts: true,
+      include_evidence: true,
+      timezone: 'UTC',
+      retrieval_context: { enabled: false, domains: ['project'], max_results_per_domain: 6, mode: 'hybrid' },
+      candidate_prefilter: { enabled: false, mode: 'hybrid', max_candidates: 20 },
+      deep_analysis: { enabled: false, trigger_relevance: ['relevant'], min_confidence: 0.7, max_candidates_per_run: 5, content_source: 'prefer_extracted_text', output: 'deep_report' },
+    },
+    actions_json: { batch_digest: true, per_item_summary: false, extract_evidence: false, create_proposals: false, mark_items: false },
+    cursor_json: null,
+    last_fired_at: null,
+    next_run_at: null,
+    created_by_user_id: 'user-1',
+    created_at: '2026-07-01T00:00:00.000Z',
+    updated_at: '2026-07-01T00:00:00.000Z',
+  })
+  vi.mocked(intakeApi.updatePostProcessingRule).mockImplementation(async (_connectionId, _ruleId, body) => ({
+    id: 'rule-1',
+    space_id: 'space-1',
+    source_connection_id: 'conn-1',
+    agent_id: 'agent-1',
+    project_id: null,
+    name: 'Recipe Feed post-processing',
+    status: body.status ?? 'active',
+    trigger_type: 'items_materialized',
+    trigger_config_json: { min_new_items: 1, cooldown_seconds: 900, timezone: 'UTC', skip_when_no_new_items: true },
+    input_config_json: {
+      window: 'new_since_last_success',
+      item_limit: 10,
+      max_batches_per_event: 10,
+      processing_strategy: 'batch_digest',
+      content_source: 'excerpt_only',
+      include_excerpts: true,
+      include_evidence: true,
+      timezone: 'UTC',
+      retrieval_context: { enabled: false, domains: ['project'], max_results_per_domain: 6, mode: 'hybrid' },
+      candidate_prefilter: { enabled: false, mode: 'hybrid', max_candidates: 20 },
+      deep_analysis: { enabled: false, trigger_relevance: ['relevant'], min_confidence: 0.7, max_candidates_per_run: 5, content_source: 'prefer_extracted_text', output: 'deep_report' },
+    },
+    actions_json: { batch_digest: true, per_item_summary: false, extract_evidence: false, create_proposals: false, mark_items: false },
+    cursor_json: null,
+    last_fired_at: null,
+    next_run_at: null,
+    created_by_user_id: 'user-1',
+    created_at: '2026-07-01T00:00:00.000Z',
+    updated_at: '2026-07-01T00:01:00.000Z',
+  }))
+  vi.mocked(intakeApi.runPostProcessingRule).mockResolvedValue({
+    id: 'post-run-1',
+    space_id: 'space-1',
+    rule_id: 'rule-1',
+    source_connection_id: 'conn-1',
+    agent_id: 'agent-1',
+    project_id: null,
+    agent_run_id: 'agent-run-1',
+    triggered_by_user_id: 'user-1',
+    trigger_type: 'manual',
+    status: 'succeeded',
+    input_item_ids: ['item-1'],
+    input_evidence_ids: [],
+    output_artifact_ids: ['artifact-1'],
+    output_proposal_ids: [],
+    output_job_ids: [],
+    cursor_before_json: null,
+    cursor_after_json: null,
+    retrieval_context_json: {},
+    item_decisions_json: [],
+    summary: 'Done',
+    error_json: null,
+    started_at: '2026-07-01T00:00:00.000Z',
+    completed_at: '2026-07-01T00:00:01.000Z',
+    created_at: '2026-07-01T00:00:00.000Z',
+  })
   vi.mocked(intakeApi.evidence).mockResolvedValue(page([{
     id: 'evidence-1',
     space_id: 'space-1',
@@ -194,11 +310,76 @@ function renderPage() {
 
 function chooseSelect(currentLabel: string, nextLabel: string, index = 0) {
   fireEvent.click(screen.getAllByRole('button', { name: currentLabel })[index])
-  fireEvent.click(screen.getByRole('button', { name: nextLabel }))
+  fireEvent.click(screen.getByRole('option', { name: nextLabel }))
 }
 
 function typeScheduleNumber(label: string, value: string, index = 0) {
   fireEvent.change(screen.getAllByLabelText(label)[index], { target: { value } })
+}
+
+function postProcessingRule(overrides: Partial<SourcePostProcessingRule> = {}): SourcePostProcessingRule {
+  return {
+    id: 'rule-1',
+    space_id: 'space-1',
+    source_connection_id: 'conn-1',
+    agent_id: 'agent-1',
+    project_id: null,
+    name: 'Recipe Feed post-processing',
+    status: 'active',
+    trigger_type: 'items_materialized',
+    trigger_config_json: { min_new_items: 1, cooldown_seconds: 900, timezone: 'UTC', skip_when_no_new_items: true },
+    input_config_json: {
+      window: 'new_since_last_success',
+      item_limit: 10,
+      max_batches_per_event: 10,
+      processing_strategy: 'batch_digest',
+      content_source: 'excerpt_only',
+      include_excerpts: true,
+      include_evidence: true,
+      timezone: 'UTC',
+      retrieval_context: { enabled: false, domains: ['project'], max_results_per_domain: 6, mode: 'hybrid' },
+      candidate_prefilter: { enabled: false, mode: 'hybrid', max_candidates: 20 },
+      deep_analysis: { enabled: false, trigger_relevance: ['relevant'], min_confidence: 0.7, max_candidates_per_run: 5, content_source: 'prefer_extracted_text', output: 'deep_report' },
+    },
+    actions_json: { batch_digest: true, per_item_summary: false, extract_evidence: false, create_proposals: false, mark_items: false },
+    cursor_json: null,
+    last_fired_at: null,
+    next_run_at: null,
+    created_by_user_id: 'user-1',
+    created_at: '2026-07-01T00:00:00.000Z',
+    updated_at: '2026-07-01T00:00:00.000Z',
+    ...overrides,
+  }
+}
+
+function postProcessingRun(overrides: Partial<SourcePostProcessingRun> = {}): SourcePostProcessingRun {
+  return {
+    id: 'post-run-1',
+    space_id: 'space-1',
+    rule_id: 'rule-1',
+    source_connection_id: 'conn-1',
+    agent_id: 'agent-1',
+    project_id: null,
+    agent_run_id: 'agent-run-1',
+    triggered_by_user_id: 'user-1',
+    trigger_type: 'manual',
+    status: 'succeeded',
+    input_item_ids: ['item-1'],
+    input_evidence_ids: [],
+    output_artifact_ids: ['artifact-1'],
+    output_proposal_ids: [],
+    output_job_ids: [],
+    cursor_before_json: null,
+    cursor_after_json: null,
+    retrieval_context_json: {},
+    item_decisions_json: [],
+    summary: 'Done',
+    error_json: null,
+    started_at: '2026-07-01T00:00:00.000Z',
+    completed_at: '2026-07-01T00:00:01.000Z',
+    created_at: '2026-07-01T00:00:00.000Z',
+    ...overrides,
+  }
 }
 
 beforeEach(() => {
@@ -400,5 +581,238 @@ describe('SourceConnectionDetailPage', () => {
       expect(intakeApi.scanConnection).toHaveBeenCalledWith('conn-1')
       expect(intakeApi.runJob).toHaveBeenCalledWith('scan-job-1')
     })
+  })
+
+  it('creates a post-processing rule with a relevance screening profile', async () => {
+    const user = userEvent.setup()
+    vi.mocked(intakeApi.getConnection).mockResolvedValue({
+      ...baseConnection,
+      handler_kind: 'recipe',
+      active_handler_version_id: null,
+      active_recipe_version_id: 'recipe-version-1',
+    } as SourceConnection)
+    vi.mocked(intakeApi.sourceRuns).mockResolvedValue(page([]))
+    vi.mocked(intakeApi.sourceRecipeVersions).mockResolvedValue(page([recipeVersion as SourceRecipeVersion]))
+
+    renderPage()
+
+    await screen.findByText('Recipe Feed')
+    await user.click(screen.getByRole('tab', { name: 'Post-processing' }))
+
+    await user.click(screen.getByLabelText('Screen for relevance'))
+    await user.type(screen.getByLabelText('Objective'), 'Papers on agent memory')
+    await user.type(screen.getByLabelText('Include criteria (one per line)'), 'agent memory{enter}retrieval evaluation')
+    await user.type(screen.getByLabelText('Exclude criteria (one per line)'), 'pure hardware optimization')
+
+    await user.click(screen.getByRole('button', { name: 'Create rule' }))
+
+    await waitFor(() => {
+      expect(intakeApi.createPostProcessingRule).toHaveBeenCalledWith('conn-1', expect.objectContaining({
+        input_config_json: expect.objectContaining({
+          relevance_profile: {
+            enabled: true,
+            objective: 'Papers on agent memory',
+            include_criteria: ['agent memory', 'retrieval evaluation'],
+            exclude_criteria: ['pure hardware optimization'],
+            must_have: [],
+            nice_to_have: [],
+          },
+        }),
+      }))
+    })
+    expect(screen.getByRole('tab', { name: 'Post-processing' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByText('Recipe Feed post-processing')).toBeInTheDocument()
+    expect(intakeApi.getConnection).toHaveBeenCalledTimes(1)
+  })
+
+  it('saves project context and knowledge base comparison as separate judging context options', async () => {
+    const user = userEvent.setup()
+    vi.mocked(projectsApi.list).mockResolvedValue(page([{
+      id: 'project-1',
+      space_id: 'space-1',
+      owner_user_id: 'user-1',
+      name: 'Agent Memory Research',
+      description: null,
+      status: 'active',
+      current_focus: 'Screen papers for agent memory work',
+      settings_json: null,
+      created_at: '2026-07-01T00:00:00.000Z',
+      updated_at: '2026-07-01T00:00:00.000Z',
+      archived_at: null,
+    }]))
+    vi.mocked(intakeApi.getConnection).mockResolvedValue({
+      ...baseConnection,
+      handler_kind: 'recipe',
+      active_handler_version_id: null,
+      active_recipe_version_id: 'recipe-version-1',
+    } as SourceConnection)
+    vi.mocked(intakeApi.sourceRuns).mockResolvedValue(page([]))
+    vi.mocked(intakeApi.sourceRecipeVersions).mockResolvedValue(page([recipeVersion as SourceRecipeVersion]))
+
+    renderPage()
+
+    await screen.findByText('Recipe Feed')
+    await user.click(screen.getByRole('tab', { name: 'Post-processing' }))
+    await user.selectOptions(screen.getByDisplayValue('No project'), 'project-1')
+    await user.click(screen.getByText('Advanced options'))
+    await user.click(screen.getByLabelText(/Use project context/))
+    await user.click(screen.getByLabelText(/Compare with knowledge base/))
+
+    await user.click(screen.getByRole('button', { name: 'Create rule' }))
+
+    await waitFor(() => {
+      expect(intakeApi.createPostProcessingRule).toHaveBeenCalledWith('conn-1', expect.objectContaining({
+        project_id: 'project-1',
+        input_config_json: expect.objectContaining({
+          retrieval_context: {
+            enabled: true,
+            domains: ['project', 'knowledge'],
+            max_results_per_domain: 6,
+            mode: 'hybrid',
+          },
+        }),
+      }))
+    })
+  })
+
+  it('allows external model processing from the post-processing tab', async () => {
+    const user = userEvent.setup()
+    vi.mocked(intakeApi.getConnection).mockResolvedValue({
+      ...baseConnection,
+      handler_kind: 'recipe',
+      active_handler_version_id: null,
+      active_recipe_version_id: 'recipe-version-1',
+    } as SourceConnection)
+    vi.mocked(intakeApi.sourceRuns).mockResolvedValue(page([]))
+    vi.mocked(intakeApi.sourceRecipeVersions).mockResolvedValue(page([recipeVersion as SourceRecipeVersion]))
+    vi.mocked(intakeApi.updateConnection).mockResolvedValue({
+      ...baseConnection,
+      consent_json: { allow_external_model_egress: true },
+      policy_json: { source_egress_class: 'external_provider_allowed' },
+      handler_kind: 'recipe',
+      active_handler_version_id: null,
+      active_recipe_version_id: 'recipe-version-1',
+    } as SourceConnection)
+
+    renderPage()
+
+    await screen.findByText('Recipe Feed')
+    await user.click(screen.getByRole('tab', { name: 'Post-processing' }))
+    expect(screen.getByText('External model blocked')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /allow external model/i }))
+
+    await waitFor(() => {
+      expect(intakeApi.updateConnection).toHaveBeenCalledWith('conn-1', {
+        consent: { allow_external_model_egress: true },
+        policy: { source_egress_class: 'external_provider_allowed' },
+      })
+    })
+    await waitFor(() => {
+      expect(screen.queryByText('External model blocked')).not.toBeInTheDocument()
+    })
+  })
+
+  it('shows live status while a post-processing rule runs manually', async () => {
+    const user = userEvent.setup()
+    const rule = postProcessingRule()
+    let resolveRun: (run: SourcePostProcessingRun) => void = () => undefined
+    vi.mocked(intakeApi.getConnection).mockResolvedValue({
+      ...baseConnection,
+      handler_kind: 'recipe',
+      active_handler_version_id: null,
+      active_recipe_version_id: 'recipe-version-1',
+    } as SourceConnection)
+    vi.mocked(intakeApi.sourceRuns).mockResolvedValue(page([]))
+    vi.mocked(intakeApi.sourceRecipeVersions).mockResolvedValue(page([recipeVersion as SourceRecipeVersion]))
+    vi.mocked(intakeApi.postProcessingRules).mockResolvedValue([rule])
+    vi.mocked(intakeApi.postProcessingBacklog).mockResolvedValue({
+      source_connection_id: 'conn-1',
+      rules: [{
+        rule_id: rule.id,
+        rule_name: rule.name,
+        status: rule.status,
+        trigger_type: rule.trigger_type,
+        pending_item_count: 3,
+        batch_size: 10,
+        max_batches_per_event: 10,
+        cursor_json: null,
+        last_fired_at: null,
+        last_run: null,
+        last_success_run: null,
+        last_failed_run: null,
+      }],
+    })
+    vi.mocked(intakeApi.runPostProcessingRule).mockReturnValue(new Promise(resolve => {
+      resolveRun = resolve
+    }))
+
+    renderPage()
+
+    await screen.findByText('Recipe Feed')
+    await user.click(screen.getByRole('tab', { name: 'Post-processing' }))
+    await user.click(screen.getByRole('button', { name: /^Run$/ }))
+
+    expect(await screen.findByText('Running post-processing')).toBeInTheDocument()
+    expect(screen.getByText('Running the next batch for this rule.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /running/i })).toBeDisabled()
+
+    resolveRun(postProcessingRun())
+
+    await waitFor(() => {
+      expect(screen.getByText('Post-processing run finished')).toBeInTheDocument()
+      expect(screen.getByText('Run completed successfully.')).toBeInTheDocument()
+    })
+  })
+
+  it('blocks submitting relevance screening with no objective or include criteria', async () => {
+    const user = userEvent.setup()
+    vi.mocked(intakeApi.getConnection).mockResolvedValue({
+      ...baseConnection,
+      handler_kind: 'recipe',
+      active_handler_version_id: null,
+      active_recipe_version_id: 'recipe-version-1',
+    } as SourceConnection)
+    vi.mocked(intakeApi.sourceRuns).mockResolvedValue(page([]))
+    vi.mocked(intakeApi.sourceRecipeVersions).mockResolvedValue(page([recipeVersion as SourceRecipeVersion]))
+
+    renderPage()
+
+    await screen.findByText('Recipe Feed')
+    await user.click(screen.getByRole('tab', { name: 'Post-processing' }))
+
+    await user.click(screen.getByLabelText('Screen for relevance'))
+    await user.type(screen.getByLabelText('Exclude criteria (one per line)'), 'pure hardware optimization')
+    await user.click(screen.getByRole('button', { name: 'Create rule' }))
+
+    expect(intakeApi.createPostProcessingRule).not.toHaveBeenCalled()
+  })
+
+  it('omits relevance_profile from the payload when the checkbox is unchecked after typing criteria', async () => {
+    const user = userEvent.setup()
+    vi.mocked(intakeApi.getConnection).mockResolvedValue({
+      ...baseConnection,
+      handler_kind: 'recipe',
+      active_handler_version_id: null,
+      active_recipe_version_id: 'recipe-version-1',
+    } as SourceConnection)
+    vi.mocked(intakeApi.sourceRuns).mockResolvedValue(page([]))
+    vi.mocked(intakeApi.sourceRecipeVersions).mockResolvedValue(page([recipeVersion as SourceRecipeVersion]))
+
+    renderPage()
+
+    await screen.findByText('Recipe Feed')
+    await user.click(screen.getByRole('tab', { name: 'Post-processing' }))
+
+    await user.click(screen.getByLabelText('Screen for relevance'))
+    await user.type(screen.getByLabelText('Objective'), 'Papers on agent memory')
+    await user.click(screen.getByLabelText('Screen for relevance'))
+    await user.click(screen.getByRole('button', { name: 'Create rule' }))
+
+    await waitFor(() => {
+      expect(intakeApi.createPostProcessingRule).toHaveBeenCalled()
+    })
+    const body = vi.mocked(intakeApi.createPostProcessingRule).mock.calls[0]?.[1] as { input_config_json?: Record<string, unknown> }
+    expect(body.input_config_json?.relevance_profile).toBeUndefined()
   })
 })

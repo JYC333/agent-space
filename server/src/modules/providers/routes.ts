@@ -3,6 +3,7 @@
  *
  * - GET /api/v1/providers
  * - GET /api/v1/providers/catalog
+ * - GET /api/v1/providers/presets
  * - GET /api/v1/providers/litellm-providers
  * - GET /api/v1/providers/:configId
  *
@@ -16,7 +17,7 @@
  * proxy wildcard) and mis-validate their non-DTO payloads as provider configs.
  *
  * Provider commands and credential-channel routes are registered by
- * `providerCommandRoutes`.
+ * provider command routes.
  */
 
 import type { FastifyInstance } from "fastify";
@@ -26,8 +27,9 @@ import {
   getProviderConfig,
   listLitellmProviders,
   listProviderConfigs,
+  listProviderPresets,
 } from "./service";
-import { registerProviderCommandRoutes } from "./providerCommandRoutes";
+import { registerProviderCommandRoutes } from "./commands/routes";
 
 export function registerRoutes(app: FastifyInstance, context: ModuleContext): void {
   registerProviderCommandRoutes(app, context.config);
@@ -36,6 +38,9 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
   );
   app.get("/api/v1/providers/catalog", async (request, reply) =>
     getProviderCatalogInfo(context.config, request, reply),
+  );
+  app.get("/api/v1/providers/presets", async (request, reply) =>
+    listProviderPresets(context.config, request, reply),
   );
   app.get("/api/v1/providers/litellm-providers", async (request, reply) =>
     listLitellmProviders(context.config, request, reply),

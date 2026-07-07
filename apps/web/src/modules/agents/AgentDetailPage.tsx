@@ -43,6 +43,7 @@ export default function AgentDetailPage() {
   const [proposals, setProposals] = useState<Proposal[]>([])
   const [loading, setLoading] = useState(true)
   const [statusBusy, setStatusBusy] = useState(false)
+  const [activeTab, setActiveTab] = useState<string | null>(null)
 
   const reload = useCallback(async () => {
     if (!agentId) return
@@ -66,6 +67,10 @@ export default function AgentDetailPage() {
     setLoading(true)
     reload().catch(err => toast.error(errMsg(err))).finally(() => setLoading(false))
   }, [reload])
+
+  useEffect(() => {
+    setActiveTab(null)
+  }, [agentId])
 
   if (loading) return <div className="p-6 flex items-center gap-2 text-muted-foreground"><Loader2 className="size-4 animate-spin" /> Loading…</div>
   if (!agent) return <div className="p-6 text-muted-foreground">Agent not found.</div>
@@ -121,7 +126,7 @@ export default function AgentDetailPage() {
         </div>
       </div>
 
-      <Tabs defaultValue={isAssistant ? 'preferences' : 'overview'}>
+      <Tabs value={activeTab ?? (isAssistant ? 'preferences' : 'overview')} onValueChange={setActiveTab}>
         <TabsList className="w-full flex-wrap justify-start gap-1 h-auto">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           {isAssistant && <TabsTrigger value="preferences">Preferences</TabsTrigger>}
@@ -708,7 +713,7 @@ function ModelTab({
     setIsDefault(profiles.length === 0)
     setCredentialProfileId('')
     setRuntimeToolVersion('')
-    setRetrievalToolDomains({ memory: false, project_public_summary: false })
+    setRetrievalToolDomains({ memory: false, project_public_summary: false, intake: false })
   }
 
   return (

@@ -16,8 +16,8 @@ import {
 import {
   RetrievalEmbeddingBackfillService,
   type RetrievalEmbedder,
-} from "../src/modules/retrievalEmbedding/service";
-import { EMBED_DIMENSIONS } from "../src/modules/retrievalEmbedding/config";
+} from "../src/modules/retrieval/embedding/service";
+import { EMBED_DIMENSIONS } from "../src/modules/retrieval/embedding/config";
 import { insertKnowledgeItem } from "./support/knowledgeFixtures";
 
 // W9 egress governance on real Postgres: the per-space switch round-trips through

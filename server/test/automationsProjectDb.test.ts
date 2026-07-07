@@ -45,8 +45,6 @@ vi.mock("../src/modules/policy/gateway", async (importOriginal) => {
 
 import { AutomationService } from "../src/modules/automations/service";
 import { PgAutomationRepository } from "../src/modules/automations/repository";
-import { PgRunRepository } from "../src/modules/runs/repository";
-import { PostRunFinalizationService } from "../src/modules/runs/finalizationService";
 
 const MIGRATIONS_DIR = join(process.cwd(), "migrations");
 const SPACE = "11111111-1111-4111-8111-111111111111";
@@ -54,13 +52,9 @@ const OTHER_SPACE = "22222222-2222-4222-8222-222222222222";
 const OWNER = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"; // space owner + project owner
 const MEMBER = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"; // plain space member, not a project member
 const PROJECT = "55555555-5555-4555-8555-555555555555";
-const PROJECT_B = "56565656-5656-4556-8556-565656565656"; // second project in SPACE
 const OTHER_PROJECT = "66666666-6666-4666-8666-666666666666"; // lives in OTHER_SPACE
 const AGENT = "77777777-7777-4777-8777-777777777777";
 const AGENT_VERSION = "88888888-8888-4888-8888-888888888888";
-const WORKSPACE = "99999999-9999-4999-8999-999999999999";
-const CONNECTOR = "33333333-3333-4333-8333-333333333333";
-const CONNECTION = "44444444-4444-4444-8444-444444444444";
 
 const config = {
   databaseUrl: "postgresql://test@test:5432/test",
@@ -119,9 +113,8 @@ beforeEach(async () => {
   );
   await pool.query(
     `INSERT INTO projects (id, space_id, owner_user_id, name, status, created_at, updated_at)
-     VALUES ($1,$2,$3,'Research','active',$4,$4), ($5,$2,$3,'Research B','active',$4,$4),
-            ($6,$7,NULL,'Elsewhere','active',$4,$4)`,
-    [PROJECT, SPACE, OWNER, now, PROJECT_B, OTHER_PROJECT, OTHER_SPACE],
+     VALUES ($1,$2,$3,'Research','active',$4,$4), ($5,$6,NULL,'Elsewhere','active',$4,$4)`,
+    [PROJECT, SPACE, OWNER, now, OTHER_PROJECT, OTHER_SPACE],
   );
   await pool.query(
     `INSERT INTO agents (id, space_id, owner_user_id, name, status, current_version_id, created_at, updated_at, visibility)
@@ -157,76 +150,6 @@ beforeEach(async () => {
 
 function service(): AutomationService {
   return new AutomationService(config, new PgAutomationRepository(pool!));
-}
-
-async function seedIntakeSourceWithBinding(): Promise<void> {
-  const now = new Date().toISOString();
-  await pool!.query(
-    `INSERT INTO workspaces (
-       id, space_id, name, status, workspace_type, kind, visibility, protected, system_managed,
-       created_at, updated_at
-     ) VALUES ($1,$2,'ws','active','project','standard','space_shared',false,false,$3,$3)`,
-    [WORKSPACE, SPACE, now],
-  );
-  await pool!.query(
-    `INSERT INTO project_workspaces (id, space_id, project_id, workspace_id, role, created_at, updated_at)
-     VALUES ($1,$2,$3,$5,'reference',$6,$6), ($4,$2,$7,$5,'reference',$6,$6)
-     ON CONFLICT (space_id, project_id, workspace_id, role) DO NOTHING`,
-    [randomUUID(), SPACE, PROJECT, randomUUID(), WORKSPACE, now, PROJECT_B],
-  );
-  await pool!.query(
-    `INSERT INTO source_connectors (
-       id, connector_key, display_name, connector_type, ingestion_mode, status,
-       capabilities_json, created_at, updated_at
-     ) VALUES ($1,'rss','RSS','external_feed','pull','active','{}'::jsonb,$2,$2)`,
-    [CONNECTOR, now],
-  );
-  await pool!.query(
-    `INSERT INTO source_connections (
-       id, space_id, connector_id, owner_user_id, name, endpoint_url, status,
-       fetch_frequency, capture_policy, trust_level, consent_json, policy_json,
-       config_json, created_at, updated_at
-     ) VALUES ($1,$2,$3,$4,'arXiv','https://example.org/rss','active',
-       'daily','reference_only','normal','{}'::jsonb,'{}'::jsonb,'{}'::jsonb,$5,$5)`,
-    [CONNECTION, SPACE, CONNECTOR, OWNER, now],
-  );
-  await pool!.query(
-    `INSERT INTO workspace_source_bindings (
-       id, space_id, workspace_id, project_id, source_connection_id, binding_key,
-       status, priority, filters_json, routing_policy_json, extraction_policy_json,
-       created_at, updated_at
-     ) VALUES ($1,$2,$3,$4,$5,'default','active',0,'{}'::jsonb,'{}'::jsonb,'{}'::jsonb,$6,$6)`,
-    [randomUUID(), SPACE, WORKSPACE, PROJECT, CONNECTION, now],
-  );
-}
-
-async function seedIntakeItem(title: string, createdAt: string): Promise<string> {
-  const id = randomUUID();
-  await pool!.query(
-    `INSERT INTO intake_items (
-       id, space_id, connection_id, item_type, title, source_uri, excerpt,
-       first_seen_at, last_seen_at, status, read_status, content_state,
-       retention_policy, created_at, updated_at
-     ) VALUES ($1,$2,$3,'external_url',$4,$6,'Paper abstract',
-       $5,$5,'new','unread','excerpt_saved','summary_only',$5,$5)`,
-    [id, SPACE, CONNECTION, title, createdAt, `https://example.org/paper/${id}`],
-  );
-  return id;
-}
-
-async function createBoundAutomation(configJson: Record<string, unknown> = {}): Promise<string> {
-  const created = await service().create({
-    spaceId: SPACE,
-    ownerUserId: OWNER,
-    body: {
-      name: "Paper digest",
-      agent_id: AGENT,
-      project_id: PROJECT,
-      trigger_type: "manual",
-      config_json: { target_type: "agent_run", ...configJson },
-    },
-  });
-  return created.id;
 }
 
 describe("Automation × Project binding (real Postgres)", () => {
@@ -374,183 +297,8 @@ describe("Automation × Project binding (real Postgres)", () => {
     expect(run.rows[0]?.trigger_origin).toBe("automation");
   });
 
-  it("injects the intake delta, advances the cursor only on run success, and re-reads on failure", async () => {
+  it("rejects intake event automations", async () => {
     if (!available) return;
-    await seedIntakeSourceWithBinding();
-    const automationId = await createBoundAutomation();
-    await seedIntakeItem("Paper A", "2026-07-01T00:00:00.000Z");
-    await seedIntakeItem("Paper B", "2026-07-02T00:00:00.000Z");
-    const runs = new PgRunRepository(pool!);
-    const finalizer = new PostRunFinalizationService(runs);
-
-    // First fire sees both items and injects them into the run instruction.
-    const first = await service().fire({ spaceId: SPACE, automationId, actorUserId: OWNER });
-    expect(first.intake_delta_count).toBe(2);
-    const firstRun = await pool!.query<{ instruction: string | null }>(
-      `SELECT instruction FROM runs WHERE id = $1`,
-      [String(first.run_id)],
-    );
-    expect(firstRun.rows[0]?.instruction).toContain("Paper A");
-    expect(firstRun.rows[0]?.instruction).toContain("Paper B");
-    const automationRun = await pool!.query<{ trigger_context_json: Record<string, unknown> }>(
-      `SELECT trigger_context_json FROM automation_runs WHERE run_id = $1`,
-      [String(first.run_id)],
-    );
-    expect(automationRun.rows[0]?.trigger_context_json).toMatchObject({ intake_delta_count: 2 });
-
-    // A failed run must not advance the cursor: the next fire re-reads the same delta.
-    await runs.markRunTerminal({
-      run_id: String(first.run_id),
-      space_id: SPACE,
-      status: "failed",
-      output_text: "boom",
-      exit_code: 1,
-      completed_at: new Date().toISOString(),
-    });
-    await finalizer.finalize(String(first.run_id), SPACE);
-    const afterFailure = await new PgAutomationRepository(pool!).get(SPACE, automationId);
-    expect(afterFailure?.cursor_json).toBeNull();
-
-    const second = await service().fire({ spaceId: SPACE, automationId, actorUserId: OWNER });
-    expect(second.intake_delta_count).toBe(2);
-
-    // Success commits the watermark; the next fire sees only newer items.
-    await runs.markRunTerminal({
-      run_id: String(second.run_id),
-      space_id: SPACE,
-      status: "succeeded",
-      output_text: "ok",
-      exit_code: 0,
-      completed_at: new Date().toISOString(),
-    });
-    await finalizer.finalize(String(second.run_id), SPACE);
-    const afterSuccess = await new PgAutomationRepository(pool!).get(SPACE, automationId);
-    expect(afterSuccess?.cursor_json).toMatchObject({
-      intake_watermark: { created_at: "2026-07-02T00:00:00.000Z" },
-    });
-
-    await seedIntakeItem("Paper C", "2026-07-03T00:00:00.000Z");
-    const third = await service().fire({ spaceId: SPACE, automationId, actorUserId: OWNER });
-    expect(third.intake_delta_count).toBe(1);
-    const thirdRun = await pool!.query<{ instruction: string | null }>(
-      `SELECT instruction FROM runs WHERE id = $1`,
-      [String(third.run_id)],
-    );
-    expect(thirdRun.rows[0]?.instruction).toContain("Paper C");
-    expect(thirdRun.rows[0]?.instruction).not.toContain("Paper A");
-  });
-
-  it("does not replay historical backlog: items existing at bind time start below the cursor", async () => {
-    if (!available) return;
-    await seedIntakeSourceWithBinding();
-    await seedIntakeItem("Old paper", "2026-06-01T00:00:00.000Z");
-    const automationId = await createBoundAutomation();
-
-    const auto = await new PgAutomationRepository(pool!).get(SPACE, automationId);
-    expect(auto?.cursor_json).toMatchObject({
-      intake_watermark: { created_at: "2026-06-01T00:00:00.000Z" },
-    });
-
-    const result = await service().fire({ spaceId: SPACE, automationId, actorUserId: OWNER });
-    expect(result.intake_delta_count).toBe(0);
-    const run = await pool!.query<{ instruction: string | null }>(
-      `SELECT instruction FROM runs WHERE id = $1`,
-      [String(result.run_id)],
-    );
-    expect(run.rows[0]?.instruction ?? "").not.toContain("Old paper");
-
-    await seedIntakeItem("New paper", "2026-07-01T00:00:00.000Z");
-    const next = await service().fire({ spaceId: SPACE, automationId, actorUserId: OWNER });
-    expect(next.intake_delta_count).toBe(1);
-  });
-
-  it("re-initializes the cursor when the bound project changes", async () => {
-    if (!available) return;
-    await seedIntakeSourceWithBinding();
-    const automationId = await createBoundAutomation();
-    await seedIntakeItem("Paper A", "2026-07-01T00:00:00.000Z");
-
-    // Bind the same connection to PROJECT_B as well, then rebind the automation.
-    const now = new Date().toISOString();
-    await pool!.query(
-      `INSERT INTO workspace_source_bindings (
-         id, space_id, workspace_id, project_id, source_connection_id, binding_key,
-         status, priority, filters_json, routing_policy_json, extraction_policy_json,
-         created_at, updated_at
-       ) VALUES ($1,$2,$3,$4,$5,'project-b','active',0,'{}'::jsonb,'{}'::jsonb,'{}'::jsonb,$6,$6)`,
-      [randomUUID(), SPACE, WORKSPACE, PROJECT_B, CONNECTION, now],
-    );
-    const rebound = await service().update({
-      spaceId: SPACE,
-      automationId,
-      actorUserId: OWNER,
-      body: { project_id: PROJECT_B },
-    });
-    // The new scope's current watermark covers Paper A: it is not replayed
-    // into project B, but items materialized afterwards are delivered.
-    expect(rebound.cursor_json).toMatchObject({
-      intake_watermark: { created_at: "2026-07-01T00:00:00.000Z" },
-    });
-    const first = await service().fire({ spaceId: SPACE, automationId, actorUserId: OWNER });
-    expect(first.intake_delta_count).toBe(0);
-    await seedIntakeItem("Paper B", "2026-07-02T00:00:00.000Z");
-    const second = await service().fire({ spaceId: SPACE, automationId, actorUserId: OWNER });
-    expect(second.intake_delta_count).toBe(1);
-  });
-
-  it("event fires are skipped while a previous automation run is still in flight", async () => {
-    if (!available) return;
-    await seedIntakeSourceWithBinding();
-    const automation = await service().create({
-      spaceId: SPACE,
-      ownerUserId: OWNER,
-      body: {
-        name: "Event digest",
-        agent_id: AGENT,
-        project_id: PROJECT,
-        trigger_type: "event",
-        config_json: {
-          target_type: "agent_run",
-          event: { type: "intake.items_materialized", cooldown_seconds: 0 },
-        },
-      },
-    });
-    await seedIntakeItem("Paper A", "2026-07-01T00:00:00.000Z");
-    const first = await service().fireIntakeEventAutomations({
-      spaceId: SPACE,
-      sourceConnectionId: CONNECTION,
-      newItemCount: 1,
-    });
-    expect(first.fired).toBe(1);
-
-    // The queued run has not settled, so its watermark is uncommitted; a new
-    // fire would re-deliver the same delta and is skipped instead.
-    await seedIntakeItem("Paper B", "2026-07-02T00:00:00.000Z");
-    const second = await service().fireIntakeEventAutomations({
-      spaceId: SPACE,
-      sourceConnectionId: CONNECTION,
-      newItemCount: 1,
-    });
-    expect(second.fired).toBe(0);
-    expect(second.skipped).toEqual([{ automation_id: automation.id, reason: "run_in_flight" }]);
-  });
-
-  it("skips the fire without creating a run when configured and no new items exist", async () => {
-    if (!available) return;
-    await seedIntakeSourceWithBinding();
-    const automationId = await createBoundAutomation({ skip_when_no_new_items: true });
-
-    const result = await service().fire({ spaceId: SPACE, automationId, actorUserId: OWNER });
-    expect(result).toMatchObject({ skipped: true, skip_reason: "no_new_intake_items" });
-    const runCount = await pool!.query<{ n: string }>(`SELECT count(*) AS n FROM runs`);
-    expect(Number(runCount.rows[0]?.n)).toBe(0);
-  });
-
-  it("event automations: shape validation, project-binding match, cooldown, and empty-delta skip", async () => {
-    if (!available) return;
-    await seedIntakeSourceWithBinding();
-
-    // Shape validation: event trigger requires an event object and a scope.
     await expect(
       service().create({
         spaceId: SPACE,
@@ -564,112 +312,6 @@ describe("Automation × Project binding (real Postgres)", () => {
         },
       }),
     ).rejects.toMatchObject({ statusCode: 422 });
-    await expect(
-      service().create({
-        spaceId: SPACE,
-        ownerUserId: OWNER,
-        body: {
-          name: "Unscoped event",
-          agent_id: AGENT,
-          trigger_type: "event",
-          config_json: {
-            target_type: "agent_run",
-            event: { type: "intake.items_materialized" },
-          },
-        },
-      }),
-    ).rejects.toMatchObject({ statusCode: 422 });
-
-    const automation = await service().create({
-      spaceId: SPACE,
-      ownerUserId: OWNER,
-      body: {
-        name: "Event digest",
-        agent_id: AGENT,
-        project_id: PROJECT,
-        trigger_type: "event",
-        config_json: {
-          target_type: "agent_run",
-          event: { type: "intake.items_materialized", cooldown_seconds: 900 },
-        },
-      },
-    });
-    // Event automations are pre-authorized like scheduled ones.
-    const grants = await pool!.query(
-      `SELECT id FROM automation_credential_grants WHERE automation_id = $1 AND status = 'active'`,
-      [automation.id],
-    );
-    expect(grants.rows).toHaveLength(1);
-
-    // New items materialized → the event fires the automation once.
-    await seedIntakeItem("Paper A", "2026-07-01T00:00:00.000Z");
-    const first = await service().fireIntakeEventAutomations({
-      spaceId: SPACE,
-      sourceConnectionId: CONNECTION,
-      newItemCount: 1,
-    });
-    expect(first).toMatchObject({ matched: 1, fired: 1 });
-    const automationRuns = await pool!.query<{ trigger_type: string }>(
-      `SELECT trigger_type FROM automation_runs WHERE automation_id = $1`,
-      [automation.id],
-    );
-    expect(automationRuns.rows).toEqual([{ trigger_type: "event" }]);
-
-    // Immediate duplicate delivery is suppressed by the cooldown.
-    const second = await service().fireIntakeEventAutomations({
-      spaceId: SPACE,
-      sourceConnectionId: CONNECTION,
-      newItemCount: 1,
-    });
-    expect(second.fired).toBe(0);
-    expect(second.skipped).toEqual([{ automation_id: automation.id, reason: "cooldown" }]);
-
-    // Below min_new_items is filtered before any fire attempt.
-    const below = await service().fireIntakeEventAutomations({
-      spaceId: SPACE,
-      sourceConnectionId: CONNECTION,
-      newItemCount: 0,
-    });
-    expect(below.skipped).toEqual([{ automation_id: automation.id, reason: "below_min_new_items" }]);
-
-    // An unrelated connection matches nothing.
-    const unrelated = await service().fireIntakeEventAutomations({
-      spaceId: SPACE,
-      sourceConnectionId: randomUUID(),
-      newItemCount: 5,
-    });
-    expect(unrelated.matched).toBe(0);
-  });
-
-  it("event fire with no new intake items skips run creation by default", async () => {
-    if (!available) return;
-    await seedIntakeSourceWithBinding();
-    const automation = await service().create({
-      spaceId: SPACE,
-      ownerUserId: OWNER,
-      body: {
-        name: "Event digest",
-        agent_id: AGENT,
-        project_id: PROJECT,
-        trigger_type: "event",
-        config_json: {
-          target_type: "agent_run",
-          event: { type: "intake.items_materialized", cooldown_seconds: 0 },
-        },
-      },
-    });
-    // No intake items exist, so the event fire has an empty delta and skips.
-    const result = await service().fireIntakeEventAutomations({
-      spaceId: SPACE,
-      sourceConnectionId: CONNECTION,
-      newItemCount: 3,
-    });
-    expect(result.fired).toBe(0);
-    expect(result.skipped).toEqual([
-      { automation_id: automation.id, reason: "no_new_intake_items" },
-    ]);
-    const runCount = await pool!.query<{ n: string }>(`SELECT count(*) AS n FROM runs`);
-    expect(Number(runCount.rows[0]?.n)).toBe(0);
   });
 
   it("fire preflight fails when the bound project was soft-deleted after binding", async () => {
@@ -691,6 +333,6 @@ describe("Automation × Project binding (real Postgres)", () => {
         automationId: created.id,
         actorUserId: OWNER,
       }),
-    ).rejects.toMatchObject({ statusCode: 422 });
+    ).rejects.toMatchObject({ statusCode: 404 });
   });
 });

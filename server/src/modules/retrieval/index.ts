@@ -37,11 +37,11 @@ export {
   buildRetrievalBriefArtifactSpec,
   persistRetrievalBriefArtifact,
   RETRIEVAL_BRIEF_ARTIFACT_TYPE,
-} from "./briefArtifacts";
+} from "./artifacts/brief";
 export type {
   RetrievalBriefArtifactContext,
   RetrievalBriefArtifactSpec,
-} from "./briefArtifacts";
+} from "./artifacts/brief";
 export type {
   BriefCandidate,
   SynthesisConfig,
@@ -55,25 +55,25 @@ export type { RelationalIntent, RelationalIntentKind } from "./relationalIntent"
 export {
   RetrievalMaintenanceService,
   DEFAULT_MAINTENANCE_CONFIG,
-} from "./maintenance";
+} from "./maintenance/service";
 export {
   createRetrievalMaintenanceProposalPacket,
   persistRetrievalMaintenanceReportArtifact,
   registerRetrievalMaintenanceProposalAppliers,
   RETRIEVAL_MAINTENANCE_PACKET_PROPOSAL_TYPE,
   RETRIEVAL_MAINTENANCE_REPORT_ARTIFACT_TYPE,
-} from "./maintenanceArtifacts";
-export type { RetrievalMaintenanceReportContext } from "./maintenanceArtifacts";
+} from "./maintenance/artifacts";
+export type { RetrievalMaintenanceReportContext } from "./maintenance/artifacts";
 export {
   buildRetrievalEvalReportArtifactSpec,
   persistRetrievalEvalReportArtifact,
   RETRIEVAL_EVAL_REPORT_ARTIFACT_TYPE,
-} from "./evalArtifacts";
+} from "./artifacts/eval";
 export {
   persistRetrievalCalibrationDecisionArtifact,
   RETRIEVAL_CALIBRATION_DECISION_ARTIFACT_TYPE,
   RetrievalCalibrationDecisionError,
-} from "./calibrationArtifacts";
+} from "./artifacts/calibration";
 export {
   buildRetrievalEvalDiagnosticsReport,
   buildRetrievalEvalDiagnosticsReportFromArtifactMetadata,
@@ -83,22 +83,22 @@ export {
   createRetrievalDiagnosticsProposalPacket,
   registerRetrievalDiagnosticsProposalAppliers,
   RETRIEVAL_DIAGNOSTICS_PACKET_PROPOSAL_TYPE,
-} from "./diagnosticsArtifacts";
+} from "./artifacts/diagnostics";
 export {
   persistRetrievalExplainReportArtifact,
   RETRIEVAL_EXPLAIN_REPORT_ARTIFACT_TYPE,
-} from "./explainArtifacts";
+} from "./artifacts/explain";
 export type {
   RetrievalEvalReportArtifactContext,
   RetrievalEvalReportArtifactSpec,
-} from "./evalArtifacts";
+} from "./artifacts/eval";
 export type {
   MaintenanceConfig,
   MaintenanceFinding,
   MaintenanceFindingKind,
   MaintenanceObjectRef,
   MaintenanceReport,
-} from "./maintenance";
+} from "./maintenance/service";
 export { RetrievalRegistry } from "./registry";
 export type { RetrievalDomainAdapter } from "./registry";
 export {

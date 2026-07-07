@@ -410,3 +410,117 @@ CREATE TABLE public.extracted_evidence (
     deleted_at timestamp with time zone,
     CONSTRAINT extracted_evidence_pkey PRIMARY KEY (id)
 );
+
+CREATE TABLE public.retrieval_objects (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    object_type character varying(64) NOT NULL,
+    object_id character varying(36) NOT NULL,
+    workspace_id character varying(36),
+    owner_user_id character varying(36),
+    visibility character varying(32),
+    status character varying(32) NOT NULL,
+    title character varying(512) NOT NULL,
+    slug character varying(512),
+    object_kind character varying(64),
+    content_hash character varying(64) NOT NULL,
+    source_connection_ids_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    indexed_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    source_updated_at timestamp with time zone,
+    CONSTRAINT retrieval_objects_pkey PRIMARY KEY (id),
+    CONSTRAINT ck_retrieval_objects_source_connections_array CHECK ((jsonb_typeof(source_connection_ids_json) = 'array'::text))
+);
+
+CREATE TABLE public.retrieval_aliases (
+    id character varying(36) NOT NULL,
+    retrieval_object_id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    object_type character varying(64) NOT NULL,
+    object_id character varying(36) NOT NULL,
+    alias text NOT NULL,
+    normalized_alias text NOT NULL,
+    alias_kind character varying(32) NOT NULL,
+    confidence double precision NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    CONSTRAINT retrieval_aliases_pkey PRIMARY KEY (id),
+    CONSTRAINT ck_retrieval_aliases_confidence CHECK (((confidence >= (0)::double precision) AND (confidence <= (1)::double precision)))
+);
+
+CREATE TABLE public.retrieval_chunks (
+    id character varying(36) NOT NULL,
+    retrieval_object_id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    object_type character varying(64) NOT NULL,
+    object_id character varying(36) NOT NULL,
+    chunk_index integer NOT NULL,
+    plain_text text NOT NULL,
+    tsv tsvector,
+    content_hash character varying(64) NOT NULL,
+    embedding text,
+    embedding_model character varying(128),
+    embedding_dimensions integer,
+    embedding_generated_at timestamp with time zone,
+    embedding_claim_id character varying(64),
+    embedding_claimed_at timestamp with time zone,
+    embedding_attempts integer DEFAULT 0 NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT retrieval_chunks_pkey PRIMARY KEY (id)
+);
+
+CREATE TABLE public.retrieval_edges (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    from_object_type character varying(64) NOT NULL,
+    from_object_id character varying(36) NOT NULL,
+    to_object_type character varying(64) NOT NULL,
+    to_object_id character varying(36) NOT NULL,
+    relation_type character varying(64) NOT NULL,
+    edge_origin character varying(64) NOT NULL,
+    edge_status character varying(32) NOT NULL,
+    confidence double precision NOT NULL,
+    evidence_json jsonb NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT retrieval_edges_pkey PRIMARY KEY (id),
+    CONSTRAINT ck_retrieval_edges_confidence CHECK (((confidence >= (0)::double precision) AND (confidence <= (1)::double precision))),
+    CONSTRAINT ck_retrieval_edges_status CHECK (((edge_status)::text = ANY ((ARRAY['derived'::character varying, 'suggested'::character varying])::text[])))
+);
+
+CREATE UNIQUE INDEX ix_retrieval_objects_space_object_unique ON public.retrieval_objects USING btree (space_id, object_type, object_id);
+CREATE UNIQUE INDEX ix_retrieval_aliases_unique ON public.retrieval_aliases USING btree (space_id, object_type, object_id, normalized_alias, alias_kind);
+CREATE UNIQUE INDEX ix_retrieval_chunks_object_chunk_unique ON public.retrieval_chunks USING btree (retrieval_object_id, chunk_index);
+CREATE UNIQUE INDEX ix_retrieval_edges_unique ON public.retrieval_edges USING btree (space_id, from_object_type, from_object_id, to_object_type, to_object_id, relation_type, edge_origin);
+
+CREATE TABLE public.jobs (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    job_type character varying(128) NOT NULL,
+    status character varying(32) NOT NULL,
+    priority integer NOT NULL,
+    payload_json jsonb NOT NULL,
+    result_json jsonb,
+    error text,
+    attempts integer NOT NULL,
+    max_attempts integer NOT NULL,
+    scheduled_at timestamp with time zone DEFAULT now() NOT NULL,
+    claimed_by character varying(64),
+    claimed_at timestamp with time zone,
+    started_at timestamp with time zone,
+    completed_at timestamp with time zone,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    heartbeat_at timestamp with time zone,
+    user_id character varying(36),
+    workspace_id character varying(36),
+    agent_id character varying(36),
+    CONSTRAINT jobs_pkey PRIMARY KEY (id),
+    CONSTRAINT ck_jobs_attempts_nonneg CHECK ((attempts >= 0)),
+    CONSTRAINT ck_jobs_max_attempts_positive CHECK ((max_attempts > 0)),
+    CONSTRAINT ck_jobs_status CHECK (((status)::text = ANY ((ARRAY['pending'::character varying, 'claimed'::character varying, 'running'::character varying, 'completed'::character varying, 'failed'::character varying, 'cancelled'::character varying])::text[])))
+);
+
+CREATE INDEX ix_jobs_space_id ON public.jobs USING btree (space_id);
+CREATE INDEX ix_jobs_status ON public.jobs USING btree (status);
+CREATE INDEX ix_jobs_job_type ON public.jobs USING btree (job_type);

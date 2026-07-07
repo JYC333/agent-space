@@ -14,15 +14,16 @@ import type { BriefCandidate, SynthesisResult } from "../retrieval";
 import type { RetrievalRegistry } from "../retrieval/registry";
 import { RetrievalSearchService, persistRetrievalBriefArtifact } from "../retrieval";
 import { readSpaceRetrievalSettings } from "../retrieval/settings";
-import type { RetrievalEgressPolicy } from "../retrievalEgress/egressPolicy";
-import { ProviderQueryEmbedder } from "../retrievalEmbedding/queryEmbedder";
-import { ProviderReranker } from "../retrievalRerank/providerReranker";
-import { ProviderSynthesizer } from "../retrievalSynthesis/providerSynthesizer";
-import { resolveProviderCommandStore } from "../providers/providerCommandStore";
+import type { RetrievalEgressPolicy } from "../retrieval/egress/egressPolicy";
+import { ProviderQueryEmbedder } from "../retrieval/embedding/queryEmbedder";
+import { ProviderReranker } from "../retrieval/rerankProvider/providerReranker";
+import { ProviderSynthesizer } from "../retrieval/synthesisProvider/providerSynthesizer";
+import { resolveProviderCommandStore } from "../providers/commands/store";
 import { loadSourcePolicySnapshots, sourceEgressPoliciesForSnapshots } from "../retrieval/sourcePolicy";
 import { knowledgeRetrievalRegistry } from "../knowledge/retrievalAdapter";
 import { memoryRetrievalRegistry } from "../memory/retrievalAdapter";
 import { projectRetrievalRegistry } from "../projects/retrievalAdapter";
+import { intakeRetrievalRegistry } from "../intake/retrievalAdapter";
 import { PgMemoryReadRepository } from "../memory/repository";
 import { canInitiateContextOpsScan } from "../contextOps/reviewPolicy";
 import { buildClaimTrajectory } from "../knowledge/claimReviewLoop";
@@ -61,6 +62,12 @@ const DOMAIN_CONFIG: Record<AskSpaceDomain, DomainConfig> = {
     registry: projectRetrievalRegistry,
     objectTypes: ["project_public_summary"],
     surface: "project_public_summary_brief",
+    persistTrace: false,
+  },
+  intake: {
+    registry: intakeRetrievalRegistry,
+    objectTypes: ["intake_item", "extracted_evidence"],
+    surface: "intake_brief",
     persistTrace: false,
   },
 };
@@ -468,12 +475,14 @@ function primaryObjectType(section: AskSpaceDomainSection): RetrievalObjectType 
   if (first) return first;
   if (section.domain === "memory") return "memory_entry";
   if (section.domain === "project") return "project_public_summary";
+  if (section.domain === "intake") return "intake_item";
   return "knowledge_item";
 }
 
 function domainLabel(domain: AskSpaceDomain): string {
   if (domain === "memory") return "Memory";
   if (domain === "project") return "Project summaries";
+  if (domain === "intake") return "Intake";
   return "Knowledge";
 }
 

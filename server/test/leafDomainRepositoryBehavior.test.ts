@@ -4,6 +4,7 @@ import { PgIntakeRepository } from "../src/modules/intake/repository";
 import { PgKnowledgeRepository } from "../src/modules/knowledge/repository";
 import type { ServerConfig } from "../src/config";
 import type { SpaceUserIdentity, Queryable } from "../src/modules/routeUtils/common";
+import { handleIntakeRetrievalTestSql } from "./helpers/intakeRetrievalTestSql";
 
 function intakeConfig(): ServerConfig {
   return {
@@ -80,6 +81,8 @@ class FakeDb implements Queryable {
   constructor(private readonly handler: (sql: string, params: readonly unknown[]) => unknown[]) {}
 
   async query<Row = Record<string, unknown>>(sql: string, params: readonly unknown[] = []) {
+    const retrievalResult = handleIntakeRetrievalTestSql<Row>(sql, params);
+    if (retrievalResult) return retrievalResult;
     if (sql.includes("FROM scheduler_tasks")) {
       return { rows: [] as Row[], rowCount: 0 };
     }
@@ -571,6 +574,73 @@ describe("Leaf domain repository behavior", () => {
     expect(insertParams?.[2]).toBe("workspace-1");
     expect(insertParams?.[3]).toBe("project-1");
     expect(insertParams?.[4]).toBe("conn-1");
+  });
+
+  it("backfills historical evidence when requested during workspace source binding creation", async () => {
+    let bindingId: string | null = null;
+    let backfillParams: readonly unknown[] | null = null;
+    const db = new FakeDb((sql, params) => {
+      if (sql.includes("INSERT INTO evidence_links")) {
+        backfillParams = params;
+        return [];
+      }
+      if (sql.includes("FROM source_connections")) return [sourceConnectionRow()];
+      if (sql.includes("FROM projects")) return [{ id: "project-1", owner_user_id: "user-1" }];
+      if (sql.includes("FROM workspaces")) return [{ id: "workspace-1" }];
+      if (sql.includes("FROM project_workspaces")) return [{ id: "project-workspace-1" }];
+      if (sql.includes("INSERT INTO workspace_source_bindings")) {
+        bindingId = String(params[0]);
+        return [workspaceBindingRow(params)];
+      }
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+
+    const out = await new PgIntakeRepository(db, intakeConfig()).createWorkspaceBinding(identity, {
+      workspace_id: "workspace-1",
+      project_id: "project-1",
+      source_connection_id: "conn-1",
+      backfill_history: true,
+    });
+
+    expect(out).toMatchObject({
+      backfill_result: {
+        workspace_id: "workspace-1",
+        project_id: "project-1",
+        source_connection_id: "conn-1",
+        created_links: 0,
+      },
+    });
+    expect(backfillParams?.[0]).toBe("space-1");
+    expect(backfillParams?.[1]).toBe(bindingId);
+  });
+
+  it("backfills historical evidence for an existing workspace source binding after validation", async () => {
+    let backfillParams: readonly unknown[] | null = null;
+    const db = new FakeDb((sql, params) => {
+      if (sql.includes("INSERT INTO evidence_links")) {
+        backfillParams = params;
+        return [];
+      }
+      if (sql.includes("FROM workspace_source_bindings")) {
+        return [workspaceBindingRow(["binding-1", "space-1", "workspace-1", "project-1", "conn-1"])];
+      }
+      if (sql.includes("FROM projects")) return [{ id: "project-1", owner_user_id: "user-1" }];
+      if (sql.includes("FROM workspaces")) return [{ id: "workspace-1" }];
+      if (sql.includes("FROM project_workspaces")) return [{ id: "project-workspace-1" }];
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+
+    const out = await new PgIntakeRepository(db, intakeConfig()).backfillWorkspaceBinding(identity, "binding-1");
+
+    expect(out).toMatchObject({
+      binding_id: "binding-1",
+      workspace_id: "workspace-1",
+      project_id: "project-1",
+      source_connection_id: "conn-1",
+      created_links: 0,
+    });
+    expect(backfillParams?.[0]).toBe("space-1");
+    expect(backfillParams?.[1]).toBe("binding-1");
   });
 
   it("blocks connected manual URL content queueing beyond source retention policy", async () => {

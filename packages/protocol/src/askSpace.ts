@@ -20,9 +20,9 @@ import {
 } from "./knowledgeRetrieval.js";
 import { ClaimTrajectorySignalSchema } from "./claimReviewLoop.js";
 
-// The three isolated retrieval domains Ask Space can gather from. Each maps to its
+// The isolated retrieval domains Ask Space can gather from. Each maps to its
 // own registry + read gate; they are never merged into one retrieval pass.
-export const AskSpaceDomainSchema = z.enum(["knowledge", "memory", "project"]);
+export const AskSpaceDomainSchema = z.enum(["knowledge", "memory", "project", "intake"]);
 export type AskSpaceDomain = z.infer<typeof AskSpaceDomainSchema>;
 
 export const AskSpaceRequestSchema = z
@@ -31,7 +31,7 @@ export const AskSpaceRequestSchema = z
     // Defaults to ["knowledge"] (the cheapest, least privacy-sensitive domain).
     // Memory touches the viewer's private entries + access logs, and Project
     // touches public summaries, so both are explicit opt-ins.
-    domains: z.array(AskSpaceDomainSchema).min(1).max(3).optional(),
+    domains: z.array(AskSpaceDomainSchema).min(1).max(4).optional(),
     max_results_per_domain: z.number().int().positive().max(50).optional(),
     mode: RetrievalSearchModeSchema.optional(),
     include_trace: z.boolean().optional(),

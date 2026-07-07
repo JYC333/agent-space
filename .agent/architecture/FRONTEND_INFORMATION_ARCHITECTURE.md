@@ -128,6 +128,28 @@ PersonalView-as-Space switcher entry, the module-gallery Home, the imperative
 
 ---
 
+## 3b. Interaction State And Refresh Policy
+
+Frontend pages must preserve the user's local navigation context while mutations complete.
+
+- Route-level, detail-page, settings-page, and sidebar tabs must be controlled (`value` +
+  `onValueChange`), not `defaultValue`, unless the component is truly static and never
+  remounts after data changes.
+- A save/create/run action must not reset the active tab, selected panel, open advanced
+  section, or current filter. Reset local UI state only when the entity id, route scope, or
+  explicit user action changes.
+- Prefer local state updates from mutation responses (`setItem`, `upsert`, append/prepend
+  returned rows) over full `load()` reloads. Use a background refresh only for secondary
+  read models that the mutation response cannot provide.
+- Initial skeleton/loading states are for first load or route/entity changes. Refresh buttons
+  and post-mutation reloads should keep existing content visible and show only local busy
+  indicators.
+- Tests for tabbed/detail/settings pages should cover the common regression: perform a
+  mutation from a non-default tab and assert the active tab remains selected and the page does
+  not re-run the full initial load unless that is intentionally required.
+
+---
+
 ## 4. Module Visibility Policy
 
 Implemented modules with backend support appear in the navigation (Global Rail and, where
@@ -158,7 +180,7 @@ not be navigable.
 | Retrieval Settings | Enabled | Space-scoped UI for the `retrieval.space.settings` scoped setting, `space_retrieval_prompts`, and retrieval `provider_task_policies` (`/retrieval-settings`); members can view retrieval models and the advanced collapsed rewrite prompt, while owner/admin users can edit default search mode, retrieval embedding dimensions/models, native rerank model, query-rewrite chat model and prompt, rerank/rewrite availability, rewrite/cache/trace defaults, and default result budget |
 | Settings | Enabled | Functional |
 | Capabilities | Enabled | Capability/skill control-plane; developer-heavy but user-visible for review |
-| Providers | Enabled | Functional; provider cards and create/edit forms show capability labels for Chat, Embeddings, and Native rerank so retrieval-only providers are not confused with ordinary chat providers |
+| Providers | Enabled | Functional; provider cards and create/edit forms show capability labels for Chat, Embeddings, and Native rerank, and creation is split into chat-provider, embedding-provider, and rerank-provider flows so retrieval-only providers are not confused with ordinary chat providers |
 | Runtime (CLI Adapters) | Enabled | Functional |
 | Agent Rooms | Enabled | Space-scoped room surface at `/agent-groups`; starts on create/list, then opens a chat-style room with conversation history and a Tiptap composer. Creating a room only creates the room and members; goal is optional room metadata that can be added or edited later. The first user message creates the room/root run, with the room goal passed as background instruction only when present rather than inserted as a synthetic chat message. User messages go to the manager agent by default when no structured mention is present. Structured `@agent` mention tokens are parsed into a visible route preview before send: one mention routes that segment directly to that agent, adjacent mentions fan out the same segment in parallel, and separated mention groups create segmented recipient prompts. The user can explicitly switch the turn to Agent coordination, which routes the full message to the manager for decomposition/delegation instead of directly fanning out. Room members are the automatic `agent.delegate` target pool for every active room agent, not only the manager; `agent.wait_for_results` lets any room agent wait for sibling/delegated same-room results when its answer depends on them. Member capability snapshots are included in room tool context. Chat history treats recipient/delegating agent `agent_message` rows as the main conversation and folds child-agent delegation details by user turn by default; advanced lifecycle controls, trace/run links, and policy records live behind room settings / advanced audit rather than the chat first screen. |
 | **Home** (user-scoped) | Enabled | Cross-space command center at `/home`; **not** a Space, not in the switcher |
@@ -223,8 +245,9 @@ The frontend is ready for personal dogfooding. The core product loop is usable:
   optional project-scoped saved workflow presets, builds run drafts directly
   from templates or saved presets, and queues normal agent runs. Runtime profile
   selection is hidden when an Agent has only one enabled default runtime. Project
-  pages show read-only Intake consumption summaries and hand off source management
-  to `/intake?project_id=...`; they do not create RSS/source connections. The
+  pages show read-only Intake consumption summaries and recent Intake
+  recommendations, then hand off source management to `/intake?project_id=...`;
+  they do not create RSS/source connections. The
   Capabilities page is the imported skill/package review surface, and Artifacts
   render structured Research outputs when possible.
 

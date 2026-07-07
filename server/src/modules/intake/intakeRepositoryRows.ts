@@ -15,6 +15,9 @@ export interface SourceConnectionRow {
   id: string;
   space_id: string;
   connector_id: string;
+  connector_key?: string | null;
+  connector_type?: string | null;
+  ingestion_mode?: string | null;
   owner_user_id: string;
   credential_id: string | null;
   name: string;
@@ -197,6 +200,14 @@ export function connectionColumnsForAlias(alias: string): string {
   return [
     ...CONNECTION_TABLE_COLUMNS.map((column) => `${alias}.${column}`),
     ...CONNECTION_SCHEDULE_SELECT_COLUMNS,
+  ].join(", ");
+}
+export function connectionColumnsWithConnectorForAlias(alias: string, connectorAlias: string): string {
+  return [
+    connectionColumnsForAlias(alias),
+    `${connectorAlias}.connector_key`,
+    `${connectorAlias}.connector_type`,
+    `${connectorAlias}.ingestion_mode`,
   ].join(", ");
 }
 export const ITEM_COLUMNS = `id, space_id, connection_id, item_type, source_object_type, source_object_id, title, source_uri, canonical_uri, source_domain, source_external_id, author, occurred_at, first_seen_at, last_seen_at, content_hash, excerpt, status, read_status, content_state, retention_policy, relevance_score, novelty_score, raw_artifact_id, extracted_artifact_id, summary_artifact_id, search_index_ref, embedding_index_ref, metadata_json, created_at, updated_at`;

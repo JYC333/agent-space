@@ -2,8 +2,8 @@ import type { ServerConfig } from "../../config";
 import { getDbPool } from "../../db/pool";
 import type { JobHandlerRegistry } from "../jobs/handlerRegistry";
 import { PgJobQueueRepository } from "../jobs/repository";
-import { resolveProviderCommandStore } from "../providers/providerCommandStore";
-import { completeProviderText } from "../providers/providerInvocation";
+import { resolveProviderCommandStore } from "../providers/commands/store";
+import { completeProviderText } from "../providers/invocation/invocation";
 import { PgSessionRepository, type SessionSummarizer } from "./repository";
 import type { CondenserPromptConfig } from "./condenser";
 

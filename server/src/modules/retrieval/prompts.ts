@@ -7,7 +7,7 @@ import type { Queryable } from "../routeUtils/common";
 import {
   DEFAULT_QUERY_REWRITE_SYSTEM_PROMPT,
   DEFAULT_QUERY_REWRITE_USER_TEMPLATE,
-} from "../retrievalQueryRewrite/prompt";
+} from "./queryRewriteProvider/prompt";
 
 export interface SpaceRetrievalPromptOut {
   space_id: string;

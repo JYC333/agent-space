@@ -9,8 +9,8 @@ import { registerCapabilityProposalAppliers } from "../capabilities/proposalAppl
 import { registerKnowledgeProposalAppliers } from "../knowledge/proposalApplier";
 import { registerTaskProposalAppliers } from "../tasks/proposalApplier";
 import { registerWorkspaceProposalAppliers } from "../workspaces";
-import { registerRetrievalDiagnosticsProposalAppliers } from "../retrieval/diagnosticsArtifacts";
-import { registerRetrievalMaintenanceProposalAppliers } from "../retrieval/maintenanceArtifacts";
+import { registerRetrievalDiagnosticsProposalAppliers } from "../retrieval/artifacts/diagnostics";
+import { registerRetrievalMaintenanceProposalAppliers } from "../retrieval/maintenance/artifacts";
 import { registerMemoryMaintenanceProposalAppliers } from "../memory/maintenanceArtifacts";
 import { registerClaimCandidatePacketProposalAppliers } from "../knowledge/claimCandidatePackets";
 import { registerRelationDiscoveryProposalAppliers } from "../knowledge/relationDiscoveryArtifacts";
@@ -28,7 +28,7 @@ import {
   markAgentBundleDirty,
 } from "../context/digestService";
 import { PgJobQueueRepository } from "../jobs/repository";
-import { enqueueRetrievalEmbeddingBackfillWithQueue } from "../retrievalEmbedding/job";
+import { enqueueRetrievalEmbeddingBackfillWithQueue } from "../retrieval/embedding/job";
 import type { ProposalAcceptResultType } from "@agent-space/protocol" with {
   "resolution-mode": "import",
 };

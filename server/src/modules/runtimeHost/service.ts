@@ -5,11 +5,11 @@ import type {
   RuntimeHostExecuteResponse,
 } from "@agent-space/protocol" with { "resolution-mode": "import" };
 import type { ServerConfig } from "../../config";
-import { resolveProviderCommandStore } from "../providers/providerCommandStore";
+import { resolveProviderCommandStore } from "../providers/commands/store";
 import {
   completeProviderMessages,
   ProviderInvocationError,
-} from "../providers/providerInvocation";
+} from "../providers/invocation/invocation";
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -81,6 +81,7 @@ function failureResponse(
     output_json: {
       adapter_type: "ts_agent_host",
       run_id: input.run_id,
+      model_provider_id: input.model_provider_id,
     },
     exit_code: 1,
     error_code: errorCode,
@@ -101,6 +102,7 @@ function failureResponse(
     adapter_metadata: {
       adapter_type: "ts_agent_host",
       run_id: input.run_id,
+      model_provider_id: input.model_provider_id,
       tool_mode: input.tool_mode,
     },
     adapter_log_json: null,

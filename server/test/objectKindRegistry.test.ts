@@ -151,7 +151,7 @@ class ObjectKindApplyServiceFakeClient extends ObjectKindApplyFakeDb {
     }
     if (norm.startsWith("INSERT INTO policy_decision_records")) {
       this.auditWrites += 1;
-      return { rows: [], rowCount: 1 };
+      return { rows: [{ id: "policy-decision-1" }], rowCount: 1 };
     }
     if (norm.startsWith("UPDATE proposals SET status = 'accepted'")) {
       if (this.proposalRow.status !== "pending") return { rows: [], rowCount: 0 };

@@ -23,7 +23,14 @@ import { acquireArxivRequestSlot } from "./connectors/arxivThrottle";
 import { fetchIntakeSource, type IntakeSourceFetchResult } from "./sourceFetch";
 import { normalizeUrl, sourceDomain } from "./intakeRepositoryMappers";
 import { linkEvidenceToBoundProjects } from "./evidenceProjectLinker";
-import { emitIntakeItemsMaterializedEvent } from "./automationEventEmitter";
+import {
+  emitSourcePostProcessingDeepAnalysisEvent,
+  emitSourcePostProcessingEvent,
+} from "./postProcessing/eventEmitter";
+import {
+  reindexExtractedEvidenceAndParentForRetrieval,
+  reindexIntakeItemAndEvidenceForRetrieval,
+} from "./retrievalIndexing";
 import { computeNextCheckAt } from "./scanSchedule";
 import {
   getSourceConnectionScanTask,
@@ -114,6 +121,12 @@ export class IntakeExtractionWorker {
         await this.executeConnectionScan(job);
       } else if (job.job_type === "manual_url" || job.job_type === "extract_text") {
         await this.executeTextExtraction(job);
+        await emitSourcePostProcessingDeepAnalysisEvent(this.db, {
+          spaceId: job.space_id,
+          sourceConnectionId: job.connection_id,
+          intakeItemId: job.intake_item_id,
+          metadata: job.metadata_json,
+        });
       } else if (job.job_type === "snapshot") {
         await this.executeSnapshot(job);
       } else if (
@@ -306,7 +319,7 @@ export class IntakeExtractionWorker {
         endpoint_url: connection.endpoint_url,
       },
     });
-    await emitIntakeItemsMaterializedEvent(this.db, {
+    await emitSourcePostProcessingEvent(this.db, {
       spaceId: job.space_id,
       sourceConnectionId: job.connection_id,
       newItemCount: result.created,
@@ -632,6 +645,7 @@ export class IntakeExtractionWorker {
         createdAt: now,
       });
     }
+    await this.reindexItemForRetrieval(input.job.space_id, itemId, "intake_connection_scan");
     return { itemId, created };
   }
 
@@ -707,6 +721,7 @@ export class IntakeExtractionWorker {
       [job.space_id, item.id, artifactId, contentHash, now, rawArtifactId],
     );
 
+    const evidenceId = randomUUID();
     await this.db.query(
       `INSERT INTO extracted_evidence (
          id, space_id, intake_item_id, source_object_type, source_object_id,
@@ -718,9 +733,9 @@ export class IntakeExtractionWorker {
          $4, $5, 'document', $6, $7,
          $8, $9, $10, $11,
          $13, 'normal', 0.7, 'candidate', '{}'::jsonb, $12, $12
-       )`,
+      )`,
       [
-        randomUUID(),
+        evidenceId,
         job.space_id,
         item.id,
         job.id,
@@ -739,6 +754,7 @@ export class IntakeExtractionWorker {
       spaceId: job.space_id,
       intakeItemId: item.id,
     });
+    await this.reindexEvidenceForRetrieval(job.space_id, evidenceId, "intake_text_extraction");
 
     await this.db.query(
       `UPDATE extraction_jobs SET source_snapshot_id = $3 WHERE id = $1 AND space_id = $2`,
@@ -888,6 +904,7 @@ export class IntakeExtractionWorker {
         WHERE id = $1 AND space_id = $2`,
       [job.id, job.space_id, itemId],
     );
+    await this.reindexItemForRetrieval(job.space_id, itemId, "intake_internal_normalization");
   }
 
   private async loadInternalSource(
@@ -1350,6 +1367,22 @@ export class IntakeExtractionWorker {
       return { content: response.bytes, mimeType: response.contentType ?? "application/octet-stream" };
     }
     throw new HttpError(415, `Unsupported source content type (${response.contentType ?? "unknown"})`);
+  }
+
+  private async reindexItemForRetrieval(spaceId: string, itemId: string, trigger: string): Promise<void> {
+    await reindexIntakeItemAndEvidenceForRetrieval(this.db, { spaceId, itemId, trigger }).catch((error) => {
+      process.stderr.write(
+        `[intake.retrieval] item reindex failed (${itemId}): ${String((error as Error)?.message ?? error)}\n`,
+      );
+    });
+  }
+
+  private async reindexEvidenceForRetrieval(spaceId: string, evidenceId: string, trigger: string): Promise<void> {
+    await reindexExtractedEvidenceAndParentForRetrieval(this.db, { spaceId, evidenceId, trigger }).catch((error) => {
+      process.stderr.write(
+        `[intake.retrieval] evidence reindex failed (${evidenceId}): ${String((error as Error)?.message ?? error)}\n`,
+      );
+    });
   }
 }
 

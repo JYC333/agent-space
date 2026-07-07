@@ -18,26 +18,13 @@ import { PgRunRepository } from "../runs/repository";
 import { BUILTIN_RUNTIME_ADAPTER_SPECS, type RuntimeAdapterType } from "../runtimeAdapters";
 import { computeNextRunAt, InvalidScheduleError } from "./schedule";
 import {
-  computeIntakeDelta,
-  intakeCursorWatermark,
-  intakeDeltaConfig,
-  intakeDeltaScopeKey,
-  renderIntakeDeltaInstruction,
-  type IntakeDelta,
-} from "./intakeDelta";
-import {
-  INTAKE_ITEMS_MATERIALIZED_EVENT,
-  isInEventCooldown,
-  parseIntakeEventTriggerConfig,
-} from "./eventTrigger";
-import {
   PgAutomationRepository,
   automationToOut,
   type AutomationRepositoryPort,
   type AutomationRow,
 } from "./repository";
 
-const VALID_TRIGGER_TYPES = new Set(["manual", "schedule", "event"]);
+const VALID_TRIGGER_TYPES = new Set(["manual", "schedule"]);
 const VALID_STATUSES = new Set(["active", "paused", "archived"]);
 const AUTOMATION_TARGET_AGENT_RUN = "agent_run";
 const AUTOMATION_TARGET_KNOWLEDGE_MAINTENANCE = "knowledge_retrieval_maintenance";
@@ -138,9 +125,6 @@ export class AutomationService {
       }
       await this.repo.assertProjectWriter(input.spaceId, projectId, input.ownerUserId);
     }
-    if (triggerType === "event") {
-      assertIntakeEventAutomationShape(targetType, projectId, configJson);
-    }
     await this.enforceAction("automation.create", input.spaceId, input.ownerUserId, {
       agent_id: agentId,
       trigger_type: triggerType,
@@ -158,18 +142,6 @@ export class AutomationService {
       automationPreAuthorized: isUnattendedTrigger(triggerType),
       configJson,
     });
-    // Start the intake cursor at "now" for the bound scope so the first fires
-    // deliver new items only, not the project's historical backlog.
-    const deltaConfig = intakeDeltaConfig(configJson);
-    let cursorJson: Record<string, unknown> | null = null;
-    if (projectId || deltaConfig.sourceConnectionIds.length > 0) {
-      const watermark = await this.repo.currentIntakeWatermark(
-        input.spaceId,
-        projectId,
-        deltaConfig.sourceConnectionIds,
-      );
-      if (watermark) cursorJson = { intake_watermark: watermark };
-    }
     return this.repo.create({
       spaceId: input.spaceId,
       ownerUserId: input.ownerUserId,
@@ -181,7 +153,6 @@ export class AutomationService {
       triggerType,
       configJson,
       preflightSnapshot,
-      cursorJson,
     });
   }
 
@@ -224,9 +195,6 @@ export class AutomationService {
       await this.repo.assertProjectWriter(input.spaceId, authorityProjectId, input.actorUserId);
       hasProjectWriterAuthority = true;
     }
-    if (existing.trigger_type === "event") {
-      assertIntakeEventAutomationShape(nextTargetType, nextProjectId, configJson ?? existing.config_json);
-    }
     await this.enforceAction("automation.update", input.spaceId, input.actorUserId, {
       agent_id: existing.agent_id,
       target_type: nextTargetType,
@@ -245,27 +213,6 @@ export class AutomationService {
         configJson: configJson ?? existing.config_json,
       });
     }
-    // A changed delta scope invalidates the committed watermark: keeping it
-    // would silently skip the new scope's items (or replay the old scope's).
-    // Re-initialize the cursor at the new scope's current watermark.
-    const prevScope = intakeDeltaScopeKey(
-      existing.project_id,
-      intakeDeltaConfig(existing.config_json).sourceConnectionIds,
-    );
-    const nextDeltaConfig = intakeDeltaConfig(configJson ?? existing.config_json);
-    const nextScope = intakeDeltaScopeKey(nextProjectId, nextDeltaConfig.sourceConnectionIds);
-    let cursorPatch: Record<string, unknown> | null | undefined;
-    if (nextScope !== prevScope) {
-      const watermark =
-        nextProjectId || nextDeltaConfig.sourceConnectionIds.length > 0
-          ? await this.repo.currentIntakeWatermark(
-              input.spaceId,
-              nextProjectId,
-              nextDeltaConfig.sourceConnectionIds,
-            )
-          : null;
-      cursorPatch = watermark ? { intake_watermark: watermark } : null;
-    }
     return this.repo.update(input.spaceId, input.automationId, {
       name: optionalString(input.body.name, "name", 256) ?? undefined,
       description:
@@ -275,7 +222,6 @@ export class AutomationService {
       status: status ?? undefined,
       config_json: configJson,
       project_id: hasProjectKey ? nextProjectId : undefined,
-      cursor_json: cursorPatch,
     });
   }
 
@@ -344,15 +290,6 @@ export class AutomationService {
     const result = await withTransaction(getDbPool(this.config.databaseUrl), async (client) => {
       return this.persistFire(client, auto, input, triggerType, preflightSnapshot);
     });
-    if (result.skipped) {
-      return {
-        skipped: true,
-        skip_reason: "no_new_intake_items",
-        trigger_origin: "automation",
-        preflight_executable: Boolean(preflightSnapshot.executable),
-        intake_delta_count: 0,
-      };
-    }
     if (triggerType === "manual") {
       await this.repo.recordFire(input.spaceId, auto.id);
     }
@@ -361,74 +298,7 @@ export class AutomationService {
       automation_run_id: result.automationRunId,
       trigger_origin: "automation",
       preflight_executable: Boolean(preflightSnapshot.executable),
-      intake_delta_count: result.intakeDeltaCount,
     };
-  }
-
-  /**
-   * Fire matching `trigger_type='event'` automations for an intake
-   * "items materialized" event. Consumed from the `automation_intake_event`
-   * job; delivery is at-least-once, so matching is idempotent-by-effect: the
-   * cooldown suppresses bursts and the intake delta cursor makes a duplicate
-   * fire a no-op (empty delta skips by default for event fires).
-   */
-  async fireIntakeEventAutomations(input: {
-    spaceId: string;
-    sourceConnectionId: string;
-    newItemCount: number;
-  }): Promise<{ matched: number; fired: number; skipped: Array<{ automation_id: string; reason: string }> }> {
-    const autos = await this.repo.listEventAutomationsForConnection(
-      input.spaceId,
-      input.sourceConnectionId,
-    );
-    const skipped: Array<{ automation_id: string; reason: string }> = [];
-    let fired = 0;
-    for (const auto of autos) {
-      try {
-        const eventConfig = parseIntakeEventTriggerConfig(auto.config_json);
-        if (input.newItemCount < eventConfig.minNewItems) {
-          skipped.push({ automation_id: auto.id, reason: "below_min_new_items" });
-          continue;
-        }
-        if (isInEventCooldown(auto.last_fired_at, eventConfig.cooldownSeconds)) {
-          skipped.push({ automation_id: auto.id, reason: "cooldown" });
-          continue;
-        }
-        // While a previous fire's run is still queued/running the cursor has
-        // not been committed yet, so a new fire would re-deliver the same
-        // delta. Skip; the unconsumed items surface on the next event or
-        // scheduled fire after the run settles.
-        if (await this.repo.hasInFlightRun(auto.space_id, auto.id)) {
-          skipped.push({ automation_id: auto.id, reason: "run_in_flight" });
-          continue;
-        }
-        const result = await this.fire({
-          spaceId: auto.space_id,
-          automationId: auto.id,
-          actorUserId: auto.owner_user_id,
-          triggerType: "event",
-          triggerContext: {
-            event: {
-              type: INTAKE_ITEMS_MATERIALIZED_EVENT,
-              source_connection_id: input.sourceConnectionId,
-              new_item_count: input.newItemCount,
-            },
-          },
-        });
-        if (result.skipped) {
-          skipped.push({ automation_id: auto.id, reason: String(result.skip_reason ?? "skipped") });
-          continue;
-        }
-        await this.repo.recordFire(auto.space_id, auto.id);
-        fired += 1;
-      } catch (error) {
-        skipped.push({
-          automation_id: auto.id,
-          reason: error instanceof Error ? error.message : "fire_failed",
-        });
-      }
-    }
-    return { matched: autos.length, fired, skipped };
   }
 
   async scanAndFire(): Promise<number> {
@@ -479,13 +349,12 @@ export class AutomationService {
             advanceSchedule: true,
           });
         } else {
-          const result = await withTransaction(pool, async (client) => {
+          await withTransaction(pool, async (client) => {
             const automations = new PgAutomationRepository(client);
             const persisted = await this.persistFire(client, auto, fireInput, "schedule", preflightSnapshot);
             await automations.advanceSchedule(auto);
             return persisted;
           });
-          if (result.skipped) continue;
         }
         fired += 1;
       } catch (error) {
@@ -509,36 +378,14 @@ export class AutomationService {
     },
     triggerType: string,
     preflightSnapshot: Record<string, unknown>,
-  ): Promise<
-    | { skipped: false; runId: string; automationRunId: string; intakeDeltaCount: number }
-    | { skipped: true }
-  > {
+  ): Promise<{ runId: string; automationRunId: string }> {
     const runs = new PgRunRepository(client);
     const queue = new PgJobQueueRepository(client);
     const automations = new PgAutomationRepository(client);
 
-    const deltaConfig = intakeDeltaConfig(auto.config_json, triggerType === "event");
-    let delta: IntakeDelta | null = null;
-    if (auto.project_id || deltaConfig.sourceConnectionIds.length > 0) {
-      delta = await computeIntakeDelta(client, {
-        spaceId: input.spaceId,
-        projectId: auto.project_id,
-        sourceConnectionIds: deltaConfig.sourceConnectionIds,
-        cursor: intakeCursorWatermark(auto.cursor_json),
-        limit: deltaConfig.limit,
-      });
-      if (delta.items.length === 0 && deltaConfig.skipWhenNoNewItems) {
-        return { skipped: true };
-      }
-    }
-    const instruction =
-      delta && delta.items.length > 0
-        ? [input.instruction, renderIntakeDeltaInstruction(delta.items)]
-            .filter((part): part is string => Boolean(part))
-            .join("\n\n")
-        : input.instruction ?? null;
+    const instruction = input.instruction ?? null;
     const prompt = input.prompt ?? automationConfiguredPrompt(auto.config_json);
-    const triggerContext = buildAutomationRunTriggerContext(input.triggerContext, delta);
+    const triggerContext = input.triggerContext ?? null;
 
     const run = await runs.createQueuedRun({
       space_id: input.spaceId,
@@ -568,7 +415,7 @@ export class AutomationService {
       preflightSnapshot,
       triggerContext,
     });
-    return { skipped: false, runId: run.id, automationRunId, intakeDeltaCount: delta?.items.length ?? 0 };
+    return { runId: run.id, automationRunId };
   }
 
   private async executeMaintenanceFire(
@@ -1189,24 +1036,7 @@ type AutomationTargetType =
 type ScheduleHandledError = Error & { [AUTOMATION_SCHEDULE_HANDLED]?: true };
 
 function isUnattendedTrigger(triggerType: string): boolean {
-  return triggerType === "schedule" || triggerType === "event";
-}
-
-function assertIntakeEventAutomationShape(
-  targetType: AutomationTargetType,
-  projectId: string | null,
-  configJson: Record<string, unknown> | null | undefined,
-): void {
-  if (targetType !== AUTOMATION_TARGET_AGENT_RUN) {
-    throw new HttpError(422, "Event automations only support the agent_run target");
-  }
-  const eventConfig = parseIntakeEventTriggerConfig(configJson);
-  if (!projectId && eventConfig.sourceConnectionIds.length === 0) {
-    throw new HttpError(
-      422,
-      "Event automations require a project binding or config_json.event.source_connection_ids",
-    );
-  }
+  return triggerType === "schedule";
 }
 
 function automationTargetType(configJson: Record<string, unknown> | null | undefined): AutomationTargetType {
@@ -1251,22 +1081,6 @@ function reviewCycleRequestFromConfig(configJson: Record<string, unknown> | null
 
 function automationConfiguredPrompt(configJson: Record<string, unknown> | null | undefined): string | null {
   return stringValue(recordValue(configJson).prompt);
-}
-
-function buildAutomationRunTriggerContext(
-  baseContext: Record<string, unknown> | null | undefined,
-  delta: IntakeDelta | null,
-): Record<string, unknown> | null {
-  const context: Record<string, unknown> = {};
-  if (baseContext && typeof baseContext === "object" && !Array.isArray(baseContext)) {
-    Object.assign(context, baseContext);
-  }
-  if (delta?.proposedWatermark) {
-    context.proposed_intake_watermark = delta.proposedWatermark;
-    context.intake_delta_count = delta.items.length;
-    context.intake_delta_item_ids = delta.items.map((item) => item.id);
-  }
-  return Object.keys(context).length > 0 ? context : null;
 }
 
 function optionalPositiveInt(value: unknown, field: string, fallback: number, max: number): number {

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../src/config";
 import { getDbPool } from "../src/db/pool";
-import { CliCredentialBroker } from "../src/modules/providers/cliCredentialBroker";
+import { CliCredentialBroker } from "../src/modules/providers/cli/credentialBroker";
 
 vi.mock("../src/db/pool", () => ({
   getDbPool: vi.fn(),

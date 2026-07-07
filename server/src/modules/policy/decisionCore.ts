@@ -696,6 +696,8 @@ const RETRIEVAL_TOOL_ACTIONS = new Set([
   "memory.retrieval.brief",
   "project_public_summary.search",
   "project_public_summary.brief",
+  "intake.retrieval.search",
+  "intake.retrieval.brief",
 ]);
 
 const ruleRetrievalToolCall: Rule = (ctx) => {

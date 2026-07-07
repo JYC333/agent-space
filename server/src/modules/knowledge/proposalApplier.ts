@@ -9,7 +9,7 @@ import {
 } from "../memory/memoryApplyProvenance";
 import { PgJobQueueRepository } from "../jobs/repository";
 import { RetrievalProjectionService } from "../retrieval";
-import { enqueueRetrievalEmbeddingBackfillWithQueue } from "../retrievalEmbedding/job";
+import { enqueueRetrievalEmbeddingBackfillWithQueue } from "../retrieval/embedding/job";
 import { knowledgeRetrievalRegistry } from "./retrievalAdapter";
 import {
   RELATION_CREATE_STATUSES,

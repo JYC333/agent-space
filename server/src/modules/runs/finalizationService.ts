@@ -94,13 +94,6 @@ export class PostRunFinalizationService {
     );
     if (existing) return existing;
 
-    if (run.status === "succeeded") {
-      // Commit the automation intake watermark proposed at fire time. Only
-      // successful runs advance the cursor; the advance itself is monotonic,
-      // so a retried finalization cannot regress or double-apply it.
-      await this.repository.advanceAutomationIntakeCursorForRun(spaceId, runId);
-    }
-
     const evaluation = await this.evaluate(run);
     const now = new Date().toISOString();
     const taskBridge = await this.repository.bridgeTaskEvaluationForRunEvaluation(

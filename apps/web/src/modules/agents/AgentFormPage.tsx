@@ -187,6 +187,7 @@ export default function AgentFormPage() {
   const [retrievalToolDomains, setRetrievalToolDomains] = useState<RetrievalToolDomainState>({
     memory: false,
     project_public_summary: false,
+    intake: false,
   })
 
   useEffect(() => {
@@ -251,7 +252,7 @@ export default function AgentFormPage() {
         setCondenseCustomSystem(condenser.custom_system)
         setCondenseCustomInstructions(condenser.custom_instructions)
         setSummaryPromptOpen(Boolean(condenser.custom_system || condenser.custom_instructions))
-        setRetrievalToolDomains({ memory: false, project_public_summary: false })
+        setRetrievalToolDomains({ memory: false, project_public_summary: false, intake: false })
       })
       .catch(err => toast.error(errMsg(err)))
       .finally(() => setLoading(false))

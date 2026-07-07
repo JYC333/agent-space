@@ -12,7 +12,7 @@ import {
 import { cleanupSandbox, evaluateCustomSourceRunnerBlockReason } from "./customSourceRunner";
 import { executeCustomSourceHandler } from "./customSourceHandlerExecution";
 import { CustomSourceMaterializationService } from "./customSourceMaterializer";
-import { emitIntakeItemsMaterializedEvent } from "../automationEventEmitter";
+import { emitSourcePostProcessingEvent } from "../postProcessing/eventEmitter";
 import { fetchCustomSourceEndpointHtml } from "./customSourceEndpointFetch";
 import { CustomSourceCredentialService } from "./customSourceCredentialService";
 import { computeNextCheckAt } from "../scanSchedule";
@@ -207,7 +207,7 @@ async function runOne(db: Queryable, config: ServerConfig, run: QueuedRunRow): P
 
       await completeExtractionJob(db, run, result);
       if (result.status === "succeeded" && result.itemsCreated > 0) {
-        await emitIntakeItemsMaterializedEvent(db, {
+        await emitSourcePostProcessingEvent(db, {
           spaceId: run.space_id,
           sourceConnectionId: run.source_connection_id,
           newItemCount: result.itemsCreated,

@@ -162,6 +162,12 @@ describe("providers read authority", () => {
       "ollama",
       "other",
     ]);
+
+    const presets = await app.inject({ method: "GET", url: "/api/v1/providers/presets" });
+    expect(presets.statusCode).toBe(200);
+    expect(presets.json().map((preset: { id: string }) => preset.id)).toEqual(
+      expect.arrayContaining(["cohere_embedding", "cohere_rerank", "minimax"]),
+    );
   });
 
   it("answers 503 when the DB read fails, without leaking the error", async () => {

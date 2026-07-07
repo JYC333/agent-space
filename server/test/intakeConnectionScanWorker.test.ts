@@ -4,6 +4,7 @@ import { loadConfig } from "../src/config";
 import { IntakeExtractionWorker } from "../src/modules/intake/extractionWorker";
 import { __setArxivThrottleForTests } from "../src/modules/intake/connectors/arxivThrottle";
 import type { Queryable } from "../src/modules/routeUtils/common";
+import { handleIntakeRetrievalTestSql } from "./helpers/intakeRetrievalTestSql";
 
 type ConnectorKey = "rss" | "atom" | "web_page" | "arxiv";
 type CapturePolicy =
@@ -54,6 +55,8 @@ class ScanDb implements Queryable {
 
   async query<Row = Record<string, unknown>>(sql: string, params: readonly unknown[] = []) {
     this.calls.push({ sql, params });
+    const retrievalResult = handleIntakeRetrievalTestSql<Row>(sql, params);
+    if (retrievalResult) return retrievalResult;
     if (sql.includes("SET status = 'running'")) {
       const jobId = String(params[0]);
       const child = this.childJobs.find((entry) => entry.id === jobId);

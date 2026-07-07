@@ -223,7 +223,7 @@ snapshot connections as source provenance, so one paper or URL captured by
 multiple bound sources remains visible to each bound project without duplicating
 the raw item.
 
-### Project automation integration
+### Project linking and source post-processing
 
 When a source connection has an active `workspace_source_bindings` row for a
 project, and that binding's workspace is still linked to the project, all three
@@ -236,11 +236,121 @@ reads for project-bound agent runs.
 For deduped items, auto-linking also considers `SourceSnapshot.connection_id`
 rows for the same item, not only `IntakeItem.connection_id`.
 
+Binding a source to a project can also backfill historical extracted evidence.
+`POST /api/v1/intake/workspace-source-bindings` accepts
+`backfill_history=true`, and
+`POST /api/v1/intake/workspace-source-bindings/:bindingId/backfill` reruns the
+same idempotent materialization later. Backfill does not duplicate intake items
+or evidence; it only inserts missing active project `context_candidate`
+`evidence_links` for existing `ExtractedEvidence` rows whose parent item or
+same-item source snapshot belongs to the bound source.
+
 After a scan materializes new items, the scan paths emit a best-effort
-`automation_intake_event` job (`automationEventEmitter.ts`). The automations
-module consumes it to fire `trigger_type='event'` automations. Emission is
-at-least-once; the automation intake delta cursor makes duplicates harmless.
-See [modules/automations.md](automations.md).
+`source_post_processing_event` job (`postProcessing/eventEmitter.ts`). Intake
+owns that job, the rule cursor, and the run audit rows:
+
+- `source_post_processing_rules` bind one source connection to one reusable
+  agent and define trigger, input window, and actions.
+- `source_post_processing_runs` record each rule/manual execution, input item
+  and evidence ids, associated agent run, output artifacts/proposals/jobs,
+  cursor before/after, status, and errors.
+- Supported triggers are `items_materialized`, `schedule`, and `manual`.
+- Supported actions are `batch_digest`, `per_item_summary`, `extract_evidence`,
+  `create_proposals`, and `mark_items`; the default is artifact-only
+  `batch_digest`.
+- `input_config_json.retrieval_context` can opt a rule into retrieval-backed
+  relevance context across Project, Knowledge, Memory, and Intake domains.
+  Project context and Knowledge base comparison are separate user-facing choices:
+  project context is the targeted judging reference when a `project_id` is set,
+  while Knowledge is an optional comparison source and is not enabled by default.
+  With a `project_id`, the project public summary is pinned before search
+  results. Backend validation rejects project-context search on rules that do
+  not have a `project_id`.
+- Before sending source item titles, excerpts, evidence, or extracted text to
+  an agent run, source post-processing revalidates the selected agent/provider
+  destination against the source connection's consent and egress policy. A
+  denied source egress, including the space external-egress switch for external
+  providers, fails the post-processing run before source content leaves Intake.
+- Post-processing agent output is consumed as structured
+  `source_post_processing.result.v1`; invalid structure fails the run and does
+  not advance the rule cursor. `item_decisions_json` records
+  `relevant`/`maybe`/`not_relevant` decisions, and `mark_items` maps them to
+  `selected`/`triaged`/`ignored`.
+- `input_config_json.relevance_profile` lets a rule define what "relevant"
+  means independent of which actions are enabled: an `objective`,
+  `include_criteria`/`exclude_criteria`/`must_have`/`nice_to_have` lists, and
+  an optional `decision_policy` (default wording is used when absent). The
+  profile is rule-level, so multiple sources can reuse the same agent with
+  different screening criteria.
+  `isRelevanceScreeningEnabled(actions, inputConfig)` (`postProcessing/repository.ts`)
+  is the single predicate — screening is active when `mark_items` is on
+  **or** `relevance_profile.enabled` is true — and both the prompt
+  (`postProcessing/instruction.ts`) and the structured-output validator
+  (`postProcessing/resultParser.ts`) use it. When screening is active,
+  `item_decisions` must cover every input item even if `mark_items` itself is
+  off, so screening runs stay auditable. `matched_context_refs` are validated
+  against the retrieval refs supplied to that run; hallucinated context refs
+  fail the run instead of being persisted. Applying item decisions refreshes the
+  affected Intake retrieval projections so `ignored` items drop out and
+  `selected`/`triaged` items remain current in search.
+- When `relevance_profile.enabled`, its `objective` and `include_criteria`
+  are folded into the retrieval query ahead of the summary goal/connection
+  name fallback, biasing whichever explicitly selected project, knowledge,
+  memory, or intake context gets pulled in before the agent judges the batch.
+- Candidate prefiltering ranks only the current input batch before prompt
+  assembly. Items filtered before the LLM are persisted as low-confidence
+  `maybe` decisions with `stage="candidate_prefilter"` refs, so `mark_items`
+  sends them to triage rather than silently ignoring them.
+- Optional deep-analysis follow-up uses array-valued
+  `source_post_processing_followups` in extraction job metadata. Multiple
+  rules can wait on the same pending extraction job without overwriting each
+  other, and generated deep-analysis jobs are appended back to the source
+  screening run's `output_job_ids_json` for traceability.
+- Preset creation flows may stamp `input_config_json.content_profile`,
+  `summary_goal`, `output_instructions`, and `relevance_profile` so the
+  reusable post-processing agent receives source-specific content guidance
+  without cloning agents. Those preset-specific defaults live with the
+  preset implementation, not in the generic source post-processing
+  UI/service orchestration. The arXiv preset ships a frontend-only
+  `screen_relevant_papers` option
+  (`apps/web/src/modules/intake/sourcePostProcessingPresets.ts`,
+  `apps/web/src/modules/intake/sourcePresets/academic/arxivPostProcessing.ts`)
+  that enables `mark_items`, candidate prefiltering, and an enabled
+  `relevance_profile` seeded from an optional screening objective. It does not
+  enable Knowledge context by default; context domains are explicit rule options,
+  not a separate backend preset enum. Public external source connectors such as
+  arXiv, RSS, Atom, and watched public web pages default to allowing external
+  model processing unless credentials or advanced source governance override
+  that policy.
+
+Post-processing may reuse the same `agent_id` across many sources. It is not an
+Automations `event` trigger and does not use Automations cursors. `DailyCaptureReport`
+remains separate: it summarizes a user's daily captured activity, not one
+source connection's post-intake processing.
+
+### Retrieval projection
+
+Intake is a retrieval domain through `intake_item` and `extracted_evidence`
+object types. The adapter indexes active candidate material only:
+
+- `intake_item`: `new`, `triaged`, and `selected` items; `ignored`,
+  `archived`, and deleted items remove their projection.
+- `extracted_evidence`: `candidate` and `active` evidence linked to a valid,
+  readable parent intake item.
+- Edges are projected both ways as `has_evidence` and `evidence_for`.
+
+The indexed text is intentionally bounded: item title, author/source URI/domain,
+excerpt, and selected preset metadata; evidence title/type/excerpt plus source
+title/author/URI. Full raw snapshots and extracted reader documents are not
+indexed by default. Materialization, manual URL create/update, extraction,
+custom/recipe materialization, and post-processing evidence writes best-effort
+refresh the corresponding retrieval projection and enqueue embedding backfill.
+
+Intake retrieval is opt-in in user-facing context surfaces: Ask Space defaults
+to Knowledge only, managed agent tools expose `intake.retrieval.search` and
+`intake.retrieval.brief` only when a run/profile enables the Intake domain, and
+owner/admin maintenance uses the Intake-owned
+`POST /api/v1/intake/retrieval/search|brief|reindex` endpoints.
 
 ## Custom Source Boundary
 

@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { loadConfig } from "../src/config";
-import { CliCredentialBroker } from "../src/modules/providers/cliCredentialBroker";
+import { CliCredentialBroker } from "../src/modules/providers/cli/credentialBroker";
 
 let tempDir: string | undefined;
 

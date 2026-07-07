@@ -39,7 +39,7 @@ import type {
   SkillLibraryIndexResponse, SkillLocalOverlay, SkillLocalOverlayUpsertRequest,
   SourceConnector, SourceConnection, SourceConnectionCreate, SourceCapturePolicy, SourceScheduleRule, IntakeItem, ExtractionJob,
   SourcePresetListResponse, ArxivPresetPreviewRequest, ArxivPresetPreviewResponse, ArxivPresetCreateRequest,
-  ExtractedEvidence, EvidenceLink, WorkspaceSourceBinding,
+  ExtractedEvidence, EvidenceLink, WorkspaceSourceBinding, WorkspaceSourceBindingBackfillResult,
   CustomSourceActivationResult, CustomSourceCreateDraftRequest, CustomSourceHandlerRun,
   CustomSourceHandlerSummary, CustomSourceHandlerVersion, CustomSourceInstanceRunnerSettings,
   CustomSourceInstanceRunnerSettingsUpdate,
@@ -48,6 +48,11 @@ import type {
   SourceRecipeDryRunResponse, SourceRecipePlanRequest, SourceRecipePlanResponse,
   SourceRecipePipelineBridgeRequest, SourceRecipePipelineBridgeResponse,
   SourceRecipeVersion, SourceRunSummary,
+  SourcePostProcessingBacklog, SourcePostProcessingDecisionActionResult,
+  SourcePostProcessingDecisionReviewStatus, SourcePostProcessingDrainResult,
+  SourcePostProcessingItemDecision, SourcePostProcessingItemRelevance,
+  SourcePostProcessingRule, SourcePostProcessingRun,
+  SourcePostProcessingRuleCreate, SourcePostProcessingRuleUpdate,
   SummaryRunRequest, SummaryRunOut,
   DailyCaptureReportSettingOut, DailyCaptureReportSettingUpdate,
   DailyReportRunRequest, DailyReportRunResponse, DailyReportArtifactItem,
@@ -1278,14 +1283,71 @@ export const intakeApi = {
     workspace_id: string
     source_connection_id: string
     project_id: string
+    backfill_history?: boolean
     binding_key?: string
     priority?: number
     filters?: Record<string, unknown>
     routing_policy?: Record<string, unknown>
     extraction_policy?: Record<string, unknown>
   }) => post<WorkspaceSourceBinding>('/intake/workspace-source-bindings', body),
+  backfillWorkspaceBinding: (bindingId: string) =>
+    post<WorkspaceSourceBindingBackfillResult>(`/intake/workspace-source-bindings/${bindingId}/backfill`),
   summarize: (body: SummaryRunRequest) =>
-    post<SummaryRunOut>('/intake/summary-runs', body),
+    post<SummaryRunOut>('/intake/post-processing/run-once', body),
+  postProcessingRules: (connectionId: string) =>
+    get<SourcePostProcessingRule[]>(`/intake/connections/${connectionId}/post-processing/rules`),
+  createPostProcessingRule: (connectionId: string, body: SourcePostProcessingRuleCreate) =>
+    post<SourcePostProcessingRule>(`/intake/connections/${connectionId}/post-processing/rules`, body),
+  updatePostProcessingRule: (connectionId: string, ruleId: string, body: SourcePostProcessingRuleUpdate) =>
+    patch<SourcePostProcessingRule>(`/intake/connections/${connectionId}/post-processing/rules/${ruleId}`, body),
+  runPostProcessingRule: (connectionId: string, ruleId: string) =>
+    post<SourcePostProcessingRun>(`/intake/connections/${connectionId}/post-processing/rules/${ruleId}/run`),
+  drainPostProcessingRule: (connectionId: string, ruleId: string) =>
+    post<SourcePostProcessingDrainResult>(`/intake/connections/${connectionId}/post-processing/rules/${ruleId}/drain`),
+  postProcessingRuns: (connectionId: string, params: { limit?: number; offset?: number } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    return get<Page<SourcePostProcessingRun>>(`/intake/connections/${connectionId}/post-processing/runs?` + new URLSearchParams(q))
+  },
+  postProcessingBacklog: (connectionId: string) =>
+    get<SourcePostProcessingBacklog>(`/intake/connections/${connectionId}/post-processing/backlog`),
+  postProcessingDecisions: (params: {
+    connection_id?: string
+    project_id?: string
+    rule_id?: string
+    relevance?: SourcePostProcessingItemRelevance
+    review_status?: SourcePostProcessingDecisionReviewStatus
+    limit?: number
+    offset?: number
+  } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.connection_id !== undefined) q.connection_id = params.connection_id
+    if (params.project_id !== undefined) q.project_id = params.project_id
+    if (params.rule_id !== undefined) q.rule_id = params.rule_id
+    if (params.relevance !== undefined) q.relevance = params.relevance
+    if (params.review_status !== undefined) q.review_status = params.review_status
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    return get<Page<SourcePostProcessingItemDecision>>('/intake/post-processing/decisions?' + new URLSearchParams(q))
+  },
+  postProcessingConnectionDecisions: (connectionId: string, params: {
+    rule_id?: string
+    relevance?: SourcePostProcessingItemRelevance
+    review_status?: SourcePostProcessingDecisionReviewStatus
+    limit?: number
+    offset?: number
+  } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.rule_id !== undefined) q.rule_id = params.rule_id
+    if (params.relevance !== undefined) q.relevance = params.relevance
+    if (params.review_status !== undefined) q.review_status = params.review_status
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    return get<Page<SourcePostProcessingItemDecision>>(`/intake/connections/${connectionId}/post-processing/decisions?` + new URLSearchParams(q))
+  },
+  postProcessingDecisionAction: (decisionId: string, action: string) =>
+    post<SourcePostProcessingDecisionActionResult>(`/intake/post-processing/decisions/${decisionId}/actions`, { action }),
 }
 
 // ── Intake Reader ─────────────────────────────────────────────────────────
@@ -1442,6 +1504,7 @@ export type ProviderType =
   | 'openrouter'
   | 'ollama'
   | 'zeroentropy'
+  | 'cohere'
   | 'other'
 
 export interface ModelProviderOut {
@@ -1470,6 +1533,41 @@ export interface ModelProviderOut {
 export interface ModelProviderModelsOut {
   models: string[]
   source: 'configured' | 'live'
+}
+
+export type ProviderPresetMode = 'chat' | 'embedding' | 'rerank'
+
+export interface ProviderPresetOut {
+  id: string
+  mode: ProviderPresetMode
+  label: string
+  description?: string | null
+  name: string
+  provider_type: ProviderType
+  base_url: string
+  claude_compatible_base_url?: string | null
+  openai_compatible_base_url?: string | null
+  default_model?: string | null
+  available_models: string[]
+  embedding_dimensions?: number | null
+  embedding_dimension_options?: number[]
+  api_key_required: boolean
+  task?: string | null
+}
+
+export interface ProviderFromPresetCreateRequest {
+  preset_id: string
+  api_key?: string | null
+  name?: string
+  network_profile_id?: string | null
+  default_model?: string | null
+  available_models?: string[]
+  embedding_dimensions?: number
+  is_default?: boolean
+}
+
+export interface ProviderFromPresetCreateResponse {
+  provider: ModelProviderOut
 }
 
 export interface ProviderTaskChainEntry {
@@ -1521,6 +1619,8 @@ export interface ChatResponse {
 export const providersApi = {
   list: () => get<ModelProviderOut[]>('/providers'),
 
+  presets: () => get<ProviderPresetOut[]>('/providers/presets'),
+
   litellmProviders: () => get<string[]>('/providers/litellm-providers'),
 
   create: (data: {
@@ -1536,6 +1636,9 @@ export const providersApi = {
     enabled?: boolean
     is_default?: boolean
   }) => post<ModelProviderOut>('/providers', data),
+
+  createFromPreset: (data: ProviderFromPresetCreateRequest) =>
+    post<ProviderFromPresetCreateResponse>('/providers/from-preset', data),
 
   patch: (id: string, data: Partial<{
     name: string

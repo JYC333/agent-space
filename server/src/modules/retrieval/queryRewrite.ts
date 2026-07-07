@@ -11,7 +11,7 @@ import { normalizeAlias } from "./normalize";
  * and any failure degrades to the original query alone.
  *
  * The engine owns only the seam + the deterministic merge bound; the provider
- * call, prompt, and audit live in the app layer (`modules/retrievalQueryRewrite`).
+ * call, prompt, and audit live in the app layer (`modules/retrieval/queryRewriteProvider`).
  */
 export interface QueryRewriter {
   /**

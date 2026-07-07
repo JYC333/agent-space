@@ -55,6 +55,26 @@ describe("source connection consent policy", () => {
     ).toBe("external_provider_allowed");
   });
 
+  it("defaults public external source connectors to external model processing", () => {
+    const governance = normalizeSourceConnectionCreateGovernance(identity, {
+      connector_key: "arxiv",
+    });
+
+    expect(governance.consent.allow_local_provider_egress).toBe(true);
+    expect(governance.consent.allow_external_model_egress).toBe(true);
+    expect(governance.policy.source_egress_class).toBe("external_provider_allowed");
+  });
+
+  it("keeps credentialed external sources internal-only by default", () => {
+    const governance = normalizeSourceConnectionCreateGovernance(identity, {
+      connector_key: "rss",
+      credential_id: "credential-1",
+    });
+
+    expect(governance.consent.allow_external_model_egress).toBe(false);
+    expect(governance.policy.source_egress_class).toBe("internal_only");
+  });
+
   it("rejects derived write policies that bypass proposal review", () => {
     expect(() =>
       normalizeSourceConnectionCreateGovernance(identity, {
@@ -102,6 +122,42 @@ describe("source connection consent policy", () => {
     expect(() =>
       enforceSourceRetentionPolicy(governance.policy, "full_text"),
     ).not.toThrow();
+  });
+
+  it("lazy-normalizes legacy public source egress to external model processing on read", () => {
+    const legacy = existingConnection({
+      connector_key: "arxiv",
+      consent_json: {
+        allow_local_provider_egress: false,
+        allow_external_model_egress: false,
+      },
+      policy_json: {
+        source_egress_class: "internal_only",
+      },
+    });
+    const governance = normalizeSourceConnectionReadGovernance(legacy);
+
+    expect(governance.consent.allow_local_provider_egress).toBe(true);
+    expect(governance.consent.allow_external_model_egress).toBe(true);
+    expect(governance.policy.source_egress_class).toBe("external_provider_allowed");
+  });
+
+  it("respects advanced source egress overrides on public sources", () => {
+    const legacy = existingConnection({
+      connector_key: "arxiv",
+      consent_json: {
+        allow_local_provider_egress: false,
+        allow_external_model_egress: false,
+      },
+      policy_json: {
+        source_egress_class: "internal_only",
+        source_egress_configured: true,
+      },
+    });
+    const governance = normalizeSourceConnectionReadGovernance(legacy);
+
+    expect(governance.consent.allow_external_model_egress).toBe(false);
+    expect(governance.policy.source_egress_class).toBe("internal_only");
   });
 
   it("enforces derived import target policy for source-derived proposals", () => {

@@ -714,8 +714,6 @@ CREATE INDEX ix_runs_trigger_origin ON public.runs USING btree (trigger_origin);
 
 CREATE INDEX ix_runs_workspace_id ON public.runs USING btree (workspace_id);
 
--- Automation intake-cursor surface: run finalization commits the intake
--- watermark proposed at fire time (automations/intakeCursor.ts).
 CREATE TABLE public.automations (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
@@ -729,7 +727,6 @@ CREATE TABLE public.automations (
     status character varying(32) DEFAULT 'active'::character varying NOT NULL,
     preflight_snapshot_json jsonb,
     config_json jsonb,
-    cursor_json jsonb,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     CONSTRAINT automations_pkey PRIMARY KEY (id)

@@ -43,6 +43,10 @@ import {
   WorkspaceRoutingCard,
 } from './IntakePageSections'
 import { runPendingItemJob } from './intakeActions'
+import {
+  sourcePostProcessingRuleForConnection,
+  type SourcePostProcessingPreset,
+} from './sourcePostProcessingPresets'
 
 export default function IntakePage() {
   const { activeSpaceId, activeSpaceName } = useSpace()
@@ -78,6 +82,9 @@ export default function IntakePage() {
   const [recipePlan, setRecipePlan] = useState<SourceRecipePlanResponse | null>(null)
   const [recipeDryRun, setRecipeDryRun] = useState<SourceRecipeDryRunResult | null>(null)
   const [recipeActivation, setRecipeActivation] = useState<SourceRecipeActivationResult | null>(null)
+  const [recipePostProcessingEnabled, setRecipePostProcessingEnabled] = useState(false)
+  const [recipePostProcessingPreset, setRecipePostProcessingPreset] = useState<SourcePostProcessingPreset>('batch_digest')
+  const [recipePostProcessingCreateProposals, setRecipePostProcessingCreateProposals] = useState(false)
   const [customSourceName, setCustomSourceName] = useState('')
   const [customSourceEndpointUrl, setCustomSourceEndpointUrl] = useState('')
   const [customSourceFetchFrequency, setCustomSourceFetchFrequency] = useState('manual')
@@ -91,6 +98,7 @@ export default function IntakePage() {
 
   const [workspaceId, setWorkspaceId] = useState('')
   const [bindingConnectionId, setBindingConnectionId] = useState('')
+  const [backfillHistoryOnBind, setBackfillHistoryOnBind] = useState(true)
 
   const connectorById = useMemo(() => new Map(connectors.map(c => [c.id, c])), [connectors])
   const connectionOptions = useMemo(
@@ -314,6 +322,29 @@ export default function IntakePage() {
     }
   }
 
+  async function createPostProcessingPreset(connection: SourceConnection): Promise<boolean> {
+    const rule = sourcePostProcessingRuleForConnection(connection, {
+      enabled: recipePostProcessingEnabled,
+      preset: recipePostProcessingPreset,
+      createProposals: recipePostProcessingCreateProposals,
+    })
+    if (!rule) return false
+    try {
+      await intakeApi.createPostProcessingRule(connection.id, rule)
+      toast.success('Post-processing preset added')
+      return true
+    } catch (e) {
+      toast.error(`Source created, post-processing setup failed: ${errMsg(e)}`)
+      return false
+    }
+  }
+
+  function resetRecipePostProcessingPreset() {
+    setRecipePostProcessingEnabled(false)
+    setRecipePostProcessingPreset('batch_digest')
+    setRecipePostProcessingCreateProposals(false)
+  }
+
   async function previewRecipeSource(event: FormEvent) {
     event.preventDefault()
     setBusy('recipe:plan')
@@ -357,6 +388,7 @@ export default function IntakePage() {
         schedule_rule: scheduleRuleFromForm(recipeFetchFrequency, recipeSchedule),
       })
       setRecipeActivation(activation)
+      await createPostProcessingPreset(created.connection)
       if (activation.status === 'pending_approval') {
         toast.success(`Approval proposal created: ${activation.proposal_id}`)
       } else {
@@ -366,6 +398,7 @@ export default function IntakePage() {
       setRecipeEndpointUrl('')
       setRecipeSchedule(emptyScheduleFormValue())
       setRecipePlan(null)
+      resetRecipePostProcessingPreset()
       await load()
     } catch (e) {
       toast.error(errMsg(e))
@@ -548,11 +581,17 @@ export default function IntakePage() {
     if (!targetWorkspaceId || !targetConnectionId) return
     setBusy('workspace:binding')
     try {
-      await intakeApi.createWorkspaceBinding({
+      const binding = await intakeApi.createWorkspaceBinding({
         workspace_id: targetWorkspaceId,
         source_connection_id: targetConnectionId,
         project_id: scopedProjectId,
+        backfill_history: backfillHistoryOnBind,
       })
+      if (binding.backfill_result) {
+        toast.success(`Source bound; ${binding.backfill_result.created_links} historical evidence links added`)
+      } else {
+        toast.success('Source bound')
+      }
       await load()
     } catch (e) {
       toast.error(errMsg(e))
@@ -596,6 +635,9 @@ export default function IntakePage() {
             plan={recipePlan}
             dryRun={recipeDryRun}
             activation={recipeActivation}
+            postProcessingEnabled={recipePostProcessingEnabled}
+            postProcessingPreset={recipePostProcessingPreset}
+            postProcessingCreateProposals={recipePostProcessingCreateProposals}
             busy={busy}
             onNameChange={setRecipeSourceName}
             onEndpointUrlChange={(value) => {
@@ -615,6 +657,9 @@ export default function IntakePage() {
               setRecipeListSelector(value)
               setRecipePlan(null)
             }}
+            onPostProcessingEnabledChange={setRecipePostProcessingEnabled}
+            onPostProcessingPresetChange={setRecipePostProcessingPreset}
+            onPostProcessingCreateProposalsChange={setRecipePostProcessingCreateProposals}
             onPreview={previewRecipeSource}
             onCreateActivate={createRecipeSource}
           />
@@ -641,8 +686,10 @@ export default function IntakePage() {
             bindings={bindings}
             busy={busy}
             projectScoped={Boolean(scopedProjectId)}
+            backfillHistory={backfillHistoryOnBind}
             onWorkspaceIdChange={setWorkspaceId}
             onBindingConnectionIdChange={setBindingConnectionId}
+            onBackfillHistoryChange={setBackfillHistoryOnBind}
             onCreateWorkspaceBinding={createWorkspaceBinding}
           />
           <AdvancedSourceTools>

@@ -301,6 +301,72 @@ describe("provider invocation resilience", () => {
     expect(outcomes[1]).toEqual({ member: "m2", outcome: { kind: "success" } });
   });
 
+  it("falls back to an anthropic provider's OpenAI-compatible URL on transient network reset", async () => {
+    const outcomes: Array<{ member: string; outcome: PoolOutcome }> = [];
+    const store = makeStore(
+      {
+        minimax: target("minimax", [{ member: "m1", key: "k1" }], {
+          provider_type: "anthropic",
+          base_url: "https://api.minimaxi.com/anthropic",
+          openai_compatible_base_url: "https://api.minimaxi.com/v1",
+          default_model: "MiniMax-M3",
+        }),
+      },
+      outcomes,
+    );
+    const attempts: Attempt[] = [];
+    __setProviderHttpClientForTests({
+      async fetch(url, init) {
+        const headers = (init?.headers ?? {}) as Record<string, string>;
+        const body = init?.body ? JSON.parse(String(init.body)) : {};
+        attempts.push({
+          url: String(url),
+          key: headers.authorization?.replace("Bearer ", "") ?? headers["x-api-key"] ?? null,
+          model: body.model ?? null,
+          body,
+        });
+        if (attempts.length === 1) {
+          const error = new Error("fetch failed") as Error & { cause?: Error };
+          error.cause = new Error("read ECONNRESET");
+          throw error;
+        }
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { content: "openai compatible ok" } }],
+            model: body.model,
+            usage: {},
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      },
+    });
+
+    const result = await completeProviderChat(store, "space-1", {
+      ...CHAT,
+      provider_id: "minimax",
+      system: "Return JSON only.",
+      model: "MiniMax-M3",
+    });
+
+    expect(result.content).toBe("openai compatible ok");
+    expect(attempts.map((a) => a.url)).toEqual([
+      "https://api.minimaxi.com/anthropic/v1/messages",
+      "https://api.minimaxi.com/v1/chat/completions",
+    ]);
+    expect(attempts.map((a) => a.key)).toEqual(["k1", "k1"]);
+    expect(attempts[0].body).toMatchObject({
+      system: "Return JSON only.",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(attempts[1].body).toMatchObject({
+      messages: [
+        { role: "system", content: "Return JSON only." },
+        { role: "user", content: "hi" },
+      ],
+    });
+    expect(outcomes).toEqual([{ member: "m1", outcome: { kind: "success" } }]);
+  });
+
   it("does not rotate keys on permanent request errors", async () => {
     const outcomes: Array<{ member: string; outcome: PoolOutcome }> = [];
     const store = makeStore(
@@ -477,6 +543,44 @@ describe("provider invocation resilience", () => {
     });
   });
 
+  it("embedding supports Cohere v2 embed with retrieval input types and output dimensions", async () => {
+    const outcomes: Array<{ member: string; outcome: PoolOutcome }> = [];
+    const store = makeStore(
+      {
+        co: target("co", [{ member: "mc", key: "kc" }], {
+          provider_type: "cohere",
+          base_url: "https://api.cohere.com",
+          default_model: "embed-v4.0",
+        }),
+      },
+      outcomes,
+    );
+    const attempts = scriptedHttp([
+      { status: 200, body: { embeddings: { float: [[0.1, 0.2], [0.3, 0.4]] } } },
+    ]);
+
+    const result = await completeProviderEmbedding(store, "space-1", {
+      provider_id: "co",
+      inputs: ["alpha", "beta"],
+      dimensions: 1536,
+      inputType: "query",
+      task: "retrieval_embedding",
+    });
+
+    expect(result).toEqual({ vectors: [[0.1, 0.2], [0.3, 0.4]], model: "embed-v4.0" });
+    expect(attempts[0]).toMatchObject({
+      url: "https://api.cohere.com/v2/embed",
+      key: "kc",
+      model: "embed-v4.0",
+    });
+    expect(attempts[0]?.body).toMatchObject({
+      texts: ["alpha", "beta"],
+      input_type: "search_query",
+      output_dimension: 1536,
+      embedding_types: ["float"],
+    });
+  });
+
   it("rerank supports ZeroEntropy /models/rerank with a task-specific default model", async () => {
     const outcomes: Array<{ member: string; outcome: PoolOutcome }> = [];
     const store = makeStore(
@@ -521,6 +625,58 @@ describe("provider invocation resilience", () => {
       url: "https://api.zeroentropy.dev/v1/models/rerank",
       key: "kz",
       model: "zerank-2",
+    });
+    expect(attempts[0]?.body).toMatchObject({
+      query: "alpha",
+      documents: ["doc a", "doc b"],
+      top_n: 2,
+    });
+  });
+
+  it("rerank supports Cohere v2 rerank with a task-specific default model", async () => {
+    const outcomes: Array<{ member: string; outcome: PoolOutcome }> = [];
+    const store = makeStore(
+      {
+        co: target("co", [{ member: "mc", key: "kc" }], {
+          provider_type: "cohere",
+          base_url: "https://api.cohere.com",
+          default_model: "embed-v4.0",
+        }),
+      },
+      outcomes,
+    );
+    const attempts = scriptedHttp([
+      {
+        status: 200,
+        body: {
+          results: [
+            { index: 1, relevance_score: 0.91 },
+            { index: 0, relevance_score: 0.18 },
+          ],
+          meta: { billed_units: { search_units: 1 } },
+        },
+      },
+    ]);
+
+    const result = await completeProviderRerank(store, "space-1", {
+      provider_id: "co",
+      query: "alpha",
+      documents: ["doc a", "doc b"],
+      task: "retrieval_rerank",
+    });
+
+    expect(result).toMatchObject({
+      scores: [
+        { index: 1, score: 0.91 },
+        { index: 0, score: 0.18 },
+      ],
+      model: "rerank-v4.0-pro",
+      usage: { billed_units: { search_units: 1 } },
+    });
+    expect(attempts[0]).toMatchObject({
+      url: "https://api.cohere.com/v2/rerank",
+      key: "kc",
+      model: "rerank-v4.0-pro",
     });
     expect(attempts[0]?.body).toMatchObject({
       query: "alpha",

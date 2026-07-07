@@ -15,8 +15,8 @@ import { knowledgeRetrievalRegistry } from "../src/modules/knowledge/retrievalAd
 import {
   RetrievalEmbeddingBackfillService,
   type RetrievalEmbedder,
-} from "../src/modules/retrievalEmbedding/service";
-import { EMBED_DIMENSIONS } from "../src/modules/retrievalEmbedding/config";
+} from "../src/modules/retrieval/embedding/service";
+import { EMBED_DIMENSIONS } from "../src/modules/retrieval/embedding/config";
 import { insertKnowledgeItem } from "./support/knowledgeFixtures";
 
 // Vector recall arm end-to-end on pgvector: a query that matches NOTHING

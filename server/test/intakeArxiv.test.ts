@@ -21,6 +21,7 @@ import { IntakeExtractionWorker } from "../src/modules/intake/extractionWorker";
 import type { Queryable } from "../src/modules/routeUtils/common";
 import { HttpError } from "../src/modules/routeUtils/common";
 import { simplePdfBytes } from "./fixtures/simplePdf";
+import { handleIntakeRetrievalTestSql } from "./helpers/intakeRetrievalTestSql";
 
 function config() {
   return loadConfig({
@@ -259,6 +260,12 @@ describe("SourcePresetService", () => {
     expect(String(insert?.params[6])).toContain("https://export.arxiv.org/api/query?");
     expect(insert?.params[7]).toBe("weekly");
     expect(insert?.params[8]).toBe("extract_text");
+    expect(JSON.parse(String(insert?.params[11]))).toMatchObject({
+      allow_external_model_egress: true,
+    });
+    expect(JSON.parse(String(insert?.params[12]))).toMatchObject({
+      source_egress_class: "external_provider_allowed",
+    });
     expect(JSON.parse(String(insert?.params[13]))).toEqual({
       preset_id: "arxiv",
       mode: "search",
@@ -589,6 +596,8 @@ class ExtractionDb implements Queryable {
 
   async query<Row = Record<string, unknown>>(sql: string, params: readonly unknown[] = []) {
     this.calls.push({ sql, params });
+    const retrievalResult = handleIntakeRetrievalTestSql<Row>(sql, params);
+    if (retrievalResult) return retrievalResult;
     if (sql.includes("SET status = 'running'")) {
       return { rows: [this.jobRow()] as Row[], rowCount: 1 };
     }

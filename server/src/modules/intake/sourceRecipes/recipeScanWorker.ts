@@ -5,7 +5,7 @@ import { loadProtocol } from "../../providers/protocolRuntime";
 import { PgCustomSourceHandlerRepository } from "../customSources/customSourceHandlerRepository";
 import { CustomSourceCredentialService } from "../customSources/customSourceCredentialService";
 import { CustomSourceMaterializationService } from "../customSources/customSourceMaterializer";
-import { emitIntakeItemsMaterializedEvent } from "../automationEventEmitter";
+import { emitSourcePostProcessingEvent } from "../postProcessing/eventEmitter";
 import { fetchCustomSourceEndpointHtml } from "../customSources/customSourceEndpointFetch";
 import { cleanupSandbox } from "../customSources/customSourceRunner";
 import { computeNextCheckAt } from "../scanSchedule";
@@ -252,7 +252,7 @@ async function runOne(db: Queryable, config: ServerConfig, job: PendingRecipeJob
         ],
       );
       if (result.status === "succeeded" && result.itemsCreated > 0) {
-        await emitIntakeItemsMaterializedEvent(db, {
+        await emitSourcePostProcessingEvent(db, {
           spaceId: job.space_id,
           sourceConnectionId: job.connection_id,
           newItemCount: result.itemsCreated,

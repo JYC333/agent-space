@@ -67,7 +67,8 @@ afterAll(async () => {
 beforeEach(async () => {
   if (!available || !pool) return;
   await pool.query(
-    `TRUNCATE policy_decision_records, proposal_approvals, proposals, runs, space_memberships,
+    `TRUNCATE jobs, retrieval_edges, retrieval_chunks, retrieval_aliases, retrieval_objects,
+              policy_decision_records, proposal_approvals, proposals, runs, space_memberships,
               source_handler_runs, source_handler_versions, source_recipe_versions, source_connections, source_connectors,
               scheduler_tasks, settings, artifacts, extraction_jobs, intake_items,
               source_snapshots, extracted_evidence, credentials`,

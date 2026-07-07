@@ -10,7 +10,7 @@ import {
   type CliCredentialBrokerPort,
   type CliExecutionResult,
 } from "../src/modules/runs/vendorCliAdapter";
-import { ProviderProxyLeaseRegistry } from "../src/modules/providers/providerProxyLease";
+import { ProviderProxyLeaseRegistry } from "../src/modules/providers/proxy/lease";
 import type { RuntimeToolResolverPort } from "../src/modules/runtimeTools";
 import type { RunRecord } from "../src/modules/runs/repository";
 

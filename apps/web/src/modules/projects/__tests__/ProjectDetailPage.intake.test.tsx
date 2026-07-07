@@ -134,6 +134,13 @@ vi.mock('../../../api/client', () => ({
       created_at: '2026-06-30T00:00:00.000Z',
       updated_at: '2026-06-30T00:00:00.000Z',
     }),
+    backfillWorkspaceBinding: vi.fn().mockResolvedValue({
+      binding_id: 'binding-1',
+      workspace_id: 'workspace-1',
+      project_id: 'project-1',
+      source_connection_id: 'conn-1',
+      created_links: 2,
+    }),
     createManualUrl: vi.fn().mockResolvedValue({
       id: 'item-new',
       space_id: 'space-1',
@@ -271,6 +278,12 @@ vi.mock('../../../api/client', () => ({
       limit: 5,
       offset: 0,
     }),
+    postProcessingDecisions: vi.fn().mockResolvedValue({
+      items: [],
+      total: 0,
+      limit: 5,
+      offset: 0,
+    }),
   },
   intakeReaderApi: {
     listByProject: vi.fn().mockResolvedValue({ items: [] }),
@@ -312,6 +325,17 @@ describe('ProjectDetailPage Intake consumption', () => {
       expect(intakeApi.createConnection).not.toHaveBeenCalled()
       expect(intakeApi.createSourceRecipe).not.toHaveBeenCalled()
       expect(intakeApi.createCustomSourceDraft).not.toHaveBeenCalled()
+    })
+  })
+
+  it('backfills historical evidence for an existing linked source', async () => {
+    renderPage()
+
+    const button = await screen.findByRole('button', { name: /backfill history/i })
+    fireEvent.click(button)
+
+    await waitFor(() => {
+      expect(intakeApi.backfillWorkspaceBinding).toHaveBeenCalledWith('binding-1')
     })
   })
 
@@ -371,6 +395,7 @@ describe('ProjectDetailPage Intake consumption', () => {
         project_id: 'project-1',
         workspace_id: 'workspace-1',
         source_connection_id: 'conn-1',
+        backfill_history: true,
       })
     })
   })
@@ -605,7 +630,7 @@ describe('ProjectDetailPage Intake consumption', () => {
     renderPage()
 
     fireEvent.click(await screen.findByRole('button', { name: /^engineering feed$/i }))
-    fireEvent.click(screen.getByRole('button', { name: /^research feed$/i }))
+    fireEvent.click(screen.getByRole('option', { name: /^research feed$/i }))
 
     await waitFor(() => {
       expect(intakeApi.updateItem).toHaveBeenCalledWith('item-1', { connection_id: 'conn-2' })

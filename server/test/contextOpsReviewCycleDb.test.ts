@@ -8,7 +8,7 @@ import {
 import type { RetrievalBriefResponse } from "@agent-space/protocol" with { "resolution-mode": "import" };
 import { migrate } from "../src/db/migrator";
 import { runContextReviewCycle } from "../src/modules/contextOps/reviewCycle";
-import { persistRetrievalBriefArtifact } from "../src/modules/retrieval/briefArtifacts";
+import { persistRetrievalBriefArtifact } from "../src/modules/retrieval/artifacts/brief";
 import { RetrievalProjectionService } from "../src/modules/retrieval";
 import { knowledgeRetrievalRegistry } from "../src/modules/knowledge/retrievalAdapter";
 import { insertKnowledgeItem } from "./support/knowledgeFixtures";

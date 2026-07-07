@@ -184,10 +184,12 @@ code and migrations still win over documentation.
 ### 6. Automation and Triggers
 
 **Current state**
-- Manual, scheduled, and internal intake-event triggers are implemented
-  (`intake.items_materialized` via the job queue, with min-new-items and
-  cooldown; see [modules/automations.md](../modules/automations.md)). The
-  cooldown is the minimal form of the P9 trigger-budget vocabulary.
+- Manual and scheduled Automations are separate from Intake source
+  post-processing. Intake owns `intake.items_materialized` handling through
+  source post-processing rules, with min-new-items, cooldown, per-event backlog
+  drain caps, cursor-safe batched runs, relevance screening, candidate evidence,
+  review proposals, and persisted item decisions. The cooldown/backlog cap are
+  the minimal form of the P9 trigger-budget vocabulary.
 
 **Next work**
 - Design external trigger registry after manual/scheduled/internal-event automation behavior is stable.

@@ -1108,7 +1108,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     approval_capability: null,
     default_required_approver_role: null,
     current_enforcement_point:
-      "server/src/modules/retrievalTool/service.ts, server/src/modules/runs/managedRetrievalTools.ts",
+      "server/src/modules/retrieval/tool/service.ts, server/src/modules/runs/managedRetrievalTools.ts",
     description:
       "Invoke the managed-run Knowledge retrieval search tool under the instructing user's read access.",
     lifecycle_status: "wired_direct",
@@ -1123,7 +1123,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     approval_capability: null,
     default_required_approver_role: null,
     current_enforcement_point:
-      "server/src/modules/retrievalTool/service.ts, server/src/modules/runs/managedRetrievalTools.ts",
+      "server/src/modules/retrieval/tool/service.ts, server/src/modules/runs/managedRetrievalTools.ts",
     description:
       "Invoke the managed-run Knowledge Context Brief tool under the instructing user's read access.",
     lifecycle_status: "wired_direct",
@@ -1138,7 +1138,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     approval_capability: null,
     default_required_approver_role: null,
     current_enforcement_point:
-      "server/src/modules/retrievalTool/service.ts, server/src/modules/runs/managedRetrievalTools.ts",
+      "server/src/modules/retrieval/tool/service.ts, server/src/modules/runs/managedRetrievalTools.ts",
     description:
       "Invoke the explicitly opted-in managed-run Memory retrieval search tool under the instructing user's read access.",
     lifecycle_status: "wired_direct",
@@ -1153,7 +1153,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     approval_capability: null,
     default_required_approver_role: null,
     current_enforcement_point:
-      "server/src/modules/retrievalTool/service.ts, server/src/modules/runs/managedRetrievalTools.ts",
+      "server/src/modules/retrieval/tool/service.ts, server/src/modules/runs/managedRetrievalTools.ts",
     description:
       "Invoke the explicitly opted-in managed-run Memory Context Brief tool under the instructing user's read access.",
     lifecycle_status: "wired_direct",
@@ -1168,7 +1168,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     approval_capability: null,
     default_required_approver_role: null,
     current_enforcement_point:
-      "server/src/modules/retrievalTool/service.ts, server/src/modules/runs/managedRetrievalTools.ts",
+      "server/src/modules/retrieval/tool/service.ts, server/src/modules/runs/managedRetrievalTools.ts",
     description:
       "Invoke the explicitly opted-in managed-run Project public-summary search tool under the instructing user's read access.",
     lifecycle_status: "wired_direct",
@@ -1183,9 +1183,39 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     approval_capability: null,
     default_required_approver_role: null,
     current_enforcement_point:
-      "server/src/modules/retrievalTool/service.ts, server/src/modules/runs/managedRetrievalTools.ts",
+      "server/src/modules/retrieval/tool/service.ts, server/src/modules/runs/managedRetrievalTools.ts",
     description:
       "Invoke the explicitly opted-in managed-run Project public-summary Context Brief tool under the instructing user's read access.",
+    lifecycle_status: "wired_direct",
+    record_failure_mode: "fail_closed",
+  },
+  {
+    action: "intake.retrieval.search",
+    resource_type: "retrieval_tool",
+    default_risk_level: "low",
+    default_decision: "deny",
+    audit_required: true,
+    approval_capability: null,
+    default_required_approver_role: null,
+    current_enforcement_point:
+      "server/src/modules/retrieval/tool/service.ts, server/src/modules/runs/managedRetrievalTools.ts",
+    description:
+      "Invoke the explicitly opted-in managed-run Intake retrieval search tool under the instructing user's read access.",
+    lifecycle_status: "wired_direct",
+    record_failure_mode: "fail_closed",
+  },
+  {
+    action: "intake.retrieval.brief",
+    resource_type: "retrieval_tool",
+    default_risk_level: "low",
+    default_decision: "deny",
+    audit_required: true,
+    approval_capability: null,
+    default_required_approver_role: null,
+    current_enforcement_point:
+      "server/src/modules/retrieval/tool/service.ts, server/src/modules/runs/managedRetrievalTools.ts",
+    description:
+      "Invoke the explicitly opted-in managed-run Intake Context Brief tool under the instructing user's read access.",
     lifecycle_status: "wired_direct",
     record_failure_mode: "fail_closed",
   },

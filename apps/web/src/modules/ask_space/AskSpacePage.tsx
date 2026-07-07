@@ -27,9 +27,10 @@ const DOMAIN_LABELS: Record<AskSpaceDomain, string> = {
   knowledge: 'Knowledge',
   memory: 'Memory',
   project: 'Project summaries',
+  intake: 'Intake',
 }
 
-const ALL_DOMAINS: AskSpaceDomain[] = ['knowledge', 'memory', 'project']
+const ALL_DOMAINS: AskSpaceDomain[] = ['knowledge', 'memory', 'project', 'intake']
 
 function GapBadges({ summary }: { summary: AskSpaceResponse['gap_summary'] }) {
   const entries: Array<[string, number]> = [

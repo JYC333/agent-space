@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Pool } from "pg";
 import {
   PostgreSqlContainer,
@@ -11,8 +11,8 @@ import { knowledgeRetrievalRegistry } from "../src/modules/knowledge/retrievalAd
 import {
   RetrievalEmbeddingBackfillService,
   type RetrievalEmbedder,
-} from "../src/modules/retrievalEmbedding/service";
-import { EMBED_DIMENSIONS, EMBED_MAX_ATTEMPTS } from "../src/modules/retrievalEmbedding/config";
+} from "../src/modules/retrieval/embedding/service";
+import { EMBED_DIMENSIONS, EMBED_MAX_ATTEMPTS } from "../src/modules/retrieval/embedding/config";
 import { insertKnowledgeItem } from "./support/knowledgeFixtures";
 
 // Exercises the Phase-2 embedding pipeline AND the vector schema end-to-end on a
@@ -126,31 +126,55 @@ describe("Retrieval embedding backfill (real Postgres + pgvector)", () => {
 
   it("leaves chunks pending when the embedder returns a wrong-dimension vector", async () => {
     if (!available || !pool) return;
+    const stderrWrites: string[] = [];
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(((chunk: unknown) => {
+      stderrWrites.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write);
     const before = await pendingCount();
-    const result = await new RetrievalEmbeddingBackfillService(pool, fakeEmbedder(8)).backfillSpace(SPACE);
-    expect(result.embedded).toBe(0);
-    expect(await pendingCount()).toBe(before);
+    try {
+      const result = await new RetrievalEmbeddingBackfillService(pool, fakeEmbedder(8)).backfillSpace(SPACE);
+      expect(result.embedded).toBe(0);
+      expect(await pendingCount()).toBe(before);
+      expect(stderrWrites.join("")).toContain(
+        "model 'fake-embed-v1' returned 8-dim vectors but the space expects 2560-dim vectors",
+      );
+    } finally {
+      stderr.mockRestore();
+    }
   });
 
   it("stops retrying a chunk after the attempt cap (poison-chunk guard)", async () => {
     if (!available || !pool) return;
+    const stderrWrites: string[] = [];
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(((chunk: unknown) => {
+      stderrWrites.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write);
     // Repeatedly fail with a wrong-dimension embedder until the cap is reached.
-    for (let attempt = 0; attempt < EMBED_MAX_ATTEMPTS; attempt += 1) {
-      const failed = await new RetrievalEmbeddingBackfillService(pool, fakeEmbedder(8)).backfillSpace(SPACE);
-      expect(failed.embedded).toBe(0);
-      expect(failed.scanned).toBeGreaterThan(0);
-    }
-    // At the cap, even a correctly-sized embedder claims nothing: poison chunks
-    // are excluded from future claims (no more provider egress for them).
-    const after = await new RetrievalEmbeddingBackfillService(pool, fakeEmbedder(EMBED_DIMENSIONS)).backfillSpace(SPACE);
-    expect(after.scanned).toBe(0);
-    expect(after.embedded).toBe(0);
+    try {
+      for (let attempt = 0; attempt < EMBED_MAX_ATTEMPTS; attempt += 1) {
+        const failed = await new RetrievalEmbeddingBackfillService(pool, fakeEmbedder(8)).backfillSpace(SPACE);
+        expect(failed.embedded).toBe(0);
+        expect(failed.scanned).toBeGreaterThan(0);
+      }
+      expect(stderrWrites.join("")).toContain(
+        "model 'fake-embed-v1' returned 8-dim vectors but the space expects 2560-dim vectors",
+      );
+      // At the cap, even a correctly-sized embedder claims nothing: poison chunks
+      // are excluded from future claims (no more provider egress for them).
+      const after = await new RetrievalEmbeddingBackfillService(pool, fakeEmbedder(EMBED_DIMENSIONS)).backfillSpace(SPACE);
+      expect(after.scanned).toBe(0);
+      expect(after.embedded).toBe(0);
 
-    const capped = await pool.query<{ n: number }>(
-      `SELECT count(*)::int AS n FROM retrieval_chunks
-        WHERE embedding IS NULL AND embedding_attempts >= $1`,
-      [EMBED_MAX_ATTEMPTS],
-    );
-    expect(capped.rows[0].n).toBeGreaterThan(0);
+      const capped = await pool.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM retrieval_chunks
+          WHERE embedding IS NULL AND embedding_attempts >= $1`,
+        [EMBED_MAX_ATTEMPTS],
+      );
+      expect(capped.rows[0].n).toBeGreaterThan(0);
+    } finally {
+      stderr.mockRestore();
+    }
   });
 });

@@ -86,7 +86,6 @@ function AddAutomationForm({ agents, projects, onAdded, canCreate }: {
 
   function handleTargetChange(next: AutomationTargetType) {
     setTargetType(next)
-    if (next !== 'agent_run' && triggerType === 'event') setTriggerType('schedule')
     if (next === 'context_ops_review_cycle') {
       setCreatePacket(true)
       setIncludeMemoryMaintenance(true)
@@ -99,15 +98,9 @@ function AddAutomationForm({ agents, projects, onAdded, canCreate }: {
     if (!canCreate) { toast.error('Select an operational space first'); return }
     if (!agentId) { toast.error('Pick an agent for this automation'); return }
     if (triggerType === 'schedule' && !cron.trim()) { toast.error('A cron expression is required'); return }
-    if (triggerType === 'event' && targetType !== 'agent_run') { toast.error('Event automations only support agent runs'); return }
-    if (triggerType === 'event' && !projectId) { toast.error('Pick a project for this event automation'); return }
 
     const config: Record<string, unknown> = { target_type: targetType }
     if (triggerType === 'schedule') { config.cron = cron.trim(); config.timezone = timezone.trim() || 'UTC' }
-    if (triggerType === 'event') {
-      config.event = { type: 'intake.items_materialized', min_new_items: 1, cooldown_seconds: 900 }
-      config.skip_when_no_new_items = true
-    }
     if (targetType === 'agent_run' && prompt.trim()) config.prompt = prompt.trim()
     if (targetType === 'knowledge_retrieval_maintenance') {
       config.create_packet = createPacket
@@ -172,7 +165,7 @@ function AddAutomationForm({ agents, projects, onAdded, canCreate }: {
 
       {targetType === 'agent_run' && (
         <div className="space-y-1.5">
-          <label className={fieldLabel}>Project {triggerType === 'event' ? '(required)' : '(optional)'}</label>
+          <label className={fieldLabel}>Project (optional)</label>
           <select value={projectId} onChange={e => setProjectId(e.target.value)} className={selectCls}>
             <option value="">No project</option>
             {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
@@ -195,7 +188,6 @@ function AddAutomationForm({ agents, projects, onAdded, canCreate }: {
         <label className={fieldLabel}>Trigger</label>
         <select value={triggerType} onChange={e => setTriggerType(e.target.value as AutomationTriggerType)} className={selectCls}>
           <option value="schedule">Schedule (cron)</option>
-          {targetType === 'agent_run' && <option value="event">Event (new intake items)</option>}
           <option value="manual">Manual only</option>
         </select>
       </div>
@@ -231,13 +223,6 @@ function AddAutomationForm({ agents, projects, onAdded, canCreate }: {
             </div>
           )}
         </>
-      )}
-
-      {triggerType === 'event' && targetType === 'agent_run' && (
-        <div className="flex items-start gap-2 text-xs text-muted-foreground p-2 rounded-md bg-amber-500/10">
-          <ShieldCheck className="size-3.5 mt-0.5 shrink-0 text-amber-600" />
-          <span>Fires when a source bound to the selected project materializes new Intake items. Event fires are pre-authorized and use the automation cursor to avoid duplicate delivery.</span>
-        </div>
       )}
 
       {targetType === 'agent_run' ? (
@@ -291,7 +276,6 @@ function AutomationCard({ auto, agentName, projectName, projects, onChanged }: {
   const [projectDraft, setProjectDraft] = useState(auto.project_id ?? '')
   const [savingProject, setSavingProject] = useState(false)
   const isSchedule = auto.trigger_type === 'schedule'
-  const isEvent = auto.trigger_type === 'event'
   const archived = auto.status === 'archived'
   const target = automationTarget(auto)
 
@@ -327,7 +311,7 @@ function AutomationCard({ auto, agentName, projectName, projects, onChanged }: {
           <Badge variant="muted" className="text-[10px]">
             {shortTargetLabel(target)}
           </Badge>
-          <Badge variant={isSchedule || isEvent ? 'default' : 'muted'} className="text-[10px]">{auto.trigger_type}</Badge>
+          <Badge variant={isSchedule ? 'default' : 'muted'} className="text-[10px]">{auto.trigger_type}</Badge>
           {projectName && <Badge variant="muted" className="text-[10px]">{projectName}</Badge>}
           {auto.status === 'active' && <Badge variant="muted" className="text-[10px]">active</Badge>}
           {auto.status === 'paused' && <Badge variant="muted" className="text-[10px]">paused</Badge>}
@@ -340,12 +324,6 @@ function AutomationCard({ auto, agentName, projectName, projects, onChanged }: {
         <div className="text-xs text-muted-foreground space-y-0.5 mb-3">
           <p>Cron: <span className="font-mono text-foreground">{cfgString(auto.config_json, 'cron') || '—'}</span> <span className="font-mono">({cfgString(auto.config_json, 'timezone') || 'UTC'})</span></p>
           <p>Next run: <span className="text-foreground">{fmt(auto.next_run_at)}</span></p>
-          <p>Last fired: {fmt(auto.last_fired_at)}</p>
-        </div>
-      )}
-      {isEvent && (
-        <div className="text-xs text-muted-foreground space-y-0.5 mb-3">
-          <p>Event: <span className="text-foreground">new Intake items</span></p>
           <p>Last fired: {fmt(auto.last_fired_at)}</p>
         </div>
       )}
@@ -390,7 +368,7 @@ function AutomationCard({ auto, agentName, projectName, projects, onChanged }: {
                   auto.id,
                   target === 'agent_run' ? { prompt: cfgString(auto.config_json, 'prompt') || undefined } : {},
                 )
-                if (result.skipped) toast.info('Skipped — no new intake items since the last run')
+                if (result.skipped) toast.info(result.skip_reason ? `Skipped — ${result.skip_reason}` : 'Skipped')
                 else toast.success(target === 'agent_run' ? 'Run queued' : 'Scan completed')
                 onChanged()
               } catch (err) {

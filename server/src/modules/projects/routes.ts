@@ -25,12 +25,12 @@ import {
 } from "../retrieval";
 import { readSpaceRetrievalPrompt } from "../retrieval/prompts";
 import { readSpaceRetrievalSettings, resolveRetrievalSearchControls } from "../retrieval/settings";
-import { ProviderReranker } from "../retrievalRerank/providerReranker";
-import { ProviderQueryRewriter } from "../retrievalQueryRewrite/providerQueryRewriter";
-import { ProviderQueryEmbedder } from "../retrievalEmbedding/queryEmbedder";
-import { enqueueRetrievalEmbeddingBackfill } from "../retrievalEmbedding/job";
-import { ProviderSynthesizer } from "../retrievalSynthesis/providerSynthesizer";
-import { resolveProviderCommandStore } from "../providers/providerCommandStore";
+import { ProviderReranker } from "../retrieval/rerankProvider/providerReranker";
+import { ProviderQueryRewriter } from "../retrieval/queryRewriteProvider/providerQueryRewriter";
+import { ProviderQueryEmbedder } from "../retrieval/embedding/queryEmbedder";
+import { enqueueRetrievalEmbeddingBackfill } from "../retrieval/embedding/job";
+import { ProviderSynthesizer } from "../retrieval/synthesisProvider/providerSynthesizer";
+import { resolveProviderCommandStore } from "../providers/commands/store";
 import { loadProtocol } from "../providers/protocolRuntime";
 import { projectRetrievalRegistry } from "./retrievalAdapter";
 import { ProjectPublicSummaryGenerator } from "./publicSummaryGenerator";

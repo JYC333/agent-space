@@ -81,7 +81,15 @@ export type KnowledgeRelationType =
   | 'summarizes'
   | 'updates'
 export type KnowledgeRelationStatus = 'candidate' | 'active' | 'rejected' | 'archived'
-export type RetrievalObjectType = 'knowledge_item' | 'note' | 'source' | 'claim' | 'memory_entry' | 'project_public_summary'
+export type RetrievalObjectType =
+  | 'knowledge_item'
+  | 'note'
+  | 'source'
+  | 'claim'
+  | 'memory_entry'
+  | 'project_public_summary'
+  | 'intake_item'
+  | 'extracted_evidence'
 export const SPACE_OBJECT_KIND_KEYS_BY_BASE_OBJECT_TYPE = {
   knowledge_item: ['concept', 'lesson', 'procedure', 'decision', 'question', 'answer', 'summary'],
   note: ['note'],
@@ -89,6 +97,8 @@ export const SPACE_OBJECT_KIND_KEYS_BY_BASE_OBJECT_TYPE = {
   claim: ['fact', 'hypothesis', 'belief', 'preference', 'commitment', 'question', 'interpretation', 'instruction', 'metric', 'relationship', 'event'],
   memory_entry: ['preference', 'semantic', 'episodic', 'procedural', 'project'],
   project_public_summary: ['project_public_summary'],
+  intake_item: ['external_url', 'feed_entry', 'activity_record', 'artifact', 'run_event', 'file', 'document', 'log'],
+  extracted_evidence: ['document', 'excerpt', 'event', 'log', 'artifact', 'claim', 'summary'],
 } as const satisfies Record<RetrievalObjectType, readonly string[]>
 export type SpaceObjectKindStatus = 'draft' | 'active' | 'deprecated' | 'archived'
 export type SpaceObjectKindRelationHintDirection = 'from' | 'to' | 'either'
@@ -358,7 +368,7 @@ export interface RetrievalBriefResponse {
   artifact_error?: string
 }
 // ── Ask Space (Slice A) ─────────────────────────────────────────────────
-export type AskSpaceDomain = 'knowledge' | 'memory' | 'project'
+export type AskSpaceDomain = 'knowledge' | 'memory' | 'project' | 'intake'
 export interface AskSpaceRequest {
   query: string
   domains?: AskSpaceDomain[]
@@ -1496,6 +1506,15 @@ export interface WorkspaceSourceBinding {
   created_by_user_id: string | null
   created_at: string
   updated_at: string
+  backfill_result?: WorkspaceSourceBindingBackfillResult
+}
+
+export interface WorkspaceSourceBindingBackfillResult {
+  binding_id: string
+  workspace_id: string
+  project_id: string
+  source_connection_id: string
+  created_links: number
 }
 
 export type JobStatus    = 'pending' | 'claimed' | 'running' | 'completed' | 'failed' | 'cancelled'
@@ -3853,7 +3872,7 @@ export interface DailyReportArtifactItem {
   capture_count: number
 }
 
-// ── Input Summary (POST /activity/summary-runs, POST /intake/summary-runs) ──
+// ── Input Summary (POST /activity/summary-runs, POST /intake/post-processing/run-once) ──
 
 export interface SummaryRunRequest {
   activity_ids?: string[]
@@ -3866,10 +3885,240 @@ export interface SummaryRunRequest {
 
 export interface SummaryRunOut {
   run_id: string
-  artifact_id: string
+  artifact_id: string | null
   proposal_ids: string[]
   status: string
   summary_preview: string
+}
+
+// ── Intake Source Post-Processing ─────────────────────────────────────────
+
+export type SourcePostProcessingTriggerType = 'items_materialized' | 'schedule' | 'manual'
+export type SourcePostProcessingRuleStatus = 'active' | 'paused' | 'archived'
+export type SourcePostProcessingRunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'skipped'
+export type SourcePostProcessingStrategy = 'batch_digest' | 'screen_then_digest' | 'screen_extract_digest'
+export type SourcePostProcessingContentSource =
+  | 'excerpt_only'
+  | 'prefer_extracted_text_for_candidates'
+  | 'require_extracted_text_for_candidates'
+export type SourcePostProcessingDecisionReviewStatus =
+  | 'pending'
+  | 'accepted'
+  | 'ignored'
+  | 'queued'
+  | 'proposed'
+  | 'rerun'
+  | 'dismissed'
+export type SourcePostProcessingItemRelevance = 'relevant' | 'maybe' | 'not_relevant'
+
+export interface SourcePostProcessingActions {
+  batch_digest: boolean
+  per_item_summary: boolean
+  extract_evidence: boolean
+  create_proposals: boolean
+  mark_items: boolean
+}
+
+export type SourcePostProcessingRetrievalDomain = 'knowledge' | 'project' | 'memory' | 'intake'
+export type SourcePostProcessingRetrievalMode = 'exact' | 'lexical' | 'hybrid' | 'hybrid_rerank'
+export type SourcePostProcessingDeepAnalysisContentSource = 'prefer_extracted_text' | 'require_extracted_text'
+export type SourcePostProcessingDeepAnalysisOutput = 'deep_report' | 'per_item_deep_summary'
+
+export interface SourcePostProcessingRetrievalContextConfig {
+  enabled: boolean
+  domains: SourcePostProcessingRetrievalDomain[]
+  query?: string
+  max_results_per_domain: number
+  mode: SourcePostProcessingRetrievalMode
+}
+
+export interface SourcePostProcessingCandidatePrefilterConfig {
+  enabled: boolean
+  mode: SourcePostProcessingRetrievalMode
+  max_candidates: number
+  min_score?: number
+}
+
+export interface SourcePostProcessingDeepAnalysisConfig {
+  enabled: boolean
+  trigger_relevance: Array<'relevant' | 'maybe'>
+  min_confidence: number
+  max_candidates_per_run: number
+  content_source: SourcePostProcessingDeepAnalysisContentSource
+  output: SourcePostProcessingDeepAnalysisOutput
+}
+
+export interface SourcePostProcessingRelevanceDecisionPolicy {
+  relevant?: string
+  maybe?: string
+  not_relevant?: string
+}
+
+export interface SourcePostProcessingRelevanceProfile {
+  enabled: boolean
+  objective?: string
+  include_criteria: string[]
+  exclude_criteria: string[]
+  must_have: string[]
+  nice_to_have: string[]
+  decision_policy?: SourcePostProcessingRelevanceDecisionPolicy
+}
+
+export interface SourcePostProcessingInputConfig {
+  window: 'new_since_last_success' | 'local_day' | 'last_24h' | 'explicit'
+  item_limit: number
+  max_batches_per_event: number
+  processing_strategy: SourcePostProcessingStrategy
+  content_source: SourcePostProcessingContentSource
+  include_excerpts: boolean
+  include_evidence: boolean
+  timezone: string
+  content_profile?: 'generic' | 'arxiv_new_papers'
+  summary_goal?: string
+  output_instructions?: string
+  retrieval_context: SourcePostProcessingRetrievalContextConfig
+  candidate_prefilter: SourcePostProcessingCandidatePrefilterConfig
+  deep_analysis: SourcePostProcessingDeepAnalysisConfig
+  relevance_profile?: SourcePostProcessingRelevanceProfile
+}
+
+export interface SourcePostProcessingTriggerConfig {
+  min_new_items: number
+  cooldown_seconds: number
+  cron?: string
+  timezone: string
+  skip_when_no_new_items: boolean
+}
+
+export interface SourcePostProcessingRule {
+  id: string
+  space_id: string
+  source_connection_id: string
+  agent_id: string
+  project_id: string | null
+  name: string
+  status: SourcePostProcessingRuleStatus
+  trigger_type: SourcePostProcessingTriggerType
+  trigger_config_json: SourcePostProcessingTriggerConfig
+  input_config_json: SourcePostProcessingInputConfig
+  actions_json: SourcePostProcessingActions
+  cursor_json: Record<string, unknown> | null
+  last_fired_at: string | null
+  next_run_at: string | null
+  created_by_user_id: string
+  created_at: string
+  updated_at: string
+}
+
+export interface SourcePostProcessingRun {
+  id: string
+  space_id: string
+  rule_id: string | null
+  source_connection_id: string
+  agent_id: string
+  project_id: string | null
+  agent_run_id: string | null
+  triggered_by_user_id: string | null
+  trigger_type: SourcePostProcessingTriggerType
+  status: SourcePostProcessingRunStatus
+  input_item_ids: string[]
+  input_evidence_ids: string[]
+  output_artifact_ids: string[]
+  output_proposal_ids: string[]
+  output_job_ids: string[]
+  cursor_before_json: Record<string, unknown> | null
+  cursor_after_json: Record<string, unknown> | null
+  retrieval_context_json: Record<string, unknown>
+  item_decisions_json: Array<Record<string, unknown>>
+  summary: string | null
+  error_json: Record<string, unknown> | null
+  started_at: string | null
+  completed_at: string | null
+  created_at: string
+}
+
+export interface SourcePostProcessingItemDecision {
+  id: string
+  space_id: string
+  source_connection_id: string
+  rule_id: string | null
+  run_id: string
+  project_id: string | null
+  intake_item_id: string
+  relevance: SourcePostProcessingItemRelevance
+  confidence: number | null
+  reason: string | null
+  matched_context_refs: Array<Record<string, unknown>>
+  applied_item_status: string | null
+  review_status: SourcePostProcessingDecisionReviewStatus
+  action_json: Record<string, unknown>
+  item: {
+    title: string | null
+    source_uri: string | null
+    source_domain: string | null
+    author: string | null
+    status: string | null
+    content_state: string | null
+  }
+  rule_name: string | null
+  run_status: string | null
+  run_created_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface SourcePostProcessingBacklogRule {
+  rule_id: string
+  rule_name: string
+  status: SourcePostProcessingRuleStatus
+  trigger_type: SourcePostProcessingTriggerType
+  pending_item_count: number
+  batch_size: number
+  max_batches_per_event: number
+  cursor_json: Record<string, unknown> | null
+  last_fired_at: string | null
+  last_run: SourcePostProcessingRun | null
+  last_success_run: SourcePostProcessingRun | null
+  last_failed_run: SourcePostProcessingRun | null
+}
+
+export interface SourcePostProcessingBacklog {
+  source_connection_id: string
+  rules: SourcePostProcessingBacklogRule[]
+}
+
+export interface SourcePostProcessingDrainResult {
+  runs: SourcePostProcessingRun[]
+  stopped_reason: string
+  pending_item_count: number
+}
+
+export interface SourcePostProcessingDecisionActionResult {
+  decision: SourcePostProcessingItemDecision
+  proposal_id?: string
+  job_ids?: string[]
+  run?: SourcePostProcessingRun
+}
+
+export interface SourcePostProcessingRuleCreate {
+  name?: string
+  agent_id?: string | null
+  project_id?: string | null
+  trigger_type?: SourcePostProcessingTriggerType
+  trigger_config_json?: Partial<SourcePostProcessingTriggerConfig>
+  input_config_json?: Partial<SourcePostProcessingInputConfig>
+  actions_json?: Partial<SourcePostProcessingActions>
+}
+
+export interface SourcePostProcessingRuleUpdate {
+  name?: string | null
+  agent_id?: string | null
+  project_id?: string | null
+  status?: SourcePostProcessingRuleStatus | null
+  trigger_type?: SourcePostProcessingTriggerType
+  trigger_config_json?: Partial<SourcePostProcessingTriggerConfig>
+  input_config_json?: Partial<SourcePostProcessingInputConfig>
+  actions_json?: Partial<SourcePostProcessingActions>
 }
 
 // ── Reader ─────────────────────────────────────────────────────────────────────
@@ -4158,7 +4407,7 @@ export interface ProjectSummary {
 }
 
 // ── Automations ─────────────────────────────────────────────────────────────
-export type AutomationTriggerType = 'manual' | 'schedule' | 'event'
+export type AutomationTriggerType = 'manual' | 'schedule'
 export type AutomationTargetType = 'agent_run' | 'knowledge_retrieval_maintenance' | 'context_ops_review_cycle'
 
 export interface AutomationOut {
@@ -4205,7 +4454,6 @@ export interface AutomationFireResult {
   preflight_executable: boolean
   skipped?: boolean
   skip_reason?: string
-  intake_delta_count?: number
   target_type?: AutomationTargetType
   artifact_id?: string | null
   proposal_id?: string | null

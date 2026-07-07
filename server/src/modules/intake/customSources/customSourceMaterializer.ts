@@ -9,6 +9,7 @@ import type { ServerConfig } from "../../../config";
 import type { Queryable } from "../../routeUtils/common";
 import { sha256, sourceDomain } from "../intakeRepositoryMappers";
 import { linkEvidenceToBoundProjects } from "../evidenceProjectLinker";
+import { reindexIntakeItemAndEvidenceForRetrieval } from "../retrievalIndexing";
 import {
   validateCustomSourceHandlerOutput,
   type CustomSourceContractValidationResult,
@@ -173,6 +174,7 @@ export class CustomSourceMaterializationService {
             intakeItemId: itemId,
           });
         }
+        await this.reindexItemForRetrieval(run.spaceId, itemId, "custom_source_materialization");
       } catch (error) {
         errors.push(
           `items[${index}] (${item.external_id}): ${error instanceof Error ? error.message : String(error)}`,
@@ -427,6 +429,14 @@ export class CustomSourceMaterializationService {
       ],
     );
     return artifactId;
+  }
+
+  private async reindexItemForRetrieval(spaceId: string, itemId: string, trigger: string): Promise<void> {
+    await reindexIntakeItemAndEvidenceForRetrieval(this.db, { spaceId, itemId, trigger }).catch((error) => {
+      process.stderr.write(
+        `[intake.retrieval] item reindex failed (${itemId}): ${String((error as Error)?.message ?? error)}\n`,
+      );
+    });
   }
 
   private async recordRunResult(

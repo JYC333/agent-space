@@ -36,6 +36,8 @@ type CenterView =
   | { mode: 'diff';    diff: string; path: string }
   | { mode: 'session'; session: ConsoleSession }
 
+type WorkspaceConsoleLeftTab = 'files' | 'changes' | 'sessions'
+
 export default function WorkspaceConsolePage() {
   const { activeSpaceId, activeSpaceName } = useSpace()
   const [searchParams] = useSearchParams()
@@ -50,6 +52,7 @@ export default function WorkspaceConsolePage() {
   const [gitStatus, setGitStatus]                 = useState<GitStatus | null>(null)
   const [sessions, setSessions]                   = useState<ConsoleSession[]>([])
   const [selectedFilePath, setSelectedFilePath]   = useState<string | null>(null)
+  const [leftTab, setLeftTab]                     = useState<WorkspaceConsoleLeftTab>('files')
   const [treeLoading, setTreeLoading]             = useState(false)
   const [gitLoading, setGitLoading]               = useState(false)
 
@@ -302,7 +305,7 @@ export default function WorkspaceConsolePage() {
 
         {/* ── LEFT SIDEBAR ─────────────────────────────────────────────── */}
         <div className="w-56 shrink-0 border-r flex flex-col min-h-0 bg-card/50">
-          <Tabs defaultValue="files" className="flex flex-col flex-1 min-h-0">
+          <Tabs value={leftTab} onValueChange={value => setLeftTab(value as WorkspaceConsoleLeftTab)} className="flex flex-col flex-1 min-h-0">
             <div className="shrink-0 px-2 pt-2">
               <TabsList className="w-full grid grid-cols-3 h-7 text-[10px]">
                 <TabsTrigger value="files"   className="text-[10px] px-1">Files</TabsTrigger>

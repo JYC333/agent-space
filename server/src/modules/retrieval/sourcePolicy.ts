@@ -1,5 +1,5 @@
 import type { Queryable } from "../routeUtils/common";
-import type { RetrievalSourceEgressPolicy } from "../retrievalEgress/egressPolicy";
+import type { RetrievalSourceEgressPolicy } from "./egress/egressPolicy";
 import { isSpaceOwnerOrAdmin } from "../access/roles";
 
 const SOURCE_EGRESS_CLASSES = [

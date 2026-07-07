@@ -7,8 +7,8 @@ import {
   __setAuthRepositoryForTests,
   type AuthRepository,
 } from "../src/modules/auth";
-import { RETRIEVAL_CALIBRATION_DECISION_ARTIFACT_TYPE } from "../src/modules/retrieval/calibrationArtifacts";
-import { RETRIEVAL_EVAL_REPORT_ARTIFACT_TYPE } from "../src/modules/retrieval/evalArtifacts";
+import { RETRIEVAL_CALIBRATION_DECISION_ARTIFACT_TYPE } from "../src/modules/retrieval/artifacts/calibration";
+import { RETRIEVAL_EVAL_REPORT_ARTIFACT_TYPE } from "../src/modules/retrieval/artifacts/eval";
 
 vi.mock("../src/db/pool", () => ({
   getDbPool: vi.fn(),

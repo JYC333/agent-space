@@ -15,6 +15,7 @@ export const PROVIDER_TYPE_VALUES = [
   "openrouter",
   "ollama",
   "zeroentropy",
+  "cohere",
   "other",
 ] as const;
 export type ProviderTypeValue = (typeof PROVIDER_TYPE_VALUES)[number];
@@ -147,6 +148,55 @@ export type ProviderCatalogInfo = z.infer<typeof ProviderCatalogInfoSchema>;
 /** `GET /providers/litellm-providers`: litellm chat provider ids. */
 export const LitellmProvidersResponseSchema = z.array(z.string());
 export type LitellmProvidersResponse = z.infer<typeof LitellmProvidersResponseSchema>;
+
+export const ProviderPresetModeSchema = z.enum(["chat", "embedding", "rerank"]);
+export type ProviderPresetMode = z.infer<typeof ProviderPresetModeSchema>;
+
+export const ProviderPresetDTOSchema = z
+  .object({
+    id: z.string().min(1),
+    mode: ProviderPresetModeSchema,
+    label: z.string().min(1),
+    description: z.string().nullish(),
+    name: z.string().min(1),
+    provider_type: z.enum(PROVIDER_TYPE_VALUES),
+    base_url: z.string().min(1),
+    claude_compatible_base_url: z.string().nullish(),
+    openai_compatible_base_url: z.string().nullish(),
+    default_model: z.string().nullish(),
+    available_models: z.array(z.string()),
+    embedding_dimensions: z.number().int().positive().nullish(),
+    embedding_dimension_options: z.array(z.number().int().positive()).optional(),
+    api_key_required: z.boolean(),
+    task: z.string().nullish(),
+    ...SecretResponseGuards,
+  })
+  .passthrough();
+export type ProviderPresetDTO = z.infer<typeof ProviderPresetDTOSchema>;
+
+export const ProviderPresetListResponseSchema = z.array(ProviderPresetDTOSchema);
+export type ProviderPresetListResponse = z.infer<typeof ProviderPresetListResponseSchema>;
+
+export const ProviderFromPresetCreateRequestSchema = z.object({
+  preset_id: z.string().min(1),
+  api_key: z.string().nullish(),
+  name: z.string().min(1).optional(),
+  network_profile_id: IdSchema.nullish(),
+  default_model: z.string().nullish(),
+  available_models: z.array(z.string()).optional(),
+  embedding_dimensions: z.number().int().min(64).max(4096).optional(),
+  is_default: z.boolean().optional(),
+});
+export type ProviderFromPresetCreateRequest = z.infer<
+  typeof ProviderFromPresetCreateRequestSchema
+>;
+
+export const ProviderFromPresetCreateResponseSchema = z.object({
+  provider: ModelProviderDTOSchema,
+});
+export type ProviderFromPresetCreateResponse = z.infer<
+  typeof ProviderFromPresetCreateResponseSchema
+>;
 
 /**
  * The catalog payload itself. Pinned by exact value on

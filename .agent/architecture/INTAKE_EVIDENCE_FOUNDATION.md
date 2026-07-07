@@ -46,9 +46,50 @@ There is no Area concept in this foundation.
   authority, and the workspace must already be linked to the project through
   `ProjectWorkspace`. `binding_key` distinguishes multiple filtered bindings
   over the same project/workspace/connection.
+- `SourcePostProcessingRule` is Intake-owned source-level AI post-processing.
+  Rules choose a reusable agent, trigger/window strategy, optional project, and
+  actions such as digest, relevance screening, evidence extraction, proposals,
+  and item marking. Runs are auditable through `SourcePostProcessingRun`.
+  Screening rules can optionally run a candidate prefilter before the LLM sees
+  the batch, using current-batch title/excerpt/source metadata to reduce the
+  prompt set while persisting low-confidence `maybe` review decisions for
+  filtered-out items instead of auto-ignoring them.
+- Source post-processing supports an optional deep-analysis follow-up. The first
+  screening pass decides from supplied title/excerpt/metadata and any configured
+  retrieval context. If configured, relevant candidate items above the rule's
+  confidence threshold can queue full-text extraction and then enqueue a
+  second-stage `screen_extract_digest` pass over those candidates only. This is
+  reusable by any source preset; arXiv uses it only when the preset option is
+  explicitly enabled.
+- `SourcePostProcessingItemDecision` is the review/query read model for
+  screening decisions. It records rule/run/item relevance, confidence, reason,
+  matched context refs, applied item status, and review status. It is not
+  canonical Knowledge.
 
 Projects do not own raw intake. Project relevance is expressed primarily with
 `EvidenceLink(target_type="project")`.
+When an existing source binding is asked to include history, Intake backfills
+missing project `EvidenceLink` rows for already-extracted evidence; the raw
+`IntakeItem`, `SourceSnapshot`, and `ExtractedEvidence` rows remain single
+space-scoped records.
+
+Source post-processing may read project public summaries and retrieval context
+to screen source items. Without a project, screening rules require an explicit
+source-level relevance profile; generic digest rules may remain space-level.
+Rules that request project retrieval context must be bound to a project.
+Before model execution, the service also checks the selected agent/provider
+destination against the source connection's consent and source egress policy.
+Successful runs can write artifacts, candidate evidence, context-candidate
+evidence links, review proposals, item status updates, and persisted decisions.
+They do not directly write canonical Knowledge or Memory.
+
+Full-text reading is candidate-scoped, not the default intake path. Raw snapshots
+and full reader text are not embedded by default; rules may request extracted
+text for relevant candidates, and missing extraction is represented as an
+extraction job plus one or more follow-up post-processing events rather than
+broad source reprocessing. The pending extraction job keeps an array of
+post-processing follow-ups so multiple rules can wait on the same item without
+overwriting each other.
 
 ## Source References
 

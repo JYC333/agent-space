@@ -14,7 +14,7 @@ import {
 import {
   retrievalEgressAllowed,
   type RetrievalEgressPolicy,
-} from "../retrievalEgress/egressPolicy";
+} from "../retrieval/egress/egressPolicy";
 import {
   sourceEgressPoliciesForSnapshots,
   sourcePolicyAllowsRead,

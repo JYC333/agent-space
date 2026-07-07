@@ -16,7 +16,7 @@ import {
   type ScopedSettingsRead,
 } from "../settings";
 import { RetrievalEmbeddingStore } from "./embeddingStore";
-import { DEFAULT_EMBED_DIMENSIONS } from "../retrievalEmbedding/config";
+import { DEFAULT_EMBED_DIMENSIONS } from "./embedding/config";
 
 export interface SpaceRetrievalSettingsOut {
   space_id: string;

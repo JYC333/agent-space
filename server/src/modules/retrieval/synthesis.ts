@@ -4,7 +4,7 @@ import type {
   RetrievalGapAnalysis,
   RetrievalObjectType,
 } from "@agent-space/protocol" with { "resolution-mode": "import" };
-import type { RetrievalEgressPolicy } from "../retrievalEgress/egressPolicy";
+import type { RetrievalEgressPolicy } from "./egress/egressPolicy";
 import { candidateKey } from "./searchInternals";
 import type { RevalidatedObject, ScoredCandidate } from "./types";
 
@@ -30,7 +30,7 @@ import type { RevalidatedObject, ScoredCandidate } from "./types";
  *    never makes a canonical write.
  *
  * The engine owns the access-safe seam + the deterministic assembly; the provider
- * call, prompt, and audit live in the app layer (`modules/retrievalSynthesis`).
+ * call, prompt, and audit live in the app layer (`modules/retrieval/synthesisProvider`).
  */
 export interface BriefCandidate {
   objectType: RetrievalObjectType;

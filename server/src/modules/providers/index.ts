@@ -38,7 +38,7 @@ export {
   type ProviderInfo,
   type ProviderTaskChainEntry,
   type RotationStrategy,
-} from "./providerCommandStore";
+} from "./commands/store";
 export {
   __setProviderHttpClientForTests,
   buildProviderModelName,
@@ -49,8 +49,8 @@ export {
   ProviderInvocationError,
   type ProviderRerankResult,
   type ProviderHttpClient,
-} from "./providerInvocation";
-export { classifyProviderFailure } from "./providerResilience";
+} from "./invocation/invocation";
+export { classifyProviderFailure } from "./invocation/resilience";
 export {
   __setLoginFactoriesForTests,
   runCliLogin,
@@ -59,19 +59,19 @@ export {
   type LoginEvent,
   type LoginRuntimeConfig,
   type PtyFactory,
-} from "./cliLoginEngine";
+} from "./cli/loginEngine";
 export {
   CLI_LOGIN_ADAPTERS,
   cliLoginAdapterFor,
   type CliLoginAdapter,
-} from "./cliLoginAdapters";
-export { __setMountinfoReaderForTests, resolveHostPath } from "./hostPath";
+} from "./cli/loginAdapters";
+export { __setMountinfoReaderForTests, resolveHostPath } from "./cli/hostPath";
 export {
   readClaudeTokenUsage,
   unsupportedTokenUsage,
   type TokenUsage,
-} from "./cliUsageReader";
-export { readCodexTokenUsage } from "./codexUsageReader";
+} from "./cli/usageReader";
+export { readCodexTokenUsage } from "./cli/codexUsageReader";
 export {
   __setProbeFactoryForTests,
   parseQuota,
@@ -79,22 +79,22 @@ export {
   type ProbePtyFactory,
   type ProbeToolResolver,
   type QuotaResult,
-} from "./cliUsageProbe";
+} from "./cli/usageProbe";
 export {
   __setClaudeOAuthUsageHttpClientForTests,
   parseClaudeOAuthUsageResponse,
   probeClaudeOAuthQuota,
   type ClaudeOAuthHttpClient,
-} from "./claudeOAuthUsageProbe";
+} from "./cli/claudeOAuthUsageProbe";
 export {
   __setCodexRpcFactoryForTests,
   probeCodexQuota,
   type CodexRpcFactory,
   type CodexRpcHandle,
-} from "./codexUsageProbe";
+} from "./cli/codexUsageProbe";
 export {
   CLI_USAGE_REFRESH_INTERVAL_MS,
   startCliUsageRefreshScheduler,
   type CliUsageRefreshBroker,
   type CliUsageRefreshScheduler,
-} from "./cliUsageScheduler";
+} from "./cli/usageScheduler";

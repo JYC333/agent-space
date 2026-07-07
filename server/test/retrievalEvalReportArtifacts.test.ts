@@ -3,7 +3,7 @@ import {
   buildRetrievalEvalReportArtifactSpec,
   persistRetrievalEvalReportArtifact,
   RETRIEVAL_EVAL_REPORT_ARTIFACT_TYPE,
-} from "../src/modules/retrieval/evalArtifacts";
+} from "../src/modules/retrieval/artifacts/eval";
 import type { Queryable } from "../src/modules/routeUtils/common";
 
 interface CapturedQuery {

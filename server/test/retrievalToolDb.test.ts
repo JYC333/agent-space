@@ -8,7 +8,7 @@ import {
 import { migrate } from "../src/db/migrator";
 import { RetrievalProjectionService, RetrievalSearchService } from "../src/modules/retrieval";
 import { knowledgeRetrievalRegistry } from "../src/modules/knowledge/retrievalAdapter";
-import { RetrievalToolService } from "../src/modules/retrievalTool/service";
+import { RetrievalToolService } from "../src/modules/retrieval/tool/service";
 import { insertKnowledgeItem } from "./support/knowledgeFixtures";
 
 // W10 agent-space-controlled retrieval tool surface. A managed run calls retrieval

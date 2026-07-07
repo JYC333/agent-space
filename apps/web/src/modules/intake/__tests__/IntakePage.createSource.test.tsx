@@ -35,6 +35,7 @@ vi.mock('../../../api/client', () => ({
     sourcePresets: vi.fn(),
     previewArxivSourcePreset: vi.fn(),
     createArxivSourcePreset: vi.fn(),
+    createPostProcessingRule: vi.fn(),
     createManualUrl: vi.fn(),
     updateItem: vi.fn(),
     createCustomSourceDraft: vi.fn(),
@@ -45,6 +46,7 @@ vi.mock('../../../api/client', () => ({
     scanConnection: vi.fn(),
     updateConnection: vi.fn(),
     createWorkspaceBinding: vi.fn(),
+    backfillWorkspaceBinding: vi.fn(),
     itemAction: vi.fn(),
     runJob: vi.fn(),
     summarize: vi.fn(),
@@ -480,6 +482,11 @@ describe('IntakePage Create Source', () => {
     expect(await screen.findByText('Agent paper title')).toBeInTheDocument()
     expect(screen.getByText('Author One, Author Two')).toBeInTheDocument()
     expect(screen.getAllByText('cs.AI').length).toBeGreaterThan(0)
+    fireEvent.click(screen.getByText('Advanced'))
+    fireEvent.click(screen.getByLabelText('Enable post-processing after intake'))
+    fireEvent.click(screen.getByRole('button', { name: 'Digest new items' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'Extract evidence' }))
+    fireEvent.click(screen.getByLabelText('Create proposals'))
     expect(intakeApi.previewArxivSourcePreset).toHaveBeenCalledWith({
       mode: 'recent_by_category',
       categories: ['cs.AI'],
@@ -498,6 +505,19 @@ describe('IntakePage Create Source', () => {
         schedule_rule: arxivScheduleRule,
         capture_policy: 'extract_text',
       })
+      expect(intakeApi.createPostProcessingRule).toHaveBeenCalledWith('arxiv-conn-1', expect.objectContaining({
+        trigger_type: 'items_materialized',
+        input_config_json: expect.objectContaining({
+          content_profile: 'arxiv_new_papers',
+          summary_goal: expect.stringContaining('cs.AI'),
+          output_instructions: expect.stringContaining('arXiv ids'),
+        }),
+        actions_json: expect.objectContaining({
+          batch_digest: false,
+          extract_evidence: true,
+          create_proposals: true,
+        }),
+      }))
     })
     expect(intakeApi.createConnection).not.toHaveBeenCalled()
     expect(intakeApi.createSourceRecipe).not.toHaveBeenCalled()
@@ -647,6 +667,7 @@ describe('IntakePage Create Source', () => {
         workspace_id: 'workspace-1',
         source_connection_id: 'recipe-conn-1',
         project_id: 'project-1',
+        backfill_history: true,
       })
     })
   })

@@ -17,7 +17,7 @@ import {
 } from "./config";
 import { startBackgroundServices } from "./modules/scheduler/backgroundServices";
 import { enforceBackupPolicy, BackupPolicyError } from "./modules/backups/guard";
-import { startProviderProxyServer } from "./modules/providers/providerProxyServer";
+import { startProviderProxyServer } from "./modules/providers/proxy/server";
 import { PluginHost } from "./modules/plugins/host";
 import { BUILT_IN_PLUGINS } from "./modules/plugins/builtInPlugins";
 import { registerSystemCoreWorkspace } from "./modules/workspaces/systemCore";

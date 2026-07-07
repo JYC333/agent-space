@@ -99,3 +99,96 @@ CREATE TABLE public.memory_relations (
     created_at timestamp with time zone NOT NULL,
     CONSTRAINT memory_relations_pkey PRIMARY KEY (id)
 );
+
+CREATE TABLE public.intake_items (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    connection_id character varying(36),
+    deleted_at timestamp with time zone,
+    CONSTRAINT intake_items_pkey PRIMARY KEY (id)
+);
+
+CREATE TABLE public.source_snapshots (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    connection_id character varying(36),
+    CONSTRAINT source_snapshots_pkey PRIMARY KEY (id)
+);
+
+CREATE TABLE public.extracted_evidence (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    intake_item_id character varying(36),
+    source_snapshot_id character varying(36),
+    deleted_at timestamp with time zone,
+    CONSTRAINT extracted_evidence_pkey PRIMARY KEY (id)
+);
+
+CREATE TABLE public.retrieval_objects (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    object_type character varying(64) NOT NULL,
+    object_id character varying(36) NOT NULL,
+    workspace_id character varying(36),
+    owner_user_id character varying(36),
+    visibility character varying(32),
+    status character varying(32) NOT NULL,
+    title character varying(512) NOT NULL,
+    slug character varying(512),
+    object_kind character varying(64),
+    content_hash character varying(64) NOT NULL,
+    source_connection_ids_json jsonb DEFAULT '[]'::jsonb NOT NULL,
+    indexed_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    source_updated_at timestamp with time zone,
+    CONSTRAINT retrieval_objects_pkey PRIMARY KEY (id)
+);
+
+CREATE TABLE public.retrieval_aliases (
+    id character varying(36) NOT NULL,
+    retrieval_object_id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    object_type character varying(64) NOT NULL,
+    object_id character varying(36) NOT NULL,
+    alias text NOT NULL,
+    normalized_alias text NOT NULL,
+    alias_kind character varying(32) NOT NULL,
+    confidence double precision NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    CONSTRAINT retrieval_aliases_pkey PRIMARY KEY (id)
+);
+
+CREATE TABLE public.retrieval_chunks (
+    id character varying(36) NOT NULL,
+    retrieval_object_id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    object_type character varying(64) NOT NULL,
+    object_id character varying(36) NOT NULL,
+    chunk_index integer NOT NULL,
+    plain_text text NOT NULL,
+    tsv tsvector,
+    content_hash character varying(64) NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT retrieval_chunks_pkey PRIMARY KEY (id)
+);
+
+CREATE TABLE public.retrieval_edges (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    from_object_type character varying(64) NOT NULL,
+    from_object_id character varying(36) NOT NULL,
+    to_object_type character varying(64) NOT NULL,
+    to_object_id character varying(36) NOT NULL,
+    relation_type character varying(64) NOT NULL,
+    edge_origin character varying(64) NOT NULL,
+    edge_status character varying(32) NOT NULL,
+    confidence double precision NOT NULL,
+    evidence_json jsonb NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT retrieval_edges_pkey PRIMARY KEY (id)
+);
+
+CREATE UNIQUE INDEX ix_retrieval_aliases_unique ON public.retrieval_aliases USING btree (space_id, object_type, object_id, normalized_alias, alias_kind);
+CREATE UNIQUE INDEX ix_retrieval_edges_unique ON public.retrieval_edges USING btree (space_id, from_object_type, from_object_id, to_object_type, to_object_id, relation_type, edge_origin);

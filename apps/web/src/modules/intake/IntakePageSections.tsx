@@ -60,6 +60,7 @@ import {
   type ItemFilter,
   type ScheduleFormValue,
 } from './intakePageModel'
+import { SOURCE_POST_PROCESSING_PRESET_OPTIONS, type SourcePostProcessingPreset } from './sourcePostProcessingPresets'
 
 type SelectOption = { value: string; label: string }
 
@@ -180,6 +181,9 @@ export function CreateSourceCard(props: {
   plan: SourceRecipePlanResponse | null
   dryRun: SourceRecipeDryRunResult | null
   activation: SourceRecipeActivationResult | null
+  postProcessingEnabled: boolean
+  postProcessingPreset: SourcePostProcessingPreset
+  postProcessingCreateProposals: boolean
   busy: string | null
   onNameChange: (value: string) => void
   onEndpointUrlChange: (value: string) => void
@@ -188,6 +192,9 @@ export function CreateSourceCard(props: {
   onCapturePolicyChange: (value: string) => void
   onSourceTypeChange: (value: string) => void
   onListSelectorChange: (value: string) => void
+  onPostProcessingEnabledChange: (value: boolean) => void
+  onPostProcessingPresetChange: (value: SourcePostProcessingPreset) => void
+  onPostProcessingCreateProposalsChange: (value: boolean) => void
   onPreview: (event: FormEvent<HTMLFormElement>) => void
   onCreateActivate: () => void
 }) {
@@ -241,6 +248,9 @@ function WebFeedSourceForm(props: {
   plan: SourceRecipePlanResponse | null
   dryRun: SourceRecipeDryRunResult | null
   activation: SourceRecipeActivationResult | null
+  postProcessingEnabled: boolean
+  postProcessingPreset: SourcePostProcessingPreset
+  postProcessingCreateProposals: boolean
   busy: string | null
   isBusy: boolean
   canCreate: boolean
@@ -251,6 +261,9 @@ function WebFeedSourceForm(props: {
   onCapturePolicyChange: (value: string) => void
   onSourceTypeChange: (value: string) => void
   onListSelectorChange: (value: string) => void
+  onPostProcessingEnabledChange: (value: boolean) => void
+  onPostProcessingPresetChange: (value: SourcePostProcessingPreset) => void
+  onPostProcessingCreateProposalsChange: (value: boolean) => void
   onPreview: (event: FormEvent<HTMLFormElement>) => void
   onCreateActivate: () => void
 }) {
@@ -313,6 +326,41 @@ function WebFeedSourceForm(props: {
             />
           </div>
         </div>
+        <details className="rounded-md border border-border bg-muted/20 p-3">
+          <summary className="cursor-pointer text-sm font-medium">Advanced</summary>
+          <div className="mt-3 space-y-3">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="size-4 rounded border-border"
+                checked={props.postProcessingEnabled}
+                onChange={event => props.onPostProcessingEnabledChange(event.target.checked)}
+              />
+              <span>Enable post-processing after intake</span>
+            </label>
+            {props.postProcessingEnabled && (
+              <>
+                <div className="space-y-1.5">
+                  <Label>Preset</Label>
+                  <Select
+                    options={SOURCE_POST_PROCESSING_PRESET_OPTIONS}
+                    value={props.postProcessingPreset}
+                    onChange={value => props.onPostProcessingPresetChange(value as SourcePostProcessingPreset)}
+                  />
+                </div>
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="size-4 rounded border-border"
+                    checked={props.postProcessingCreateProposals}
+                    onChange={event => props.onPostProcessingCreateProposalsChange(event.target.checked)}
+                  />
+                  <span>Create proposals</span>
+                </label>
+              </>
+            )}
+          </div>
+        </details>
         <div className="grid gap-2 sm:grid-cols-2">
           <Button type="submit" variant="outline" disabled={props.busy === 'recipe:plan' || !props.endpointUrl.trim()}>
             <Sparkles className="size-4" />
@@ -643,8 +691,10 @@ export function WorkspaceRoutingCard(props: {
   bindings: WorkspaceSourceBinding[]
   busy: string | null
   projectScoped: boolean
+  backfillHistory: boolean
   onWorkspaceIdChange: (value: string) => void
   onBindingConnectionIdChange: (value: string) => void
+  onBackfillHistoryChange: (value: boolean) => void
   onCreateWorkspaceBinding: () => void
 }) {
   return (
@@ -665,6 +715,18 @@ export function WorkspaceRoutingCard(props: {
             onChange={props.onBindingConnectionIdChange}
           />
         </div>
+        <label className="flex items-start gap-2 rounded-md border border-border px-3 py-2 text-xs">
+          <input
+            type="checkbox"
+            className="mt-0.5 accent-primary"
+            checked={props.backfillHistory}
+            onChange={event => props.onBackfillHistoryChange(event.target.checked)}
+          />
+          <span>
+            <span className="block font-medium text-foreground">Include historical evidence</span>
+            <span className="text-muted-foreground">Link already extracted source evidence into this project.</span>
+          </span>
+        </label>
         <div className="flex gap-2">
           <Button
             type="button"

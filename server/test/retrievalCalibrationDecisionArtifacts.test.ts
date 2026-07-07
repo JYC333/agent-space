@@ -5,7 +5,7 @@ import {
   persistRetrievalCalibrationDecisionArtifact,
   RETRIEVAL_CALIBRATION_DECISION_ARTIFACT_TYPE,
   RetrievalCalibrationDecisionError,
-} from "../src/modules/retrieval/calibrationArtifacts";
+} from "../src/modules/retrieval/artifacts/calibration";
 
 function fakeDb(
   evidenceRows: Array<{ id: string; artifact_type: string; visibility: string }>,
