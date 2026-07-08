@@ -30,6 +30,12 @@ npm test
 # Explicit schema migrations
 SERVER_DATABASE_URL=postgresql://... npm run migrate:status
 SERVER_DATABASE_URL=postgresql://... npm run migrate
+
+# Schema changes: edit server/src/db/schema/, then generate + copy into
+# server/migrations/ (see .agent/architecture/DATABASE_AND_TRANSACTIONS.md
+# for the full authoring workflow). No database needed for either command.
+npm run schema:generate
+npm run schema:check
 ```
 
 For the default Docker Compose setup, Postgres is **not** published to the host, so prefer the

@@ -34,7 +34,11 @@ const ALLOWED_BARE = new Set(["fastify", "fast-xml-parser", "undici", "yaml", "z
 const ALLOWED_BARE_BY_FILE = new Map<string, string>([
   ["pg", join("src", "db")],
   ["node-pty", join("src", "modules", "providers", "cli", "loginEngine.ts")],
-  ["unpdf", join("src", "modules", "source", "pdfExtract.ts")],
+  ["unpdf", join("src", "modules", "sources", "pdfExtract.ts")],
+  // drizzle-orm is schema-declaration only (server/src/db/schema/), never a
+  // query layer — repositories keep writing hand-written SQL through `pg`.
+  // See .agent/architecture/DATABASE_AND_TRANSACTIONS.md, "Schema Authoring".
+  ["drizzle-orm", join("src", "db", "schema")],
 ]);
 
 /** Substrings that must never appear in any import specifier. */
@@ -57,7 +61,6 @@ const FORBIDDEN_SUBSTRINGS = [
   "migrations",
   "sqlalchemy",
   "psycopg",
-  "drizzle",
   "knex",
   "typeorm",
 ];

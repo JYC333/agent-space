@@ -1,0 +1,8 @@
+-- no-op: this migration is drizzle-kit's initial bootstrap snapshot,
+-- produced by introspecting a database that already had
+-- server/migrations/0001_baseline.sql applied. Its body is intentionally
+-- empty; the schema it would create is already provisioned by that
+-- baseline. This file exists only so drizzle/meta/_journal.json has a
+-- named entry to anchor the snapshot history that future `generate` runs
+-- diff against. It is never copied into server/migrations/ and never
+-- applied by the server migration runner (src/db/migrator.ts).

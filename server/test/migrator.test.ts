@@ -126,6 +126,13 @@ describe("server migration runner", () => {
     const files = loadMigrations(dir);
     expect(files.map((f) => f.version)).toEqual(["0001", "0002"]);
   });
+
+  it("loadMigrations rejects duplicate version prefixes", () => {
+    writeMigration("0002", "alpha", "SELECT 1;");
+    writeMigration("0002", "beta", "SELECT 2;");
+
+    expect(() => loadMigrations(dir)).toThrow(/duplicate migration version 0002/);
+  });
 });
 
 describe("withTransaction", () => {

@@ -432,9 +432,10 @@ describe("source post-processing repository (real Postgres)", () => {
         ORDER BY source_item_id`,
       [SPACE],
     );
+    const [first, second] = [selected, ignored].sort();
     expect(decisions.rows).toEqual([
-      { source_item_id: ignored, review_status: "pending" },
-      { source_item_id: selected, review_status: "pending" },
+      { source_item_id: first, review_status: "pending" },
+      { source_item_id: second, review_status: "pending" },
     ]);
   });
 

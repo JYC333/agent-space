@@ -1,8 +1,11 @@
 -- Schema fixture for server Custom Source create-flow integration tests
 -- (testcontainers). SOURCE OF TRUTH: server/migrations/0001_baseline.sql.
 -- Superset of sourceCustomSourceHandlersSchema.sql /
--- sourceCustomSourceMaterializerSchema.sql plus source_connectors and
--- extraction_jobs, since CustomSourceCreateFlowService exercises
+-- sourceCustomSourceMaterializerSchema.sql plus source_connectors,
+-- extraction_jobs, source_connection_user_subscriptions (createConnection
+-- auto-subscribes the creator and every connection read LEFT JOINs it), and
+-- source_item_user_states (every item read LEFT JOINs per-user library/read
+-- state), since CustomSourceCreateFlowService exercises
 -- PgSourcesRepository.createConnection (connector lookup) and the scan-job
 -- orchestration (extraction_jobs pairing). CHECK / NOT NULL / UNIQUE
 -- constraints are kept verbatim; unrelated FKs (spaces, users, runs,
@@ -44,6 +47,7 @@ CREATE TABLE public.source_connections (
     connector_id character varying(36) NOT NULL,
     owner_user_id character varying(36) NOT NULL,
     credential_id character varying(36),
+    visibility character varying(32) DEFAULT 'private'::character varying NOT NULL,
     name character varying(512) NOT NULL,
     endpoint_url text,
     status character varying(32) NOT NULL,
@@ -71,6 +75,28 @@ CREATE TABLE public.source_connections (
     CONSTRAINT ck_source_connections_handler_kind CHECK (((handler_kind)::text = ANY ((ARRAY['built_in'::character varying, 'generated_custom'::character varying, 'recipe'::character varying])::text[]))),
     CONSTRAINT ck_source_connections_repair_status CHECK (((repair_status)::text = ANY ((ARRAY['ok'::character varying, 'repair_required'::character varying, 'repair_pending'::character varying, 'disabled'::character varying])::text[]))),
     CONSTRAINT source_connections_connector_id_fkey FOREIGN KEY (connector_id) REFERENCES public.source_connectors(id)
+);
+
+-- createConnection auto-subscribes the creator, and every connection read
+-- (getConnectionRow / the readable-item EXISTS clause) LEFT JOINs this
+-- table, so it must exist even though these tests don't exercise
+-- multi-user subscription fan-out directly.
+CREATE TABLE public.source_connection_user_subscriptions (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    source_connection_id character varying(36) NOT NULL,
+    user_id character varying(36) NOT NULL,
+    status character varying(32) NOT NULL,
+    library_enabled boolean DEFAULT true NOT NULL,
+    digest_enabled boolean DEFAULT true NOT NULL,
+    recommended_by_user_id character varying(36),
+    recommendation_message text,
+    last_notified_at timestamp with time zone,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT source_connection_user_subscriptions_pkey PRIMARY KEY (id),
+    CONSTRAINT uq_source_connection_user_subscriptions_space_connection_user UNIQUE (space_id, source_connection_id, user_id),
+    CONSTRAINT ck_source_connection_user_subscriptions_status CHECK (((status)::text = ANY ((ARRAY['subscribed'::character varying, 'pending'::character varying, 'dismissed'::character varying, 'muted'::character varying])::text[])))
 );
 
 -- Mirrors the Level 2 recipe portion of server/migrations/0001_baseline.sql.
@@ -360,6 +386,27 @@ CREATE TABLE public.source_items (
     updated_at timestamp with time zone NOT NULL,
     deleted_at timestamp with time zone,
     CONSTRAINT source_items_pkey PRIMARY KEY (id)
+);
+
+-- getItemRow (used by createEvidence and reads generally) selects each
+-- item's per-user library/read state via a LEFT JOIN.
+CREATE TABLE public.source_item_user_states (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    source_item_id character varying(36) NOT NULL,
+    user_id character varying(36) NOT NULL,
+    library_status character varying(32) DEFAULT 'new'::character varying NOT NULL,
+    read_status character varying(32) DEFAULT 'unread'::character varying NOT NULL,
+    first_opened_at timestamp with time zone,
+    last_opened_at timestamp with time zone,
+    progress_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT source_item_user_states_pkey PRIMARY KEY (id),
+    CONSTRAINT uq_source_item_user_states_space_item_user UNIQUE (space_id, source_item_id, user_id),
+    CONSTRAINT ck_source_item_user_states_library_status CHECK (((library_status)::text = ANY ((ARRAY['new'::character varying, 'triaged'::character varying, 'selected'::character varying, 'ignored'::character varying, 'archived'::character varying])::text[]))),
+    CONSTRAINT ck_source_item_user_states_read_status CHECK (((read_status)::text = ANY ((ARRAY['unread'::character varying, 'skimmed'::character varying, 'read'::character varying, 'discussed'::character varying])::text[]))),
+    CONSTRAINT ck_source_item_user_states_progress_json CHECK ((jsonb_typeof(progress_json) = 'object'::text))
 );
 
 CREATE TABLE public.source_snapshots (

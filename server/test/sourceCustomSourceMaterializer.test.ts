@@ -383,7 +383,7 @@ describe("CustomSourceMaterializationService (real Postgres)", () => {
       "source_recipe_output",
       "source_recipe_snapshot",
     ]);
-    expect(artifacts.rows.every((row) => row.storage_path.startsWith(`${SPACE_A}/sources-recipe/`))).toBe(true);
+    expect(artifacts.rows.every((row) => row.storage_path.startsWith(`${SPACE_A}/source-recipe/`))).toBe(true);
   });
 
   it("validates handler output against instance hard limits, not only the policy envelope", async () => {

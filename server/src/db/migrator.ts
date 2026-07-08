@@ -6,6 +6,13 @@
  * baseline for empty database bootstrap; later applied schema versions are
  * immutable and must be followed by new `NNNN_*.sql` files.
  *
+ * New `NNNN_*.sql` files are normally produced by `npm run schema:generate`
+ * (drizzle-kit diffing `server/src/db/schema/` against `server/drizzle/meta/`
+ * and copying the result here under the next sequential prefix) rather than
+ * hand-written — see the "Schema Authoring" section of
+ * `.agent/architecture/DATABASE_AND_TRANSACTIONS.md`. This runner doesn't
+ * care which produced a file; it only reads ordered `.sql` files from disk.
+ *
  * Design:
  * - Migrations are ordered `.sql` files named `NNNN_name.sql` under a directory;
  *   lexicographic filename order is apply order.
@@ -61,12 +68,22 @@ export function loadMigrations(dir: string): MigrationFile[] {
   const files = readdirSync(dir)
     .filter((f) => MIGRATION_FILE_RE.test(f))
     .sort();
+  const seenVersions = new Map<string, string>();
   return files.map((file) => {
     const match = MIGRATION_FILE_RE.exec(file)!;
+    const version = match[1];
+    const previous = seenVersions.get(version);
+    if (previous) {
+      throw new Error(
+        `duplicate migration version ${version}: ${previous} and ${file}. ` +
+          "Migration version prefixes must be unique.",
+      );
+    }
+    seenVersions.set(version, file);
     const path = join(dir, file);
     const sql = readFileSync(path, "utf8");
     return {
-      version: match[1],
+      version,
       name: match[2],
       path,
       sql,

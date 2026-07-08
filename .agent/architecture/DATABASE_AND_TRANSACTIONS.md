@@ -248,3 +248,74 @@ When adding a new scheduler:
 
 - **Distributed multi-host locking** — current single-process advisory lock does not extend to multi-host. Requires a real distributed lock service.
 - **Stronger RunStep ordering under distributed writers** — current `MAX()+1` approach is not safe under concurrent writers. Requires DB sequence or distributed counter.
+
+## Schema Authoring (drizzle-kit as a generator)
+
+Current schema state is declared as TypeScript under `server/src/db/schema/`
+(one file per module-ish domain area, e.g. `tasks.ts`, `runs.ts`,
+`retrieval.ts`; see `index.ts` for the full list). This is **schema
+declaration only** — it is not a query layer. Repositories keep writing
+hand-written SQL through `pg`; nothing about how queries are written
+changes.
+
+**Generator vs. applier — a strict split:**
+- `server/migrations/` remains the canonical applied schema history.
+- `server/src/db/migrator.ts` is the only schema applier for real databases.
+  It reads ordered `NNNN_*.sql` files, rejects duplicate version prefixes,
+  records checksums, and holds the migration advisory lock.
+- `drizzle-kit` (config: `server/drizzle.config.ts`) only generates plain
+  `.sql` files by diffing `src/db/schema/**` against
+  `server/drizzle/meta/*.json` snapshots. It is not used to apply anything
+  to a live database (no `drizzle-kit migrate` / `push` in this project).
+- `server/drizzle/` (generator output + `meta/` snapshots) is **committed to
+  git**: the snapshots are the state `generate` diffs against on every
+  machine/CI run, not disposable build output.
+- `server/scripts/db/schema-sync.mjs` bridges generated SQL into the applied
+  migration directory. Every non-bootstrap journal entry in
+  `server/drizzle/meta/_journal.json` must have exactly one content-matching
+  copy under `server/migrations/`, and migration version prefixes must be
+  unique.
+
+**Changing a table:**
+1. Edit the relevant file under `src/db/schema/`.
+2. `npm run schema:generate` (from `server/`) — runs `drizzle-kit generate`,
+   then copies the new file from `server/drizzle/` into
+   `server/migrations/` under the next sequential 4-digit prefix (drizzle's
+   own internal numbering starts at 0000 and would collide with
+   `0001_baseline`'s tracked version, so it's never used directly).
+3. Review the generated SQL like any other migration; it's an ordinary
+   immutable file from here on.
+4. `npm run schema:check` (CI-safe, no database needed) fails if schema TS
+   was edited without regenerating, or if a drizzle-generated migration
+   wasn't copied into `server/migrations/`. It also fails on duplicate
+   migration version prefixes.
+
+**Exceptions — hand-written SQL migrations remain the right tool for:**
+data backfills, changes to the `retrieval_object_type` DOMAIN's `CHECK`
+values, Postgres extensions (`CREATE EXTENSION`), and anything the Drizzle
+DSL can't express. These must not otherwise change table structure that
+`src/db/schema/` describes unless the schema files are updated in the same
+change. `schema:check` is file-based: it diffs `src/db/schema/**` against
+committed `server/drizzle/meta/` snapshots and checks generated migrations
+were copied into `server/migrations/`. It does not inspect a live database
+or re-read hand-written migrations for structural drift.
+
+**Schema representation notes:**
+- The `retrieval_object_type` Postgres DOMAIN (a closed enum used by ~10
+  retrieval/knowledge columns) is represented with `customType` in
+  `src/db/schema/_types.ts`; the DOMAIN definition itself lives in SQL
+  migrations.
+- `retrieval_chunks.embedding` is a deliberately *unconstrained* pgvector
+  column (no fixed dimension — enforced per-row by a CHECK tying
+  `embedding_dimensions` to `vector_dims(embedding)`); drizzle-orm's
+  built-in `vector()` helper always emits a fixed `vector(N)`, so it can't
+  represent this column. It is represented with `customType`.
+- `retrieval_chunks.tsv` is represented with a `tsvector` `customType`.
+- Default btree operator classes are omitted from schema declarations and
+  snapshots. The HNSW half-vector ANN index keeps its required
+  `halfvec_cosine_ops` operator class inside the raw SQL index expression.
+
+**Normal workflow does not use `drizzle-kit pull`.** The day-to-day tools
+(`schema:generate`, `schema:check`) diff only against committed
+`server/drizzle/meta/*.json` snapshots. `pull` is not a schema parity check
+for this repository.

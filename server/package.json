@@ -18,10 +18,13 @@
     "pretest:watch": "npm run build:protocol",
     "test:watch": "vitest",
     "migrate": "npm run build && node dist/db/migrateCli.js up",
-    "migrate:status": "npm run build && node dist/db/migrateCli.js status"
+    "migrate:status": "npm run build && node dist/db/migrateCli.js status",
+    "schema:generate": "drizzle-kit generate --config=drizzle.config.ts && node scripts/db/schema-sync.mjs copy",
+    "schema:check": "drizzle-kit generate --config=drizzle.config.ts && git diff --exit-code -- drizzle src/db/schema && node scripts/db/schema-sync.mjs check"
   },
   "dependencies": {
     "@agent-space/protocol": "file:../packages/protocol",
+    "drizzle-orm": "^0.45.2",
     "fast-xml-parser": "^5.9.3",
     "fastify": "^5.2.0",
     "node-pty": "^1.1.0",
@@ -35,6 +38,7 @@
     "@testcontainers/postgresql": "^12.0.2",
     "@types/node": "^22.0.0",
     "@types/pg": "^8.20.0",
+    "drizzle-kit": "^0.31.10",
     "typescript": "^6.0.3",
     "vitest": "^3.2.6"
   },

@@ -256,17 +256,17 @@ describe("SourcePresetService", () => {
     const connectorLookup = db.calls.find((call) => call.sql.includes("FROM source_connectors"));
     expect(connectorLookup?.params[0]).toBe("arxiv");
     const insert = db.calls.find((call) => call.sql.includes("INSERT INTO source_connections"));
-    expect(insert?.params[5]).toBe('arXiv: cat:cs.AI AND all:"agent"');
-    expect(String(insert?.params[6])).toContain("https://export.arxiv.org/api/query?");
-    expect(insert?.params[7]).toBe("weekly");
-    expect(insert?.params[8]).toBe("extract_text");
-    expect(JSON.parse(String(insert?.params[11]))).toMatchObject({
+    expect(insert?.params[6]).toBe('arXiv: cat:cs.AI AND all:"agent"');
+    expect(String(insert?.params[7])).toContain("https://export.arxiv.org/api/query?");
+    expect(insert?.params[8]).toBe("weekly");
+    expect(insert?.params[9]).toBe("extract_text");
+    expect(JSON.parse(String(insert?.params[12]))).toMatchObject({
       allow_external_model_egress: true,
     });
-    expect(JSON.parse(String(insert?.params[12]))).toMatchObject({
+    expect(JSON.parse(String(insert?.params[13]))).toMatchObject({
       source_egress_class: "external_provider_allowed",
     });
-    expect(JSON.parse(String(insert?.params[13]))).toEqual({
+    expect(JSON.parse(String(insert?.params[14]))).toEqual({
       preset_id: "arxiv",
       mode: "search",
       categories: [],
@@ -275,7 +275,7 @@ describe("SourcePresetService", () => {
       sort_by: "lastUpdatedDate",
       sort_order: "descending",
     });
-    expect(JSON.parse(String(insert?.params[14]))).toEqual({ frequency: "weekly", weekday: 1, hour: 9, minute: 0 });
+    expect(JSON.parse(String(insert?.params[15]))).toEqual({ frequency: "weekly", weekday: 1, hour: 9, minute: 0 });
   });
 
   it("createArxiv creates a recent category source without a search keyword", async () => {
@@ -288,10 +288,10 @@ describe("SourcePresetService", () => {
     });
 
     const insert = db.calls.find((call) => call.sql.includes("INSERT INTO source_connections"));
-    expect(insert?.params[5]).toBe("arXiv new: cs.LG");
-    expect(new URL(String(insert?.params[6])).searchParams.get("search_query")).toBe("cat:cs.LG");
-    expect(new URL(String(insert?.params[6])).searchParams.get("sortBy")).toBe("submittedDate");
-    expect(JSON.parse(String(insert?.params[13]))).toEqual({
+    expect(insert?.params[6]).toBe("arXiv new: cs.LG");
+    expect(new URL(String(insert?.params[7])).searchParams.get("search_query")).toBe("cat:cs.LG");
+    expect(new URL(String(insert?.params[7])).searchParams.get("sortBy")).toBe("submittedDate");
+    expect(JSON.parse(String(insert?.params[14]))).toEqual({
       preset_id: "arxiv",
       mode: "recent_by_category",
       categories: ["cs.LG"],
@@ -312,9 +312,9 @@ describe("SourcePresetService", () => {
     });
 
     const insert = db.calls.find((call) => call.sql.includes("INSERT INTO source_connections"));
-    expect(insert?.params[5]).toBe("arXiv new: cs.LG + stat.ML");
-    expect(new URL(String(insert?.params[6])).searchParams.get("search_query")).toBe("cat:cs.LG OR cat:stat.ML");
-    expect(JSON.parse(String(insert?.params[13]))).toEqual({
+    expect(insert?.params[6]).toBe("arXiv new: cs.LG + stat.ML");
+    expect(new URL(String(insert?.params[7])).searchParams.get("search_query")).toBe("cat:cs.LG OR cat:stat.ML");
+    expect(JSON.parse(String(insert?.params[14]))).toEqual({
       preset_id: "arxiv",
       mode: "recent_by_category",
       categories: ["cs.LG", "stat.ML"],
@@ -517,17 +517,31 @@ describe("SourceExtractionWorker arXiv HTML-first extraction", () => {
 /** Fake Queryable for preset service tests (settings + createConnection path). */
 class PresetDb implements Queryable {
   readonly calls: Array<{ sql: string; params: readonly unknown[] }> = [];
+  private lastConnection: Record<string, unknown> | undefined;
 
   async query<Row = Record<string, unknown>>(sql: string, params: readonly unknown[] = []) {
     this.calls.push({ sql, params });
     if (sql.includes("FROM settings")) {
       return { rows: [] as Row[], rowCount: 0 };
     }
+    if (sql.includes("JOIN source_connectors")) {
+      // getConnectionRow's re-fetch after createConnection inserts + subscribes.
+      return { rows: [{ ...this.lastConnection, subscription_status: "subscribed" }] as Row[], rowCount: 1 };
+    }
     if (sql.includes("FROM source_connectors")) {
       return { rows: [{ id: "connector-arxiv" }] as Row[], rowCount: 1 };
     }
     if (sql.includes("INSERT INTO source_connections")) {
-      return { rows: [connectionRow(params)] as Row[], rowCount: 1 };
+      this.lastConnection = connectionRow(params);
+      return { rows: [this.lastConnection] as Row[], rowCount: 1 };
+    }
+    if (sql.includes("INSERT INTO source_connection_user_subscriptions")) {
+      return { rows: [{ status: params[4] }] as Row[], rowCount: 1 };
+    }
+    if (sql.includes("SELECT type FROM spaces")) {
+      // Personal space: createDefaultPendingSubscriptions short-circuits
+      // before fanning pending subscriptions out to other space members.
+      return { rows: [{ type: "personal" }] as Row[], rowCount: 1 };
     }
     if (sql.includes("FROM scheduler_tasks")) {
       return { rows: [] as Row[], rowCount: 0 };
@@ -546,17 +560,23 @@ function connectionRow(params: readonly unknown[]): Record<string, unknown> {
     connector_id: params[2],
     owner_user_id: params[3],
     credential_id: params[4],
-    name: params[5],
-    endpoint_url: params[6],
+    visibility: params[5],
+    name: params[6],
+    endpoint_url: params[7],
     status: "active",
-    fetch_frequency: params[7],
-    capture_policy: params[8],
-    trust_level: params[9],
+    fetch_frequency: params[8],
+    capture_policy: params[9],
+    trust_level: params[10],
     topic_hints_json: null,
     consent_json: {},
     policy_json: {},
-    config_json: JSON.parse(String(params[13])),
-    schedule_rule_json: JSON.parse(String(params[14])),
+    config_json: JSON.parse(String(params[14])),
+    schedule_rule_json: JSON.parse(String(params[15])),
+    handler_kind: "built_in",
+    active_handler_version_id: null,
+    active_recipe_version_id: null,
+    repair_status: "ok",
+    last_handler_run_id: null,
     last_checked_at: null,
     next_check_at: null,
     created_at: "2026-07-03T00:00:00.000Z",
