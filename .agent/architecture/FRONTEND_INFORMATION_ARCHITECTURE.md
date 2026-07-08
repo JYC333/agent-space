@@ -94,7 +94,7 @@ logic by calling every domain API separately from the browser.
 
 Mirrors Home's structure but limited to the active Space (`homeApi.summary`): today stats, the
 product-loop strip (recent runs / open tasks / pending proposals), pending review with quick
-accept/reject, intake, projects, providers, runtime, recent. Writes default to the active Space.
+accept/reject, sources, projects, providers, runtime, recent. Writes default to the active Space.
 
 ---
 
@@ -103,10 +103,10 @@ accept/reject, intake, projects, providers, runtime, recent. Writes default to t
 Two stable tiers plus per-scene context (`src/core/navigation.tsx`, `src/components/shell/`):
 
 - **Global Rail** (`RAIL_ITEMS`) — narrow, icon-only desktop rail of major destinations, Home
-  first and stable: Home · Inbox · Intake · Review · Knowledge · Tasks · Projects · Agents · Workspaces · Settings.
+  first and stable: Home · Inbox · Library · Sources · Review · Knowledge · Tasks · Projects · Agents · Workspaces · Settings.
   Collapsible/expandable. On mobile this becomes the bottom tab bar (`MOBILE_TAB_ITEMS`).
 - **Scene Sidebar** (`SCENES`) — second-level navigation for the current scene, changes by
-  scene (Inbox / Review / Agents / Workspaces). Collapsible; when collapsed the expand
+  scene (Inbox / Library / Review / Agents / Workspaces). Collapsible; when collapsed the expand
   handle is shown in the main header next to the scene title (e.g. "☰ Agents"). Home needs no
   scene sidebar. On mobile it becomes a horizontal tab strip. Filter scenes (Inbox)
   drive a single real, API-backed query param the page reads — no fabricated views; route
@@ -185,8 +185,9 @@ not be navigable.
 | Agent Rooms | Enabled | Space-scoped room surface at `/agent-groups`; starts on create/list, then opens a chat-style room with conversation history and a Tiptap composer. Creating a room only creates the room and members; goal is optional room metadata that can be added or edited later. The first user message creates the room/root run, with the room goal passed as background instruction only when present rather than inserted as a synthetic chat message. User messages go to the manager agent by default when no structured mention is present. Structured `@agent` mention tokens are parsed into a visible route preview before send: one mention routes that segment directly to that agent, adjacent mentions fan out the same segment in parallel, and separated mention groups create segmented recipient prompts. The user can explicitly switch the turn to Agent coordination, which routes the full message to the manager for decomposition/delegation instead of directly fanning out. Room members are the automatic `agent.delegate` target pool for every active room agent, not only the manager; `agent.wait_for_results` lets any room agent wait for sibling/delegated same-room results when its answer depends on them. Member capability snapshots are included in room tool context. Chat history treats recipient/delegating agent `agent_message` rows as the main conversation and folds child-agent delegation details by user turn by default; advanced lifecycle controls, trace/run links, and policy records live behind room settings / advanced audit rather than the chat first screen. |
 | **Home** (user-scoped) | Enabled | Cross-space command center at `/home`; **not** a Space, not in the switcher |
 | **Today** (Space) | Enabled | Space-scoped dashboard at `/spaces/:spaceId/today` for the active Space |
-| **Inbox** (Activity) | Enabled | Capture intake (rail label "Inbox"; route `/activity`) |
-| **Intake** | Enabled | Space-scoped information stream control plane at `/intake`; owns RSS/Atom/web page connections, candidate items, evidence, scan state, and source governance. Project pages consume Intake summaries and link back here for management. |
+| **Inbox** (Activity) | Enabled | Capture inputs (rail label "Inbox"; route `/activity`) |
+| **Library** | Enabled | Space-scoped, per-user reading surface at `/library` for Sources-derived items and digests. `/library` is a shell that defaults to `/library/items`; scene-sidebar routes keep `All Items` and `Digests` as siblings, with soft type filters under `All Items` (`/library/items/articles`, `/library/items/emails`, `/library/items/videos`, `/library/items/podcasts`, `/library/items/pdfs`). It only shows items/digests from sources the current user follows, plus that user's manual unconnected URLs. Source digest detail routes live under `/library/digests/:connectionId/:date`; single-item readers live under `/library/items/:itemId` or the day-scoped `/library/digests/:connectionId/:date/items/:itemId`. |
+| **Sources** | Enabled | Space-scoped information stream control plane at `/sources`; owns RSS/Atom/web page connections, owner/visibility metadata, opt-in delivery subscriptions, scan state, and source governance. Pending source recommendations show source metadata and Follow/Dismiss/Mute actions without exposing the item stream until the user follows. Project pages consume Sources summaries and link back here for management. |
 | **Review** (Proposals + Memory) | Enabled | Governance area (rail label "Review"; routes `/proposals` and `/memory`). The scene sidebar links real surfaces; proposal-type filters live inside `/proposals`. |
 | **Knowledge** | Enabled | First-level unified module (rail label "Knowledge"; route `/knowledge`). `/knowledge` redirects to the last-used workspace (default `/knowledge/notes`); `/knowledge/home` is an optional overview hub, never the forced landing. Sub-areas switch via an in-header breadcrumb (no scene sidebar): **Notes** (working-knowledge workspace — configurable collection tree + open-note tabs), **Wiki** (canonical, KnowledgeItem-backed, `/knowledge/wiki`), **Sources** (backend source CRUD exists; current frontend is list-only evidence browsing), **Cards** |
 | **Graph** | Enabled | Space-scoped relationship projection at `/graph`; renders the shared `GraphProjection` contract through `apps/web/src/components/graph/`, reads core `/api/v1/graph/*`, persists per-user view state under `scope_key='core:graph'`, and remains read-only over visible `space_objects` / `object_relations`. |
@@ -245,11 +246,17 @@ The frontend is ready for personal dogfooding. The core product loop is usable:
   optional project-scoped saved workflow presets, builds run drafts directly
   from templates or saved presets, and queues normal agent runs. Runtime profile
   selection is hidden when an Agent has only one enabled default runtime. Project
-  pages show read-only Intake consumption summaries and recent Intake
-  recommendations, then hand off source management to `/intake?project_id=...`;
+  pages show read-only Sources consumption summaries and recent Sources
+  recommendations, then hand off source management to `/sources?project_id=...`;
   they do not create RSS/source connections. The
-  Capabilities page is the imported skill/package review surface, and Artifacts
-  render structured Research outputs when possible.
+  Capabilities page is the imported skill/package review surface. Library (`/library`)
+  is the shell for per-user Sources-derived reading, with scene-sidebar routes
+  for All Items and Digests; item type filters live under All Items rather than
+  becoming top-level Library categories. Activity Inbox daily source rows point
+  into `/library/digests/:connectionId/:date` and source recommendation rows
+  point into `/sources?view=pending`; Inbox does not render source item or
+  digest bodies.
+  Artifacts render structured Research outputs when possible.
 
 **Non-blocking follow-ups (discovered during use):**
 

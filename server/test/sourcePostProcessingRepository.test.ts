@@ -13,8 +13,8 @@ import {
   normalizeActions,
   normalizeInputConfig,
   normalizeTriggerConfig,
-} from "../src/modules/intake/postProcessing/repository";
-import type { SourceConnectionRow } from "../src/modules/intake/intakeRepositoryRows";
+} from "../src/modules/sources/postProcessing/repository";
+import type { SourceConnectionRow } from "../src/modules/sources/sourceRepositoryRows";
 
 const MIGRATIONS_DIR = join(process.cwd(), "migrations");
 const SPACE = "11111111-1111-4111-8111-111111111111";
@@ -52,9 +52,9 @@ afterAll(async () => {
 beforeEach(async () => {
   if (!available || !pool) return;
   await pool.query(
-    `TRUNCATE source_post_processing_item_decisions, source_post_processing_runs, source_post_processing_rules,
+    `TRUNCATE activity_records, artifacts, source_post_processing_item_decisions, source_post_processing_runs, source_post_processing_rules,
        jobs, retrieval_edges, retrieval_chunks, retrieval_aliases, retrieval_objects,
-       extracted_evidence, intake_items, scheduler_tasks, source_connections,
+       extracted_evidence, source_items, scheduler_tasks, source_connections,
        source_connectors, agent_runtime_profiles, agent_versions, agents,
        projects, space_memberships, users, spaces CASCADE`,
   );
@@ -79,7 +79,7 @@ beforeEach(async () => {
   );
   await pool.query(
     `INSERT INTO agents (id, space_id, owner_user_id, name, status, current_version_id, created_at, updated_at, visibility)
-     VALUES ($1,$2,$3,'Reusable Intake Agent','active',NULL,$4,$4,'space_shared')`,
+     VALUES ($1,$2,$3,'Reusable Source Agent','active',NULL,$4,$4,'space_shared')`,
     [AGENT, SPACE, OWNER, now],
   );
   await pool.query(
@@ -87,7 +87,7 @@ beforeEach(async () => {
        id, agent_id, space_id, version_label, system_prompt, model_config_json,
        runtime_config_json, context_policy_json, memory_policy_json,
        capabilities_json, tool_permissions_json, runtime_policy_json, created_at
-     ) VALUES ($1,$2,$3,'v1','Summarize intake','{}'::jsonb,'{"adapter_type":"model_api"}'::jsonb,
+     ) VALUES ($1,$2,$3,'v1','Summarize source','{}'::jsonb,'{"adapter_type":"model_api"}'::jsonb,
        '{}'::jsonb,'{}'::jsonb,'[]'::jsonb,'{}'::jsonb,'{}'::jsonb,$4)`,
     [AGENT_VERSION, AGENT, SPACE, now],
   );
@@ -116,6 +116,13 @@ beforeEach(async () => {
        'daily','reference_only','normal','{}'::jsonb,'{}'::jsonb,'{}'::jsonb,$5,$5)`,
     [CONNECTION, SPACE, CONNECTOR, OWNER, now],
   );
+  await pool.query(
+    `INSERT INTO source_connection_user_subscriptions (
+       id, space_id, source_connection_id, user_id, status,
+       library_enabled, digest_enabled, created_at, updated_at
+     ) VALUES ($1,$2,$3,$4,'subscribed',true,true,$5,$5)`,
+    [randomUUID(), SPACE, CONNECTION, OWNER, now],
+  );
 });
 
 function repo(): PgSourcePostProcessingRepository {
@@ -127,7 +134,7 @@ class FakePostProcessingDb {
 
   async query<T>(sql: string, params: unknown[] = []): Promise<{ rows: T[] }> {
     this.calls.push({ sql, params });
-    return { rows: [{ id: "job-1", intake_item_id: "item-1" } as T] };
+    return { rows: [{ id: "job-1", source_item_id: "item-1" } as T] };
   }
 }
 
@@ -139,6 +146,7 @@ function sourceConnection(overrides: Partial<SourceConnectionRow> = {}): SourceC
     connector_id: CONNECTOR,
     owner_user_id: OWNER,
     credential_id: null,
+    visibility: "space_discoverable",
     name: "arXiv",
     endpoint_url: "https://example.org/rss",
     status: "active",
@@ -166,12 +174,12 @@ function sourceConnection(overrides: Partial<SourceConnectionRow> = {}): SourceC
 async function seedItem(title: string, createdAt: string): Promise<string> {
   const id = randomUUID();
   await pool!.query(
-    `INSERT INTO intake_items (
+    `INSERT INTO source_items (
        id, space_id, connection_id, item_type, source_object_type, source_object_id,
-       title, source_uri, excerpt, first_seen_at, last_seen_at, status, read_status,
+       title, source_uri, excerpt, first_seen_at, last_seen_at,
        content_state, retention_policy, created_at, updated_at
-     ) VALUES ($1,$2,$3,'external_url','intake_item',$1,$4,$6,'Paper abstract',
-       $5,$5,'new','unread','excerpt_saved','summary_only',$5,$5)`,
+     ) VALUES ($1,$2,$3,'external_url','source_item',$1,$4,$6,'Paper abstract',
+       $5,$5,'excerpt_saved','summary_only',$5,$5)`,
     [id, SPACE, CONNECTION, title, createdAt, `https://example.org/paper/${id}`],
   );
   return id;
@@ -182,10 +190,10 @@ async function seedEvidence(itemId: string, title: string): Promise<string> {
   const now = new Date().toISOString();
   await pool!.query(
     `INSERT INTO extracted_evidence (
-       id, space_id, intake_item_id, source_object_type, source_object_id,
+       id, space_id, source_item_id, source_object_type, source_object_id,
        evidence_type, title, content_excerpt, trust_level, extraction_method,
        confidence, status, metadata_json, created_at, updated_at
-     ) VALUES ($1,$2,$3,'intake_item',$3,'excerpt',$4,'Important excerpt',
+     ) VALUES ($1,$2,$3,'source_item',$3,'excerpt',$4,'Important excerpt',
        'normal','manual',0.8,'candidate','{}'::jsonb,$5,$5)`,
     [id, SPACE, itemId, title, now],
   );
@@ -296,7 +304,7 @@ describe("source post-processing repository (real Postgres)", () => {
       cursor: null,
     });
     expect(initial.items.map((item) => item.id)).toEqual([first, second]);
-    expect(initial.evidence.map((row) => row.intake_item_id)).toEqual([first]);
+    expect(initial.evidence.map((row) => row.source_item_id)).toEqual([first]);
     expect(initial.cursorAfter).toMatchObject({ id: second, created_at: "2026-07-02T00:00:00.000Z" });
 
     const next = await repo().collectInputBatch({
@@ -354,48 +362,80 @@ describe("source post-processing repository (real Postgres)", () => {
 
     await repo().advanceRuleCursor({ spaceId: SPACE, ruleId: rule.id, cursor: cursorAfter });
     const reloaded = await repo().getRule(SPACE, rule.id);
-    expect(reloaded?.cursor_json).toMatchObject({ intake_watermark: cursorAfter });
+    expect(reloaded?.cursor_json).toMatchObject({ source_watermark: cursorAfter });
   });
 
-  it("refreshes intake retrieval projections after applying item decisions", async () => {
+  it("persists item decisions without mutating per-user library state", async () => {
     if (!available) return;
     const selected = await seedItem("Relevant paper", "2026-07-01T00:00:00.000Z");
     const ignored = await seedItem("Skipped paper", "2026-07-02T00:00:00.000Z");
+    const rule = await repo().createRule({
+      spaceId: SPACE,
+      sourceConnectionId: CONNECTION,
+      agentId: AGENT,
+      projectId: null,
+      name: "Screening",
+      triggerType: "manual",
+      triggerConfig: normalizeTriggerConfig(null, "manual"),
+      inputConfig: normalizeInputConfig(null),
+      actions: normalizeActions({ batch_digest: true, mark_items: true }),
+      createdByUserId: OWNER,
+    });
+    const run = await repo().createRun({
+      spaceId: SPACE,
+      ruleId: rule.id,
+      sourceConnectionId: CONNECTION,
+      agentId: AGENT,
+      projectId: null,
+      triggeredByUserId: OWNER,
+      triggerType: "manual",
+      inputItemIds: [selected, ignored],
+      inputEvidenceIds: [],
+      cursorBefore: null,
+      cursorAfter: { id: ignored, created_at: "2026-07-02T00:00:00.000Z" },
+    });
 
-    await repo().applyItemDecisions(SPACE, [
-      {
-        intake_item_id: selected,
+    await repo().persistItemDecisions({
+      spaceId: SPACE,
+      sourceConnectionId: CONNECTION,
+      ruleId: rule.id,
+      runId: run.id,
+      projectId: null,
+      decisions: [{
+        source_item_id: selected,
         relevance: "relevant",
         confidence: 0.9,
         reason: "Strong match.",
         matched_context_refs: [],
-      },
-      {
-        intake_item_id: ignored,
+      }, {
+        source_item_id: ignored,
         relevance: "not_relevant",
         confidence: 0.8,
         reason: "No clear match.",
         matched_context_refs: [],
-      },
-    ]);
-
-    const statuses = await pool!.query<{ id: string; status: string }>(
-      `SELECT id, status FROM intake_items WHERE id = ANY($1::varchar[]) ORDER BY id`,
-      [[selected, ignored]],
-    );
-    expect(Object.fromEntries(statuses.rows.map((row) => [row.id, row.status]))).toMatchObject({
-      [selected]: "selected",
-      [ignored]: "ignored",
+      }],
     });
 
-    const projections = await pool!.query<{ object_id: string; status: string }>(
-      `SELECT object_id, status
-         FROM retrieval_objects
-        WHERE space_id = $1 AND object_type = 'intake_item'
-        ORDER BY object_id`,
+    const states = await pool!.query<{ count: string }>(
+      `SELECT count(*)::text AS count
+         FROM source_item_user_states
+        WHERE space_id = $1
+          AND source_item_id = ANY($2::varchar[])`,
+      [SPACE, [selected, ignored]],
+    );
+    expect(states.rows[0]?.count).toBe("0");
+
+    const decisions = await pool!.query<{ source_item_id: string; review_status: string }>(
+      `SELECT source_item_id, review_status
+         FROM source_post_processing_item_decisions
+        WHERE space_id = $1
+        ORDER BY source_item_id`,
       [SPACE],
     );
-    expect(projections.rows).toEqual([{ object_id: selected, status: "selected" }]);
+    expect(decisions.rows).toEqual([
+      { source_item_id: ignored, review_status: "pending" },
+      { source_item_id: selected, review_status: "pending" },
+    ]);
   });
 
   it("reports backlog counts from the rule cursor", async () => {
@@ -474,9 +514,8 @@ describe("source post-processing repository (real Postgres)", () => {
       ruleId: rule.id,
       runId: run.id,
       projectId: PROJECT,
-      appliedByMarkItems: true,
       decisions: [{
-        intake_item_id: itemId,
+        source_item_id: itemId,
         relevance: "relevant",
         confidence: 0.91,
         reason: "Matches project context.",
@@ -487,7 +526,7 @@ describe("source post-processing repository (real Postgres)", () => {
     const listed = await repo().listDecisions({
       spaceId: SPACE,
       connectionId: CONNECTION,
-      reviewStatus: "accepted",
+      reviewStatus: "pending",
       limit: 10,
       offset: 0,
     });
@@ -495,10 +534,9 @@ describe("source post-processing repository (real Postgres)", () => {
     expect(listed.items[0]).toMatchObject({
       source_connection_id: CONNECTION,
       project_id: PROJECT,
-      intake_item_id: itemId,
+      source_item_id: itemId,
       relevance: "relevant",
-      applied_item_status: "selected",
-      review_status: "accepted",
+      review_status: "pending",
       item: { title: "Relevant paper" },
     });
 
@@ -510,6 +548,346 @@ describe("source post-processing repository (real Postgres)", () => {
     });
     expect(updated.review_status).toBe("queued");
     expect(updated.action_json).toMatchObject({ queue_content: { job_ids: ["job-1"] } });
+  });
+
+  it("aggregates the briefing stream by the rule's local day, not UTC", async () => {
+    if (!available) return;
+    const itemA = await seedItem("Relevant paper", "2026-07-01T00:00:00.000Z");
+    const itemB = await seedItem("Maybe paper", "2026-07-01T00:00:00.000Z");
+    const rule = await repo().createRule({
+      spaceId: SPACE,
+      sourceConnectionId: CONNECTION,
+      agentId: AGENT,
+      projectId: null,
+      name: "Briefing digest",
+      triggerType: "manual",
+      triggerConfig: normalizeTriggerConfig(null, "manual"),
+      // UTC+8: a run stamped 23:30 UTC falls on the *next* calendar day locally.
+      inputConfig: normalizeInputConfig({ timezone: "Asia/Shanghai" }),
+      actions: normalizeActions({ batch_digest: true, per_item_summary: true }),
+      createdByUserId: OWNER,
+    });
+    const run = await repo().createRun({
+      spaceId: SPACE,
+      ruleId: rule.id,
+      sourceConnectionId: CONNECTION,
+      agentId: AGENT,
+      projectId: null,
+      triggeredByUserId: OWNER,
+      triggerType: "manual",
+      inputItemIds: [itemA, itemB],
+      inputEvidenceIds: [],
+      cursorBefore: null,
+      cursorAfter: { id: itemB, created_at: "2026-07-01T00:00:00.000Z" },
+    });
+    const digestArtifactId = await repo().insertArtifact({
+      spaceId: SPACE,
+      runId: null,
+      ownerUserId: OWNER,
+      projectId: null,
+      artifactType: "summary",
+      title: "Briefing digest",
+      content: "# Digest\n\n**Relevant paper** is a strong match.\n",
+      metadata: { action: "batch_digest" },
+    });
+    const summaryArtifactId = await repo().insertArtifact({
+      spaceId: SPACE,
+      runId: null,
+      ownerUserId: OWNER,
+      projectId: null,
+      artifactType: "summary",
+      title: "Summary: Relevant paper",
+      content: "Concise per-item summary.",
+      metadata: { action: "per_item_summary", source_item_id: itemA },
+    });
+    await repo().markRunFinished({
+      runId: run.id,
+      spaceId: SPACE,
+      status: "succeeded",
+      outputArtifactIds: [digestArtifactId, summaryArtifactId],
+      summary: "Digest complete",
+    });
+    await repo().persistItemDecisions({
+      spaceId: SPACE,
+      sourceConnectionId: CONNECTION,
+      ruleId: rule.id,
+      runId: run.id,
+      projectId: null,
+      decisions: [
+        { source_item_id: itemA, relevance: "relevant", confidence: 0.9, reason: "Strong match.", matched_context_refs: [] },
+        { source_item_id: itemB, relevance: "maybe", confidence: 0.5, reason: "Unclear.", matched_context_refs: [] },
+      ],
+    });
+    // createRun/markRunFinished always stamp `now()`; back-date the run directly
+    // to a timestamp whose UTC and Asia/Shanghai calendar dates differ, so the
+    // assertions below only pass if the bucketing is actually timezone-aware.
+    await pool!.query(
+      `UPDATE source_post_processing_runs SET created_at = '2026-07-07T23:30:00.000Z' WHERE id = $1`,
+      [run.id],
+    );
+
+    const list = await repo().listBriefings({ spaceId: SPACE, userId: OWNER, limit: 10, offset: 0 });
+    expect(list.total).toBe(1);
+    const summary = list.items[0]!;
+    expect(summary).toMatchObject({
+      source_connection_id: CONNECTION,
+      connection_name: "arXiv",
+      date: "2026-07-08",
+      run_ids: [run.id],
+      run_count: 1,
+      item_decision_counts: { relevant: 1, maybe: 1, not_relevant: 0 },
+      digest_artifact_id: digestArtifactId,
+    });
+    expect(summary.digest_preview).toBe("Digest Relevant paper is a strong match.");
+
+    const detail = await repo().getBriefing({ spaceId: SPACE, userId: OWNER, connectionId: CONNECTION, date: "2026-07-08" });
+    expect(detail).toMatchObject({
+      source_connection_id: CONNECTION,
+      connection_name: "arXiv",
+      date: "2026-07-08",
+      runs: [{ run_id: run.id, status: "succeeded" }],
+      digests: [{ run_id: run.id, artifact_id: digestArtifactId }],
+      item_summaries: [{ source_item_id: itemA, artifact_id: summaryArtifactId }],
+    });
+    expect(detail!.item_decisions.map((d) => d.source_item_id).sort()).toEqual([itemA, itemB].sort());
+
+    expect(await repo().getBriefing({ spaceId: SPACE, userId: OWNER, connectionId: CONNECTION, date: "2099-01-01" })).toBeNull();
+  });
+
+  it("emits and re-surfaces one daily Activity Inbox briefing pointer per source local day", async () => {
+    if (!available) return;
+    const itemA = await seedItem("Relevant paper", "2026-07-01T00:00:00.000Z");
+    const itemB = await seedItem("Maybe paper", "2026-07-01T00:00:00.000Z");
+    const rule = await repo().createRule({
+      spaceId: SPACE,
+      sourceConnectionId: CONNECTION,
+      agentId: AGENT,
+      projectId: PROJECT,
+      name: "Daily briefing",
+      triggerType: "manual",
+      triggerConfig: normalizeTriggerConfig(null, "manual"),
+      inputConfig: normalizeInputConfig({ timezone: "Asia/Shanghai" }),
+      actions: normalizeActions({ batch_digest: true, mark_items: true }),
+      createdByUserId: OWNER,
+    });
+    const run = await repo().createRun({
+      spaceId: SPACE,
+      ruleId: rule.id,
+      sourceConnectionId: CONNECTION,
+      agentId: AGENT,
+      projectId: PROJECT,
+      triggeredByUserId: OWNER,
+      triggerType: "manual",
+      inputItemIds: [itemA, itemB],
+      inputEvidenceIds: [],
+      cursorBefore: null,
+      cursorAfter: null,
+    });
+    await pool!.query(
+      `UPDATE source_post_processing_runs SET created_at = '2026-07-07T23:30:00.000Z' WHERE id = $1`,
+      [run.id],
+    );
+    const digestArtifactId = await repo().insertArtifact({
+      spaceId: SPACE,
+      runId: null,
+      ownerUserId: OWNER,
+      projectId: PROJECT,
+      artifactType: "summary",
+      title: "Daily digest",
+      content: "# First digest\n\nFull body stays in Brief, not Activity.\n",
+      metadata: { action: "batch_digest" },
+    });
+    await repo().persistItemDecisions({
+      spaceId: SPACE,
+      sourceConnectionId: CONNECTION,
+      ruleId: rule.id,
+      runId: run.id,
+      projectId: PROJECT,
+      decisions: [
+        { source_item_id: itemA, relevance: "relevant", confidence: 0.9, reason: "Strong match.", matched_context_refs: [] },
+        { source_item_id: itemB, relevance: "maybe", confidence: 0.5, reason: "Unclear.", matched_context_refs: [] },
+      ],
+    });
+    await repo().markRunFinished({
+      runId: run.id,
+      spaceId: SPACE,
+      status: "succeeded",
+      outputArtifactIds: [digestArtifactId],
+      summary: "Digest complete",
+    });
+
+    const aggregateKey = `source:briefing:${CONNECTION}:2026-07-08`;
+    const first = await pool!.query<{
+      id: string;
+      title: string;
+      content: string;
+      payload_json: {
+        briefing_date: string;
+        source_connection_id: string;
+        post_processing_run_ids: string[];
+        artifact_ids: string[];
+        decision_counts: { relevant: number; maybe: number; not_relevant: number };
+      };
+      status: string;
+      processed_at: Date | null;
+      project_id: string | null;
+      aggregate_key: string;
+    }>(
+      `SELECT id, title, content, payload_json, status, processed_at, project_id, aggregate_key
+         FROM activity_records
+        WHERE space_id = $1 AND aggregate_key = $2`,
+      [SPACE, aggregateKey],
+    );
+    expect(first.rowCount).toBe(1);
+    const firstRow = first.rows[0]!;
+    expect(firstRow).toMatchObject({
+      aggregate_key: aggregateKey,
+      project_id: PROJECT,
+      status: "raw",
+    });
+    expect(firstRow.title).toContain("arXiv - 2026-07-08 briefing");
+    expect(firstRow.content).toContain("2 items screened: 1 relevant, 1 maybe, 0 not relevant.");
+    expect(firstRow.content).toContain("First digest");
+    expect(firstRow.payload_json).toMatchObject({
+      briefing_date: "2026-07-08",
+      source_connection_id: CONNECTION,
+      post_processing_run_ids: [run.id],
+      artifact_ids: [digestArtifactId],
+      decision_counts: { relevant: 1, maybe: 1, not_relevant: 0 },
+    });
+
+    await pool!.query(
+      `UPDATE activity_records
+          SET status = 'processed', processed_at = '2026-07-08T12:00:00.000Z'
+        WHERE id = $1`,
+      [firstRow.id],
+    );
+    const itemC = await seedItem("Skipped paper", "2026-07-02T00:00:00.000Z");
+    const secondRun = await repo().createRun({
+      spaceId: SPACE,
+      ruleId: rule.id,
+      sourceConnectionId: CONNECTION,
+      agentId: AGENT,
+      projectId: PROJECT,
+      triggeredByUserId: OWNER,
+      triggerType: "manual",
+      inputItemIds: [itemC],
+      inputEvidenceIds: [],
+      cursorBefore: null,
+      cursorAfter: null,
+    });
+    await pool!.query(
+      `UPDATE source_post_processing_runs SET created_at = '2026-07-08T10:00:00.000Z' WHERE id = $1`,
+      [secondRun.id],
+    );
+    await repo().persistItemDecisions({
+      spaceId: SPACE,
+      sourceConnectionId: CONNECTION,
+      ruleId: rule.id,
+      runId: secondRun.id,
+      projectId: PROJECT,
+      decisions: [
+        { source_item_id: itemC, relevance: "not_relevant", confidence: 0.8, reason: "Not useful.", matched_context_refs: [] },
+      ],
+    });
+    await repo().markRunFinished({
+      runId: secondRun.id,
+      spaceId: SPACE,
+      status: "succeeded",
+      outputArtifactIds: [],
+      summary: "Second digest complete",
+    });
+
+    const resurfaced = await pool!.query<typeof first.rows[number]>(
+      `SELECT id, title, content, payload_json, status, processed_at, project_id, aggregate_key
+         FROM activity_records
+        WHERE space_id = $1 AND aggregate_key = $2`,
+      [SPACE, aggregateKey],
+    );
+    const resurfacedRow = resurfaced.rows[0]!;
+    expect(resurfaced.rowCount).toBe(1);
+    expect(resurfacedRow.id).toBe(firstRow.id);
+    expect(resurfacedRow.status).toBe("raw");
+    expect(resurfacedRow.processed_at).toBeNull();
+    expect(resurfacedRow.payload_json.post_processing_run_ids).toEqual([secondRun.id, run.id]);
+    expect(resurfacedRow.payload_json.decision_counts).toEqual({ relevant: 1, maybe: 1, not_relevant: 1 });
+
+    await pool!.query(
+      `UPDATE activity_records
+          SET status = 'processed', processed_at = '2026-07-08T13:00:00.000Z'
+        WHERE id = $1`,
+      [firstRow.id],
+    );
+    await repo().upsertDailyBriefingActivity({ spaceId: SPACE, runId: secondRun.id });
+    const replay = await pool!.query<{ status: string; processed_at: Date | null }>(
+      `SELECT status, processed_at
+         FROM activity_records
+        WHERE space_id = $1 AND aggregate_key = $2`,
+      [SPACE, aggregateKey],
+    );
+    expect(replay.rows[0]).toMatchObject({ status: "processed" });
+    expect(replay.rows[0]!.processed_at).not.toBeNull();
+  });
+
+  it("honors the per-source daily Inbox briefing toggle at emission time", async () => {
+    if (!available) return;
+    await pool!.query(
+      `UPDATE source_connections SET config_json = '{"daily_inbox_briefing": false}'::jsonb WHERE id = $1`,
+      [CONNECTION],
+    );
+    const itemId = await seedItem("Muted paper", "2026-07-01T00:00:00.000Z");
+    const rule = await repo().createRule({
+      spaceId: SPACE,
+      sourceConnectionId: CONNECTION,
+      agentId: AGENT,
+      projectId: null,
+      name: "Muted briefing",
+      triggerType: "manual",
+      triggerConfig: normalizeTriggerConfig(null, "manual"),
+      inputConfig: normalizeInputConfig({ timezone: "UTC" }),
+      actions: normalizeActions({ batch_digest: true, mark_items: true }),
+      createdByUserId: OWNER,
+    });
+    const run = await repo().createRun({
+      spaceId: SPACE,
+      ruleId: rule.id,
+      sourceConnectionId: CONNECTION,
+      agentId: AGENT,
+      projectId: null,
+      triggeredByUserId: OWNER,
+      triggerType: "manual",
+      inputItemIds: [itemId],
+      inputEvidenceIds: [],
+      cursorBefore: null,
+      cursorAfter: null,
+    });
+    await pool!.query(
+      `UPDATE source_post_processing_runs SET created_at = '2026-07-08T10:00:00.000Z' WHERE id = $1`,
+      [run.id],
+    );
+    await repo().persistItemDecisions({
+      spaceId: SPACE,
+      sourceConnectionId: CONNECTION,
+      ruleId: rule.id,
+      runId: run.id,
+      projectId: null,
+      decisions: [
+        { source_item_id: itemId, relevance: "relevant", confidence: 0.9, reason: "Relevant.", matched_context_refs: [] },
+      ],
+    });
+    await repo().markRunFinished({
+      runId: run.id,
+      spaceId: SPACE,
+      status: "succeeded",
+      outputArtifactIds: [],
+      summary: "Muted digest",
+    });
+
+    const rows = await pool!.query(
+      `SELECT id FROM activity_records WHERE space_id = $1 AND aggregate_key = $2`,
+      [SPACE, `source:briefing:${CONNECTION}:2026-07-08`],
+    );
+    expect(rows.rowCount).toBe(0);
   });
 
   it("indexes scheduled active rules through scheduler tasks", async () => {

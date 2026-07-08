@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Loader2, RefreshCw, ShieldCheck } from 'lucide-react'
 import { toast } from 'sonner'
-import { intakeApi } from '../../api/client'
+import { sourcesApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
 import { Badge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'
@@ -97,7 +97,7 @@ export function CustomSourceSpacePolicyPanel() {
     }
     setLoading(true)
     try {
-      const next = await intakeApi.customSourceSpacePolicy()
+      const next = await sourcesApi.customSourceSpacePolicy()
       setPolicy(next)
       setForm(formFromPolicy(next))
     } catch (err) {
@@ -118,7 +118,7 @@ export function CustomSourceSpacePolicyPanel() {
       }
       setLoading(true)
       try {
-        const next = await intakeApi.customSourceSpacePolicy()
+        const next = await sourcesApi.customSourceSpacePolicy()
         if (cancelled) return
         setPolicy(next)
         setForm(formFromPolicy(next))
@@ -148,7 +148,7 @@ export function CustomSourceSpacePolicyPanel() {
     setSaving(true)
     try {
       const downloadBytesMax = parseDownloadBytes(form.downloadMiB)
-      const next = await intakeApi.updateCustomSourceSpacePolicy({
+      const next = await sourcesApi.updateCustomSourceSpacePolicy({
         creator_roles: form.creatorRoles,
         default_capture_policy: form.defaultCapturePolicy,
         default_retention_policy: form.defaultRetentionPolicy,

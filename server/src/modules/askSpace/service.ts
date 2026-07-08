@@ -23,7 +23,7 @@ import { loadSourcePolicySnapshots, sourceEgressPoliciesForSnapshots } from "../
 import { knowledgeRetrievalRegistry } from "../knowledge/retrievalAdapter";
 import { memoryRetrievalRegistry } from "../memory/retrievalAdapter";
 import { projectRetrievalRegistry } from "../projects/retrievalAdapter";
-import { intakeRetrievalRegistry } from "../intake/retrievalAdapter";
+import { sourceRetrievalRegistry } from "../sources/retrievalAdapter";
 import { PgMemoryReadRepository } from "../memory/repository";
 import { canInitiateContextOpsScan } from "../contextOps/reviewPolicy";
 import { buildClaimTrajectory } from "../knowledge/claimReviewLoop";
@@ -64,10 +64,10 @@ const DOMAIN_CONFIG: Record<AskSpaceDomain, DomainConfig> = {
     surface: "project_public_summary_brief",
     persistTrace: false,
   },
-  intake: {
-    registry: intakeRetrievalRegistry,
-    objectTypes: ["intake_item", "extracted_evidence"],
-    surface: "intake_brief",
+  source: {
+    registry: sourceRetrievalRegistry,
+    objectTypes: ["source_item", "extracted_evidence"],
+    surface: "source_brief",
     persistTrace: false,
   },
 };
@@ -475,14 +475,14 @@ function primaryObjectType(section: AskSpaceDomainSection): RetrievalObjectType 
   if (first) return first;
   if (section.domain === "memory") return "memory_entry";
   if (section.domain === "project") return "project_public_summary";
-  if (section.domain === "intake") return "intake_item";
+  if (section.domain === "source") return "source_item";
   return "knowledge_item";
 }
 
 function domainLabel(domain: AskSpaceDomain): string {
   if (domain === "memory") return "Memory";
   if (domain === "project") return "Project summaries";
-  if (domain === "intake") return "Intake";
+  if (domain === "source") return "Source";
   return "Knowledge";
 }
 

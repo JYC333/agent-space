@@ -363,4 +363,30 @@ describe('ArtifactInlineRenderer', () => {
     expect(screen.getByText('target_not_returned')).toBeInTheDocument()
     expect(screen.getByText('Access safety')).toBeInTheDocument()
   })
+
+  it('renders post-processing summary artifacts as markdown through the shared reading core', async () => {
+    render(
+      <ArtifactInlineRenderer
+        artifact={artifact({
+          artifact_type: 'summary',
+          title: 'arXiv digest',
+          content: '# Digest\n\n- [Paper one](https://arxiv.org/abs/1)\n- Paper two\n',
+        })}
+      />,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Digest' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Paper one' })).toHaveAttribute('href', 'https://arxiv.org/abs/1')
+    expect(screen.getByText('Paper two')).toBeInTheDocument()
+    expect(document.querySelector('pre')).not.toBeInTheDocument()
+  })
+
+  it('falls back to an empty-state message for a summary artifact with no inline content', () => {
+    render(
+      <ArtifactInlineRenderer
+        artifact={artifact({ artifact_type: 'summary', has_inline_content: false, content: '' })}
+      />,
+    )
+    expect(screen.getByText('No inline preview. Use Export to download.')).toBeInTheDocument()
+  })
 })

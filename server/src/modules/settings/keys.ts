@@ -1,7 +1,7 @@
 export const SETTINGS_KEYS = {
   assistantDefault: "agent.default_assistant.settings",
-  customSourceInstanceRunner: "intake.custom_source.runner",
-  customSourceSpacePolicy: "intake.custom_source.space_policy",
+  customSourceInstanceRunner: "source.custom_source.runner",
+  customSourceSpacePolicy: "source.custom_source.space_policy",
   dailyCaptureReport: "daily_capture_report.settings",
   retrievalSpace: "retrieval.space.settings",
 } as const;

@@ -54,7 +54,7 @@ a new table, not a revival of this removed table.
 
 | Field | Responsibility |
 |---|---|
-| `source_type` | Kind of producing object: `activity`, `proposal`, `memory`, `artifact`, `run_step`, `run_event`, `external_source`, `user_confirmation`, `intake_item`, `source_snapshot`, `extracted_evidence`. |
+| `source_type` | Kind of producing object: `activity`, `proposal`, `memory`, `artifact`, `run_step`, `run_event`, `external_source`, `user_confirmation`, `source_item`, `source_snapshot`, `extracted_evidence`. |
 | `source_id` | ID of the producing object. |
 | `source_trust` | Trust level of this provenance link. |
 | `evidence_json` | Structured evidence at this link in the chain. |
@@ -109,7 +109,16 @@ and consolidation repository (`server/src/modules/activity/`) if
 `source_trust` is not explicitly set. Unrecognized `activity_type` values
 default to `untrusted_external`.
 
-Intake/Evidence provenance trust is a separate, smaller vocabulary:
+## Activity Pointer Rows
+
+Some Activity rows are attention pointers, not raw memory candidates. Daily
+Sources briefings set `activity_records.aggregate_key` to
+`source:briefing:<source_connection_id>:<local_date>` and carry only a short
+preview plus ids/counts in `payload_json`. The full content remains in the
+Library/Sources read model. Activity consolidation paths must exclude rows where
+`aggregate_key IS NOT NULL`.
+
+Sources/Evidence provenance trust is a separate, smaller vocabulary:
 `trusted`, `normal`, and `untrusted`. Source connection trust maps explicitly to
 that vocabulary. Activity `source_trust` maps explicitly before becoming
 evidence trust. Runtime/run/artifact trust values (`high`, `medium`, `low`,
@@ -136,20 +145,20 @@ Active `MemoryEntry` creation requires the `_INTERNAL_WRITE_AUTHORITY` sentinel 
 
 Approved proposal apply uses proposal-validated writer methods. Ordinary callers cannot pass a generic bypass reason string.
 
-## Intake/Evidence — Candidate-Only Rule
+## Sources/Evidence — Candidate-Only Rule
 
-Intake and extracted evidence content is **candidate-only**. It may be cited in a runtime context snapshot, but it must not become active Memory without a proposal/review cycle.
+Sources and extracted evidence content is **candidate-only**. It may be cited in a runtime context snapshot, but it must not become active Memory without a proposal/review cycle.
 
 Current enforcement:
-- External and internal source material enters `IntakeItem`, `SourceSnapshot`, `ExtractionJob`, and `ExtractedEvidence` rows.
+- External and internal source material enters `SourceItem`, `SourceSnapshot`, `ExtractionJob`, and `ExtractedEvidence` rows.
 - `EvidenceLink` controls which candidate/active evidence can be selected into a `ContextSnapshot`;
-  Intake-created evidence remains candidate-only, but active relevance links can make it citable in runtime context.
+  Sources-created evidence remains candidate-only, but active relevance links can make it citable in runtime context.
   Selector input link types are limited to `context_candidate`, `supports`,
   `contradicts`, `derived_from`, and `mentions`. Accepted source lineage belongs
   in `provenance_links`, not `evidence_links`.
 - `used_in_context` links are audit-only records of prior context use. They are
   not selector inputs.
-- Internal run/activity/artifact records are valid intake sources via
+- Internal run/activity/artifact records are valid source references via
   `source_object_type`/`source_object_id`, not fake internal URLs.
 - `source_uri` remains external HTTP/HTTPS only.
 - `ActivityConsolidationService` runs visible Memory create-safety before
@@ -157,9 +166,9 @@ Current enforcement:
   `processed` and does not create another proposal.
 - `ActivityConsolidationService` → `MemoryProposalProducer` is the only pipeline that creates Proposal rows from Activity. Proposals remain `pending` until explicitly accepted.
 - `ProposalApplyService.apply` is the only path that creates active `MemoryEntry` from a proposal.
-- No code path creates active Memory from intake/evidence payload without proposal.
+- No code path creates active Memory from source/evidence payload without proposal.
 
-Future automated intake work must enter the Intake/Activity → proposal path before Memory.
+Future automated source work must enter the Sources/Activity → proposal path before Memory.
 
 ## Provenance Questions Answerable from Durable Records
 

@@ -335,7 +335,7 @@ const VALID_CLAIM_SOURCE_REF_TYPES = new Set([
   "extracted_evidence",
   "source_snapshot",
   "external_pointer",
-  "intake_item",
+  "source_item",
 ]);
 
 const VALID_CLAIM_SOURCE_TRUST_LEVELS = new Set([
@@ -391,7 +391,7 @@ const VALID_PROVENANCE_TYPES = new Set([
   "run_step",
   "external_source",
   "user_confirmation",
-  "intake_item",
+  "source_item",
   "source_snapshot",
   "extracted_evidence",
   "run_event",
@@ -1654,7 +1654,7 @@ async function claimSourcesFromPayload(
       ? await sourcePolicySnapshotForConnection(context.db, context.proposal.space_id, sourceConnectionId)
       : {};
     if (!sourceObjectId && !sourceConnectionId && !sourceRefType) {
-      throw new KnowledgeApplyValidationError("claim source requires source_object_id, source_connection_id, or source_ref_type/source_ref_id");
+      throw new KnowledgeApplyValidationError("claim source requires source_object_id, source_connection_id, or source_ref_type/sources_ref_id");
     }
     const evidenceRole = optionalString(source.evidence_role) ?? "supports";
     if (!VALID_CLAIM_EVIDENCE_ROLES.has(evidenceRole)) {

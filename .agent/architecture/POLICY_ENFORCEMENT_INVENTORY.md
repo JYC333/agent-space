@@ -165,9 +165,9 @@ permission manifest that routes risk and enables unknown-action fail-closed beha
   `workspace.write_patch`, `artifact.persist`, `proposal.create`, `proposal.apply`,
   `agent.config_update`, `workspace.read`, `runtime_skill.render`,
   `automation.create`, `automation.update`, `automation.fire`,
-  `intake.connection_manage`, `intake.item_create`, `intake.item_update`,
+  `source.connection_manage`, `source.item_create`, `source.item_update`,
   `evidence.create`, `evidence.update`, `evidence.link`,
-  `workspace_intake.configure`, `context.select_evidence`,
+  `workspace_source.configure`, `context.select_evidence`,
   `retrieval.search`, `retrieval.brief`, `memory.retrieval.search`,
   `memory.retrieval.brief`, `project_public_summary.search`,
   `project_public_summary.brief`.

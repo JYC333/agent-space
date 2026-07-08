@@ -204,7 +204,7 @@ export const MODULE_REGISTRY: Module[] = [
   {
     id: 'activity', label: 'Inbox', path: '/activity',
     section: 'capture', group: 'daily', icon: 'inbox',
-    description: 'Capture intake — review raw records before they become proposals.',
+    description: 'Everything awaiting your attention: new briefings and records to review.',
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: false,
     perspectiveType: 'space-scoped',
@@ -212,14 +212,14 @@ export const MODULE_REGISTRY: Module[] = [
     component: lazy(() => import('./activity/ActivityModule')),
   },
   {
-    id: 'intake', label: 'Intake', path: '/intake',
-    section: 'capture', group: 'daily', icon: 'radio',
-    description: 'Unified information stream control plane for source connections, candidate items, scan state, and evidence.',
+    id: 'library', label: 'Library', path: '/library',
+    section: 'capture', group: 'daily', icon: 'library',
+    description: 'Read, filter, and triage the articles, papers, and digests your sources bring in.',
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: false,
     perspectiveType: 'space-scoped',
     hasSubRoutes: true,
-    component: lazy(() => import('./intake/IntakeModule')),
+    component: lazy(() => import('./library/LibraryModule')),
   },
   {
     id: 'daily_reports', label: 'Daily Report', path: '/daily-report',
@@ -247,6 +247,16 @@ export const MODULE_REGISTRY: Module[] = [
     enabled: true, visible: true, planned: true,
     perspectiveType: 'neutral',
     component: lazy(() => import('./time/TimePage')),
+  },
+  {
+    id: 'source', label: 'Sources', path: '/sources',
+    section: 'capture', group: 'daily', icon: 'rss',
+    description: 'Manage information subscriptions: connections, scan schedules, and screening rules.',
+    source: 'built_in', capabilityId: undefined,
+    enabled: true, visible: true, planned: false,
+    perspectiveType: 'space-scoped',
+    hasSubRoutes: true,
+    component: lazy(() => import('./sources/SourcesModule')),
   },
 
   // ── Work (task → run → outputs → review) ───────────────────────────────────

@@ -713,7 +713,7 @@ function ModelTab({
     setIsDefault(profiles.length === 0)
     setCredentialProfileId('')
     setRuntimeToolVersion('')
-    setRetrievalToolDomains({ memory: false, project_public_summary: false, intake: false })
+    setRetrievalToolDomains({ memory: false, project_public_summary: false, source: false })
   }
 
   return (

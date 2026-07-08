@@ -11,8 +11,8 @@ export type RetrievalToolPolicyAction =
   | "memory.retrieval.brief"
   | "project_public_summary.search"
   | "project_public_summary.brief"
-  | "intake.retrieval.search"
-  | "intake.retrieval.brief";
+  | "source.retrieval.search"
+  | "source.retrieval.brief";
 
 export interface RetrievalToolPolicyActor {
   spaceId: string;

@@ -62,7 +62,7 @@ export const CLAIM_SOURCE_REF_TYPE_VALUES = [
   "extracted_evidence",
   "source_snapshot",
   "external_pointer",
-  "intake_item",
+  "source_item",
 ] as const;
 export const CLAIM_SOURCE_TRUST_VALUES = [
   "trusted",
@@ -267,7 +267,7 @@ const ClaimSourcePacketSchema = z
     if (!source.source_object_id && !source.source_connection_id && !source.source_ref_type) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "claim source requires source_object_id, source_connection_id, or source_ref_type/source_ref_id",
+        message: "claim source requires source_object_id, source_connection_id, or source_ref_type/sources_ref_id",
       });
     }
   });

@@ -32,7 +32,7 @@ import {
   listTopics,
   sendEntityExport,
 } from "./graph";
-import { getResearchAtlasSyncStatus, runResearchAtlasIntakeSync } from "./sync";
+import { getResearchAtlasSyncStatus, runResearchAtlasSourceSync } from "./sync";
 
 class RequestError extends Error {
   constructor(readonly statusCode: number, message: string) {
@@ -330,9 +330,9 @@ export function registerResearchAtlasRoutes(
   );
 
   app.post(
-    "/api/v1/atlas/sync/intake",
+    "/api/v1/atlas/sync/sources",
     atlasRoute(async (_request, reply, identity) => {
-      reply.send(await runResearchAtlasIntakeSync(db, {
+      reply.send(await runResearchAtlasSourceSync(db, {
         spaceId: identity.spaceId,
         userId: identity.userId,
       }));

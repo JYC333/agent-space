@@ -104,24 +104,24 @@ registry `default_decision`. Not full RBAC/ABAC — they express intent and defa
 | `workspace.read` | workspace | low | allow | workspaces routes via `enforce()` |
 | `runtime_skill.render` | runtime_skill_binding | medium | require_approval | context module via `enforce()` |
 | `agent.config_update` | agent | high | allow (audit_required) | agents routes/repository before config proposal creation |
-| `intake.connection_manage` | source_connection | medium | allow (audit_required) | intake routes via `enforce()` |
-| `intake.item_create` | intake_item | low | allow (audit_required) | intake routes via `enforce()` |
-| `intake.item_update` | intake_item | low | allow (audit_required) | intake routes via `enforce()` |
-| `evidence.create` | evidence | low | allow (audit_required) | intake routes via `enforce()` |
-| `evidence.update` | evidence | low | allow (audit_required) | intake routes via `enforce()` |
-| `evidence.link` | evidence | low | allow (audit_required) | intake routes via `enforce()` |
-| `workspace_intake.configure` | workspace_intake | medium | allow (audit_required) | intake routes via `enforce()` |
-| `intake.custom_source_create` | source_connection | medium | allow (audit_required) | intake routes via `enforce()` |
-| `intake.custom_source_generate` | source_connection | medium | allow (audit_required) | intake routes via `enforce()` |
-| `intake.custom_source_test` | source_connection | low | allow (audit_required) | intake routes via `enforce()` |
-| `intake.custom_source_activate` | source_connection | medium | allow (audit_required) | intake routes via `enforce()` |
-| `intake.custom_source_repair` | source_connection | medium | allow (audit_required) | intake custom source routes via `enforce()` |
-| `intake.custom_source_rollback` | source_connection | medium | allow (audit_required) | intake custom source routes via `enforce()` |
-| `intake.custom_source_credential_create` | custom_source_credential | high | allow (audit_required) | intake custom source routes via `enforce()` |
-| `intake.source_recipe_create` | source_connection | medium | allow (audit_required) | intake source recipe routes via `enforce()` |
-| `intake.source_recipe_activate` | source_connection | medium | allow (audit_required) | intake source recipe routes via `enforce()` |
-| `intake.source_recipe_dry_run` | source_connection | low | allow (audit_required) | intake source recipe routes via `enforce()` |
-| `intake.custom_source_settings_update` | custom_source_settings | medium | allow (audit_required) | intake settings routes via `enforce()` |
+| `source.connection_manage` | source_connection | medium | allow (audit_required) | sources routes via `enforce()` |
+| `source.item_create` | source_item | low | allow (audit_required) | sources routes via `enforce()` |
+| `source.item_update` | source_item | low | allow (audit_required) | sources routes via `enforce()` |
+| `evidence.create` | evidence | low | allow (audit_required) | sources routes via `enforce()` |
+| `evidence.update` | evidence | low | allow (audit_required) | sources routes via `enforce()` |
+| `evidence.link` | evidence | low | allow (audit_required) | sources routes via `enforce()` |
+| `workspace_source.configure` | workspace_source | medium | allow (audit_required) | sources routes via `enforce()` |
+| `source.custom_source_create` | source_connection | medium | allow (audit_required) | sources routes via `enforce()` |
+| `source.custom_source_generate` | source_connection | medium | allow (audit_required) | sources routes via `enforce()` |
+| `source.custom_source_test` | source_connection | low | allow (audit_required) | sources routes via `enforce()` |
+| `source.custom_source_activate` | source_connection | medium | allow (audit_required) | sources routes via `enforce()` |
+| `source.custom_source_repair` | source_connection | medium | allow (audit_required) | sources custom source routes via `enforce()` |
+| `source.custom_source_rollback` | source_connection | medium | allow (audit_required) | sources custom source routes via `enforce()` |
+| `source.custom_source_credential_create` | custom_source_credential | high | allow (audit_required) | sources custom source routes via `enforce()` |
+| `source.source_recipe_create` | source_connection | medium | allow (audit_required) | source recipe routes via `enforce()` |
+| `source.source_recipe_activate` | source_connection | medium | allow (audit_required) | source recipe routes via `enforce()` |
+| `source.source_recipe_dry_run` | source_connection | low | allow (audit_required) | source recipe routes via `enforce()` |
+| `source.custom_source_settings_update` | custom_source_settings | medium | allow (audit_required) | sources settings routes via `enforce()` |
 | `context.select_evidence` | evidence | low | allow | context module via `enforce()` |
 | `retrieval.search` | retrieval_tool | low | deny (allow only by rule) | managed retrieval tools via `enforce()` |
 | `retrieval.brief` | retrieval_tool | low | deny (allow only by rule) | managed retrieval tools via `enforce()` |

@@ -42,7 +42,7 @@ CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
 -- subtype expansion belongs in object_kind / metadata, not new base types.
 
 CREATE DOMAIN public.retrieval_object_type AS character varying(64)
-    CONSTRAINT retrieval_object_type_allowed CHECK (((VALUE)::text = ANY ((ARRAY['knowledge_item'::character varying, 'note'::character varying, 'source'::character varying, 'claim'::character varying, 'memory_entry'::character varying, 'project_public_summary'::character varying, 'intake_item'::character varying, 'extracted_evidence'::character varying])::text[])));
+    CONSTRAINT retrieval_object_type_allowed CHECK (((VALUE)::text = ANY ((ARRAY['knowledge_item'::character varying, 'note'::character varying, 'source'::character varying, 'claim'::character varying, 'memory_entry'::character varying, 'project_public_summary'::character varying, 'source_item'::character varying, 'extracted_evidence'::character varying])::text[])));
 
 
 --
@@ -77,7 +77,8 @@ CREATE TABLE public.activity_records (
     visibility character varying(32) DEFAULT 'space_shared'::character varying NOT NULL,
     owner_user_id character varying(36),
     project_id character varying(36),
-    CONSTRAINT ck_activity_records_source_kind CHECK (((source_kind IS NULL) OR ((source_kind)::text = ANY ((ARRAY['user_capture'::character varying, 'chat_message'::character varying, 'external_chat'::character varying, 'file_import'::character varying, 'web_capture'::character varying, 'run_event'::character varying, 'workspace_event'::character varying, 'system_event'::character varying, 'external_source'::character varying, 'intake'::character varying])::text[])))),
+    aggregate_key character varying(128),
+    CONSTRAINT ck_activity_records_source_kind CHECK (((source_kind IS NULL) OR ((source_kind)::text = ANY ((ARRAY['user_capture'::character varying, 'chat_message'::character varying, 'external_chat'::character varying, 'file_import'::character varying, 'web_capture'::character varying, 'run_event'::character varying, 'workspace_event'::character varying, 'system_event'::character varying, 'external_source'::character varying, 'source'::character varying])::text[])))),
     CONSTRAINT ck_activity_records_source_trust CHECK (((source_trust IS NULL) OR ((source_trust)::text = ANY ((ARRAY['user_confirmed'::character varying, 'internal_system'::character varying, 'trusted_external'::character varying, 'untrusted_external'::character varying, 'agent_inferred'::character varying])::text[])))),
     CONSTRAINT ck_activity_records_status CHECK (((status)::text = ANY ((ARRAY['raw'::character varying, 'processed'::character varying, 'proposals_generated'::character varying, 'failed'::character varying, 'archived'::character varying])::text[])))
 );
@@ -179,7 +180,7 @@ CREATE TABLE public.agents (
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     visibility character varying(32) NOT NULL,
-    CONSTRAINT ck_agents_agent_kind CHECK (((agent_kind)::text = ANY ((ARRAY['standard'::character varying, 'system_assistant'::character varying, 'system_evolver'::character varying, 'system_intake_post_processor'::character varying])::text[]))),
+    CONSTRAINT ck_agents_agent_kind CHECK (((agent_kind)::text = ANY ((ARRAY['standard'::character varying, 'system_assistant'::character varying, 'system_evolver'::character varying, 'system_source_post_processor'::character varying])::text[]))),
     CONSTRAINT ck_agents_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'inactive'::character varying, 'archived'::character varying, 'disabled'::character varying])::text[])))
 );
 
@@ -990,7 +991,7 @@ CREATE TABLE public.external_run_records (
 CREATE TABLE public.extracted_evidence (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
-    intake_item_id character varying(36),
+    source_item_id character varying(36),
     extraction_job_id character varying(36),
     source_snapshot_id character varying(36),
     source_object_type character varying(64),
@@ -1029,7 +1030,7 @@ CREATE TABLE public.extraction_jobs (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
     connection_id character varying(36),
-    intake_item_id character varying(36),
+    source_item_id character varying(36),
     source_snapshot_id character varying(36),
     source_object_type character varying(64),
     source_object_id character varying(36),
@@ -1050,16 +1051,17 @@ CREATE TABLE public.extraction_jobs (
 
 
 --
--- Name: intake_items; Type: TABLE; Schema: public; Owner: -
+-- Name: source_items; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.intake_items (
+CREATE TABLE public.source_items (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
     connection_id character varying(36),
     item_type character varying(64) NOT NULL,
     source_object_type character varying(64),
     source_object_id character varying(36),
+    created_by_user_id character varying(36),
     title character varying(1024) NOT NULL,
     source_uri text,
     canonical_uri text,
@@ -1071,8 +1073,6 @@ CREATE TABLE public.intake_items (
     last_seen_at timestamp with time zone NOT NULL,
     content_hash character varying(128),
     excerpt character varying(2048),
-    status character varying(32) NOT NULL,
-    read_status character varying(32) NOT NULL,
     content_state character varying(64) NOT NULL,
     retention_policy character varying(32) NOT NULL,
     relevance_score double precision,
@@ -1086,11 +1086,9 @@ CREATE TABLE public.intake_items (
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     deleted_at timestamp with time zone,
-    CONSTRAINT ck_intake_items_content_state CHECK (((content_state)::text = ANY ((ARRAY['metadata_only'::character varying, 'excerpt_saved'::character varying, 'content_queued'::character varying, 'content_saved'::character varying, 'snapshot_queued'::character varying, 'snapshot_saved'::character varying, 'extraction_failed'::character varying, 'content_unavailable'::character varying])::text[]))),
-    CONSTRAINT ck_intake_items_item_type CHECK (((item_type)::text = ANY ((ARRAY['external_url'::character varying, 'feed_entry'::character varying, 'activity_record'::character varying, 'artifact'::character varying, 'run_event'::character varying, 'file'::character varying, 'document'::character varying, 'log'::character varying])::text[]))),
-    CONSTRAINT ck_intake_items_read_status CHECK (((read_status)::text = ANY ((ARRAY['unread'::character varying, 'skimmed'::character varying, 'read'::character varying, 'discussed'::character varying])::text[]))),
-    CONSTRAINT ck_intake_items_retention_policy CHECK (((retention_policy)::text = ANY ((ARRAY['metadata_only'::character varying, 'summary_only'::character varying, 'full_text'::character varying, 'full_snapshot'::character varying, 'archived'::character varying])::text[]))),
-    CONSTRAINT ck_intake_items_status CHECK (((status)::text = ANY ((ARRAY['new'::character varying, 'triaged'::character varying, 'selected'::character varying, 'ignored'::character varying, 'archived'::character varying])::text[])))
+    CONSTRAINT ck_source_items_content_state CHECK (((content_state)::text = ANY ((ARRAY['metadata_only'::character varying, 'excerpt_saved'::character varying, 'content_queued'::character varying, 'content_saved'::character varying, 'snapshot_queued'::character varying, 'snapshot_saved'::character varying, 'extraction_failed'::character varying, 'content_unavailable'::character varying])::text[]))),
+    CONSTRAINT ck_source_items_item_type CHECK (((item_type)::text = ANY ((ARRAY['external_url'::character varying, 'feed_entry'::character varying, 'activity_record'::character varying, 'artifact'::character varying, 'run_event'::character varying, 'file'::character varying, 'document'::character varying, 'log'::character varying])::text[]))),
+    CONSTRAINT ck_source_items_retention_policy CHECK (((retention_policy)::text = ANY ((ARRAY['metadata_only'::character varying, 'summary_only'::character varying, 'full_text'::character varying, 'full_snapshot'::character varying, 'archived'::character varying])::text[])))
 );
 
 
@@ -1210,7 +1208,7 @@ CREATE TABLE public.space_object_kinds (
     CONSTRAINT ck_space_object_kinds_extraction_policy_object CHECK ((jsonb_typeof(extraction_policy_json) = 'object'::text)),
     CONSTRAINT ck_space_object_kinds_field_schema_object CHECK ((jsonb_typeof(field_schema_json) = 'object'::text)),
     CONSTRAINT ck_space_object_kinds_key CHECK (((key)::text ~ '^[a-z][a-z0-9_]{0,63}$'::text)),
-    CONSTRAINT ck_space_object_kinds_key_by_base_object_type CHECK (CASE (base_object_type)::text WHEN 'knowledge_item'::text THEN ((key)::text = ANY ((ARRAY['concept'::character varying, 'lesson'::character varying, 'procedure'::character varying, 'decision'::character varying, 'question'::character varying, 'answer'::character varying, 'summary'::character varying])::text[])) WHEN 'note'::text THEN ((key)::text = 'note'::text) WHEN 'source'::text THEN ((key)::text = ANY ((ARRAY['activity_record'::character varying, 'chat_capture'::character varying, 'webpage'::character varying, 'article'::character varying, 'paper'::character varying, 'pdf'::character varying, 'file'::character varying, 'email'::character varying, 'manual_reference'::character varying, 'external_note'::character varying])::text[])) WHEN 'claim'::text THEN ((key)::text = ANY ((ARRAY['fact'::character varying, 'hypothesis'::character varying, 'belief'::character varying, 'preference'::character varying, 'commitment'::character varying, 'question'::character varying, 'interpretation'::character varying, 'instruction'::character varying, 'metric'::character varying, 'relationship'::character varying, 'event'::character varying])::text[])) WHEN 'memory_entry'::text THEN ((key)::text = ANY ((ARRAY['preference'::character varying, 'semantic'::character varying, 'episodic'::character varying, 'procedural'::character varying, 'project'::character varying])::text[])) WHEN 'project_public_summary'::text THEN ((key)::text = 'project_public_summary'::text) WHEN 'intake_item'::text THEN ((key)::text = ANY ((ARRAY['external_url'::character varying, 'feed_entry'::character varying, 'activity_record'::character varying, 'artifact'::character varying, 'run_event'::character varying, 'file'::character varying, 'document'::character varying, 'log'::character varying])::text[])) WHEN 'extracted_evidence'::text THEN ((key)::text = ANY ((ARRAY['document'::character varying, 'excerpt'::character varying, 'event'::character varying, 'log'::character varying, 'artifact'::character varying, 'claim'::character varying, 'summary'::character varying])::text[])) ELSE false END),
+    CONSTRAINT ck_space_object_kinds_key_by_base_object_type CHECK (CASE (base_object_type)::text WHEN 'knowledge_item'::text THEN ((key)::text = ANY ((ARRAY['concept'::character varying, 'lesson'::character varying, 'procedure'::character varying, 'decision'::character varying, 'question'::character varying, 'answer'::character varying, 'summary'::character varying])::text[])) WHEN 'note'::text THEN ((key)::text = 'note'::text) WHEN 'source'::text THEN ((key)::text = ANY ((ARRAY['activity_record'::character varying, 'chat_capture'::character varying, 'webpage'::character varying, 'article'::character varying, 'paper'::character varying, 'pdf'::character varying, 'file'::character varying, 'email'::character varying, 'manual_reference'::character varying, 'external_note'::character varying])::text[])) WHEN 'claim'::text THEN ((key)::text = ANY ((ARRAY['fact'::character varying, 'hypothesis'::character varying, 'belief'::character varying, 'preference'::character varying, 'commitment'::character varying, 'question'::character varying, 'interpretation'::character varying, 'instruction'::character varying, 'metric'::character varying, 'relationship'::character varying, 'event'::character varying])::text[])) WHEN 'memory_entry'::text THEN ((key)::text = ANY ((ARRAY['preference'::character varying, 'semantic'::character varying, 'episodic'::character varying, 'procedural'::character varying, 'project'::character varying])::text[])) WHEN 'project_public_summary'::text THEN ((key)::text = 'project_public_summary'::text) WHEN 'source_item'::text THEN ((key)::text = ANY ((ARRAY['external_url'::character varying, 'feed_entry'::character varying, 'activity_record'::character varying, 'artifact'::character varying, 'run_event'::character varying, 'file'::character varying, 'document'::character varying, 'log'::character varying])::text[])) WHEN 'extracted_evidence'::text THEN ((key)::text = ANY ((ARRAY['document'::character varying, 'excerpt'::character varying, 'event'::character varying, 'log'::character varying, 'artifact'::character varying, 'claim'::character varying, 'summary'::character varying])::text[])) ELSE false END),
     CONSTRAINT ck_space_object_kinds_retrieval_policy_object CHECK ((jsonb_typeof(retrieval_policy_json) = 'object'::text)),
     CONSTRAINT ck_space_object_kinds_status CHECK (((status)::text = ANY ((ARRAY['draft'::character varying, 'active'::character varying, 'deprecated'::character varying, 'archived'::character varying])::text[]))),
     CONSTRAINT ck_space_object_kinds_ui_config_object CHECK ((jsonb_typeof(ui_config_json) = 'object'::text)),
@@ -1359,7 +1357,7 @@ CREATE TABLE public.claim_sources (
     CONSTRAINT ck_claim_sources_has_source CHECK (((source_object_id IS NOT NULL) OR ((source_ref_type IS NOT NULL) AND (source_ref_id IS NOT NULL)) OR (source_connection_id IS NOT NULL))),
     CONSTRAINT ck_claim_sources_source_ref CHECK ((((source_ref_type IS NULL) AND (source_ref_id IS NULL)) OR ((source_ref_type IS NOT NULL) AND (source_ref_id IS NOT NULL)))),
     CONSTRAINT ck_claim_sources_source_ref_connection CHECK (((source_ref_type IS NULL) OR (source_connection_id IS NOT NULL))),
-    CONSTRAINT ck_claim_sources_source_ref_type CHECK (((source_ref_type IS NULL) OR ((source_ref_type)::text = ANY ((ARRAY['activity'::character varying, 'artifact'::character varying, 'run_event'::character varying, 'extracted_evidence'::character varying, 'source_snapshot'::character varying, 'external_pointer'::character varying, 'intake_item'::character varying])::text[])))),
+    CONSTRAINT ck_claim_sources_source_ref_type CHECK (((source_ref_type IS NULL) OR ((source_ref_type)::text = ANY ((ARRAY['activity'::character varying, 'artifact'::character varying, 'run_event'::character varying, 'extracted_evidence'::character varying, 'source_snapshot'::character varying, 'external_pointer'::character varying, 'source_item'::character varying])::text[])))),
     CONSTRAINT ck_claim_sources_source_trust CHECK (((source_trust IS NULL) OR ((source_trust)::text = ANY ((ARRAY['trusted'::character varying, 'normal'::character varying, 'untrusted'::character varying, 'unknown'::character varying])::text[]))))
 );
 
@@ -2059,7 +2057,7 @@ CREATE TABLE public.provenance_links (
     evidence_json jsonb,
     created_at timestamp with time zone NOT NULL,
     CONSTRAINT ck_provenance_links_source_trust CHECK (((source_trust IS NULL) OR ((source_trust)::text = ANY ((ARRAY['user_confirmed'::character varying, 'internal_system'::character varying, 'trusted_external'::character varying, 'untrusted_external'::character varying, 'agent_inferred'::character varying])::text[])))),
-    CONSTRAINT ck_provenance_links_source_type CHECK (((source_type)::text = ANY ((ARRAY['activity'::character varying, 'proposal'::character varying, 'memory'::character varying, 'artifact'::character varying, 'run_step'::character varying, 'external_source'::character varying, 'user_confirmation'::character varying, 'intake_item'::character varying, 'source_snapshot'::character varying, 'extracted_evidence'::character varying, 'run_event'::character varying])::text[])))
+    CONSTRAINT ck_provenance_links_source_type CHECK (((source_type)::text = ANY ((ARRAY['activity'::character varying, 'proposal'::character varying, 'memory'::character varying, 'artifact'::character varying, 'run_step'::character varying, 'external_source'::character varying, 'user_confirmation'::character varying, 'source_item'::character varying, 'source_snapshot'::character varying, 'extracted_evidence'::character varying, 'run_event'::character varying])::text[])))
 );
 
 
@@ -2510,6 +2508,7 @@ CREATE TABLE public.source_connections (
     connector_id character varying(36) NOT NULL,
     owner_user_id character varying(36) NOT NULL,
     credential_id character varying(36),
+    visibility character varying(32) DEFAULT 'private'::character varying NOT NULL,
     name character varying(512) NOT NULL,
     endpoint_url text,
     status character varying(32) NOT NULL,
@@ -2534,7 +2533,53 @@ CREATE TABLE public.source_connections (
     CONSTRAINT ck_source_connections_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'paused'::character varying, 'archived'::character varying])::text[]))),
     CONSTRAINT ck_source_connections_trust_level CHECK (((trust_level)::text = ANY ((ARRAY['trusted'::character varying, 'normal'::character varying, 'untrusted'::character varying])::text[]))),
     CONSTRAINT ck_source_connections_handler_kind CHECK (((handler_kind)::text = ANY ((ARRAY['built_in'::character varying, 'generated_custom'::character varying, 'recipe'::character varying])::text[]))),
-    CONSTRAINT ck_source_connections_repair_status CHECK (((repair_status)::text = ANY ((ARRAY['ok'::character varying, 'repair_required'::character varying, 'repair_pending'::character varying, 'disabled'::character varying])::text[])))
+    CONSTRAINT ck_source_connections_repair_status CHECK (((repair_status)::text = ANY ((ARRAY['ok'::character varying, 'repair_required'::character varying, 'repair_pending'::character varying, 'disabled'::character varying])::text[]))),
+    CONSTRAINT ck_source_connections_visibility CHECK (((visibility)::text = ANY ((ARRAY['private'::character varying, 'space_discoverable'::character varying])::text[])))
+);
+
+
+--
+-- Name: source_connection_user_subscriptions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.source_connection_user_subscriptions (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    source_connection_id character varying(36) NOT NULL,
+    user_id character varying(36) NOT NULL,
+    status character varying(32) NOT NULL,
+    library_enabled boolean DEFAULT true NOT NULL,
+    digest_enabled boolean DEFAULT true NOT NULL,
+    recommended_by_user_id character varying(36),
+    recommendation_message text,
+    last_notified_at timestamp with time zone,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT source_connection_user_subscriptions_pkey PRIMARY KEY (id),
+    CONSTRAINT ck_source_connection_user_subscriptions_status CHECK (((status)::text = ANY ((ARRAY['subscribed'::character varying, 'pending'::character varying, 'dismissed'::character varying, 'muted'::character varying])::text[])))
+);
+
+
+--
+-- Name: source_item_user_states; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.source_item_user_states (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    source_item_id character varying(36) NOT NULL,
+    user_id character varying(36) NOT NULL,
+    library_status character varying(32) DEFAULT 'new'::character varying NOT NULL,
+    read_status character varying(32) DEFAULT 'unread'::character varying NOT NULL,
+    first_opened_at timestamp with time zone,
+    last_opened_at timestamp with time zone,
+    progress_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT source_item_user_states_pkey PRIMARY KEY (id),
+    CONSTRAINT ck_source_item_user_states_library_status CHECK (((library_status)::text = ANY ((ARRAY['new'::character varying, 'triaged'::character varying, 'selected'::character varying, 'ignored'::character varying, 'archived'::character varying])::text[]))),
+    CONSTRAINT ck_source_item_user_states_read_status CHECK (((read_status)::text = ANY ((ARRAY['unread'::character varying, 'skimmed'::character varying, 'read'::character varying, 'discussed'::character varying])::text[]))),
+    CONSTRAINT ck_source_item_user_states_progress_json CHECK ((jsonb_typeof(progress_json) = 'object'::text))
 );
 
 
@@ -2610,19 +2655,17 @@ CREATE TABLE public.source_post_processing_item_decisions (
     rule_id character varying(36),
     run_id character varying(36) NOT NULL,
     project_id character varying(36),
-    intake_item_id character varying(36) NOT NULL,
+    source_item_id character varying(36) NOT NULL,
     relevance character varying(32) NOT NULL,
     confidence double precision,
     reason text,
     matched_context_refs_json jsonb DEFAULT '[]'::jsonb NOT NULL,
-    applied_item_status character varying(32),
     review_status character varying(32) DEFAULT 'pending'::character varying NOT NULL,
     action_json jsonb DEFAULT '{}'::jsonb NOT NULL,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     CONSTRAINT source_post_processing_item_decisions_pkey PRIMARY KEY (id),
     CONSTRAINT ck_source_post_processing_item_decisions_action_object CHECK ((jsonb_typeof(action_json) = 'object'::text)),
-    CONSTRAINT ck_source_post_processing_item_decisions_applied_status CHECK (((applied_item_status IS NULL) OR ((applied_item_status)::text = ANY ((ARRAY['new'::character varying, 'triaged'::character varying, 'selected'::character varying, 'ignored'::character varying, 'archived'::character varying])::text[])))),
     CONSTRAINT ck_source_post_processing_item_decisions_confidence CHECK (((confidence IS NULL) OR ((confidence >= (0)::double precision) AND (confidence <= (1)::double precision)))),
     CONSTRAINT ck_source_post_processing_item_decisions_refs_array CHECK ((jsonb_typeof(matched_context_refs_json) = 'array'::text)),
     CONSTRAINT ck_source_post_processing_item_decisions_relevance CHECK (((relevance)::text = ANY ((ARRAY['relevant'::character varying, 'maybe'::character varying, 'not_relevant'::character varying])::text[]))),
@@ -2632,8 +2675,8 @@ CREATE TABLE public.source_post_processing_item_decisions (
 --
 -- Name: source_handler_versions; Type: TABLE; Schema: public; Owner: -
 --
--- Generated, source-specific handler code versions for Intake Custom
--- Source. See .agent/architecture/INTAKE_CUSTOM_SOURCE_HANDLERS.md. Handler
+-- Generated, source-specific handler code versions for Source Custom
+-- Source. See .agent/architecture/SOURCE_CUSTOM_SOURCE_HANDLERS.md. Handler
 -- code never writes this table directly.
 --
 
@@ -2795,7 +2838,7 @@ CREATE TABLE public.source_pointers (
 CREATE TABLE public.source_snapshots (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
-    intake_item_id character varying(36),
+    source_item_id character varying(36),
     connection_id character varying(36),
     snapshot_type character varying(32) NOT NULL,
     artifact_id character varying(36),
@@ -3701,11 +3744,11 @@ ALTER TABLE ONLY public.extraction_jobs
 
 
 --
--- Name: intake_items intake_items_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: source_items source_items_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.intake_items
-    ADD CONSTRAINT intake_items_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY public.source_items
+    ADD CONSTRAINT source_items_pkey PRIMARY KEY (id);
 
 
 --
@@ -4756,6 +4799,13 @@ ALTER TABLE ONLY public.workspaces
 --
 
 CREATE INDEX ix_activity_records_activity_type ON public.activity_records USING btree (activity_type);
+
+
+--
+-- Name: uq_activity_records_space_aggregate_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_activity_records_space_aggregate_key ON public.activity_records USING btree (space_id, aggregate_key) WHERE (aggregate_key IS NOT NULL);
 
 
 --
@@ -6103,10 +6153,10 @@ CREATE INDEX ix_extracted_evidence_extraction_job_id ON public.extracted_evidenc
 
 
 --
--- Name: ix_extracted_evidence_intake_item_id; Type: INDEX; Schema: public; Owner: -
+-- Name: ix_extracted_evidence_source_item_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX ix_extracted_evidence_intake_item_id ON public.extracted_evidence USING btree (intake_item_id);
+CREATE INDEX ix_extracted_evidence_source_item_id ON public.extracted_evidence USING btree (source_item_id);
 
 
 --
@@ -6180,10 +6230,10 @@ CREATE INDEX ix_extraction_jobs_connection_id ON public.extraction_jobs USING bt
 
 
 --
--- Name: ix_extraction_jobs_intake_item_id; Type: INDEX; Schema: public; Owner: -
+-- Name: ix_extraction_jobs_source_item_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX ix_extraction_jobs_intake_item_id ON public.extraction_jobs USING btree (intake_item_id);
+CREATE INDEX ix_extraction_jobs_source_item_id ON public.extraction_jobs USING btree (source_item_id);
 
 
 --
@@ -6243,136 +6293,136 @@ CREATE INDEX ix_extraction_jobs_status ON public.extraction_jobs USING btree (st
 
 
 --
--- Name: ix_intake_items_canonical_uri; Type: INDEX; Schema: public; Owner: -
+-- Name: ix_source_items_canonical_uri; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX ix_intake_items_canonical_uri ON public.intake_items USING btree (space_id, canonical_uri);
-
-
---
--- Name: ix_intake_items_connection_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_intake_items_connection_id ON public.intake_items USING btree (connection_id);
+CREATE INDEX ix_source_items_canonical_uri ON public.source_items USING btree (space_id, canonical_uri);
 
 
 --
--- Name: ix_intake_items_content_hash; Type: INDEX; Schema: public; Owner: -
+-- Name: ix_source_items_connection_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX ix_intake_items_content_hash ON public.intake_items USING btree (content_hash);
-
-
---
--- Name: ix_intake_items_deleted_at; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_intake_items_deleted_at ON public.intake_items USING btree (deleted_at);
+CREATE INDEX ix_source_items_connection_id ON public.source_items USING btree (connection_id);
 
 
 --
--- Name: ix_intake_items_extracted_artifact_id; Type: INDEX; Schema: public; Owner: -
+-- Name: ix_source_items_created_by_user_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX ix_intake_items_extracted_artifact_id ON public.intake_items USING btree (extracted_artifact_id);
-
-
---
--- Name: ix_intake_items_item_type; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_intake_items_item_type ON public.intake_items USING btree (item_type);
+CREATE INDEX ix_source_items_created_by_user_id ON public.source_items USING btree (created_by_user_id);
 
 
 --
--- Name: ix_intake_items_occurred_at; Type: INDEX; Schema: public; Owner: -
+-- Name: ix_source_items_content_hash; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX ix_intake_items_occurred_at ON public.intake_items USING btree (occurred_at);
-
-
---
--- Name: ix_intake_items_raw_artifact_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_intake_items_raw_artifact_id ON public.intake_items USING btree (raw_artifact_id);
+CREATE INDEX ix_source_items_content_hash ON public.source_items USING btree (content_hash);
 
 
 --
--- Name: ix_intake_items_source_domain; Type: INDEX; Schema: public; Owner: -
+-- Name: ix_source_items_deleted_at; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX ix_intake_items_source_domain ON public.intake_items USING btree (source_domain);
-
-
---
--- Name: ix_intake_items_source_external_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_intake_items_source_external_id ON public.intake_items USING btree (source_external_id);
+CREATE INDEX ix_source_items_deleted_at ON public.source_items USING btree (deleted_at);
 
 
 --
--- Name: ix_intake_items_source_object; Type: INDEX; Schema: public; Owner: -
+-- Name: ix_source_items_extracted_artifact_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX ix_intake_items_source_object ON public.intake_items USING btree (space_id, source_object_type, source_object_id);
-
-
---
--- Name: ix_intake_items_source_object_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_intake_items_source_object_id ON public.intake_items USING btree (source_object_id);
+CREATE INDEX ix_source_items_extracted_artifact_id ON public.source_items USING btree (extracted_artifact_id);
 
 
 --
--- Name: ix_intake_items_source_object_type; Type: INDEX; Schema: public; Owner: -
+-- Name: ix_source_items_item_type; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX ix_intake_items_source_object_type ON public.intake_items USING btree (source_object_type);
-
-
---
--- Name: ix_intake_items_space_connection; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_intake_items_space_connection ON public.intake_items USING btree (space_id, connection_id);
+CREATE INDEX ix_source_items_item_type ON public.source_items USING btree (item_type);
 
 
 --
--- Name: ix_intake_items_space_domain; Type: INDEX; Schema: public; Owner: -
+-- Name: ix_source_items_occurred_at; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX ix_intake_items_space_domain ON public.intake_items USING btree (space_id, source_domain);
-
-
---
--- Name: ix_intake_items_space_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_intake_items_space_id ON public.intake_items USING btree (space_id);
+CREATE INDEX ix_source_items_occurred_at ON public.source_items USING btree (occurred_at);
 
 
 --
--- Name: ix_intake_items_space_status; Type: INDEX; Schema: public; Owner: -
+-- Name: ix_source_items_raw_artifact_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX ix_intake_items_space_status ON public.intake_items USING btree (space_id, status);
-
-
---
--- Name: ix_intake_items_status; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_intake_items_status ON public.intake_items USING btree (status);
+CREATE INDEX ix_source_items_raw_artifact_id ON public.source_items USING btree (raw_artifact_id);
 
 
 --
--- Name: ix_intake_items_summary_artifact_id; Type: INDEX; Schema: public; Owner: -
+-- Name: ix_source_items_source_domain; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX ix_intake_items_summary_artifact_id ON public.intake_items USING btree (summary_artifact_id);
+CREATE INDEX ix_source_items_source_domain ON public.source_items USING btree (source_domain);
+
+
+--
+-- Name: ix_source_items_source_external_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_source_items_source_external_id ON public.source_items USING btree (source_external_id);
+
+
+--
+-- Name: ix_source_items_source_object; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_source_items_source_object ON public.source_items USING btree (space_id, source_object_type, source_object_id);
+
+
+--
+-- Name: ix_source_items_source_object_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_source_items_source_object_id ON public.source_items USING btree (source_object_id);
+
+
+--
+-- Name: ix_source_items_source_object_type; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_source_items_source_object_type ON public.source_items USING btree (source_object_type);
+
+
+--
+-- Name: ix_source_items_space_connection; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_source_items_space_connection ON public.source_items USING btree (space_id, connection_id);
+
+
+--
+-- Name: ix_source_items_space_domain; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_source_items_space_domain ON public.source_items USING btree (space_id, source_domain);
+
+
+--
+-- Name: ix_source_items_space_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_source_items_space_id ON public.source_items USING btree (space_id);
+
+
+--
+-- Name: ix_source_items_space_created_by_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_source_items_space_created_by_user_id ON public.source_items USING btree (space_id, created_by_user_id);
+
+
+--
+-- Name: ix_source_items_summary_artifact_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_source_items_summary_artifact_id ON public.source_items USING btree (summary_artifact_id);
 
 
 --
@@ -8403,6 +8453,13 @@ CREATE INDEX ix_source_connections_owner_user_id ON public.source_connections US
 
 
 --
+-- Name: ix_source_connections_visibility; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_source_connections_visibility ON public.source_connections USING btree (visibility);
+
+
+--
 -- Name: ix_source_connections_space_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -8421,6 +8478,48 @@ CREATE INDEX ix_source_connections_space_status ON public.source_connections USI
 --
 
 CREATE INDEX ix_source_connections_status ON public.source_connections USING btree (status);
+
+
+--
+-- Name: uq_source_connection_user_subscriptions_space_connection_user; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_source_connection_user_subscriptions_space_connection_user ON public.source_connection_user_subscriptions USING btree (space_id, source_connection_id, user_id);
+
+
+--
+-- Name: ix_source_connection_user_subscriptions_user_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_source_connection_user_subscriptions_user_status ON public.source_connection_user_subscriptions USING btree (space_id, user_id, status);
+
+
+--
+-- Name: ix_source_connection_user_subscriptions_connection_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_source_connection_user_subscriptions_connection_status ON public.source_connection_user_subscriptions USING btree (space_id, source_connection_id, status);
+
+
+--
+-- Name: uq_source_item_user_states_space_item_user; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_source_item_user_states_space_item_user ON public.source_item_user_states USING btree (space_id, source_item_id, user_id);
+
+
+--
+-- Name: ix_source_item_user_states_user_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_source_item_user_states_user_status ON public.source_item_user_states USING btree (space_id, user_id, library_status, read_status);
+
+
+--
+-- Name: ix_source_item_user_states_item_user; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_source_item_user_states_item_user ON public.source_item_user_states USING btree (source_item_id, user_id);
 
 
 --
@@ -8490,7 +8589,7 @@ CREATE INDEX ix_source_post_processing_item_decisions_connection_review ON publi
 -- Name: ix_source_post_processing_item_decisions_item; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX ix_source_post_processing_item_decisions_item ON public.source_post_processing_item_decisions USING btree (space_id, intake_item_id, created_at DESC);
+CREATE INDEX ix_source_post_processing_item_decisions_item ON public.source_post_processing_item_decisions USING btree (space_id, source_item_id, created_at DESC);
 
 
 --
@@ -8578,10 +8677,10 @@ CREATE INDEX ix_source_snapshots_content_hash ON public.source_snapshots USING b
 
 
 --
--- Name: ix_source_snapshots_intake_item_id; Type: INDEX; Schema: public; Owner: -
+-- Name: ix_source_snapshots_source_item_id; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX ix_source_snapshots_intake_item_id ON public.source_snapshots USING btree (intake_item_id);
+CREATE INDEX ix_source_snapshots_source_item_id ON public.source_snapshots USING btree (source_item_id);
 
 
 --
@@ -8602,7 +8701,7 @@ CREATE INDEX ix_source_snapshots_space_id ON public.source_snapshots USING btree
 -- Name: ix_source_snapshots_space_item; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX ix_source_snapshots_space_item ON public.source_snapshots USING btree (space_id, intake_item_id);
+CREATE INDEX ix_source_snapshots_space_item ON public.source_snapshots USING btree (space_id, source_item_id);
 
 
 --
@@ -9241,10 +9340,10 @@ CREATE UNIQUE INDEX uq_agents_system_evolver_per_space ON public.agents USING bt
 
 
 --
--- Name: uq_agents_system_intake_post_processor_per_space; Type: INDEX; Schema: public; Owner: -
+-- Name: uq_agents_system_source_post_processor_per_space; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX uq_agents_system_intake_post_processor_per_space ON public.agents USING btree (space_id) WHERE (((agent_kind)::text = 'system_intake_post_processor'::text) AND ((status)::text = 'active'::text));
+CREATE UNIQUE INDEX uq_agents_system_source_post_processor_per_space ON public.agents USING btree (space_id) WHERE (((agent_kind)::text = 'system_source_post_processor'::text) AND ((status)::text = 'active'::text));
 
 
 --
@@ -9255,17 +9354,17 @@ CREATE UNIQUE INDEX uq_agent_runtime_profiles_default_per_agent ON public.agent_
 
 
 --
--- Name: uq_intake_items_active_canonical_uri; Type: INDEX; Schema: public; Owner: -
+-- Name: uq_source_items_active_canonical_uri; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX uq_intake_items_active_canonical_uri ON public.intake_items USING btree (space_id, canonical_uri) WHERE ((canonical_uri IS NOT NULL) AND (deleted_at IS NULL));
+CREATE UNIQUE INDEX uq_source_items_active_canonical_uri ON public.source_items USING btree (space_id, canonical_uri) WHERE ((canonical_uri IS NOT NULL) AND (deleted_at IS NULL));
 
 
 --
--- Name: uq_intake_items_active_source_uri; Type: INDEX; Schema: public; Owner: -
+-- Name: uq_source_items_active_source_uri; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX uq_intake_items_active_source_uri ON public.intake_items USING btree (space_id, source_uri) WHERE ((source_uri IS NOT NULL) AND (deleted_at IS NULL));
+CREATE UNIQUE INDEX uq_source_items_active_source_uri ON public.source_items USING btree (space_id, source_uri) WHERE ((source_uri IS NOT NULL) AND (deleted_at IS NULL));
 
 
 --
@@ -9286,7 +9385,7 @@ CREATE UNIQUE INDEX uq_source_post_processing_rules_active_name ON public.source
 -- Name: uq_source_post_processing_item_decisions_run_item; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX uq_source_post_processing_item_decisions_run_item ON public.source_post_processing_item_decisions USING btree (space_id, run_id, intake_item_id);
+CREATE UNIQUE INDEX uq_source_post_processing_item_decisions_run_item ON public.source_post_processing_item_decisions USING btree (space_id, run_id, source_item_id);
 
 
 --
@@ -10262,11 +10361,11 @@ ALTER TABLE ONLY public.extracted_evidence
 
 
 --
--- Name: extracted_evidence extracted_evidence_intake_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: extracted_evidence extracted_evidence_source_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.extracted_evidence
-    ADD CONSTRAINT extracted_evidence_intake_item_id_fkey FOREIGN KEY (intake_item_id) REFERENCES public.intake_items(id);
+    ADD CONSTRAINT extracted_evidence_source_item_id_fkey FOREIGN KEY (source_item_id) REFERENCES public.source_items(id);
 
 
 --
@@ -10294,11 +10393,11 @@ ALTER TABLE ONLY public.extraction_jobs
 
 
 --
--- Name: extraction_jobs extraction_jobs_intake_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: extraction_jobs extraction_jobs_source_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.extraction_jobs
-    ADD CONSTRAINT extraction_jobs_intake_item_id_fkey FOREIGN KEY (intake_item_id) REFERENCES public.intake_items(id);
+    ADD CONSTRAINT extraction_jobs_source_item_id_fkey FOREIGN KEY (source_item_id) REFERENCES public.source_items(id);
 
 
 --
@@ -10422,27 +10521,27 @@ ALTER TABLE ONLY public.evolution_targets
 
 
 --
--- Name: intake_items fk_intake_items_extracted_artifact_id_artifacts; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: source_items fk_source_items_extracted_artifact_id_artifacts; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.intake_items
-    ADD CONSTRAINT fk_intake_items_extracted_artifact_id_artifacts FOREIGN KEY (extracted_artifact_id) REFERENCES public.artifacts(id) ON DELETE SET NULL;
-
-
---
--- Name: intake_items fk_intake_items_raw_artifact_id_artifacts; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.intake_items
-    ADD CONSTRAINT fk_intake_items_raw_artifact_id_artifacts FOREIGN KEY (raw_artifact_id) REFERENCES public.artifacts(id) ON DELETE SET NULL;
+ALTER TABLE ONLY public.source_items
+    ADD CONSTRAINT fk_source_items_extracted_artifact_id_artifacts FOREIGN KEY (extracted_artifact_id) REFERENCES public.artifacts(id) ON DELETE SET NULL;
 
 
 --
--- Name: intake_items fk_intake_items_summary_artifact_id_artifacts; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: source_items fk_source_items_raw_artifact_id_artifacts; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.intake_items
-    ADD CONSTRAINT fk_intake_items_summary_artifact_id_artifacts FOREIGN KEY (summary_artifact_id) REFERENCES public.artifacts(id) ON DELETE SET NULL;
+ALTER TABLE ONLY public.source_items
+    ADD CONSTRAINT fk_source_items_raw_artifact_id_artifacts FOREIGN KEY (raw_artifact_id) REFERENCES public.artifacts(id) ON DELETE SET NULL;
+
+
+--
+-- Name: source_items fk_source_items_summary_artifact_id_artifacts; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_items
+    ADD CONSTRAINT fk_source_items_summary_artifact_id_artifacts FOREIGN KEY (summary_artifact_id) REFERENCES public.artifacts(id) ON DELETE SET NULL;
 
 
 --
@@ -10583,19 +10682,27 @@ ALTER TABLE ONLY public.spaces
 
 
 --
--- Name: intake_items intake_items_connection_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: source_items source_items_connection_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.intake_items
-    ADD CONSTRAINT intake_items_connection_id_fkey FOREIGN KEY (connection_id) REFERENCES public.source_connections(id);
+ALTER TABLE ONLY public.source_items
+    ADD CONSTRAINT source_items_connection_id_fkey FOREIGN KEY (connection_id) REFERENCES public.source_connections(id);
 
 
 --
--- Name: intake_items intake_items_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: source_items source_items_created_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.intake_items
-    ADD CONSTRAINT intake_items_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+ALTER TABLE ONLY public.source_items
+    ADD CONSTRAINT source_items_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: source_items source_items_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_items
+    ADD CONSTRAINT source_items_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
 
 
 --
@@ -12308,6 +12415,62 @@ ALTER TABLE ONLY public.source_connections
 
 
 --
+-- Name: source_connection_user_subscriptions source_connection_user_subscriptions_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_connection_user_subscriptions
+    ADD CONSTRAINT source_connection_user_subscriptions_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+
+--
+-- Name: source_connection_user_subscriptions source_connection_user_subscriptions_source_connection_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_connection_user_subscriptions
+    ADD CONSTRAINT source_connection_user_subscriptions_source_connection_id_fkey FOREIGN KEY (source_connection_id) REFERENCES public.source_connections(id) ON DELETE CASCADE;
+
+
+--
+-- Name: source_connection_user_subscriptions source_connection_user_subscriptions_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_connection_user_subscriptions
+    ADD CONSTRAINT source_connection_user_subscriptions_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id);
+
+
+--
+-- Name: source_connection_user_subscriptions source_connection_user_subscriptions_recommended_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_connection_user_subscriptions
+    ADD CONSTRAINT source_connection_user_subscriptions_recommended_by_user_id_fkey FOREIGN KEY (recommended_by_user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: source_item_user_states source_item_user_states_space_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_item_user_states
+    ADD CONSTRAINT source_item_user_states_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
+
+
+--
+-- Name: source_item_user_states source_item_user_states_source_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_item_user_states
+    ADD CONSTRAINT source_item_user_states_source_item_id_fkey FOREIGN KEY (source_item_id) REFERENCES public.source_items(id) ON DELETE CASCADE;
+
+
+--
+-- Name: source_item_user_states source_item_user_states_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_item_user_states
+    ADD CONSTRAINT source_item_user_states_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id);
+
+
+--
 -- Name: source_post_processing_rules source_post_processing_rules_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -12404,11 +12567,11 @@ ALTER TABLE ONLY public.source_post_processing_runs
 
 
 --
--- Name: source_post_processing_item_decisions source_post_processing_item_decisions_intake_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: source_post_processing_item_decisions source_post_processing_item_decisions_source_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.source_post_processing_item_decisions
-    ADD CONSTRAINT source_post_processing_item_decisions_intake_item_id_fkey FOREIGN KEY (intake_item_id) REFERENCES public.intake_items(id);
+    ADD CONSTRAINT source_post_processing_item_decisions_source_item_id_fkey FOREIGN KEY (source_item_id) REFERENCES public.source_items(id);
 
 
 --
@@ -12492,11 +12655,11 @@ ALTER TABLE ONLY public.source_snapshots
 
 
 --
--- Name: source_snapshots source_snapshots_intake_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: source_snapshots source_snapshots_source_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.source_snapshots
-    ADD CONSTRAINT source_snapshots_intake_item_id_fkey FOREIGN KEY (intake_item_id) REFERENCES public.intake_items(id);
+    ADD CONSTRAINT source_snapshots_source_item_id_fkey FOREIGN KEY (source_item_id) REFERENCES public.source_items(id);
 
 
 --
@@ -13059,7 +13222,7 @@ ALTER TABLE ONLY public.workspaces
 CREATE TABLE public.reader_annotations (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
-    intake_item_id character varying(36),
+    source_item_id character varying(36),
     artifact_id character varying(36),
     source_snapshot_id character varying(36),
     annotation_type character varying(32) NOT NULL,
@@ -13078,7 +13241,7 @@ CREATE TABLE public.reader_annotations (
     CONSTRAINT ck_reader_annotations_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'archived'::character varying])::text[]))),
     CONSTRAINT ck_reader_annotations_anchor_state CHECK (((anchor_state)::text = ANY ((ARRAY['verified'::character varying, 'unverified'::character varying])::text[]))),
     CONSTRAINT ck_reader_annotations_one_target CHECK (
-        ((intake_item_id IS NOT NULL)::integer + (artifact_id IS NOT NULL)::integer + (source_snapshot_id IS NOT NULL)::integer) = 1
+        ((source_item_id IS NOT NULL)::integer + (artifact_id IS NOT NULL)::integer + (source_snapshot_id IS NOT NULL)::integer) = 1
     ),
     CONSTRAINT ck_reader_annotations_anchor_json CHECK ((jsonb_typeof(anchor_json) = 'object'::text))
 );
@@ -13090,7 +13253,7 @@ ALTER TABLE ONLY public.reader_annotations
     ADD CONSTRAINT reader_annotations_space_id_fkey FOREIGN KEY (space_id) REFERENCES public.spaces(id);
 
 ALTER TABLE ONLY public.reader_annotations
-    ADD CONSTRAINT reader_annotations_intake_item_id_fkey FOREIGN KEY (intake_item_id) REFERENCES public.intake_items(id);
+    ADD CONSTRAINT reader_annotations_source_item_id_fkey FOREIGN KEY (source_item_id) REFERENCES public.source_items(id);
 
 ALTER TABLE ONLY public.reader_annotations
     ADD CONSTRAINT reader_annotations_artifact_id_fkey FOREIGN KEY (artifact_id) REFERENCES public.artifacts(id);
@@ -13101,7 +13264,7 @@ ALTER TABLE ONLY public.reader_annotations
 ALTER TABLE ONLY public.reader_annotations
     ADD CONSTRAINT reader_annotations_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public.users(id);
 
-CREATE INDEX ix_reader_annotations_space_intake_item ON public.reader_annotations USING btree (space_id, intake_item_id, status);
+CREATE INDEX ix_reader_annotations_space_source_item ON public.reader_annotations USING btree (space_id, source_item_id, status);
 CREATE INDEX ix_reader_annotations_space_artifact ON public.reader_annotations USING btree (space_id, artifact_id, status);
 CREATE INDEX ix_reader_annotations_space_snapshot ON public.reader_annotations USING btree (space_id, source_snapshot_id, status);
 CREATE INDEX ix_reader_annotations_space_user ON public.reader_annotations USING btree (space_id, created_by_user_id, status);
@@ -13171,7 +13334,7 @@ CREATE INDEX ix_reader_comments_space_thread ON public.reader_comments USING btr
 CREATE INDEX ix_reader_comments_space_user ON public.reader_comments USING btree (space_id, created_by_user_id, status);
 
 --
--- Intake Custom Source handler constraints and indexes.
+-- Source Custom Source handler constraints and indexes.
 --
 
 ALTER TABLE ONLY public.source_handler_versions

@@ -3,8 +3,9 @@ import { describe, expect, it, vi } from 'vitest'
 import { ReadOnlyTiptapReader } from '../ReadOnlyTiptapReader'
 
 describe('ReadOnlyTiptapReader', () => {
-  it('creates a whole-block selection when a paragraph is clicked', async () => {
+  it('reports a block selection and block focus without selecting DOM text when a paragraph is clicked', async () => {
     const onTextSelected = vi.fn()
+    const onBlockFocused = vi.fn()
     render(
       <ReadOnlyTiptapReader
         contentJson={{
@@ -16,12 +17,14 @@ describe('ReadOnlyTiptapReader', () => {
         }}
         normalizedText="First paragraph. Second paragraph."
         onTextSelected={onTextSelected}
+        onBlockFocused={onBlockFocused}
       />,
     )
 
     fireEvent.click(await screen.findByText('Second paragraph.'))
 
     await waitFor(() => {
+      expect(onBlockFocused).toHaveBeenLastCalledWith(1)
       expect(onTextSelected).toHaveBeenLastCalledWith(expect.objectContaining({
         quoteText: 'Second paragraph.',
         anchorDraft: expect.objectContaining({
@@ -30,6 +33,7 @@ describe('ReadOnlyTiptapReader', () => {
         }),
       }))
     })
+    expect(window.getSelection()?.toString()).toBe('')
   })
 
   it('renders reader table nodes', async () => {

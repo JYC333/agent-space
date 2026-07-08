@@ -3,14 +3,14 @@ import {
   buildRetrievalContextQuery,
   renderInstruction,
   type SourcePostProcessingRetrievalContextSnapshot,
-} from "../src/modules/intake/postProcessing/instruction";
-import { parsePostProcessingResult } from "../src/modules/intake/postProcessing/resultParser";
+} from "../src/modules/sources/postProcessing/instruction";
+import { parsePostProcessingResult } from "../src/modules/sources/postProcessing/resultParser";
 import {
   normalizeActions,
   normalizeInputConfig,
   normalizeTriggerConfig,
-} from "../src/modules/intake/postProcessing/repository";
-import type { EvidenceRow, IntakeItemRow, SourceConnectionRow } from "../src/modules/intake/intakeRepositoryRows";
+} from "../src/modules/sources/postProcessing/repository";
+import type { EvidenceRow, SourceItemRow, SourceConnectionRow } from "../src/modules/sources/sourceRepositoryRows";
 
 function makeConnection(overrides: Partial<SourceConnectionRow> = {}): SourceConnectionRow {
   return {
@@ -19,6 +19,7 @@ function makeConnection(overrides: Partial<SourceConnectionRow> = {}): SourceCon
     connector_id: "connector-1",
     owner_user_id: "user-1",
     credential_id: null,
+    visibility: "space_discoverable",
     name: "arXiv: cs.AI",
     endpoint_url: null,
     status: "active",
@@ -43,7 +44,7 @@ function makeConnection(overrides: Partial<SourceConnectionRow> = {}): SourceCon
   };
 }
 
-function makeItem(overrides: Partial<IntakeItemRow> = {}): IntakeItemRow {
+function makeItem(overrides: Partial<SourceItemRow> = {}): SourceItemRow {
   return {
     id: "item-1",
     space_id: "space-1",
@@ -51,6 +52,7 @@ function makeItem(overrides: Partial<IntakeItemRow> = {}): IntakeItemRow {
     item_type: "article",
     source_object_type: null,
     source_object_id: null,
+    created_by_user_id: null,
     title: "A paper about agent memory",
     source_uri: "https://arxiv.org/abs/1234.5678",
     canonical_uri: null,
@@ -62,8 +64,6 @@ function makeItem(overrides: Partial<IntakeItemRow> = {}): IntakeItemRow {
     last_seen_at: new Date().toISOString(),
     content_hash: null,
     excerpt: "This paper studies retrieval-augmented agent memory.",
-    status: "new",
-    read_status: "unread",
     content_state: "excerpt_only",
     retention_policy: "default",
     relevance_score: null,
@@ -159,7 +159,7 @@ describe("renderInstruction relevance screening section", () => {
     expect(instruction).toContain("Include: agent memory");
     expect(instruction).toContain("Exclude: pure hardware optimization");
     expect(instruction).toContain("Custom relevant wording");
-    expect(instruction).toContain("Every input intake item must get exactly one item_decisions entry.");
+    expect(instruction).toContain("Every input source item must get exactly one item_decisions entry.");
   });
 
   it("still renders the screening section with default wording when mark_items is on but no profile is set", () => {
@@ -232,7 +232,7 @@ describe("renderInstruction relevance screening section", () => {
     expect(instruction).toContain("Candidate prefilter:");
     expect(instruction).toContain("Selected items in prompt: 1");
     expect(instruction).toContain("Filtered before LLM: 9");
-    expect(instruction).toContain("Only judge the intake items listed below");
+    expect(instruction).toContain("Only judge the source items listed below");
     expect(instruction).toContain("Optional deep analysis:");
     expect(instruction).toContain("Enabled after this screening run for: relevant, maybe");
     expect(instruction).toContain("Minimum confidence: 0.65");
@@ -275,15 +275,15 @@ describe("parsePostProcessingResult screening requirement", () => {
       relevance_profile: { enabled: true, objective: "Screen papers" },
     });
     const incompleteOutput = resultJson([
-      { intake_item_id: "item-1", relevance: "relevant" },
+      { source_item_id: "item-1", relevance: "relevant" },
     ]);
     expect(() => parsePostProcessingResult(incompleteOutput, actions, inputConfig, itemIds)).toThrow(
       /item_decisions must include every input item/,
     );
 
     const completeOutput = resultJson([
-      { intake_item_id: "item-1", relevance: "relevant" },
-      { intake_item_id: "item-2", relevance: "not_relevant" },
+      { source_item_id: "item-1", relevance: "relevant" },
+      { source_item_id: "item-2", relevance: "not_relevant" },
     ]);
     expect(() => parsePostProcessingResult(completeOutput, actions, inputConfig, itemIds)).not.toThrow();
   });
@@ -313,8 +313,8 @@ describe("parsePostProcessingResult screening requirement", () => {
     const actions = normalizeActions({ batch_digest: true, mark_items: true });
     const inputConfig = normalizeInputConfig({});
     const output = resultJson([
-      { intake_item_id: "item-1", relevance: "relevant", matched_context_refs: ["knowledge:claim:known"] },
-      { intake_item_id: "item-2", relevance: "maybe", matched_context_refs: ["knowledge:claim:hallucinated"] },
+      { source_item_id: "item-1", relevance: "relevant", matched_context_refs: ["knowledge:claim:known"] },
+      { source_item_id: "item-2", relevance: "maybe", matched_context_refs: ["knowledge:claim:hallucinated"] },
     ]);
     expect(() =>
       parsePostProcessingResult(output, actions, inputConfig, itemIds, ["knowledge:claim:known"]),
@@ -325,8 +325,8 @@ describe("parsePostProcessingResult screening requirement", () => {
     const actions = normalizeActions({ batch_digest: true, mark_items: true });
     const inputConfig = normalizeInputConfig({});
     const output = resultJson([
-      { intake_item_id: "item-1", relevance: "relevant", matched_context_refs: [{ ref: "knowledge:claim:known" }] },
-      { intake_item_id: "item-2", relevance: "not_relevant", matched_context_refs: [] },
+      { source_item_id: "item-1", relevance: "relevant", matched_context_refs: [{ ref: "knowledge:claim:known" }] },
+      { source_item_id: "item-2", relevance: "not_relevant", matched_context_refs: [] },
     ]);
     const parsed = parsePostProcessingResult(output, actions, inputConfig, itemIds, ["knowledge:claim:known"]);
     expect(parsed.item_decisions[0]?.matched_context_refs).toEqual([{ ref: "knowledge:claim:known" }]);

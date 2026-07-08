@@ -115,12 +115,12 @@ CREATE TABLE public.proposals (
     CONSTRAINT ck_proposals_urgency CHECK (((urgency)::text = ANY ((ARRAY['low'::character varying, 'normal'::character varying, 'high'::character varying, 'critical'::character varying])::text[])))
 );
 
-CREATE TABLE public.intake_items (
+CREATE TABLE public.source_items (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
     connection_id character varying(36),
     deleted_at timestamp with time zone,
-    CONSTRAINT intake_items_pkey PRIMARY KEY (id)
+    CONSTRAINT source_items_pkey PRIMARY KEY (id)
 );
 
 CREATE TABLE public.source_snapshots (
@@ -133,7 +133,7 @@ CREATE TABLE public.source_snapshots (
 CREATE TABLE public.extracted_evidence (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
-    intake_item_id character varying(36),
+    source_item_id character varying(36),
     source_snapshot_id character varying(36),
     deleted_at timestamp with time zone,
     CONSTRAINT extracted_evidence_pkey PRIMARY KEY (id)

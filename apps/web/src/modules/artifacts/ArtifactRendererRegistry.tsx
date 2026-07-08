@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { SpaceLink as Link } from '../../core/spaceNav'
 import type { Artifact } from '../../types/api'
 import { Badge } from '../../components/ui/badge'
+import { MarkdownReader } from '../../components/editor/MarkdownReader'
 
 interface ArtifactRendererProps {
   artifact: Artifact
@@ -18,6 +19,20 @@ function InlineTextArtifact({ artifact }: ArtifactRendererProps) {
     )
   }
   return <p className="text-sm text-muted-foreground">No inline preview. Use Export to download.</p>
+}
+
+/** Post-processing digests and per-item summaries (`artifact_type: 'summary'`) are markdown
+ *  text, not structured JSON — render them through the shared reading core (L1) instead of
+ *  the raw-source `<pre>` fallback. */
+function MarkdownSummaryArtifact({ artifact }: ArtifactRendererProps) {
+  if (!artifact.has_inline_content || !(artifact.content ?? '').trim()) {
+    return <p className="text-sm text-muted-foreground">No inline preview. Use Export to download.</p>
+  }
+  return (
+    <div className="max-h-[480px] overflow-auto rounded-md border border-border p-3">
+      <MarkdownReader markdown={artifact.content ?? ''} />
+    </div>
+  )
 }
 
 function parseJsonContent(artifact: Artifact): unknown | null {
@@ -1100,6 +1115,7 @@ function AskSpaceSessionRenderer({ artifact }: ArtifactRendererProps) {
 }
 
 const REGISTRY: Record<string, ArtifactRenderer> = {
+  'summary': MarkdownSummaryArtifact,
   'research_brief.v1': ResearchBriefRenderer,
   'ask_space_session': AskSpaceSessionRenderer,
   'research_source_table.v1': SourceTableRenderer,

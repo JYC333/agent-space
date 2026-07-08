@@ -46,7 +46,7 @@ import { contextOpsModule } from "../modules/contextOps";
 import { askSpaceModule } from "../modules/askSpace";
 import { activityModule } from "../modules/activity";
 import { sourcePointersModule } from "../modules/sourcePointers";
-import { intakeModule } from "../modules/intake";
+import { sourcesModule } from "../modules/sources";
 import { knowledgeModule } from "../modules/knowledge";
 import { graphModule } from "../modules/graph";
 import { evolutionModule } from "../modules/evolution";
@@ -116,7 +116,7 @@ export const SERVER_MODULES: readonly ServerModule[] = [
   askSpaceModule,
   activityModule,
   sourcePointersModule,
-  intakeModule,
+  sourcesModule,
   knowledgeModule,
   graphModule,
   evolutionModule,

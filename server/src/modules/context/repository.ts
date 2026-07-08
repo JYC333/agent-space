@@ -608,7 +608,7 @@ export class PgRunContextRepository {
 
     const result = await this.db.query<EvidenceContextRow>(
       `SELECT ev.id, ev.title, ev.content_excerpt, ev.evidence_type,
-              ev.trust_level, ev.intake_item_id, ev.source_snapshot_id,
+              ev.trust_level, ev.source_item_id, ev.source_snapshot_id,
               ev.artifact_id, ev.source_uri,
               COALESCE(ii.connection_id, ss.connection_id) AS source_connection_id,
               el.id AS link_id, el.link_type, el.target_type, el.target_id
@@ -616,9 +616,9 @@ export class PgRunContextRepository {
          JOIN evidence_links el
            ON el.evidence_id = ev.id
           AND el.space_id = ev.space_id
-         LEFT JOIN intake_items ii
+         LEFT JOIN source_items ii
            ON ii.space_id = ev.space_id
-          AND ii.id = ev.intake_item_id
+          AND ii.id = ev.source_item_id
           AND ii.deleted_at IS NULL
          LEFT JOIN source_snapshots ss
            ON ss.space_id = ev.space_id

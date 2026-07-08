@@ -291,7 +291,7 @@ Implemented fields:
 - `source_connection_id`: optional FK to a SourceConnection for object-backed
   evidence, but required for any `source_ref_type/source_ref_id` evidence.
   External evidence must first be normalized into a SourceConnection-backed
-  intake/source pointer or a governed Source object; raw external refs without
+  source pointer or a governed Source object; raw external refs without
   an id are rejected.
 - `source_policy_snapshot_json`: audit snapshot only; runtime revalidation still
   uses current policy

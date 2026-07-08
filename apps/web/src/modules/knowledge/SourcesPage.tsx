@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { sourcesApi } from '../../api/client'
+import { knowledgeSourcesApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
 import { errMsg } from '../../lib/utils'
 import type { KnowledgeSourceSummary } from '../../types/api'
@@ -27,7 +27,7 @@ export default function SourcesPage() {
     }
     setLoading(true)
     try {
-      const page = await sourcesApi.list({ limit: 100 })
+      const page = await knowledgeSourcesApi.list({ limit: 100 })
       setSources(page.items)
     } catch (e) {
       toast.error(errMsg(e))
@@ -54,7 +54,7 @@ export default function SourcesPage() {
             title={activeSpaceId ? 'No sources yet' : 'Select an operational space'}
             description={
               activeSpaceId
-                ? 'Sources are raw references and evidence — captured from intake or attached to wiki knowledge.'
+                ? 'Sources are raw references and evidence — captured from source or attached to wiki knowledge.'
                 : 'Choose a space to browse sources.'
             }
           />

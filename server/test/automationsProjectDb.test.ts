@@ -90,7 +90,7 @@ beforeEach(async () => {
   await pool.query(
     `TRUNCATE automation_runs, automation_credential_grants, automations, scheduler_tasks,
        jobs, context_snapshots, runs, agent_runtime_profiles, agent_versions, agents,
-       intake_items, workspace_source_bindings, source_connections, source_connectors,
+       source_items, workspace_source_bindings, source_connections, source_connectors,
        workspaces, project_members, projects, space_memberships, users, spaces CASCADE`,
   );
   const now = new Date().toISOString();
@@ -297,7 +297,7 @@ describe("Automation × Project binding (real Postgres)", () => {
     expect(run.rows[0]?.trigger_origin).toBe("automation");
   });
 
-  it("rejects intake event automations", async () => {
+  it("rejects source event automations", async () => {
     if (!available) return;
     await expect(
       service().create({

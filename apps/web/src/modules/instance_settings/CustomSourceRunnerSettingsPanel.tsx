@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Loader2, RefreshCw, Save, ShieldAlert } from 'lucide-react'
 import { toast } from 'sonner'
-import { intakeApi } from '../../api/client'
+import { sourcesApi } from '../../api/client'
 import { Badge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'
 import { Card, CardTitle } from '../../components/ui/card'
@@ -32,7 +32,7 @@ export function CustomSourceRunnerSettingsPanel() {
   async function load() {
     setLoading(true)
     try {
-      const next = await intakeApi.customSourceInstanceRunnerSettings()
+      const next = await sourcesApi.customSourceInstanceRunnerSettings()
       setSettings(next)
       setDraftRunnerEnabled(next.runner_enabled)
     } catch (err) {
@@ -48,7 +48,7 @@ export function CustomSourceRunnerSettingsPanel() {
     if (!settings || draftRunnerEnabled === null) return
     setSaving(true)
     try {
-      const next = await intakeApi.updateCustomSourceInstanceRunnerSettings({
+      const next = await sourcesApi.updateCustomSourceInstanceRunnerSettings({
         runner_enabled: draftRunnerEnabled,
       })
       setSettings(next)

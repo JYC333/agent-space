@@ -4,7 +4,7 @@ import { Badge } from '../../components/ui/badge'
 export interface RetrievalToolDomainState {
   memory: boolean
   project_public_summary: boolean
-  intake: boolean
+  source: boolean
 }
 
 export function readRetrievalToolDomains(config: Record<string, unknown> | null | undefined): RetrievalToolDomainState {
@@ -17,7 +17,7 @@ export function readRetrievalToolDomains(config: Record<string, unknown> | null 
   )
   const memory = isRecord(retrievalTools.memory) ? retrievalTools.memory : {}
   const project = isRecord(retrievalTools.project_public_summary) ? retrievalTools.project_public_summary : {}
-  const intake = isRecord(retrievalTools.intake) ? retrievalTools.intake : {}
+  const source = isRecord(retrievalTools.source) ? retrievalTools.source : {}
   return {
     memory:
       domains.has('memory') ||
@@ -32,13 +32,13 @@ export function readRetrievalToolDomains(config: Record<string, unknown> | null 
       record.project_public_summary_retrieval_tools_enabled === true ||
       retrievalTools.project_public_summary === true ||
       project.enabled === true,
-    intake:
-      domains.has('intake') ||
-      domains.has('intake_item') ||
+    source:
+      domains.has('source') ||
+      domains.has('source_item') ||
       domains.has('extracted_evidence') ||
-      record.intake_retrieval_tools_enabled === true ||
-      retrievalTools.intake === true ||
-      intake.enabled === true,
+      record.source_retrieval_tools_enabled === true ||
+      retrievalTools.source === true ||
+      source.enabled === true,
   }
 }
 
@@ -50,7 +50,7 @@ export function mergeRetrievalToolDomains(
   const nextDomains = [
     ...(domains.memory ? ['memory'] : []),
     ...(domains.project_public_summary ? ['project_public_summary'] : []),
-    ...(domains.intake ? ['intake'] : []),
+    ...(domains.source ? ['source'] : []),
   ]
   return {
     ...config,
@@ -65,9 +65,9 @@ export function mergeRetrievalToolDomains(
         ...(isRecord(currentTools.project_public_summary) ? currentTools.project_public_summary : {}),
         enabled: domains.project_public_summary,
       },
-      intake: {
-        ...(isRecord(currentTools.intake) ? currentTools.intake : {}),
-        enabled: domains.intake,
+      source: {
+        ...(isRecord(currentTools.source) ? currentTools.source : {}),
+        enabled: domains.source,
       },
     },
   }
@@ -93,7 +93,7 @@ export function RetrievalToolDomainControls({
       </div>
       {!compact && (
         <p className="text-xs text-muted-foreground">
-          Knowledge tools use the space retrieval mode. Memory, Project, and Intake tools are separately exposed only when enabled here.
+          Knowledge tools use the space retrieval mode. Memory, Project, and Source tools are separately exposed only when enabled here.
         </p>
       )}
       <div className="grid gap-2 sm:grid-cols-3">
@@ -134,17 +134,17 @@ export function RetrievalToolDomainControls({
         <label className="flex items-start gap-2 rounded-md border border-border p-3 text-sm">
           <input
             type="checkbox"
-            checked={value.intake}
-            onChange={event => set('intake', event.target.checked)}
+            checked={value.source}
+            onChange={event => set('source', event.target.checked)}
             className="mt-1"
           />
           <span>
             <span className="flex items-center gap-1.5 font-medium">
               <Inbox className="size-3.5" />
-              Intake
+              Source
             </span>
             <span className="block text-xs text-muted-foreground">
-              Enables intake.retrieval.search and intake.retrieval.brief over indexed intake items and evidence.
+              Enables source.retrieval.search and source.retrieval.brief over indexed source items and evidence.
             </span>
           </span>
         </label>

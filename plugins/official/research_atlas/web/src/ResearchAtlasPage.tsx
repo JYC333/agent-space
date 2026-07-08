@@ -346,10 +346,10 @@ function ResearchAtlasPage({ host }: { host: ResearchAtlasWebHost }) {
     setLoading(true)
     setError(null)
     try {
-      await host.api.syncIntake()
+      await host.api.syncSource()
       await loadPapers(query)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to run intake sync')
+      setError(err instanceof Error ? err.message : 'Unable to run source sync')
     } finally {
       setLoading(false)
     }
@@ -593,7 +593,7 @@ function ResearchAtlasPage({ host }: { host: ResearchAtlasWebHost }) {
         <div style={panelStyle}>
           <h2 style={sectionTitleStyle}>Sync</h2>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
-            {['intake_sync_enabled', 'crossref_enabled', 'openalex_enabled'].map((key) => (
+            {['source_sync_enabled', 'crossref_enabled', 'openalex_enabled'].map((key) => (
               <label key={key} style={{ display: 'inline-flex', gap: 5, alignItems: 'center', fontSize: 13 }}>
                 <input
                   type="checkbox"
@@ -604,7 +604,7 @@ function ResearchAtlasPage({ host }: { host: ResearchAtlasWebHost }) {
               </label>
             ))}
           </div>
-          <button style={buttonStyle} onClick={() => void runSync()} disabled={loading}>Run intake sync</button>
+          <button style={buttonStyle} onClick={() => void runSync()} disabled={loading}>Run source sync</button>
           <p style={{ ...mutedStyle, marginTop: 8 }}>
             Due refresh: {syncStatus?.due_refresh_count ?? 0}
           </p>
@@ -1153,8 +1153,8 @@ function ProjectBoard({
               </select>
             </td>
             <td style={tdStyle}>
-              {item.intake_item_id ? (
-                <host.Link to={`/intake/items/${item.intake_item_id}/read`} style={{ color: '#1f6feb' }}>Reader</host.Link>
+              {item.source_item_id ? (
+                <host.Link to={`/brief/items/${item.source_item_id}`} style={{ color: '#1f6feb' }}>Reader</host.Link>
               ) : item.source}
             </td>
           </tr>

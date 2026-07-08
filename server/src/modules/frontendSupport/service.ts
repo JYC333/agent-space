@@ -62,7 +62,7 @@ export class PgFrontendSupportService {
       jobStatus,
       runtimeStatus,
       modelProviderStatus,
-      intakeSummary,
+      sourceSummary,
     ] = await Promise.all([
       this.listHomeRuns(identity, recentRunsLimit, false),
       this.listHomeRuns(identity, 10, true),
@@ -75,7 +75,7 @@ export class PgFrontendSupportService {
       this.jobQueueStatus(identity.spaceId),
       this.runtimeStatus(identity.spaceId),
       this.modelProviderStatus(identity.spaceId),
-      this.intakeSummary(identity.spaceId),
+      this.sourceSummary(identity.spaceId),
     ]);
 
     return {
@@ -95,7 +95,7 @@ export class PgFrontendSupportService {
         retryableJobs: jobStatus.retryable,
         missingModelProvider: modelProviderStatus.missing_model_provider_config,
       }),
-      intake_summary: intakeSummary,
+      source_summary: sourceSummary,
     };
   }
 
@@ -569,7 +569,7 @@ export class PgFrontendSupportService {
     };
   }
 
-  private async intakeSummary(spaceId: string): Promise<HomeSummaryOut["intake_summary"]> {
+  private async sourceSummary(spaceId: string): Promise<HomeSummaryOut["source_summary"]> {
     const result = await this.db.query<{
       open_items: string | number;
       new_items_today: string | number;
@@ -580,9 +580,9 @@ export class PgFrontendSupportService {
       due_connections: string | number;
     }>(
       `SELECT
-         (SELECT count(*)::text FROM intake_items
+         (SELECT count(*)::text FROM source_items
            WHERE space_id = $1 AND deleted_at IS NULL AND status IN ('new', 'triaged', 'selected')) AS open_items,
-         (SELECT count(*)::text FROM intake_items
+         (SELECT count(*)::text FROM source_items
            WHERE space_id = $1 AND deleted_at IS NULL AND created_at >= date_trunc('day', now())) AS new_items_today,
          (SELECT count(*)::text FROM extraction_jobs
            WHERE space_id = $1 AND status = 'pending') AS pending_extraction_jobs,

@@ -17,7 +17,7 @@ code and migrations still win over documentation.
 | Credentials | [CREDENTIAL_STORAGE.md](CREDENTIAL_STORAGE.md), [../modules/credentials.md](../modules/credentials.md), [../modules/provider-policy.md](../modules/provider-policy.md), [../decisions/0008-credential-channel-isolation.md](../decisions/0008-credential-channel-isolation.md) |
 | Memory, context, provenance | [MEMORY_MODEL.md](MEMORY_MODEL.md), [MEMORY_CONTEXT_RUNTIME.md](MEMORY_CONTEXT_RUNTIME.md), [MEMORY_ACTIVITY_PROVENANCE.md](MEMORY_ACTIVITY_PROVENANCE.md), [MEMORY_EVOLUTION_PLAN.md](MEMORY_EVOLUTION_PLAN.md) |
 | Context and retrieval layer | [CONTEXT_AND_RETRIEVAL_LAYER.md](CONTEXT_AND_RETRIEVAL_LAYER.md), [SOURCE_CONNECTOR_CONSENT.md](SOURCE_CONNECTOR_CONSENT.md) |
-| Intake and evidence | [INTAKE_EVIDENCE_FOUNDATION.md](INTAKE_EVIDENCE_FOUNDATION.md), [../modules/activity.md](../modules/activity.md), [../modules/activity-inbox.md](../modules/activity-inbox.md) |
+| Sources and evidence | [SOURCE_EVIDENCE_FOUNDATION.md](SOURCE_EVIDENCE_FOUNDATION.md), [../modules/activity.md](../modules/activity.md), [../modules/activity-inbox.md](../modules/activity-inbox.md) |
 | Proposals and tasks | [PROPOSALS.md](PROPOSALS.md), [TASK_BOARD_MODEL.md](TASK_BOARD_MODEL.md), [../modules/proposals.md](../modules/proposals.md) |
 | Operations | [OPERATIONS_AND_SAFETY.md](OPERATIONS_AND_SAFETY.md), [DATABASE_AND_TRANSACTIONS.md](DATABASE_AND_TRANSACTIONS.md) |
 | Frontend | [FRONTEND_INFORMATION_ARCHITECTURE.md](FRONTEND_INFORMATION_ARCHITECTURE.md), [../modules/product-shell.md](../modules/product-shell.md), [../modules/frontend-layout.md](../modules/frontend-layout.md) |
@@ -162,11 +162,11 @@ code and migrations still win over documentation.
 
 ---
 
-### 5. Memory, Context, Intake, and Evidence Quality
+### 5. Memory, Context, Sources, and Evidence Quality
 
 **Next work**
 - Implement planned memory-quality phases from [MEMORY_EVOLUTION_PLAN.md](MEMORY_EVOLUTION_PLAN.md) only through proposal-safe flows.
-- Extend connector-specific ingestion behind Intake/Evidence lifecycle.
+- Extend connector-specific ingestion behind Sources/Evidence lifecycle.
 - Add synthesis and gap-analysis loops only when citations and proposal review stay explicit.
 
 **Prerequisites**
@@ -184,8 +184,8 @@ code and migrations still win over documentation.
 ### 6. Automation and Triggers
 
 **Current state**
-- Manual and scheduled Automations are separate from Intake source
-  post-processing. Intake owns `intake.items_materialized` handling through
+- Manual and scheduled Automations are separate from source
+  post-processing. Sources owns `source.items_materialized` handling through
   source post-processing rules, with min-new-items, cooldown, per-event backlog
   drain caps, cursor-safe batched runs, relevance screening, candidate evidence,
   review proposals, and persisted item decisions. The cooldown/backlog cap are
@@ -289,7 +289,7 @@ tool-call message preservation in conversation windows, tracked under P6/P7
 | H3 | Provider privacy/compliance policy: data-collection deny, provider allow/deny, required parameter rules. Add as space-scoped policy/provider-routing rules, not global config. | Capability 4 (Policy and Governance) |
 | P2 | Per-session chat concurrency guard. Add only if real chat ordering issues appear during dogfooding. | Capability 1 (Dogfooding Stabilization) |
 | P6/P7 | Self-hosted TS agent loop (AgentSession/TurnRunner/AgentLoop), tool scheduler (sequential/concurrent with observability) including tool-call (`tool_use`/`tool_result`) message preservation in conversation windows, MCP client integration. `RuntimeToolBinding` remains the authorization surface until then. | Capability 3 (Runtime and Adapter Safety) |
-| P8 | Channel adapters: IM/email/channel ingestion with external-session mapping. Requires stable intake/evidence provenance and proposal boundaries first. | Capability 6 (Automation and Triggers) |
+| P8 | Channel adapters: IM/email/channel ingestion with external-session mapping. Requires stable source/evidence provenance and proposal boundaries first. | Capability 6 (Automation and Triggers) |
 | P9 | Always-On governance: trigger budgets and cooldowns. Future automation/policy vocabulary. | Capability 6 (Automation and Triggers) |
 
 **Explicitly rejected (not to be revisited without a new decision):**
@@ -311,7 +311,7 @@ tool-call message preservation in conversation windows, tracked under P6/P7
 | Cloud/offsite backup | Local backups do not protect against host loss | Define manual encrypted offsite flow first |
 | Retention and hard delete | Personal data deletion must preserve clear audit semantics | Design retention/export/delete together |
 | Credential scoping | Current resolver is a single release boundary | Add per-run/per-tool grants only with audit and UX |
-| Broad ingestion privacy | Connectors can import sensitive data at scale | Keep Intake/Evidence candidate-only and proposal-gated |
+| Broad ingestion privacy | Connectors can import sensitive data at scale | Keep Sources/Evidence candidate-only and proposal-gated |
 | Automation scope creep | Background runs can become hidden mutation paths | Require ownership, preflight, policy, and proposal boundaries |
 | Self-evolution scope creep | Agents can gain deployment or permission authority | Keep disabled until lifecycle/evaluation/rollback are real |
 | Code patch partial apply | File rollback failures can leave workspaces inconsistent | Pre-apply snapshots are captured before each accepted code_patch; user-facing `/rollback` restores from snapshot. Keep snapshot expiry and pruning auditable. |

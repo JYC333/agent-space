@@ -19,11 +19,12 @@ interface ActivityRow {
   source_trust: string | null;
   source_url: string | null;
   status: string;
+  aggregate_key: string | null;
 }
 
 const ACTIVITY_COLUMNS = `
   id, space_id, user_id, owner_user_id, subject_user_id, workspace_id, project_id,
-  activity_type, title, content, source_trust, source_url, status
+  activity_type, title, content, source_trust, source_url, status, aggregate_key
 `;
 
 interface DedupedActivity {
@@ -60,6 +61,7 @@ export class PgActivityConsolidationRepository {
          FROM activity_records
         WHERE space_id = $1
           AND status = 'raw'
+          AND aggregate_key IS NULL
           ${idFilter}
         ORDER BY created_at ASC
         LIMIT $${params.length}`,

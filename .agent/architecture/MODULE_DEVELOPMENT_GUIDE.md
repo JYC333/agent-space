@@ -186,12 +186,12 @@ Implemented contribution points:
 
 Deferred contribution points:
 - Context providers must not contribute when disabled.
-- Activity sources and memory proposal generators must preserve the proposal/intake boundary.
+- Activity sources and memory proposal generators must preserve the proposal/sources boundary.
 
 Private/personal modules (e.g. diary) must default to `can_contribute_context: "opt_in"`
 and not contribute context unless the user has explicitly enabled it in settings. Editor-owned
 plugin documents may write their own domain tables directly; extracting them into Memory,
-Knowledge, ContextBuilder, or FlashCards must go through proposal/intake flows.
+Knowledge, ContextBuilder, or FlashCards must go through proposal/sources flows.
 
 ## Ports
 

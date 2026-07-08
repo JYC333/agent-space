@@ -31,15 +31,15 @@ export async function listProjectPapers(
     `SELECT pp.*,
             row_to_json(p.*) AS paper,
             (
-              SELECT sr.intake_item_id
+              SELECT sr.source_item_id
                 FROM research_atlas_source_records sr
                 JOIN research_atlas_entity_sources es ON es.source_record_id = sr.id
                WHERE es.entity_type = 'paper'
                  AND es.entity_id = pp.paper_id
-                 AND sr.intake_item_id IS NOT NULL
+                 AND sr.source_item_id IS NOT NULL
                ORDER BY sr.fetched_at DESC
                LIMIT 1
-            ) AS intake_item_id
+            ) AS source_item_id
        FROM research_atlas_project_papers pp
        JOIN research_atlas_papers p ON p.id = pp.paper_id
       WHERE pp.space_id = $1
@@ -58,7 +58,7 @@ export async function addProjectPaper(
     userId: string;
     projectId: string;
     paperId: string;
-    source?: "manual" | "intake_sync" | "agent_proposal";
+    source?: "manual" | "source_sync" | "agent_proposal";
     status?: ProjectPaperStatus;
   },
 ): Promise<ProjectPaperRow> {
@@ -136,9 +136,9 @@ export async function removeProjectPaper(
   return { deleted: (result.rowCount ?? 0) > 0 };
 }
 
-export async function addProjectCandidatesForIntakeItem(
+export async function addProjectCandidatesForSourceItem(
   db: Queryable,
-  input: { spaceId: string; userId: string; paperId: string; intakeItemId: string; connectionId: string | null },
+  input: { spaceId: string; userId: string; paperId: string; sourceItemId: string; connectionId: string | null },
 ): Promise<number> {
   if (!input.connectionId) return 0;
   const bindings = await db.query<{ project_id: string }>(
@@ -154,7 +154,7 @@ export async function addProjectCandidatesForIntakeItem(
     const inserted = await db.query(
       `INSERT INTO research_atlas_project_papers (
          id, space_id, project_id, paper_id, status, read_status, added_by_user_id, source, created_at, updated_at
-       ) VALUES ($1, $2, $3, $4, 'candidate', 'unread', $5, 'intake_sync', $6, $6)
+       ) VALUES ($1, $2, $3, $4, 'candidate', 'unread', $5, 'source_sync', $6, $6)
        ON CONFLICT (project_id, paper_id)
        DO NOTHING`,
       [randomUUID(), input.spaceId, binding.project_id, input.paperId, input.userId === "system" ? null : input.userId, new Date()],

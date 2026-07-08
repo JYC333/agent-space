@@ -5,11 +5,11 @@ import {
   sourcePostProcessingExecutionRequest,
   sourcePostProcessingRuntimePrompt,
   validateSourcePostProcessingInputContextBinding,
-} from "../src/modules/intake/postProcessing/service";
+} from "../src/modules/sources/postProcessing/service";
 import {
   normalizeActions,
   normalizeInputConfig,
-} from "../src/modules/intake/postProcessing/repository";
+} from "../src/modules/sources/postProcessing/repository";
 
 class FakeDb implements Queryable {
   constructor(private readonly rows: unknown[]) {}
@@ -72,7 +72,7 @@ describe("Source post-processing service", () => {
   });
 
   it("uses the full rendered instruction as the runtime prompt", () => {
-    const instruction = "Source intake post-processing run.\n\nIntake items:\n- id: item-1";
+    const instruction = "Source post-processing run.\n\nSource items:\n- id: item-1";
     expect(sourcePostProcessingRuntimePrompt(instruction)).toBe(instruction);
   });
 });

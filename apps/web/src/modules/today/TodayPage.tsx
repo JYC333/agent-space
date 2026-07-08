@@ -8,7 +8,7 @@ import { errMsg } from '../../lib/utils'
 import type {
   Session, HomeSummaryOut, HomeRunSummaryItem, HomeActiveTaskItem, HomePendingProposalItem,
   HomeRuntimeStatusSection, HomeModelProviderStatusSection, HomeSuggestedActionItem,
-  HomeIntakeSummarySection, HomeArtifactSummaryItem, Project,
+  HomeSourceSummarySection, HomeArtifactSummaryItem, Project,
 } from '../../types/api'
 import { PreviewBadge, UrgencyBadge } from '../../components/PreviewBadge'
 import { ScopeBadge } from '../../components/ScopeBadge'
@@ -156,20 +156,20 @@ function ProposalStatusCard({ proposals, onDecide }: { proposals: HomePendingPro
   )
 }
 
-function IntakeAttentionCard({ intake }: { intake: HomeIntakeSummarySection }) {
-  const needs = intake.open_items > 0 || intake.candidate_evidence > 0 || intake.pending_extraction_jobs > 0 || intake.failed_extraction_jobs > 0 || intake.due_connections > 0
+function SourceAttentionCard({ source }: { source: HomeSourceSummarySection }) {
+  const needs = source.open_items > 0 || source.candidate_evidence > 0 || source.pending_extraction_jobs > 0 || source.failed_extraction_jobs > 0 || source.due_connections > 0
   if (!needs) return null
   return (
     <div className="bg-card border border-border rounded-lg p-4 flex flex-col gap-2">
       <div className="flex items-baseline justify-between">
-        <span className="text-[11px] font-bold tracking-[.1em] uppercase text-muted-foreground">Intake</span>
-        <Link to="/intake" className="text-[11px] text-accent-foreground flex items-center gap-1 hover:underline">Review <ChevronRight className="size-3" /></Link>
+        <span className="text-[11px] font-bold tracking-[.1em] uppercase text-muted-foreground">Sources</span>
+        <Link to="/sources" className="text-[11px] text-accent-foreground flex items-center gap-1 hover:underline">Review <ChevronRight className="size-3" /></Link>
       </div>
       <div className="flex flex-col gap-1 text-[12px]">
-        {intake.due_connections > 0 && <span style={{ color: 'var(--warning)' }}>{intake.due_connections} connection{intake.due_connections !== 1 ? 's' : ''} due for scan</span>}
-        {intake.open_items > 0 && <span className="text-muted-foreground">{intake.open_items} open item{intake.open_items !== 1 ? 's' : ''}</span>}
-        {intake.candidate_evidence > 0 && <span className="text-muted-foreground">{intake.candidate_evidence} evidence candidate{intake.candidate_evidence !== 1 ? 's' : ''}</span>}
-        {intake.failed_extraction_jobs > 0 && <span style={{ color: 'var(--destructive)' }}>{intake.failed_extraction_jobs} failed extraction{intake.failed_extraction_jobs !== 1 ? 's' : ''}</span>}
+        {source.due_connections > 0 && <span style={{ color: 'var(--warning)' }}>{source.due_connections} connection{source.due_connections !== 1 ? 's' : ''} due for scan</span>}
+        {source.open_items > 0 && <span className="text-muted-foreground">{source.open_items} open item{source.open_items !== 1 ? 's' : ''}</span>}
+        {source.candidate_evidence > 0 && <span className="text-muted-foreground">{source.candidate_evidence} evidence candidate{source.candidate_evidence !== 1 ? 's' : ''}</span>}
+        {source.failed_extraction_jobs > 0 && <span style={{ color: 'var(--destructive)' }}>{source.failed_extraction_jobs} failed extraction{source.failed_extraction_jobs !== 1 ? 's' : ''}</span>}
       </div>
     </div>
   )
@@ -283,7 +283,7 @@ function emptyHomeSummary(): HomeSummaryOut {
     runtime_status: { real_adapters_configured_count: 0, configured_adapter_types: [], message: '' },
     model_provider_status: { model_providers_count: 0, enabled_model_providers_count: 0, missing_model_provider_config: true, message: '' },
     suggested_actions: [],
-    intake_summary: { open_items: 0, new_items_today: 0, pending_extraction_jobs: 0, failed_extraction_jobs: 0, candidate_evidence: 0, active_evidence: 0, due_connections: 0 },
+    source_summary: { open_items: 0, new_items_today: 0, pending_extraction_jobs: 0, failed_extraction_jobs: 0, candidate_evidence: 0, active_evidence: 0, due_connections: 0 },
   }
 }
 
@@ -346,8 +346,8 @@ export default function TodayPage() {
     { value: s.task_summary.total_open, label: 'open tasks', warn: s.task_summary.blocked_count > 0 },
     { value: s.run_stats_today.created, label: 'runs today', warn: s.run_stats_today.failed > 0 },
     { value: s.activity_summary.raw_count, label: 'raw activities', warn: s.activity_summary.raw_count > 0 },
-    { value: s.intake_summary.open_items, label: 'intake items', warn: s.intake_summary.failed_extraction_jobs > 0 },
-    { value: s.intake_summary.candidate_evidence, label: 'evidence candidates' },
+    { value: s.source_summary.open_items, label: 'source items', warn: s.source_summary.failed_extraction_jobs > 0 },
+    { value: s.source_summary.candidate_evidence, label: 'evidence candidates' },
   ]
 
   return (
@@ -368,7 +368,7 @@ export default function TodayPage() {
 
       <div className="flex flex-col gap-3 min-w-0">
         <ProposalStatusCard proposals={s.pending_proposals.items} onDecide={decide} />
-        <IntakeAttentionCard intake={s.intake_summary} />
+        <SourceAttentionCard source={s.source_summary} />
         <ProjectsCard projects={projects} />
         <ModelProviderStatusCard status={s.model_provider_status} />
         <RuntimeStatusCard status={s.runtime_status} />

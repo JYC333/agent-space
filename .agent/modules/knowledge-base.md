@@ -483,7 +483,7 @@ not replaced by Source.
 - `server/test/` - ingestion/review boundary and API contract tests
 
 ## Related Modules
-- [../architecture/INTAKE_EVIDENCE_FOUNDATION.md](../architecture/INTAKE_EVIDENCE_FOUNDATION.md) - the two evidence stacks (intake candidate vs curated wiki `Source`/`KnowledgeItemSource`), their hard separation, and the intake→wiki promotion rule spec
+- [../architecture/SOURCE_EVIDENCE_FOUNDATION.md](../architecture/SOURCE_EVIDENCE_FOUNDATION.md) - the two evidence stacks (source candidate vs curated wiki `Source`/`KnowledgeItemSource`), their hard separation, and the source→wiki promotion rule spec
 - [memory.md](memory.md) - Memory is agent context, not the Knowledge browser
 - [activity.md](activity.md) - raw input and source events
 - [spaced-repetition.md](spaced-repetition.md) - future card generation from approved Knowledge

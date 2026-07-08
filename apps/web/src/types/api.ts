@@ -88,7 +88,7 @@ export type RetrievalObjectType =
   | 'claim'
   | 'memory_entry'
   | 'project_public_summary'
-  | 'intake_item'
+  | 'source_item'
   | 'extracted_evidence'
 export const SPACE_OBJECT_KIND_KEYS_BY_BASE_OBJECT_TYPE = {
   knowledge_item: ['concept', 'lesson', 'procedure', 'decision', 'question', 'answer', 'summary'],
@@ -97,7 +97,7 @@ export const SPACE_OBJECT_KIND_KEYS_BY_BASE_OBJECT_TYPE = {
   claim: ['fact', 'hypothesis', 'belief', 'preference', 'commitment', 'question', 'interpretation', 'instruction', 'metric', 'relationship', 'event'],
   memory_entry: ['preference', 'semantic', 'episodic', 'procedural', 'project'],
   project_public_summary: ['project_public_summary'],
-  intake_item: ['external_url', 'feed_entry', 'activity_record', 'artifact', 'run_event', 'file', 'document', 'log'],
+  source_item: ['external_url', 'feed_entry', 'activity_record', 'artifact', 'run_event', 'file', 'document', 'log'],
   extracted_evidence: ['document', 'excerpt', 'event', 'log', 'artifact', 'claim', 'summary'],
 } as const satisfies Record<RetrievalObjectType, readonly string[]>
 export type SpaceObjectKindStatus = 'draft' | 'active' | 'deprecated' | 'archived'
@@ -368,7 +368,7 @@ export interface RetrievalBriefResponse {
   artifact_error?: string
 }
 // ── Ask Space (Slice A) ─────────────────────────────────────────────────
-export type AskSpaceDomain = 'knowledge' | 'memory' | 'project' | 'intake'
+export type AskSpaceDomain = 'knowledge' | 'memory' | 'project' | 'source'
 export interface AskSpaceRequest {
   query: string
   domains?: AskSpaceDomain[]
@@ -677,7 +677,7 @@ export type ActivitySourceType =
   | 'workspace_event'
   | 'system_event'
   | 'external_source'
-  | 'intake'
+  | 'source'
 export type SessionStatus    = 'active' | 'closed'
 /** Canonical run lifecycle (Run API). */
 export type RunLifecycleStatus =
@@ -931,6 +931,7 @@ export interface SourceConnection {
   connector_id: string
   owner_user_id: string
   credential_id: string | null
+  visibility: 'private' | 'space_discoverable'
   name: string
   endpoint_url: string | null
   status: 'active' | 'paused' | 'archived'
@@ -949,6 +950,12 @@ export interface SourceConnection {
   active_recipe_version_id?: string | null
   repair_status?: 'ok' | 'repair_required' | 'repair_pending' | 'disabled'
   last_handler_run_id?: string | null
+  subscription_status?: 'subscribed' | 'pending' | 'dismissed' | 'muted' | null
+  library_enabled?: boolean | null
+  digest_enabled?: boolean | null
+  recommended_by_user_id?: string | null
+  recommendation_message?: string | null
+  last_notified_at?: string | null
   created_at: string
   updated_at: string
 }
@@ -963,6 +970,7 @@ export interface SourceConnectionCreate {
   name: string
   endpoint_url?: string | null
   credential_id?: string | null
+  visibility?: 'private' | 'space_discoverable'
   fetch_frequency?: 'manual' | 'hourly' | 'daily' | 'weekly'
   next_check_at?: string | null
   schedule_rule?: SourceScheduleRule | null
@@ -1042,13 +1050,14 @@ export interface ArxivPresetCreateRequest extends ArxivPresetPreviewRequest {
   capture_policy?: SourceCapturePolicy
 }
 
-export interface IntakeItem {
+export interface SourceItem {
   id: string
   space_id: string
   connection_id: string | null
   item_type: string
   source_object_type: string | null
   source_object_id: string | null
+  created_by_user_id: string | null
   title: string
   source_uri: string | null
   canonical_uri: string | null
@@ -1060,8 +1069,11 @@ export interface IntakeItem {
   last_seen_at: string
   content_hash: string | null
   excerpt: string | null
-  status: 'new' | 'triaged' | 'selected' | 'ignored' | 'archived'
+  library_status: 'new' | 'triaged' | 'selected' | 'ignored' | 'archived'
   read_status: 'unread' | 'skimmed' | 'read' | 'discussed'
+  first_opened_at?: string | null
+  last_opened_at?: string | null
+  progress_json?: Record<string, unknown>
   content_state: string
   retention_policy: string
   relevance_score: number | null
@@ -1080,7 +1092,7 @@ export interface ExtractionJob {
   id: string
   space_id: string
   connection_id: string | null
-  intake_item_id: string | null
+  source_item_id: string | null
   source_snapshot_id: string | null
   source_object_type: string | null
   source_object_id: string | null
@@ -1448,7 +1460,7 @@ export interface SourceRunSummary {
 export interface ExtractedEvidence {
   id: string
   space_id: string
-  intake_item_id: string | null
+  source_item_id: string | null
   extraction_job_id: string | null
   source_snapshot_id: string | null
   source_object_type: string | null
@@ -1941,6 +1953,7 @@ export interface ActivityInboxRecord {
   source_url: string | null
   status: ActivityStatus
   metadata_json: Record<string, unknown> | null
+  aggregate_key?: string | null
   visibility?: ObjectVisibility
   created_at: string
   updated_at: string
@@ -3783,7 +3796,7 @@ export interface HomeSuggestedActionItem {
   priority: HomeSuggestedActionPriority
 }
 
-export interface HomeIntakeSummarySection {
+export interface HomeSourceSummarySection {
   open_items: number
   new_items_today: number
   pending_extraction_jobs: number
@@ -3806,7 +3819,7 @@ export interface HomeSummaryOut {
   runtime_status: HomeRuntimeStatusSection
   model_provider_status: HomeModelProviderStatusSection
   suggested_actions: HomeSuggestedActionItem[]
-  intake_summary: HomeIntakeSummarySection
+  source_summary: HomeSourceSummarySection
 }
 
 // ── Daily Capture Report ──────────────────────────────────────────────────
@@ -3872,12 +3885,12 @@ export interface DailyReportArtifactItem {
   capture_count: number
 }
 
-// ── Input Summary (POST /activity/summary-runs, POST /intake/post-processing/run-once) ──
+// ── Input Summary (POST /activity/summary-runs, POST /sources/post-processing/run-once) ──
 
 export interface SummaryRunRequest {
   activity_ids?: string[]
   evidence_ids?: string[]
-  intake_item_ids?: string[]
+  source_item_ids?: string[]
   summary_goal?: string | null
   create_memory_proposal?: boolean
   create_knowledge_proposal?: boolean
@@ -3891,7 +3904,7 @@ export interface SummaryRunOut {
   summary_preview: string
 }
 
-// ── Intake Source Post-Processing ─────────────────────────────────────────
+// ── Source Source Post-Processing ─────────────────────────────────────────
 
 export type SourcePostProcessingTriggerType = 'items_materialized' | 'schedule' | 'manual'
 export type SourcePostProcessingRuleStatus = 'active' | 'paused' | 'archived'
@@ -3919,7 +3932,7 @@ export interface SourcePostProcessingActions {
   mark_items: boolean
 }
 
-export type SourcePostProcessingRetrievalDomain = 'knowledge' | 'project' | 'memory' | 'intake'
+export type SourcePostProcessingRetrievalDomain = 'knowledge' | 'project' | 'memory' | 'source'
 export type SourcePostProcessingRetrievalMode = 'exact' | 'lexical' | 'hybrid' | 'hybrid_rerank'
 export type SourcePostProcessingDeepAnalysisContentSource = 'prefer_extracted_text' | 'require_extracted_text'
 export type SourcePostProcessingDeepAnalysisOutput = 'deep_report' | 'per_item_deep_summary'
@@ -4044,12 +4057,11 @@ export interface SourcePostProcessingItemDecision {
   rule_id: string | null
   run_id: string
   project_id: string | null
-  intake_item_id: string
+  source_item_id: string
   relevance: SourcePostProcessingItemRelevance
   confidence: number | null
   reason: string | null
   matched_context_refs: Array<Record<string, unknown>>
-  applied_item_status: string | null
   review_status: SourcePostProcessingDecisionReviewStatus
   action_json: Record<string, unknown>
   item: {
@@ -4057,7 +4069,8 @@ export interface SourcePostProcessingItemDecision {
     source_uri: string | null
     source_domain: string | null
     author: string | null
-    status: string | null
+    library_status: 'new' | 'triaged' | 'selected' | 'ignored' | 'archived'
+    read_status: 'unread' | 'skimmed' | 'read' | 'discussed'
     content_state: string | null
   }
   rule_name: string | null
@@ -4085,6 +4098,32 @@ export interface SourcePostProcessingBacklogRule {
 export interface SourcePostProcessingBacklog {
   source_connection_id: string
   rules: SourcePostProcessingBacklogRule[]
+}
+
+/** One Library brief entry: a source's aggregated output for one local day.
+ *  Documented in .agent/modules/library.md. */
+export interface SourcePostProcessingBriefingDaySummary {
+  source_connection_id: string
+  connection_name: string
+  project_id: string | null
+  date: string
+  run_ids: string[]
+  run_count: number
+  item_decision_counts: { relevant: number; maybe: number; not_relevant: number }
+  digest_artifact_id: string | null
+  digest_preview: string | null
+  latest_run_created_at: string
+}
+
+export interface SourcePostProcessingBriefingDetail {
+  source_connection_id: string
+  connection_name: string
+  project_id: string | null
+  date: string
+  runs: Array<{ run_id: string; status: SourcePostProcessingRunStatus; created_at: string; summary: string | null }>
+  digests: Array<{ run_id: string; artifact_id: string; title: string; content: string }>
+  item_summaries: Array<{ source_item_id: string; artifact_id: string; title: string; content: string }>
+  item_decisions: SourcePostProcessingItemDecision[]
 }
 
 export interface SourcePostProcessingDrainResult {
@@ -4140,7 +4179,7 @@ export interface ReaderDocumentPayload {
   content_format: 'tiptap_json'
   content_schema_version: 1
   content_json: Record<string, unknown>
-  intake_item_id: string | null
+  source_item_id: string | null
   artifact_id: string | null
   source_snapshot_id: string | null
   raw_artifact_id: string | null
@@ -4154,7 +4193,7 @@ export interface ReaderDocumentPayload {
 export interface ReaderAnnotation {
   id: string
   space_id: string
-  intake_item_id: string | null
+  source_item_id: string | null
   artifact_id: string | null
   source_snapshot_id: string | null
   annotation_type: 'highlight' | 'comment' | 'excerpt' | 'bookmark'
@@ -4189,7 +4228,7 @@ export interface ReaderAnnotationsResponse {
 }
 
 export interface ReaderAnnotationCreate {
-  intake_item_id?: string
+  source_item_id?: string
   artifact_id?: string
   source_snapshot_id?: string
   annotation_type: 'highlight' | 'comment' | 'excerpt' | 'bookmark'
@@ -4251,7 +4290,7 @@ export interface ReaderCreatedEvidence {
   title: string
   status: string
   evidence_type: string
-  intake_item_id: string | null
+  source_item_id: string | null
   source_object_type: string
   source_object_id: string
 }

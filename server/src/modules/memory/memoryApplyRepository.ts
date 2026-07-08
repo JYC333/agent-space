@@ -513,7 +513,7 @@ export class PgMemoryApplyRepository {
    * Default visibility for a `memory_create` with no explicit visibility. A
    * single-member personal space keeps `space_shared` (equivalent to owner-only
    * there). A multi-member household/team space defaults to `restricted`
-   * owner-only, so one member's assistant/intake-derived memory is not
+   * owner-only, so one member's assistant/sources-derived memory is not
    * auto-shared — sharing it with the space is an explicit promotion
    * (`memory_update` to `space_shared`). See SHARED_SPACE_MEMORY_ISOLATION.md.
    * `private` is intentionally not used here because it is barred outside

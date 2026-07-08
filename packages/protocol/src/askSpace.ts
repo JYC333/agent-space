@@ -22,7 +22,7 @@ import { ClaimTrajectorySignalSchema } from "./claimReviewLoop.js";
 
 // The isolated retrieval domains Ask Space can gather from. Each maps to its
 // own registry + read gate; they are never merged into one retrieval pass.
-export const AskSpaceDomainSchema = z.enum(["knowledge", "memory", "project", "intake"]);
+export const AskSpaceDomainSchema = z.enum(["knowledge", "memory", "project", "source"]);
 export type AskSpaceDomain = z.infer<typeof AskSpaceDomainSchema>;
 
 export const AskSpaceRequestSchema = z

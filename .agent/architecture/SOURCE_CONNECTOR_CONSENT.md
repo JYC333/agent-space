@@ -2,10 +2,10 @@
 
 Status: implemented first pass (2026-06-25)
 
-This document defines the source / connector permission model used by intake
+This document defines the source / connector permission model used by source
 connections before broad ingestion-heavy context work expands. Code remains the
 source of truth; active enforcement points are
-`server/src/modules/intake/sourceConsent.ts`,
+`server/src/modules/sources/sourceConsent.ts`,
 `server/src/modules/retrieval/sourcePolicy.ts`, and
 `server/src/modules/retrieval/egress/egressPolicy.ts`.
 
@@ -16,7 +16,7 @@ has the source layer needed for current ingestion work:
 
 - `source_connectors` describes connector types and capabilities.
 - `source_connections` owns per-space connector instances.
-- `intake_items`, `source_snapshots`, and `extracted_evidence` carry imported
+- `source_items`, `source_snapshots`, and `extracted_evidence` carry imported
   objects and derived evidence.
 
 `source_connections.consent_json` and `source_connections.policy_json` are
@@ -50,7 +50,7 @@ claim that egress class.
 
 Retrieval search, Context Brief, graph traversal, and managed-run retrieval
 tools consume the subject/reader/agent/admin gate for rows that carry explicit
-source connection refs. Context assembly and intake read APIs still need
+source connection refs. Context assembly and source read APIs still need
 source-aware integration.
 
 ## Policy JSON
@@ -114,14 +114,14 @@ canonical Knowledge and Memory changes remain proposal-gated.
 Imported material can flow through these durable surfaces:
 
 - Activity records for timeline / inbox review.
-- Intake items and source artifacts for source provenance.
+- Sources items and source artifacts for source provenance.
 - Extracted evidence for reviewable derived facts.
 - Knowledge or Memory proposals after explicit user / operator review.
 
 ## Retention And Trust
 
 Retention is stored in normalized `policy_json.retention_policy` and mirrored by
-`intake_items.retention_policy` as connected items are created or queued.
+`source_items.retention_policy` as connected items are created or queued.
 
 For items with a `connection_id`, manual URL queueing and item `queue_content` /
 `archive_snapshot` actions cannot request retention broader than the source
@@ -142,13 +142,13 @@ Summary runs may create Knowledge or Memory proposals only when the connected
 source policy allows that target:
 
 - `allowed_import_targets` must include `knowledge` before a Knowledge proposal
-  is created from connected intake/evidence.
+  is created from connected source/evidence.
 - `allowed_import_targets` must include `memory_proposal` before a Memory
-  proposal is created from connected intake/evidence.
+  proposal is created from connected source/evidence.
 - `derived_write_policy = "disabled"` blocks those derived proposals even when
   the target appears in the allow-list.
 
-Unconnected manual intake keeps the existing user-driven behavior. Connected
+Unconnected manual source capture keeps the existing user-driven behavior. Connected
 source material is constrained by its source policy. Mixed-source summary
 proposal requests fail closed when any connected input disallows the requested
 target. Summary runs that only create the review artifact and do not request a
@@ -279,7 +279,7 @@ reloads current source policy for enforcement:
 - `retrieval_objects.source_connection_ids_json` is required for source-derived
   retrieval rows.
 - Knowledge and Memory projections derive those ids from `provenance_links` to
-  `intake_items`, `source_snapshots`, or `extracted_evidence`.
+  `source_items`, `source_snapshots`, or `extracted_evidence`.
 - Source projections use explicit `sources.metadata_json.source_connection_id`
   or `source_connection_ids`.
 - Project public summaries use explicit `source_refs_json` entries with
@@ -309,8 +309,8 @@ Implementation should add leak tests for:
 ## Deferred Work
 
 This pass defines and validates the model at source-connection create / update
-time, exposes the normalized fields in the Intake UI, enforces the policy on
-connected intake retention escalation, RSS/Atom/web page scan scheduling,
+time, exposes the normalized fields in the Sources UI, enforces the policy on
+connected source retention escalation, RSS/Atom/web page scan scheduling,
 worker-side full-text/snapshot writes, connected summary proposal creation,
 source-aware retrieval reads, context artifact attachment, DB-backed chat
 candidates with explicit source ids, maintenance/Context Ops reads, claim

@@ -109,13 +109,13 @@ CREATE TABLE public.research_atlas_source_records (
     content_hash varchar(128),
     fetched_at timestamptz NOT NULL DEFAULT now(),
     fetch_status varchar(16) NOT NULL DEFAULT 'ok',
-    intake_item_id varchar(36),
+    source_item_id varchar(36),
     refresh_after timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT research_atlas_source_records_pkey PRIMARY KEY (id),
     CONSTRAINT research_atlas_source_records_space_nonempty CHECK (length(trim(space_id)) > 0),
-    CONSTRAINT research_atlas_source_records_connector_check CHECK (connector IN ('openalex', 'crossref', 's2', 'arxiv', 'pubmed', 'core', 'unpaywall', 'ror', 'orcid', 'opencitations', 'zotero', 'intake', 'manual')),
+    CONSTRAINT research_atlas_source_records_connector_check CHECK (connector IN ('openalex', 'crossref', 's2', 'arxiv', 'pubmed', 'core', 'unpaywall', 'ror', 'orcid', 'opencitations', 'zotero', 'source', 'manual')),
     CONSTRAINT research_atlas_source_records_entity_type_check CHECK (entity_type IN ('paper', 'scholar', 'institution', 'venue', 'group', 'topic')),
     CONSTRAINT research_atlas_source_records_status_check CHECK (fetch_status IN ('ok', 'not_found', 'error'))
 );
@@ -252,7 +252,7 @@ CREATE TABLE public.research_atlas_project_papers (
     CONSTRAINT research_atlas_project_papers_status_check CHECK (status IN ('candidate', 'shortlist', 'reading', 'done', 'rejected')),
     CONSTRAINT research_atlas_project_papers_read_status_check CHECK (read_status IN ('unread', 'skimmed', 'read')),
     CONSTRAINT research_atlas_project_papers_rating_check CHECK (rating IS NULL OR rating BETWEEN 1 AND 5),
-    CONSTRAINT research_atlas_project_papers_source_check CHECK (source IN ('manual', 'intake_sync', 'agent_proposal')),
+    CONSTRAINT research_atlas_project_papers_source_check CHECK (source IN ('manual', 'source_sync', 'agent_proposal')),
     CONSTRAINT research_atlas_project_papers_paper_fkey FOREIGN KEY (paper_id)
         REFERENCES public.research_atlas_papers(id) ON DELETE CASCADE,
     CONSTRAINT research_atlas_project_papers_unique UNIQUE (project_id, paper_id)
@@ -510,7 +510,7 @@ CREATE INDEX research_atlas_authorships_scholar_idx ON public.research_atlas_aut
 CREATE INDEX research_atlas_authorships_space_scholar_idx ON public.research_atlas_authorships (space_id, scholar_id);
 CREATE INDEX research_atlas_external_ids_entity_idx ON public.research_atlas_external_ids (entity_type, entity_id);
 CREATE INDEX research_atlas_source_records_refresh_idx ON public.research_atlas_source_records (space_id, refresh_after);
-CREATE INDEX research_atlas_source_records_intake_item_idx ON public.research_atlas_source_records (intake_item_id);
+CREATE INDEX research_atlas_source_records_source_item_idx ON public.research_atlas_source_records (source_item_id);
 CREATE UNIQUE INDEX research_atlas_source_records_unique ON public.research_atlas_source_records (space_id, connector, external_id, entity_type);
 CREATE INDEX research_atlas_curation_events_entity_idx ON public.research_atlas_curation_events (entity_type, entity_id, created_at);
 CREATE INDEX research_atlas_curation_events_locked_idx ON public.research_atlas_curation_events (entity_type, entity_id, field)

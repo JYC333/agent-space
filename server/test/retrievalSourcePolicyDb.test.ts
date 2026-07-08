@@ -12,7 +12,7 @@ import { knowledgeRetrievalRegistry } from "../src/modules/knowledge/retrievalAd
 import { insertKnowledgeItem } from "./support/knowledgeFixtures";
 
 // Closes Slice-1 audit gaps end-to-end over real Postgres:
-//   G4 — a connector-ingested object lands a provenance_link → intake_item →
+//   G4 — a connector-ingested object lands a provenance_link → source_item →
 //        source_connection, so the projection carries source_connection_ids and
 //        search fails closed for a non-allowed reader.
 //   G1 — the maintenance scan applies the same source read policy and never
@@ -27,7 +27,6 @@ const OWNER = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"; // source owner — allowe
 const READER = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"; // space member — NOT an allowed reader
 const SOURCE = "source-restricted-1";
 const CONNECTOR = "connector-1";
-const INTAKE = "intake-restricted-1";
 const LONG = "This page has more than enough searchable content to clear the thin threshold comfortably here.";
 
 let container: StartedPostgreSqlContainer | undefined;
@@ -58,7 +57,7 @@ beforeEach(async () => {
   if (!available || !pool) return;
   await pool.query(
     `TRUNCATE retrieval_objects, retrieval_aliases, retrieval_chunks, retrieval_edges,
-              knowledge_items, space_object_kinds, space_objects, provenance_links, intake_items,
+              knowledge_items, space_object_kinds, space_objects, provenance_links, source_items,
               source_connections, source_connectors, users, spaces CASCADE`,
   );
   await pool.query(`INSERT INTO spaces (id, name, type, created_at, updated_at) VALUES ($1, 'SP', 'personal', now(), now())`, [SPACE]);
@@ -131,22 +130,22 @@ async function seedRestrictedAndOpen(): Promise<void> {
     knowledgeKind: "decision",
   });
 
-  // Connector linkage: intake_item carries the connection id; a provenance_link
-  // ties the knowledge object to it (source_type = intake_item).
+  // Connector linkage: source_item carries the connection id; a provenance_link
+  // ties the knowledge object to it (source_type = source_item).
   await pool!.query(
-    `INSERT INTO intake_items (
+    `INSERT INTO source_items (
        id, space_id, connection_id, item_type, title, first_seen_at, last_seen_at,
-       status, read_status, content_state, retention_policy, created_at, updated_at
+       content_state, retention_policy, created_at, updated_at
      ) VALUES (
        $1, $2, $3, 'feed_entry', 'Restricted alpha', now(), now(),
-       'selected', 'unread', 'content_saved', 'full_text', now(), now()
+       'content_saved', 'full_text', now(), now()
      )`,
-    [INTAKE, SPACE, SOURCE],
+    [SOURCE, SPACE, SOURCE],
   );
   await pool!.query(
     `INSERT INTO provenance_links (id, space_id, target_type, target_id, source_type, source_id, source_trust, created_at)
-     VALUES ($1, $2, 'knowledge', 'restricted-doc', 'intake_item', $3, 'trusted_external', now())`,
-    ["prov-1", SPACE, INTAKE],
+     VALUES ($1, $2, 'knowledge', 'restricted-doc', 'source_item', $3, 'trusted_external', now())`,
+    ["prov-1", SPACE, SOURCE],
   );
 
   await new RetrievalProjectionService(pool!, knowledgeRetrievalRegistry).reindexAll(SPACE);

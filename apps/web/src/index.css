@@ -334,7 +334,7 @@ pre {
   font-size: 0.9em;
 }
 
-/* ── Intake Reader workspace ──────────────────────────────────────────────── */
+/* ── Source Reader workspace ──────────────────────────────────────────────── */
 
 /* Centered long-form reading column. */
 .reader-column {
@@ -507,7 +507,9 @@ pre {
 /* Keyboard paragraph-focus indicator (Readwise-style block focus). */
 .reader-surface > .reader-block-focused {
   background: color-mix(in oklch, var(--primary) 7%, transparent);
-  box-shadow: inset 2.5px 0 0 var(--primary);
+  box-shadow:
+    inset 2.5px 0 0 var(--primary),
+    0 0 0 1px color-mix(in oklch, var(--primary) 22%, transparent);
 }
 
 /* Floating selection toolbar. */

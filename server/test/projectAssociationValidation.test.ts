@@ -94,7 +94,7 @@ describe("Project association validation", () => {
     ).rejects.toMatchObject({ statusCode: 422, message: "Project not found" });
   });
 
-  it("archives project-scoped intake bindings when the last project workspace link is removed", async () => {
+  it("archives project-scoped source bindings when the last project workspace link is removed", async () => {
     const calls: Array<{ sql: string; params: readonly unknown[] }> = [];
     const db = new FakeDb((sql, params) => {
       calls.push({ sql, params });

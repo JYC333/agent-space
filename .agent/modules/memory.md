@@ -47,7 +47,7 @@ MemoryReadTrace:
 
 ## Memory Architecture Layers
 
-- **L0** — `ActivityRecord`: raw event intake; never active Memory.
+- **L0** — `ActivityRecord`: raw event input; never active Memory.
 - **L2/L3** — `MemoryEntry`: episodic and semantic long-term memory.
 - **L4** — `Policy`: system rules; separate lifecycle, versioning, and enforcement.
 

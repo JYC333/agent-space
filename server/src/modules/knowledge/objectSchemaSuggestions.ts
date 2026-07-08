@@ -454,7 +454,7 @@ function aggregateUsage(rows: readonly UsageObjectRow[]): UsageRow[] {
 function normalizedBaseTypes(raw: readonly string[] | undefined): string[] {
   const values = raw && raw.length > 0
     ? raw
-    : ["knowledge_item", "note", "source", "claim", "memory_entry", "project_public_summary", "intake_item", "extracted_evidence"];
+    : ["knowledge_item", "note", "source", "claim", "memory_entry", "project_public_summary", "source_item", "extracted_evidence"];
   return [...new Set(values.filter((value) => RETRIEVAL_OBJECT_TYPE_VALUES.includes(value as never)))];
 }
 

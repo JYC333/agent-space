@@ -49,6 +49,7 @@ export interface ActivityRow {
   discarded_at: unknown;
   visibility: string;
   owner_user_id: string | null;
+  aggregate_key: string | null;
 }
 
 interface SummaryEvidenceRow {
@@ -59,7 +60,7 @@ interface SummaryEvidenceRow {
   trust_level: string;
 }
 
-interface SummaryIntakeItemRow {
+interface SummarySourceItemRow {
   id: string;
   title: string;
   excerpt: string | null;
@@ -68,7 +69,7 @@ interface SummaryIntakeItemRow {
 }
 
 interface SummarySourceRef {
-  source_type: "activity" | "extracted_evidence" | "intake_item";
+  source_type: "activity" | "extracted_evidence" | "source_item";
   source_id: string;
   source_trust: string;
   evidence_json?: Record<string, unknown>;
@@ -88,7 +89,7 @@ export interface ActivityListFilters {
 export interface SummaryRunInput {
   activityIds: string[];
   evidenceIds: string[];
-  intakeItemIds: string[];
+  sourceItemIds: string[];
   summaryGoal: string | null;
   createMemoryProposal: boolean;
   createKnowledgeProposal: boolean;
@@ -99,7 +100,7 @@ const ACTIVITY_COLUMNS = `
   source_task_id, project_id, source_url, activity_type, title, content,
   payload_json, occurred_at, created_at, status, updated_at, source_kind,
   source_trust, source_integrity_json, entity_refs_json, subject_user_id,
-  processed_at, discarded_at, visibility, owner_user_id
+  processed_at, discarded_at, visibility, owner_user_id, aggregate_key
 `;
 
 const SOURCE_TYPE_ALIASES: Record<string, string> = {
@@ -122,7 +123,7 @@ const SOURCE_TYPES = new Set([
   "workspace_event",
   "system_event",
   "external_source",
-  "intake",
+  "source",
 ]);
 
 export const TRUST_BY_SOURCE_TYPE: Record<string, string> = {
@@ -135,7 +136,7 @@ export const TRUST_BY_SOURCE_TYPE: Record<string, string> = {
   workspace_event: "internal_system",
   system_event: "internal_system",
   external_source: "untrusted_external",
-  intake: "internal_system",
+  source: "internal_system",
 };
 
 export class PgActivityRepository {
@@ -248,6 +249,9 @@ export class PgActivityRepository {
   async consolidate(identity: SpaceUserIdentity, activityId: string): Promise<ProposalOut[]> {
     const activity = await this.get(identity, activityId);
     if (!activity) throw new HttpError(404, "Activity record not found");
+    if (activity.aggregate_key) {
+      throw new HttpError(422, "Activity pointer records cannot be consolidated");
+    }
     if (!activity.content || !activity.content.trim()) {
       throw new HttpError(422, "Activity record has no content to consolidate");
     }
@@ -283,10 +287,10 @@ export class PgActivityRepository {
   }
 
   async createSummaryRun(identity: SpaceUserIdentity, input: SummaryRunInput): Promise<Record<string, unknown>> {
-    if (!input.activityIds.length && !input.evidenceIds.length && !input.intakeItemIds.length) {
+    if (!input.activityIds.length && !input.evidenceIds.length && !input.sourceItemIds.length) {
       throw new HttpError(
         422,
-        "At least one of activity_ids, evidence_ids, or intake_item_ids is required.",
+        "At least one of activity_ids, evidence_ids, or source_item_ids is required.",
       );
     }
     const activityRows = input.activityIds.length
@@ -311,15 +315,15 @@ export class PgActivityRepository {
           [identity.spaceId, input.evidenceIds],
         )
       : { rows: [] };
-    const intakeRows = input.intakeItemIds.length
-      ? await this.db.query<SummaryIntakeItemRow>(
+    const sourceRows = input.sourceItemIds.length
+      ? await this.db.query<SummarySourceItemRow>(
           `SELECT id, title, excerpt, source_uri, content_state
-             FROM intake_items
+             FROM source_items
             WHERE space_id = $1 AND id::text = ANY($2::text[]) AND deleted_at IS NULL`,
-          [identity.spaceId, input.intakeItemIds],
+          [identity.spaceId, input.sourceItemIds],
         )
       : { rows: [] };
-    if (evidenceRows.rows.length !== input.evidenceIds.length || intakeRows.rows.length !== input.intakeItemIds.length) {
+    if (evidenceRows.rows.length !== input.evidenceIds.length || sourceRows.rows.length !== input.sourceItemIds.length) {
       throw new HttpError(403, "Summary input is not visible in this space");
     }
     const sourceRefs: SummarySourceRef[] = [
@@ -335,14 +339,14 @@ export class PgActivityRepository {
         source_trust: provenanceTrustFromEvidence(row.trust_level),
         evidence_json: { source_uri: row.source_uri },
       })),
-      ...intakeRows.rows.map((row) => ({
-        source_type: "intake_item" as const,
+      ...sourceRows.rows.map((row) => ({
+        source_type: "source_item" as const,
         source_id: row.id,
         source_trust: "untrusted_external",
         evidence_json: { source_uri: row.source_uri, content_state: row.content_state },
       })),
     ];
-    const summaryPreview = buildSummaryPreview(activityRows.rows, evidenceRows.rows, intakeRows.rows, input.summaryGoal);
+    const summaryPreview = buildSummaryPreview(activityRows.rows, evidenceRows.rows, sourceRows.rows, input.summaryGoal);
     const artifactId = randomUUID();
     const now = new Date().toISOString();
     await this.db.query(
@@ -368,7 +372,7 @@ export class PgActivityRepository {
         JSON.stringify({
           activity_ids: input.activityIds,
           evidence_ids: input.evidenceIds,
-          intake_item_ids: input.intakeItemIds,
+          source_item_ids: input.sourceItemIds,
           summary_goal: input.summaryGoal,
           generated_by: "server",
         }),
@@ -559,6 +563,7 @@ export function activityToOut(row: ActivityRow): Record<string, unknown> {
     source_url: row.source_url,
     status: row.status,
     metadata_json: objectValue(row.payload_json),
+    aggregate_key: row.aggregate_key,
     visibility: row.visibility,
     occurred_at: dateIso(row.occurred_at),
     created_at: dateIso(row.created_at) ?? new Date(0).toISOString(),
@@ -587,7 +592,7 @@ function normalizeSourceType(sourceType: string): string {
 function buildSummaryPreview(
   rows: ActivityRow[],
   evidenceRows: SummaryEvidenceRow[],
-  intakeRows: SummaryIntakeItemRow[],
+  sourceRows: SummarySourceItemRow[],
   summaryGoal: string | null,
 ): string {
   const header = summaryGoal ? `# ${summaryGoal}` : "# Input summary";
@@ -598,8 +603,8 @@ function buildSummaryPreview(
   for (const row of evidenceRows) {
     chunks.push(`## Evidence: ${row.title}\n\n${(row.content_excerpt ?? row.source_uri ?? "").trim()}`.trim());
   }
-  for (const row of intakeRows) {
-    chunks.push(`## Intake: ${row.title}\n\n${(row.excerpt ?? row.source_uri ?? "").trim()}`.trim());
+  for (const row of sourceRows) {
+    chunks.push(`## Source: ${row.title}\n\n${(row.excerpt ?? row.source_uri ?? "").trim()}`.trim());
   }
   return [header, ...chunks].filter(Boolean).join("\n\n").slice(0, 8000);
 }
@@ -614,7 +619,7 @@ export function summaryInputFromBody(body: Record<string, unknown>): SummaryRunI
   return {
     activityIds: stringArray(body.activity_ids),
     evidenceIds: stringArray(body.evidence_ids),
-    intakeItemIds: stringArray(body.intake_item_ids),
+    sourceItemIds: stringArray(body.source_item_ids),
     summaryGoal: optionalString(body.summary_goal),
     createMemoryProposal: Boolean(body.create_memory_proposal),
     createKnowledgeProposal: Boolean(body.create_knowledge_proposal),

@@ -168,7 +168,7 @@ function createHost(options: {
       addGroupMembership: vi.fn(),
       exportEntities: vi.fn(),
       settings: vi.fn().mockResolvedValue({ cursors: [], due_refresh_count: 0 }),
-      syncIntake: vi.fn(),
+      syncSource: vi.fn(),
       listProjectPapers: vi.fn(),
       addProjectPaper: vi.fn(),
       updateProjectPaper: vi.fn(),

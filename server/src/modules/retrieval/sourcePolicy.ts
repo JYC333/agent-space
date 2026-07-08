@@ -83,8 +83,8 @@ export async function loadSourceConnectionIdsForTargets(
     `SELECT pl.target_id,
             COALESCE(ii.connection_id, ss.connection_id, ii_ev.connection_id, ss_ev.connection_id) AS source_connection_id
        FROM provenance_links pl
-       LEFT JOIN intake_items ii
-         ON pl.source_type = 'intake_item'
+       LEFT JOIN source_items ii
+         ON pl.source_type = 'source_item'
         AND ii.space_id = pl.space_id
         AND ii.id = pl.source_id
         AND ii.deleted_at IS NULL
@@ -97,9 +97,9 @@ export async function loadSourceConnectionIdsForTargets(
         AND ev.space_id = pl.space_id
         AND ev.id = pl.source_id
         AND ev.deleted_at IS NULL
-       LEFT JOIN intake_items ii_ev
+       LEFT JOIN source_items ii_ev
          ON ii_ev.space_id = ev.space_id
-        AND ii_ev.id = ev.intake_item_id
+        AND ii_ev.id = ev.source_item_id
         AND ii_ev.deleted_at IS NULL
        LEFT JOIN source_snapshots ss_ev
          ON ss_ev.space_id = ev.space_id
@@ -108,7 +108,7 @@ export async function loadSourceConnectionIdsForTargets(
         AND pl.target_type = $2
         AND pl.target_id = ANY($3::varchar[])
         AND pl.source_type = ANY($4::varchar[])`,
-    [spaceId, targetType, ids, ["intake_item", "source_snapshot", "extracted_evidence"]],
+    [spaceId, targetType, ids, ["source_item", "source_snapshot", "extracted_evidence"]],
   );
   for (const row of result.rows) {
     const sourceId = stringValue(row.source_connection_id);

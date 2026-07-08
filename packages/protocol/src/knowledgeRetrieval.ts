@@ -3,8 +3,8 @@ import { IdSchema, ISODateTimeSchema, SecretResponseGuards } from "./common.js";
 
 // knowledge_item / note / source / claim are owned by the Knowledge domain adapter.
 // memory_entry is owned by the Memory domain adapter. project_public_summary is
-// owned by the Projects domain adapter. intake_item / extracted_evidence are
-// owned by the Intake domain adapter. The contract is shared but each domain
+// owned by the Projects domain adapter. source_item / extracted_evidence are
+// owned by the Source domain adapter. The contract is shared but each domain
 // registers its own adapter into its own registry, so the surfaces stay isolated.
 export const RETRIEVAL_OBJECT_TYPE_VALUES = [
   "knowledge_item",
@@ -13,7 +13,7 @@ export const RETRIEVAL_OBJECT_TYPE_VALUES = [
   "claim",
   "memory_entry",
   "project_public_summary",
-  "intake_item",
+  "source_item",
   "extracted_evidence",
 ] as const;
 

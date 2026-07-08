@@ -37,7 +37,7 @@ import type {
   CapabilityDefinition, CapabilityPackDescriptor, WorkflowTemplate, ProjectWorkflowProfile, WorkflowRunDraftRequest, WorkflowRunDraftResponse,
   SkillImportPreviewResponse, SkillPackage, SkillImportApprovalProposalResponse, SkillConvertToCapabilityResponse,
   SkillLibraryIndexResponse, SkillLocalOverlay, SkillLocalOverlayUpsertRequest,
-  SourceConnector, SourceConnection, SourceConnectionCreate, SourceCapturePolicy, SourceScheduleRule, IntakeItem, ExtractionJob,
+  SourceConnector, SourceConnection, SourceConnectionCreate, SourceCapturePolicy, SourceScheduleRule, SourceItem, ExtractionJob,
   SourcePresetListResponse, ArxivPresetPreviewRequest, ArxivPresetPreviewResponse, ArxivPresetCreateRequest,
   ExtractedEvidence, EvidenceLink, WorkspaceSourceBinding, WorkspaceSourceBindingBackfillResult,
   CustomSourceActivationResult, CustomSourceCreateDraftRequest, CustomSourceHandlerRun,
@@ -48,7 +48,8 @@ import type {
   SourceRecipeDryRunResponse, SourceRecipePlanRequest, SourceRecipePlanResponse,
   SourceRecipePipelineBridgeRequest, SourceRecipePipelineBridgeResponse,
   SourceRecipeVersion, SourceRunSummary,
-  SourcePostProcessingBacklog, SourcePostProcessingDecisionActionResult,
+  SourcePostProcessingBacklog, SourcePostProcessingBriefingDaySummary,
+  SourcePostProcessingBriefingDetail, SourcePostProcessingDecisionActionResult,
   SourcePostProcessingDecisionReviewStatus, SourcePostProcessingDrainResult,
   SourcePostProcessingItemDecision, SourcePostProcessingItemRelevance,
   SourcePostProcessingRule, SourcePostProcessingRun,
@@ -414,7 +415,7 @@ export const notesApi = {
 }
 
 // ── Sources (provenance / evidence layer) ──────────────────────────────────
-export const sourcesApi = {
+export const knowledgeSourcesApi = {
   list: (params: { source_type?: string; status?: string; q?: string; limit?: number; offset?: number } = {}) => {
     const q: Record<string, string> = {}
     if (params.source_type !== undefined) q.source_type = params.source_type
@@ -1114,116 +1115,131 @@ export const activityApi = {
     post<SummaryRunOut>('/activity/summary-runs', body),
 }
 
-// ── Intake / Evidence ────────────────────────────────────────────────────
-export const intakeApi = {
+// ── Source / Evidence ────────────────────────────────────────────────────
+export const sourcesApi = {
   connectors: () =>
-    get<SourceConnector[]>('/intake/connectors'),
+    get<SourceConnector[]>('/sources/connectors'),
 
-  connections: (params: { status?: string; limit?: number; offset?: number } = {}) => {
+  connections: (params: { view?: 'subscribed' | 'pending' | 'owned' | 'available' | 'manageable'; status?: string; limit?: number; offset?: number } = {}) => {
     const q: Record<string, string> = {}
+    if (params.view !== undefined) q.view = params.view
     if (params.status !== undefined) q.status = params.status
     if (params.limit !== undefined) q.limit = String(params.limit)
     if (params.offset !== undefined) q.offset = String(params.offset)
-    return get<Page<SourceConnection>>('/intake/connections?' + new URLSearchParams(q))
+    return get<Page<SourceConnection>>('/sources/connections?' + new URLSearchParams(q))
   },
   createConnection: (body: SourceConnectionCreate) =>
-    post<SourceConnection>('/intake/connections', body),
+    post<SourceConnection>('/sources/connections', body),
   sourcePresets: () =>
-    get<SourcePresetListResponse>('/intake/source-presets'),
+    get<SourcePresetListResponse>('/sources/source-presets'),
   previewArxivSourcePreset: (body: ArxivPresetPreviewRequest) =>
-    post<ArxivPresetPreviewResponse>('/intake/source-presets/arxiv/preview', body),
+    post<ArxivPresetPreviewResponse>('/sources/source-presets/arxiv/preview', body),
   createArxivSourcePreset: (body: ArxivPresetCreateRequest) =>
-    post<SourceConnection>('/intake/source-presets/arxiv', body),
+    post<SourceConnection>('/sources/source-presets/arxiv', body),
   getConnection: (id: string) =>
-    get<SourceConnection>(`/intake/connections/${id}`),
+    get<SourceConnection>(`/sources/connections/${id}`),
   updateConnection: (id: string, body: Partial<SourceConnectionCreate> & { status?: string }) =>
-    patch<SourceConnection>(`/intake/connections/${id}`, body),
+    patch<SourceConnection>(`/sources/connections/${id}`, body),
+  recommendConnection: (id: string, body: { target_user_ids?: string[]; all_space?: boolean; message?: string | null }) =>
+    post<{ source_connection_id: string; recommended: number }>(`/sources/connections/${id}/recommendations`, body),
+  updateConnectionSubscription: (id: string, body: {
+    action: 'subscribe' | 'dismiss' | 'mute' | 'unsubscribe'
+    library_enabled?: boolean
+    digest_enabled?: boolean
+  }) =>
+    post<SourceConnection>(`/sources/connections/${id}/subscription`, body),
   scanConnection: (id: string) =>
-    post<ExtractionJob>(`/intake/connections/${id}/scan`),
+    post<ExtractionJob>(`/sources/connections/${id}/scan`),
   sourceRuns: (connectionId: string, params: { limit?: number; offset?: number } = {}) => {
     const q: Record<string, string> = {}
     if (params.limit !== undefined) q.limit = String(params.limit)
     if (params.offset !== undefined) q.offset = String(params.offset)
-    return get<Page<SourceRunSummary>>(`/intake/connections/${connectionId}/source-runs?` + new URLSearchParams(q))
+    return get<Page<SourceRunSummary>>(`/sources/connections/${connectionId}/source-runs?` + new URLSearchParams(q))
   },
 
   createCustomSourceDraft: (body: CustomSourceCreateDraftRequest) =>
-    post<SourceConnection>('/intake/custom-sources/drafts', body),
+    post<SourceConnection>('/sources/custom-sources/drafts', body),
   customSourceSummary: (connectionId: string) =>
-    get<CustomSourceHandlerSummary>(`/intake/connections/${connectionId}/custom-source`),
+    get<CustomSourceHandlerSummary>(`/sources/connections/${connectionId}/custom-source`),
   customSourceVersions: (connectionId: string, params: { limit?: number; offset?: number } = {}) => {
     const q: Record<string, string> = {}
     if (params.limit !== undefined) q.limit = String(params.limit)
     if (params.offset !== undefined) q.offset = String(params.offset)
-    return get<Page<CustomSourceHandlerVersion>>(`/intake/connections/${connectionId}/handler-versions?` + new URLSearchParams(q))
+    return get<Page<CustomSourceHandlerVersion>>(`/sources/connections/${connectionId}/handler-versions?` + new URLSearchParams(q))
   },
   customSourceRuns: (connectionId: string, params: { limit?: number; offset?: number } = {}) => {
     const q: Record<string, string> = {}
     if (params.limit !== undefined) q.limit = String(params.limit)
     if (params.offset !== undefined) q.offset = String(params.offset)
-    return get<Page<CustomSourceHandlerRun>>(`/intake/connections/${connectionId}/handler-runs?` + new URLSearchParams(q))
+    return get<Page<CustomSourceHandlerRun>>(`/sources/connections/${connectionId}/handler-runs?` + new URLSearchParams(q))
   },
   generateCustomSourceHandler: (connectionId: string, body: { capture_policy?: SourceCapturePolicy; retention_policy?: string } = {}) =>
-    post<CustomSourceHandlerVersion>(`/intake/custom-sources/${connectionId}/generate-handler`, body),
+    post<CustomSourceHandlerVersion>(`/sources/custom-sources/${connectionId}/generate-handler`, body),
   testCustomSourceHandler: (connectionId: string, body: { handler_version_id: string; fixture_html?: string }) =>
-    post<CustomSourceTestOutcome>(`/intake/custom-sources/${connectionId}/test-handler`, body),
+    post<CustomSourceTestOutcome>(`/sources/custom-sources/${connectionId}/test-handler`, body),
   activateCustomSourceHandler: (connectionId: string, body: { handler_version_id: string; next_check_at?: string | null; schedule_rule?: SourceScheduleRule | null }) =>
-    post<CustomSourceActivationResult>(`/intake/custom-sources/${connectionId}/activate`, body),
+    post<CustomSourceActivationResult>(`/sources/custom-sources/${connectionId}/activate`, body),
   customSourceSpacePolicy: () =>
-    get<CustomSourceSpacePolicy>('/intake/custom-source-settings/space'),
+    get<CustomSourceSpacePolicy>('/sources/custom-source-settings/space'),
   customSourceInstanceRunnerSettings: () =>
-    get<CustomSourceInstanceRunnerSettings>('/intake/custom-source-settings/instance'),
+    get<CustomSourceInstanceRunnerSettings>('/sources/custom-source-settings/instance'),
   updateCustomSourceInstanceRunnerSettings: (body: CustomSourceInstanceRunnerSettingsUpdate) =>
-    put<CustomSourceInstanceRunnerSettings>('/intake/custom-source-settings/instance', body),
+    put<CustomSourceInstanceRunnerSettings>('/sources/custom-source-settings/instance', body),
   updateCustomSourceSpacePolicy: (body: CustomSourceSpacePolicyUpdate) =>
-    put<CustomSourceSpacePolicy>('/intake/custom-source-settings/space', body),
+    put<CustomSourceSpacePolicy>('/sources/custom-source-settings/space', body),
   planSourceRecipe: (body: SourceRecipePlanRequest) =>
-    post<SourceRecipePlanResponse>('/intake/source-recipes/plan', body),
+    post<SourceRecipePlanResponse>('/sources/source-recipes/plan', body),
   createSourceRecipe: (body: SourceRecipeCreateRequest) =>
-    post<SourceRecipeCreateResponse>('/intake/source-recipes', body),
+    post<SourceRecipeCreateResponse>('/sources/source-recipes', body),
   dryRunSourceRecipe: (connectionId: string, body: { recipe_version_id: string; fixture_content?: string }) =>
-    post<SourceRecipeDryRunResponse>(`/intake/source-recipes/${connectionId}/dry-run`, body),
+    post<SourceRecipeDryRunResponse>(`/sources/source-recipes/${connectionId}/dry-run`, body),
   activateSourceRecipe: (connectionId: string, body: { recipe_version_id: string; next_check_at?: string | null; schedule_rule?: SourceScheduleRule | null }) =>
-    post<SourceRecipeActivationResult>(`/intake/source-recipes/${connectionId}/activate`, body),
+    post<SourceRecipeActivationResult>(`/sources/source-recipes/${connectionId}/activate`, body),
   bridgePipelineSourceRecipe: (connectionId: string, body: SourceRecipePipelineBridgeRequest = {}) =>
-    post<SourceRecipePipelineBridgeResponse>(`/intake/custom-sources/${connectionId}/bridge-pipeline`, body),
+    post<SourceRecipePipelineBridgeResponse>(`/sources/custom-sources/${connectionId}/bridge-pipeline`, body),
   sourceRecipeVersions: (connectionId: string, params: { limit?: number; offset?: number } = {}) => {
     const q: Record<string, string> = {}
     if (params.limit !== undefined) q.limit = String(params.limit)
     if (params.offset !== undefined) q.offset = String(params.offset)
-    return get<Page<SourceRecipeVersion>>(`/intake/connections/${connectionId}/recipe-versions?` + new URLSearchParams(q))
+    return get<Page<SourceRecipeVersion>>(`/sources/connections/${connectionId}/recipe-versions?` + new URLSearchParams(q))
   },
 
   items: (params: {
-    status?: string
+    library_status?: string
+    read_status?: string
     connection_id?: string
     project_id?: string
     content_state?: string
     q?: string
+    library_type?: string
+    created_after?: string
     limit?: number
     offset?: number
   } = {}) => {
     const q: Record<string, string> = {}
-    if (params.status !== undefined) q.status = params.status
+    if (params.library_status !== undefined) q.library_status = params.library_status
+    if (params.read_status !== undefined) q.read_status = params.read_status
     if (params.connection_id !== undefined) q.connection_id = params.connection_id
     if (params.project_id !== undefined) q.project_id = params.project_id
     if (params.content_state !== undefined) q.content_state = params.content_state
     if (params.q !== undefined) q.q = params.q
+    if (params.library_type !== undefined) q.library_type = params.library_type
+    if (params.created_after !== undefined) q.created_after = params.created_after
     if (params.limit !== undefined) q.limit = String(params.limit)
     if (params.offset !== undefined) q.offset = String(params.offset)
-    return get<Page<IntakeItem>>('/intake/items?' + new URLSearchParams(q))
+    return get<Page<SourceItem>>('/sources/items?' + new URLSearchParams(q))
   },
   getItem: (id: string) =>
-    get<IntakeItem>(`/intake/items/${id}`),
+    get<SourceItem>(`/sources/items/${id}`),
   updateItem: (id: string, body: { connection_id?: string | null }) =>
-    patch<IntakeItem>(`/intake/items/${id}`, body),
+    patch<SourceItem>(`/sources/items/${id}`, body),
   createManualUrl: (body: { url: string; title?: string; connection_id?: string | null; queue_content?: boolean }) =>
-    post<IntakeItem>('/intake/items/manual-url', body),
+    post<SourceItem>('/sources/items/manual-url', body),
   itemAction: (id: string, action: string) =>
-    post<IntakeItem>(`/intake/items/${id}/actions`, { action }),
+    post<SourceItem>(`/sources/items/${id}/actions`, { action }),
   jobs: (params: {
     status?: string
-    intake_item_id?: string
+    source_item_id?: string
     connection_id?: string
     job_type?: string
     limit?: number
@@ -1231,29 +1247,29 @@ export const intakeApi = {
   } = {}) => {
     const q: Record<string, string> = {}
     if (params.status !== undefined) q.status = params.status
-    if (params.intake_item_id !== undefined) q.intake_item_id = params.intake_item_id
+    if (params.source_item_id !== undefined) q.source_item_id = params.source_item_id
     if (params.connection_id !== undefined) q.connection_id = params.connection_id
     if (params.job_type !== undefined) q.job_type = params.job_type
     if (params.limit !== undefined) q.limit = String(params.limit)
     if (params.offset !== undefined) q.offset = String(params.offset)
-    return get<Page<ExtractionJob>>('/intake/jobs?' + new URLSearchParams(q))
+    return get<Page<ExtractionJob>>('/sources/jobs?' + new URLSearchParams(q))
   },
   runJob: (id: string) =>
-    post<ExtractionJob>(`/intake/jobs/${id}/run`),
+    post<ExtractionJob>(`/sources/jobs/${id}/run`),
 
-  evidence: (params: { status?: string; evidence_type?: string; intake_item_id?: string; project_id?: string; connection_id?: string; limit?: number; offset?: number } = {}) => {
+  evidence: (params: { status?: string; evidence_type?: string; source_item_id?: string; project_id?: string; connection_id?: string; limit?: number; offset?: number } = {}) => {
     const q: Record<string, string> = {}
     if (params.status !== undefined) q.status = params.status
     if (params.evidence_type !== undefined) q.evidence_type = params.evidence_type
-    if (params.intake_item_id !== undefined) q.intake_item_id = params.intake_item_id
+    if (params.source_item_id !== undefined) q.source_item_id = params.source_item_id
     if (params.project_id !== undefined) q.project_id = params.project_id
     if (params.connection_id !== undefined) q.connection_id = params.connection_id
     if (params.limit !== undefined) q.limit = String(params.limit)
     if (params.offset !== undefined) q.offset = String(params.offset)
-    return get<Page<ExtractedEvidence>>('/intake/evidence?' + new URLSearchParams(q))
+    return get<Page<ExtractedEvidence>>('/sources/evidence?' + new URLSearchParams(q))
   },
   updateEvidence: (id: string, body: { status?: string; confidence?: number; metadata?: Record<string, unknown> }) =>
-    patch<ExtractedEvidence>(`/intake/evidence/${id}`, body),
+    patch<ExtractedEvidence>(`/sources/evidence/${id}`, body),
   createEvidenceLink: (body: {
     evidence_id: string
     target_type: string
@@ -1262,14 +1278,14 @@ export const intakeApi = {
     status?: string
     confidence?: number
     reason?: string
-  }) => post<EvidenceLink>('/intake/evidence-links', body),
+  }) => post<EvidenceLink>('/sources/evidence-links', body),
   evidenceLinks: (params: { evidence_id?: string; target_type?: string; target_id?: string; status?: string } = {}) => {
     const q: Record<string, string> = {}
     if (params.evidence_id !== undefined) q.evidence_id = params.evidence_id
     if (params.target_type !== undefined) q.target_type = params.target_type
     if (params.target_id !== undefined) q.target_id = params.target_id
     if (params.status !== undefined) q.status = params.status
-    return get<Page<EvidenceLink>>('/intake/evidence-links?' + new URLSearchParams(q))
+    return get<Page<EvidenceLink>>('/sources/evidence-links?' + new URLSearchParams(q))
   },
 
   workspaceBindings: (params: { workspace_id?: string; source_connection_id?: string; project_id?: string } = {}) => {
@@ -1277,7 +1293,7 @@ export const intakeApi = {
     if (params.workspace_id !== undefined) q.workspace_id = params.workspace_id
     if (params.source_connection_id !== undefined) q.source_connection_id = params.source_connection_id
     if (params.project_id !== undefined) q.project_id = params.project_id
-    return get<WorkspaceSourceBinding[]>('/intake/workspace-source-bindings?' + new URLSearchParams(q))
+    return get<WorkspaceSourceBinding[]>('/sources/workspace-source-bindings?' + new URLSearchParams(q))
   },
   createWorkspaceBinding: (body: {
     workspace_id: string
@@ -1289,29 +1305,29 @@ export const intakeApi = {
     filters?: Record<string, unknown>
     routing_policy?: Record<string, unknown>
     extraction_policy?: Record<string, unknown>
-  }) => post<WorkspaceSourceBinding>('/intake/workspace-source-bindings', body),
+  }) => post<WorkspaceSourceBinding>('/sources/workspace-source-bindings', body),
   backfillWorkspaceBinding: (bindingId: string) =>
-    post<WorkspaceSourceBindingBackfillResult>(`/intake/workspace-source-bindings/${bindingId}/backfill`),
+    post<WorkspaceSourceBindingBackfillResult>(`/sources/workspace-source-bindings/${bindingId}/backfill`),
   summarize: (body: SummaryRunRequest) =>
-    post<SummaryRunOut>('/intake/post-processing/run-once', body),
+    post<SummaryRunOut>('/sources/post-processing/run-once', body),
   postProcessingRules: (connectionId: string) =>
-    get<SourcePostProcessingRule[]>(`/intake/connections/${connectionId}/post-processing/rules`),
+    get<SourcePostProcessingRule[]>(`/sources/connections/${connectionId}/post-processing/rules`),
   createPostProcessingRule: (connectionId: string, body: SourcePostProcessingRuleCreate) =>
-    post<SourcePostProcessingRule>(`/intake/connections/${connectionId}/post-processing/rules`, body),
+    post<SourcePostProcessingRule>(`/sources/connections/${connectionId}/post-processing/rules`, body),
   updatePostProcessingRule: (connectionId: string, ruleId: string, body: SourcePostProcessingRuleUpdate) =>
-    patch<SourcePostProcessingRule>(`/intake/connections/${connectionId}/post-processing/rules/${ruleId}`, body),
+    patch<SourcePostProcessingRule>(`/sources/connections/${connectionId}/post-processing/rules/${ruleId}`, body),
   runPostProcessingRule: (connectionId: string, ruleId: string) =>
-    post<SourcePostProcessingRun>(`/intake/connections/${connectionId}/post-processing/rules/${ruleId}/run`),
+    post<SourcePostProcessingRun>(`/sources/connections/${connectionId}/post-processing/rules/${ruleId}/run`),
   drainPostProcessingRule: (connectionId: string, ruleId: string) =>
-    post<SourcePostProcessingDrainResult>(`/intake/connections/${connectionId}/post-processing/rules/${ruleId}/drain`),
+    post<SourcePostProcessingDrainResult>(`/sources/connections/${connectionId}/post-processing/rules/${ruleId}/drain`),
   postProcessingRuns: (connectionId: string, params: { limit?: number; offset?: number } = {}) => {
     const q: Record<string, string> = {}
     if (params.limit !== undefined) q.limit = String(params.limit)
     if (params.offset !== undefined) q.offset = String(params.offset)
-    return get<Page<SourcePostProcessingRun>>(`/intake/connections/${connectionId}/post-processing/runs?` + new URLSearchParams(q))
+    return get<Page<SourcePostProcessingRun>>(`/sources/connections/${connectionId}/post-processing/runs?` + new URLSearchParams(q))
   },
   postProcessingBacklog: (connectionId: string) =>
-    get<SourcePostProcessingBacklog>(`/intake/connections/${connectionId}/post-processing/backlog`),
+    get<SourcePostProcessingBacklog>(`/sources/connections/${connectionId}/post-processing/backlog`),
   postProcessingDecisions: (params: {
     connection_id?: string
     project_id?: string
@@ -1329,7 +1345,7 @@ export const intakeApi = {
     if (params.review_status !== undefined) q.review_status = params.review_status
     if (params.limit !== undefined) q.limit = String(params.limit)
     if (params.offset !== undefined) q.offset = String(params.offset)
-    return get<Page<SourcePostProcessingItemDecision>>('/intake/post-processing/decisions?' + new URLSearchParams(q))
+    return get<Page<SourcePostProcessingItemDecision>>('/sources/post-processing/decisions?' + new URLSearchParams(q))
   },
   postProcessingConnectionDecisions: (connectionId: string, params: {
     rule_id?: string
@@ -1344,50 +1360,65 @@ export const intakeApi = {
     if (params.review_status !== undefined) q.review_status = params.review_status
     if (params.limit !== undefined) q.limit = String(params.limit)
     if (params.offset !== undefined) q.offset = String(params.offset)
-    return get<Page<SourcePostProcessingItemDecision>>(`/intake/connections/${connectionId}/post-processing/decisions?` + new URLSearchParams(q))
+    return get<Page<SourcePostProcessingItemDecision>>(`/sources/connections/${connectionId}/post-processing/decisions?` + new URLSearchParams(q))
   },
   postProcessingDecisionAction: (decisionId: string, action: string) =>
-    post<SourcePostProcessingDecisionActionResult>(`/intake/post-processing/decisions/${decisionId}/actions`, { action }),
+    post<SourcePostProcessingDecisionActionResult>(`/sources/post-processing/decisions/${decisionId}/actions`, { action }),
+  briefings: (params: {
+    connection_id?: string
+    project_id?: string
+    limit?: number
+    offset?: number
+  } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.connection_id !== undefined) q.connection_id = params.connection_id
+    if (params.project_id !== undefined) q.project_id = params.project_id
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    return get<Page<SourcePostProcessingBriefingDaySummary>>('/sources/briefings?' + new URLSearchParams(q))
+  },
+  briefing: (connectionId: string, date: string) =>
+    get<SourcePostProcessingBriefingDetail>(`/sources/briefings/${connectionId}/${date}`),
 }
 
-// ── Intake Reader ─────────────────────────────────────────────────────────
-export const intakeReaderApi = {
+// ── Source Reader ─────────────────────────────────────────────────────────
+export const sourceReaderApi = {
   getDocument: (documentType: string, documentId: string) =>
-    get<ReaderDocumentPayload>(`/intake/reader/documents/${documentType}/${documentId}`),
+    get<ReaderDocumentPayload>(`/sources/reader/documents/${documentType}/${documentId}`),
 
   listAnnotations: (documentType: string, documentId: string) =>
-    get<ReaderAnnotationsResponse>(`/intake/reader/documents/${documentType}/${documentId}/annotations`),
+    get<ReaderAnnotationsResponse>(`/sources/reader/documents/${documentType}/${documentId}/annotations`),
 
   createAnnotation: (body: ReaderAnnotationCreate) =>
-    post<ReaderAnnotation>('/intake/reader/annotations', body),
+    post<ReaderAnnotation>('/sources/reader/annotations', body),
 
   updateAnnotation: (annotationId: string, body: ReaderAnnotationUpdate) =>
-    patch<ReaderAnnotation>(`/intake/reader/annotations/${annotationId}`, body),
+    patch<ReaderAnnotation>(`/sources/reader/annotations/${annotationId}`, body),
 
   deleteAnnotation: (annotationId: string) =>
-    del(`/intake/reader/annotations/${annotationId}`),
+    del(`/sources/reader/annotations/${annotationId}`),
 
   listThreads: (annotationId: string) =>
-    get<{ items: ReaderCommentThread[] }>(`/intake/reader/annotations/${annotationId}/threads`),
+    get<{ items: ReaderCommentThread[] }>(`/sources/reader/annotations/${annotationId}/threads`),
 
   createComment: (annotationId: string, body: ReaderCommentCreate) =>
-    post<{ thread: ReaderCommentThread }>(`/intake/reader/annotations/${annotationId}/comments`, body),
+    post<{ thread: ReaderCommentThread }>(`/sources/reader/annotations/${annotationId}/comments`, body),
 
   updateComment: (commentId: string, body: ReaderCommentUpdate) =>
-    patch<ReaderComment>(`/intake/reader/comments/${commentId}`, body),
+    patch<ReaderComment>(`/sources/reader/comments/${commentId}`, body),
 
   updateThread: (threadId: string, body: ReaderThreadUpdate) =>
-    patch<ReaderCommentThread>(`/intake/reader/comment-threads/${threadId}`, body),
+    patch<ReaderCommentThread>(`/sources/reader/comment-threads/${threadId}`, body),
 
   createEvidence: (annotationId: string, body: ReaderCreateEvidenceRequest) =>
-    post<ReaderCreatedEvidence>(`/intake/reader/annotations/${annotationId}/evidence`, body),
+    post<ReaderCreatedEvidence>(`/sources/reader/annotations/${annotationId}/evidence`, body),
 
   createProposal: (annotationId: string, body: ReaderCreateProposalRequest) =>
-    post<ReaderCreatedProposal>(`/intake/reader/annotations/${annotationId}/proposals`, body),
+    post<ReaderCreatedProposal>(`/sources/reader/annotations/${annotationId}/proposals`, body),
 
   listByProject: (projectId: string, limit?: number) =>
     get<{ items: ReaderAnnotation[] }>(
-      `/intake/reader/annotations?project_id=${encodeURIComponent(projectId)}${limit != null ? `&limit=${limit}` : ''}`,
+      `/sources/reader/annotations?project_id=${encodeURIComponent(projectId)}${limit != null ? `&limit=${limit}` : ''}`,
     ),
 }
 
@@ -2018,7 +2049,7 @@ export interface ResearchAtlasProjectPaper {
   note: string | null
   pinned: boolean
   source: string
-  intake_item_id: string | null
+  source_item_id: string | null
   paper: ResearchAtlasPaper
 }
 
@@ -2105,7 +2136,7 @@ export const researchAtlasApi = {
     return getText(`/atlas/export/entities?${q}`)
   },
   settings: () => get<ResearchAtlasSyncStatus>('/atlas/settings'),
-  syncIntake: () => post<{ imported: number; scanned: number; last_error: string | null }>('/atlas/sync/intake'),
+  syncSource: () => post<{ imported: number; scanned: number; last_error: string | null }>('/atlas/sync/sources'),
   listProjectPapers: (projectId: string) =>
     get<{ project_id: string; papers: ResearchAtlasProjectPaper[] }>(`/atlas/projects/${encodeURIComponent(projectId)}/papers`),
   addProjectPaper: (projectId: string, input: { paper_id: string; status?: ResearchAtlasProjectPaper['status'] }) =>

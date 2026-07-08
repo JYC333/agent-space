@@ -86,7 +86,9 @@ profile records remain the source of truth.
 
 **B23** — The frontend is not an admin-only console. It is the primary user-facing product surface including personal use (capture, review, knowledge reading, assistant chat). Design for non-technical users.
 
-**B24** — Raw capture inputs (quick thoughts, inbox drops, file imports, chat captures) must enter via `ActivityRecord` first. Editor-owned user documents such as Notes and diary entries are durable product documents, not raw intake records, and may write their owning domain tables directly. Any extraction from those documents into Memory, KnowledgeItem, ContextBuilder, or FlashCard must still go through the proposal/intake flow. KnowledgeItem rows must not automatically enter Memory or ContextBuilder.
+**B24** — Raw capture inputs (quick thoughts, inbox drops, file imports, chat captures) must enter via `ActivityRecord` first. Editor-owned user documents such as Notes and diary entries are durable product documents, not raw input records, and may write their owning domain tables directly. Any extraction from those documents into Memory, KnowledgeItem, ContextBuilder, or FlashCard must still go through the proposal/sources flow. KnowledgeItem rows must not automatically enter Memory or ContextBuilder.
+
+**B24A** — The Activity Inbox holds pointers, never content. Any module that wants user attention delivers a clearable notification row into `ActivityRecord`; the content itself lives in that module's own reading surface (e.g. Sources-derived digests read in Library, not in Inbox). Inbox rows disappear when handled; the underlying content stays where it lives and remains revisitable from its owning surface.
 
 **B25** — The workspace console (file browser, diff viewer) is for workspace operators. It must not be shown as the primary entry point for personal-use features (capture, review, chat).
 

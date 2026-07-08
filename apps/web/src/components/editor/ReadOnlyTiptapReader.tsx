@@ -2,7 +2,7 @@ import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from 'rea
 import { EditorContent, useEditor } from '@tiptap/react'
 import { Extension, Mark, Node, mergeAttributes } from '@tiptap/core'
 import StarterKit from '@tiptap/starter-kit'
-import { Plugin, PluginKey, TextSelection as PmTextSelection } from '@tiptap/pm/state'
+import { Plugin, PluginKey } from '@tiptap/pm/state'
 import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model'
 import { cn } from '../../lib/utils'
@@ -56,6 +56,7 @@ interface ReadOnlyTiptapReaderProps {
   normalizedText: string
   className?: string
   onTextSelected?: (selection: TextSelection | null) => void
+  onBlockFocused?: (index: number | null) => void
   onAnnotationClick?: (annotationId: string) => void
   annotations?: ReaderAnnotation[]
   selectedAnnotationId?: string | null
@@ -233,6 +234,7 @@ export const ReadOnlyTiptapReader = forwardRef<ReadOnlyTiptapReaderHandle, ReadO
     normalizedText,
     className,
     onTextSelected,
+    onBlockFocused,
     onAnnotationClick,
     annotations,
     selectedAnnotationId,
@@ -240,8 +242,11 @@ export const ReadOnlyTiptapReader = forwardRef<ReadOnlyTiptapReaderHandle, ReadO
   }, ref) {
     const onSelectRef = useRef(onTextSelected)
     onSelectRef.current = onTextSelected
+    const onBlockFocusedRef = useRef(onBlockFocused)
+    onBlockFocusedRef.current = onBlockFocused
     const onAnnotationClickRef = useRef(onAnnotationClick)
     onAnnotationClickRef.current = onAnnotationClick
+    const suppressClickSelectionUpdateRef = useRef(false)
 
     const annotationsRef = useRef<ReaderAnnotation[]>([])
     annotationsRef.current = annotations ?? []
@@ -333,6 +338,7 @@ export const ReadOnlyTiptapReader = forwardRef<ReadOnlyTiptapReaderHandle, ReadO
       },
       onSelectionUpdate: ({ editor: e }) => {
         const { from, to } = e.state.selection
+        if (suppressClickSelectionUpdateRef.current && from === to) return
         onSelectRef.current?.(buildSelection(e.state.doc, from, to, normalizedText, domSelectionRect()))
       },
     })
@@ -379,6 +385,7 @@ export const ReadOnlyTiptapReader = forwardRef<ReadOnlyTiptapReaderHandle, ReadO
 
       const clickedBlock = topLevelReaderBlock(e.currentTarget, target)
       if (!clickedBlock) return
+      onBlockFocusedRef.current?.(clickedBlock.index)
       const selection = blockSelectionAt(
         editor.state.doc,
         clickedBlock.index,
@@ -389,12 +396,11 @@ export const ReadOnlyTiptapReader = forwardRef<ReadOnlyTiptapReaderHandle, ReadO
         onSelectRef.current?.(null)
         return
       }
-      const range = selection.anchorDraft.tiptap_range
-      if (range) {
-        editor.view.dispatch(
-          editor.state.tr.setSelection(PmTextSelection.create(editor.state.doc, range.from, range.to)),
-        )
-      }
+      suppressClickSelectionUpdateRef.current = true
+      window.setTimeout(() => {
+        suppressClickSelectionUpdateRef.current = false
+      }, 0)
+      window.getSelection()?.removeAllRanges()
       onSelectRef.current?.(selection)
     }
 

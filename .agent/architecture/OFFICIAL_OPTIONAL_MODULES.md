@@ -129,8 +129,8 @@ Core plugin control-plane schema (`official_plugin_enablements`, `official_plugi
 
 Plugin-owned domain tables do not live in the core baseline. The `diary` plugin owns `diary_entries` and `diary_reflections` through SQL files under `plugins/official/diary/migrations/`. The `finance_ledger` plugin owns its finance book, account, directive, posting, price, import/export, and metadata tables through SQL files under `plugins/official/finance_ledger/migrations/`. Plugin migrations are copied into `server/dist/official-plugins/<plugin_id>/migrations/` during build. The installer executes those migrations only when the plugin is installed and records their checksums in `plugin_migrations`.
 
-### Editor-owned content vs raw intake
-Diary entries are editor-owned user documents, similar to Notes. Direct diary editing writes the diary plugin tables and does not create an `ActivityRecord`. If diary content is later extracted into Memory, Knowledge, ContextBuilder, FlashCards, or agent-readable summaries, that extraction must go through the proposal/intake boundary and remain opt-in where the descriptor says context contribution is `opt_in`.
+### Editor-owned content vs raw input
+Diary entries are editor-owned user documents, similar to Notes. Direct diary editing writes the diary plugin tables and does not create an `ActivityRecord`. If diary content is later extracted into Memory, Knowledge, ContextBuilder, FlashCards, or agent-readable summaries, that extraction must go through the proposal/sources boundary and remain opt-in where the descriptor says context contribution is `opt_in`.
 
 Finance ledger rows are space-owned business data. Direct ledger editing writes
 the finance plugin tables and does not create an `ActivityRecord`. Beancount text
@@ -151,7 +151,7 @@ Disabling a module preserves all its data. `disabled_at` and `disabled_by_user_i
 
 - Official modules declare sensitive integrations in their `OfficialPluginDescriptor.permissions` field
 - Memory writes must still go through proposals (`B10`)
-- Raw capture inputs must enter via `ActivityRecord` first where applicable (`B24`); editor-owned documents such as diary entries are not raw intake records
+- Raw capture inputs must enter via `ActivityRecord` first where applicable (`B24`); editor-owned documents such as diary entries are not raw input records
 - Context contribution must be `opt_in` for private/personal or sensitive product data modules (e.g. diary and finance ledger default to `can_contribute_context: "opt_in"` and `include_in_context: false` in settings)
 - Plugin settings must not leak across spaces or users — the guard and repository enforce the descriptor's `space` or `user` scope
 - Future third-party modules require a much stricter sandbox and SDK model not covered here
@@ -181,7 +181,7 @@ Future contribution types must preserve the same fail-closed enablement rule.
 
 | Plugin | Scope | Frontend | Routes | Runtime contributions | Data ownership |
 |---|---|---|---|---|---|
-| `diary` | `user` | `/diary` | `/api/v1/diary*` | Routes, scheduler, reflection job | Plugin-owned diary entries/reflections; editor-owned personal documents; memory/context extraction remains opt-in and proposal/intake-gated. |
+| `diary` | `user` | `/diary` | `/api/v1/diary*` | Routes, scheduler, reflection job | Plugin-owned diary entries/reflections; editor-owned personal documents; memory/context extraction remains opt-in and proposal/sources-gated. |
 | `finance_ledger` | `space` | `/finance` | `/api/v1/finance*` | Routes and proposal appliers | Plugin-owned finance books/accounts/directives/postings/prices/import-export records; PostgreSQL is the runtime source of truth; Beancount text is import/export compatibility. |
 
 ---

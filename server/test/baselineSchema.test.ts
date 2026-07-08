@@ -112,6 +112,14 @@ describe("server runner applies the baseline schema", () => {
     expect(baseline).toContain("WHEN 'claim'::text THEN");
   });
 
+  it("keeps Activity Inbox pointer aggregation schema in the baseline", () => {
+    const baseline = readFileSync(join(MIGRATIONS_DIR, "0001_baseline.sql"), "utf8");
+    const activityRecords = tableDefinition(baseline, "activity_records");
+    expect(activityRecords).toContain("aggregate_key character varying(128)");
+    expect(baseline).toContain("CREATE UNIQUE INDEX uq_activity_records_space_aggregate_key");
+    expect(baseline).toContain("WHERE (aggregate_key IS NOT NULL)");
+  });
+
   it("keeps ClaimFact and object relation tables FK-backed and retrievable", () => {
     const baseline = readFileSync(join(MIGRATIONS_DIR, "0001_baseline.sql"), "utf8");
     expect(baseline).toContain("CREATE TABLE public.claims");
@@ -178,7 +186,7 @@ describe("server runner applies the baseline schema", () => {
     expect(baseline).not.toContain("ck_retrieval_feedback_events_object_type");
     expect(baseline).toContain("ck_space_object_kind_relation_hints_relation_type");
     expect(baseline).toContain("'project_public_summary'::character varying");
-    expect(baseline).toContain("'knowledge_item'::character varying, 'note'::character varying, 'source'::character varying, 'claim'::character varying, 'memory_entry'::character varying, 'project_public_summary'::character varying, 'intake_item'::character varying, 'extracted_evidence'::character varying");
+    expect(baseline).toContain("'knowledge_item'::character varying, 'note'::character varying, 'source'::character varying, 'claim'::character varying, 'memory_entry'::character varying, 'project_public_summary'::character varying, 'source_item'::character varying, 'extracted_evidence'::character varying");
   });
 
   it("keeps note collection trees and memberships space-scoped in the baseline", () => {

@@ -117,7 +117,7 @@ class FakeObjectSchemaSuggestionDb implements Queryable {
         rowCount: 2,
       };
     }
-    if (/FROM intake_items/.test(sql)) {
+    if (/FROM source_items/.test(sql)) {
       return { rows: [] as Row[], rowCount: 0 };
     }
     return { rows: [] as Row[], rowCount: 0 };
@@ -162,7 +162,7 @@ describe("scanObjectSchemaSuggestions", () => {
     });
   });
 
-  it("default scan covers claim/source SQL without reading raw content", async () => {
+  it("default scan covers claim/sources SQL without reading raw content", async () => {
     const report = await scanObjectSchemaSuggestions(new FakeObjectSchemaSuggestionDb(), {
       spaceId: "space-1",
       userId: "user-1",

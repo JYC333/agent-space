@@ -13,9 +13,9 @@ a cron schedule. Every automation-origin run goes through the same
 enforce/preflight/policy path as a manual run — this is the roadmap red line for
 Capability 6.
 
-Intake source post-processing is not an Automation trigger. Source-level
+Source post-processing is not an Automation trigger. Source-level
 summaries, evidence extraction, proposal creation, item marking, and per-source
-cursors are owned by the Intake module.
+cursors are owned by the Sources module.
 
 ## Owns
 
@@ -50,14 +50,14 @@ targets use the configured agent and optional configured prompt.
 
 ## Cross-Module Boundary
 
-Intake materialization enqueues Intake-owned
-`source_post_processing_event` jobs. Automations does not consume intake item
+Sources materialization enqueues Sources-owned
+`source_post_processing_event` jobs. Automations does not consume source item
 deltas and does not own per-source cursors.
 
 ## Related Files
 
 - `server/src/modules/automations/`
-- `server/src/modules/intake/evidenceProjectLinker.ts`
+- `server/src/modules/sources/evidenceProjectLinker.ts`
 - `server/src/modules/runs/finalizationService.ts`
 - `server/src/modules/scheduler/`
 - `apps/web/src/modules/automations/AutomationsPage.tsx`
@@ -65,5 +65,5 @@ deltas and does not own per-source cursors.
 ## Related Architecture
 
 - [PROJECTS.md](../architecture/PROJECTS.md)
-- [Intake module](intake.md)
+- [Sources module](sources.md)
 - [ROADMAP_AND_FUTURE_RISKS.md](../architecture/ROADMAP_AND_FUTURE_RISKS.md) — Capability 6

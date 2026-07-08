@@ -118,7 +118,7 @@ export async function assertWorkspaceLinkedToProject(
     [spaceId, projectId, workspaceId],
   );
   if ((link.rowCount ?? link.rows.length) === 0) {
-    throw new HttpError(422, "Workspace must be linked to the project before binding intake sources");
+    throw new HttpError(422, "Workspace must be linked to the project before binding source connections");
   }
 }
 

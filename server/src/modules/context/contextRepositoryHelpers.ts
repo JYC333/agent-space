@@ -11,7 +11,7 @@ export interface EvidenceContextRow {
   content_excerpt: string | null;
   evidence_type: string;
   trust_level: string;
-  intake_item_id: string | null;
+  source_item_id: string | null;
   source_snapshot_id: string | null;
   artifact_id: string | null;
   source_uri: string | null;
@@ -139,7 +139,7 @@ export function evidenceSelectionFromRow(
       source_type: "evidence",
       source_id: row.id,
       evidence_type: row.evidence_type,
-      intake_item_id: row.intake_item_id,
+      source_item_id: row.source_item_id,
       source_snapshot_id: row.source_snapshot_id,
       artifact_id: row.artifact_id,
       link_id: row.link_id,

@@ -25,7 +25,7 @@
 | Runtime adapter bypassing credential resolver | Blocked by `RunOrchestrationService` design |
 | Runtime adapter bypassing sandbox/path policy | Blocked by `execution_workspace` contract |
 | File mutation without approved proposal + PathPolicy | Blocked by code patch apply |
-| Automatic memory promotion from intake/evidence content | Blocked by proposal/apply boundary |
+| Automatic memory promotion from source/evidence content | Blocked by proposal/apply boundary |
 
 **UI status of planned-but-not-built surfaces:**
 - `Knowledge` — registry entry with `planned: true`; "soon" badge; non-interactive.
@@ -40,7 +40,7 @@ No automation, connector marketplace, crawler, or self-evolution controls appear
 - Explicit two-user membership and space switching.
 - Auth via session cookies or API keys. No dev-identity fallback.
 - Activity Inbox for non-chat capture (thoughts, notes, snippets, links) via `POST /api/v1/activity`.
-- Intake for source connections, manual URL intake, candidate items, extraction jobs, and citable evidence via `/api/v1/intake/*`.
+- Sources for source connections, manual URL source capture, candidate items, extraction jobs, and citable evidence via `/api/v1/sources/*`.
 - Explicit chat sessions for conversations with agents (`POST /api/v1/sessions`).
 - Memory proposal creation, review, acceptance, rejection, and archive.
 - Memory consolidation producing proposals from Activity.
@@ -75,17 +75,17 @@ These will not be built until their prerequisite foundations are stable:
 
 ## What Must Be True Before Building Disabled Surfaces
 
-**Before broad automated intake / crawling:**
-Intake/Evidence trust vocabulary, retention semantics, and candidate-to-Memory proposal path must stay fully tested. No auto-promotion of external evidence to trusted Memory.
+**Before broad automated source ingestion / crawling:**
+Sources/Evidence trust vocabulary, retention semantics, and candidate-to-Memory proposal path must stay fully tested. No auto-promotion of external evidence to trusted Memory.
 
 **Before Automation / Trigger:**
 Policy engine, ownership model, actor identity, and proposal-safe automation invariants must be documented and tested.
 
 **Before connector marketplace / integrations:**
-All connector data must enter Intake or Activity first. No direct-to-Memory connector writes.
+All connector data must enter Sources or Activity first. No direct-to-Memory connector writes.
 
 **Before self-evolution execution:**
 Evaluation gates, sandboxed experiment runs, deployment job persistence, capability lifecycle persistence, and rollback path must all be tested.
 
 **Before any broad external ingestion:**
-Retention/deletion semantics, Intake/Evidence candidate-only boundary, and trust gate must be enforced and tested.
+Retention/deletion semantics, Sources/Evidence candidate-only boundary, and trust gate must be enforced and tested.

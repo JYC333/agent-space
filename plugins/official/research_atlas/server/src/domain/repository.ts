@@ -244,7 +244,7 @@ export const researchAtlasRepository = {
       entityType: AtlasEntityType;
       payload: Record<string, unknown>;
       fetchStatus?: string;
-      intakeItemId?: string | null;
+      sourceItemId?: string | null;
       refreshAfter?: Date | null;
     },
   ): Promise<SourceRecordRow> {
@@ -253,7 +253,7 @@ export const researchAtlasRepository = {
     const result = await db.query<SourceRecordRow>(
       `INSERT INTO research_atlas_source_records (
          id, space_id, connector, external_id, entity_type, payload_json, content_hash,
-         fetched_at, fetch_status, intake_item_id, refresh_after, created_at, updated_at
+         fetched_at, fetch_status, source_item_id, refresh_after, created_at, updated_at
        ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $8, $8)
        ON CONFLICT (space_id, connector, external_id, entity_type)
        DO UPDATE SET
@@ -261,7 +261,7 @@ export const researchAtlasRepository = {
          content_hash = EXCLUDED.content_hash,
          fetched_at = EXCLUDED.fetched_at,
          fetch_status = EXCLUDED.fetch_status,
-         intake_item_id = COALESCE(EXCLUDED.intake_item_id, research_atlas_source_records.intake_item_id),
+         source_item_id = COALESCE(EXCLUDED.source_item_id, research_atlas_source_records.source_item_id),
          refresh_after = EXCLUDED.refresh_after,
          updated_at = EXCLUDED.updated_at
        RETURNING *`,
@@ -275,7 +275,7 @@ export const researchAtlasRepository = {
         contentHash,
         fetchedAt,
         input.fetchStatus ?? "ok",
-        input.intakeItemId ?? null,
+        input.sourceItemId ?? null,
         input.refreshAfter ?? null,
       ],
     );

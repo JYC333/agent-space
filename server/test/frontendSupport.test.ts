@@ -146,7 +146,7 @@ function emptyHomeSummary() {
       message: "No enabled model providers configured.",
     },
     suggested_actions: [],
-    intake_summary: {
+    source_summary: {
       open_items: 0,
       new_items_today: 0,
       pending_extraction_jobs: 0,

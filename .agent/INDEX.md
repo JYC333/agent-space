@@ -147,6 +147,7 @@ Load only the module docs relevant to your task.
 | Long-term memory | [modules/memory.md](modules/memory.md) |
 | Raw input and event capture | [modules/activity.md](modules/activity.md) |
 | Activity inbox UI and quick capture | [modules/activity-inbox.md](modules/activity-inbox.md) |
+| Sources-derived reading library | [modules/library.md](modules/library.md) |
 | Personal assistant and capture | [modules/assistant-capture.md](modules/assistant-capture.md) |
 | Memory review UI | [modules/memory-review.md](modules/memory-review.md) |
 | Policy and permission engine | [modules/policy.md](modules/policy.md) |

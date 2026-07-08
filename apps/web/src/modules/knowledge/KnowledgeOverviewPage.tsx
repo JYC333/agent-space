@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { SpaceLink as Link } from '../../core/spaceNav'
 import { ArrowRight, Clock } from 'lucide-react'
 import { toast } from 'sonner'
-import { knowledgeApi, notesApi, sourcesApi } from '../../api/client'
+import { knowledgeApi, notesApi, knowledgeSourcesApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
 import { errMsg } from '../../lib/utils'
 import type { KnowledgeItemSummary, KnowledgeSourceSummary, KnowledgeSummary, NoteSummary } from '../../types/api'
@@ -52,7 +52,7 @@ export default function KnowledgeOverviewPage() {
         knowledgeApi.summary().catch(() => null),
         notesApi.list({ limit: 50 }).then(p => p.items).catch(() => [] as NoteSummary[]),
         knowledgeApi.list({ status: 'active', limit: 50 }).then(p => p.items).catch(() => [] as KnowledgeItemSummary[]),
-        sourcesApi.list({ limit: 50 }).then(p => p.items).catch(() => [] as KnowledgeSourceSummary[]),
+        knowledgeSourcesApi.list({ limit: 50 }).then(p => p.items).catch(() => [] as KnowledgeSourceSummary[]),
       ])
       setSummary(s); setNotes(n); setWiki(w); setSources(src)
     } catch (e) {

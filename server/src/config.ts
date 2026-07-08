@@ -75,9 +75,9 @@ export interface ServerConfig {
   memoryMaintenanceSchedulerEnabled: boolean;
   memoryMaintenanceSchedulerIntervalSeconds: number;
   memoryMaintenanceSchedulerBatchLimit: number;
-  intakeExtractionSchedulerEnabled: boolean;
-  intakeExtractionSchedulerIntervalSeconds: number;
-  /** Instance hard limits for Intake Custom Source handler execution. Runner availability is DB-backed. */
+  sourceExtractionSchedulerEnabled: boolean;
+  sourceExtractionSchedulerIntervalSeconds: number;
+  /** Instance hard limits for Source Custom Source handler execution. Runner availability is DB-backed. */
   customSourceAllowedLanguages: string[];
   /** Additional operator-specified network deny rules, on top of the always-applied private/metadata blocks. */
   customSourceNetworkHardDenyRules: string[];
@@ -163,8 +163,8 @@ const KNOWN_ENV_KEYS = new Set([
   "SERVER_MEMORY_MAINTENANCE_SCHEDULER_ENABLED",
   "SERVER_MEMORY_MAINTENANCE_SCHEDULER_INTERVAL_SECONDS",
   "SERVER_MEMORY_MAINTENANCE_SCHEDULER_BATCH_LIMIT",
-  "SERVER_INTAKE_EXTRACTION_SCHEDULER_ENABLED",
-  "SERVER_INTAKE_EXTRACTION_SCHEDULER_INTERVAL_SECONDS",
+  "SERVER_SOURCE_EXTRACTION_SCHEDULER_ENABLED",
+  "SERVER_SOURCE_EXTRACTION_SCHEDULER_INTERVAL_SECONDS",
   "SERVER_CUSTOM_SOURCE_ALLOWED_LANGUAGES",
   "SERVER_CUSTOM_SOURCE_NETWORK_HARD_DENY_RULES",
   "SERVER_CUSTOM_SOURCE_TIMEOUT_MS_MAX",
@@ -508,18 +508,18 @@ export function loadConfig(env: RawEnv = process.env): ServerConfig {
     1,
     100,
   );
-  const intakeExtractionSchedulerEnabled = parseBool(
-    env.SERVER_INTAKE_EXTRACTION_SCHEDULER_ENABLED,
+  const sourceExtractionSchedulerEnabled = parseBool(
+    env.SERVER_SOURCE_EXTRACTION_SCHEDULER_ENABLED,
     true,
   );
-  const intakeExtractionSchedulerIntervalSeconds = parseBoundedInt(
-    env.SERVER_INTAKE_EXTRACTION_SCHEDULER_INTERVAL_SECONDS,
+  const sourceExtractionSchedulerIntervalSeconds = parseBoundedInt(
+    env.SERVER_SOURCE_EXTRACTION_SCHEDULER_INTERVAL_SECONDS,
     30,
-    "SERVER_INTAKE_EXTRACTION_SCHEDULER_INTERVAL_SECONDS",
+    "SERVER_SOURCE_EXTRACTION_SCHEDULER_INTERVAL_SECONDS",
     5,
     3600,
   );
-  // Intake Custom Source runner/sandbox instance hard limits. Runner
+  // Source Custom Source runner/sandbox instance hard limits. Runner
   // availability itself is DB-backed through Instance Settings.
   const customSourceAllowedLanguages = parseStringList(env.SERVER_CUSTOM_SOURCE_ALLOWED_LANGUAGES) ?? [
     "typescript_node",
@@ -658,8 +658,8 @@ export function loadConfig(env: RawEnv = process.env): ServerConfig {
     memoryMaintenanceSchedulerEnabled,
     memoryMaintenanceSchedulerIntervalSeconds,
     memoryMaintenanceSchedulerBatchLimit,
-    intakeExtractionSchedulerEnabled,
-    intakeExtractionSchedulerIntervalSeconds,
+    sourceExtractionSchedulerEnabled,
+    sourceExtractionSchedulerIntervalSeconds,
     customSourceAllowedLanguages,
     customSourceNetworkHardDenyRules,
     customSourceTimeoutMsMax,

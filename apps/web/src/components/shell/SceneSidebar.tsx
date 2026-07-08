@@ -1,7 +1,7 @@
 import { Link, useLocation, useSearchParams } from 'react-router-dom'
 import { PanelLeftClose } from 'lucide-react'
 import { cn } from '../../lib/utils'
-import { spacePath, stripSpacePrefix, type Scene } from '../../core/navigation'
+import { spacePath, stripSpacePrefix, type RouteSceneItem, type Scene } from '../../core/navigation'
 
 /** Build the in-space destination for a filter-scene item (value '' clears the filter). */
 function filterItemTo(spaceId: string | null, base: string, filterKey: string, value: string): string {
@@ -13,6 +13,20 @@ interface ActiveItem {
   to: string
   label: string
   active: boolean
+  depth: number
+}
+
+interface FlatRouteSceneItem {
+  to: string
+  label: string
+  depth: number
+}
+
+function flattenRouteItems(items: RouteSceneItem[], depth = 0): FlatRouteSceneItem[] {
+  return items.flatMap(item => [
+    { to: item.to, label: item.label, depth },
+    ...flattenRouteItems(item.children ?? [], depth + 1),
+  ])
 }
 
 function sceneItems(
@@ -27,17 +41,20 @@ function sceneItems(
     return scene.items.map(it => ({
       to: filterItemTo(spaceId, scene.base, scene.filterKey, it.value),
       label: it.label,
+      depth: 0,
       active: logical.startsWith(scene.base) && it.value === current,
     }))
   }
   // route scene: the active item is the one whose path is the longest prefix of pathname
+  const routeItems = flattenRouteItems(scene.items)
   let bestLen = -1
-  scene.items.forEach(it => {
+  routeItems.forEach(it => {
     if (logical === it.to || logical.startsWith(`${it.to}/`)) bestLen = Math.max(bestLen, it.to.length)
   })
-  return scene.items.map(it => ({
+  return routeItems.map(it => ({
     to: spacePath(spaceId, it.to),
     label: it.label,
+    depth: it.depth,
     active: (logical === it.to || logical.startsWith(`${it.to}/`)) && it.to.length === bestLen,
   }))
 }
@@ -82,6 +99,7 @@ export function SceneSidebar({
             aria-current={it.active ? 'page' : undefined}
             className={cn(
               'rounded-md px-2.5 py-1.5 text-[13px] transition-colors',
+              it.depth > 0 && 'ml-4 text-[12px]',
               it.active
                 ? 'bg-primary/10 text-accent-foreground font-medium'
                 : 'text-muted-foreground hover:text-foreground hover:bg-accent',
@@ -117,6 +135,7 @@ export function SceneTabs({
           aria-current={it.active ? 'page' : undefined}
           className={cn(
             'shrink-0 rounded-full px-3 py-1 text-[12px] transition-colors border',
+            it.depth > 0 && 'pl-2',
             it.active
               ? 'bg-primary/10 text-accent-foreground border-primary/30 font-medium'
               : 'text-muted-foreground border-border hover:text-foreground',

@@ -28,7 +28,7 @@ Proposals are the product review and application boundary for durable mutations.
   Claim Candidate Packet, retrieval review packet types, task proposal types,
   workspace proposal types, and capability proposal types contributed through
   the server `ProposalApplierRegistry`, plus the Custom Source proposal types
-  registered by the Intake module. Unregistered proposal types fail closed on accept
+  registered by the Sources module. Unregistered proposal types fail closed on accept
   until their owning domain registers a server applier. `egress_review` approval
   rows are supported, but `egress_review` does not currently have a registered applier.
 - Accept returns the general `ProposalAcceptOut` response shape.

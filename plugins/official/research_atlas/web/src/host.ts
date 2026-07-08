@@ -96,7 +96,7 @@ export interface ResearchAtlasProjectPaper {
   note: string | null
   pinned: boolean
   source: string
-  intake_item_id: string | null
+  source_item_id: string | null
   paper: ResearchAtlasPaper
 }
 
@@ -151,7 +151,7 @@ export interface ResearchAtlasApi {
   addGroupMembership(groupId: string, input: { scholar_id: string; role?: string; confidence?: number | null }): Promise<{ membership: ResearchAtlasGroupMembership }>
   exportEntities(params: { type: string; since?: string; cursor?: string; limit?: number; include_merged?: boolean; active_only?: boolean }): Promise<string>
   settings(): Promise<ResearchAtlasSyncStatus>
-  syncIntake(): Promise<{ imported: number; scanned: number; last_error: string | null }>
+  syncSource(): Promise<{ imported: number; scanned: number; last_error: string | null }>
   listProjectPapers(projectId: string): Promise<{ project_id: string; papers: ResearchAtlasProjectPaper[] }>
   addProjectPaper(projectId: string, input: { paper_id: string; status?: ResearchAtlasProjectPaper['status'] }): Promise<{ project_paper: ResearchAtlasProjectPaper }>
   updateProjectPaper(projectId: string, paperId: string, input: Partial<Pick<ResearchAtlasProjectPaper, 'status' | 'read_status' | 'rating' | 'tags' | 'note' | 'pinned'>>): Promise<{ project_paper: ResearchAtlasProjectPaper }>

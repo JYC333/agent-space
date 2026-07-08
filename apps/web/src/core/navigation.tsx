@@ -1,7 +1,7 @@
 import {
   Home, Inbox, CheckCircle, BookOpen, ListTodo, Bot, Folder, FolderKanban, Settings,
   GitBranch, Building2, ServerCog,
-  Radio,
+  Library, Rss,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -46,7 +46,8 @@ export interface RailItem {
 export const RAIL_ITEMS: RailItem[] = [
   { id: 'home',       label: 'Home',       to: '/home',        icon: Home,        scope: 'home',  mobile: true },
   { id: 'inbox',      label: 'Inbox',      to: '/activity',    icon: Inbox,       scope: 'space', mobile: true },
-  { id: 'intake',     label: 'Intake',     to: '/intake',      icon: Radio,       scope: 'space' },
+  { id: 'library',    label: 'Library',    to: '/library',     icon: Library,     scope: 'space', mobile: true },
+  { id: 'source',     label: 'Sources',    to: '/sources',      icon: Rss,         scope: 'space' },
   { id: 'review',     label: 'Review',     to: '/proposals',   icon: CheckCircle, scope: 'space', mobile: true },
   { id: 'knowledge',  label: 'Knowledge',  to: '/knowledge',   icon: BookOpen,    scope: 'space' },
   { id: 'tasks',      label: 'Tasks',      to: '/tasks',       icon: ListTodo,    scope: 'space', mobile: true },
@@ -71,6 +72,7 @@ export interface FilterSceneItem { label: string; value: string }
 export interface RouteSceneItem {
   label: string
   to: string
+  children?: RouteSceneItem[]
 }
 
 interface SceneBase {
@@ -117,6 +119,27 @@ export const SCENES: Scene[] = [
       { label: 'Proposals generated', value: 'proposals_generated' },
       { label: 'Processed',          value: 'processed' },
       { label: 'Archived',           value: 'archived' },
+    ],
+  },
+  {
+    kind: 'route',
+    id: 'library',
+    title: 'Library',
+    icon: Library,
+    segments: ['library'],
+    items: [
+      {
+        label: 'All Items',
+        to: '/library/items',
+        children: [
+          { label: 'Articles', to: '/library/items/articles' },
+          { label: 'Emails',   to: '/library/items/emails' },
+          { label: 'Videos',   to: '/library/items/videos' },
+          { label: 'Podcasts', to: '/library/items/podcasts' },
+          { label: 'PDFs',     to: '/library/items/pdfs' },
+        ],
+      },
+      { label: 'Digests', to: '/library/digests' },
     ],
   },
   // Knowledge intentionally has NO scene: cross-section navigation is the lightweight

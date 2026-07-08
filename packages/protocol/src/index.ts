@@ -104,8 +104,8 @@ export * from "./capabilities.js";
 export * from "./workflows.js";
 export * from "./skills.js";
 
-// Intake Custom Source handler contracts
-export * from "./intakeCustomSourceHandlers.js";
+// Source Custom Source handler contracts
+export * from "./sourceCustomSourceHandlers.js";
 
-// Intake Level 2 Source recipe contracts
-export * from "./intakeSourceRecipes.js";
+// Source Level 2 Source recipe contracts
+export * from "./sourceRecipes.js";

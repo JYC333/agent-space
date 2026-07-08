@@ -43,7 +43,7 @@ export const researchAtlasDescriptor: OfficialPluginDescriptor = {
     uses_scheduler: true,
   },
   settings_defaults: {
-    intake_sync_enabled: true,
+    source_sync_enabled: true,
     crossref_enabled: true,
     openalex_enabled: true,
     auto_add_project_candidates: true,

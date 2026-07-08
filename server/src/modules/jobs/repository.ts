@@ -97,7 +97,7 @@ export class PgJobQueueRepository {
          payload_json, attempts, max_attempts, scheduled_at, created_at, updated_at
        ) VALUES (
          $1, $2, $3, $4, $5, $6, 'pending', $7,
-         $8::jsonb, 0, $9, $10, $11, $11
+         $8::jsonb, 0, $9, $10::timestamptz, $11::timestamptz, $11::timestamptz
        )
        RETURNING ${JOB_SELECT_COLUMNS}`,
       [
@@ -212,9 +212,9 @@ export class PgJobQueueRepository {
     const result = await this.db.query<JobRecord>(
       `WITH candidate AS (
          SELECT id AS candidate_job_id
-           FROM jobs
+          FROM jobs
           WHERE status = 'pending'
-            AND scheduled_at <= $2
+            AND scheduled_at <= $2::timestamptz
             AND attempts < max_attempts
             ${typeFilter}
           ORDER BY priority DESC, scheduled_at ASC
@@ -224,10 +224,10 @@ export class PgJobQueueRepository {
        UPDATE jobs
           SET status = 'claimed',
               claimed_by = $1,
-              claimed_at = $2,
+              claimed_at = $2::timestamptz,
               heartbeat_at = NULL,
               attempts = attempts + 1,
-              updated_at = $2
+              updated_at = $2::timestamptz
          FROM candidate
         WHERE jobs.id = candidate.candidate_job_id
         RETURNING ${JOB_SELECT_COLUMNS}`,
@@ -248,9 +248,9 @@ export class PgJobQueueRepository {
     const result = await this.db.query(
       `UPDATE jobs
           SET status = 'running',
-              started_at = $2,
-              heartbeat_at = $2,
-              updated_at = $2
+              started_at = $2::timestamptz,
+              heartbeat_at = $2::timestamptz,
+              updated_at = $2::timestamptz
         WHERE id = $1
           AND status = 'claimed'
           AND (CAST($3 AS text) IS NULL OR claimed_by = $3)`,
@@ -269,9 +269,9 @@ export class PgJobQueueRepository {
       `UPDATE jobs
           SET status = 'completed',
               result_json = $2::jsonb,
-              completed_at = $3,
+              completed_at = $3::timestamptz,
               heartbeat_at = NULL,
-              updated_at = $3
+              updated_at = $3::timestamptz
         WHERE id = $1
           AND status IN ('claimed', 'running')
           AND (CAST($4 AS text) IS NULL OR claimed_by = $4)`,
@@ -299,8 +299,8 @@ export class PgJobQueueRepository {
               claimed_by = CASE WHEN attempts < max_attempts THEN NULL ELSE claimed_by END,
               claimed_at = CASE WHEN attempts < max_attempts THEN NULL ELSE claimed_at END,
               started_at = CASE WHEN attempts < max_attempts THEN NULL ELSE started_at END,
-              completed_at = CASE WHEN attempts < max_attempts THEN NULL ELSE $3 END,
-              updated_at = $3
+              completed_at = CASE WHEN attempts < max_attempts THEN NULL ELSE $3::timestamptz END,
+              updated_at = $3::timestamptz
         WHERE id = $1
           AND status IN ('claimed', 'running')
           AND (CAST($4 AS text) IS NULL OR claimed_by = $4)
@@ -320,8 +320,8 @@ export class PgJobQueueRepository {
          UPDATE jobs
             SET status = 'cancelled',
                 heartbeat_at = NULL,
-                completed_at = $2,
-                updated_at = $2
+                completed_at = $2::timestamptz,
+                updated_at = $2::timestamptz
           WHERE id = $1
             AND status IN ('pending', 'claimed', 'running')
             AND (CAST($3 AS text) IS NULL OR claimed_by = $3)
@@ -330,8 +330,8 @@ export class PgJobQueueRepository {
        cancelled_run AS (
          UPDATE runs
             SET status = 'cancelled',
-                ended_at = $2,
-                updated_at = $2,
+                ended_at = $2::timestamptz,
+                updated_at = $2::timestamptz,
                 error_message = 'Run cancelled',
                 error_json = '{"error_code":"run_cancelled","error_text":"Run cancelled"}'::jsonb
            FROM cancelled_job
@@ -353,8 +353,8 @@ export class PgJobQueueRepository {
   ): Promise<boolean> {
     const result = await this.db.query(
       `UPDATE jobs
-          SET heartbeat_at = $2,
-              updated_at = $2
+          SET heartbeat_at = $2::timestamptz,
+              updated_at = $2::timestamptz
         WHERE id = $1
           AND status IN ('claimed', 'running')
           AND (CAST($3 AS text) IS NULL OR claimed_by = $3)`,
@@ -372,7 +372,7 @@ export class PgJobQueueRepository {
   }): Promise<JobEventRecord> {
     const result = await this.db.query<JobEventRecord>(
       `INSERT INTO job_events (id, job_id, event_type, message, data, created_at)
-       VALUES ($1, $2, $3, $4, $5::jsonb, $6)
+       VALUES ($1, $2, $3, $4, $5::jsonb, $6::timestamptz)
        RETURNING id, job_id, event_type, message, data, created_at`,
       [
         randomUUID(),
@@ -403,9 +403,9 @@ export class PgJobQueueRepository {
                 claimed_at = NULL,
                 started_at = NULL,
                 heartbeat_at = NULL,
-                updated_at = $1
+                updated_at = $1::timestamptz
           WHERE status IN ('claimed', 'running')
-            AND COALESCE(heartbeat_at, updated_at) < $2
+            AND COALESCE(heartbeat_at, updated_at) < $2::timestamptz
             AND attempts < max_attempts
           RETURNING id
        ),
@@ -414,7 +414,7 @@ export class PgJobQueueRepository {
            FROM jobs
           WHERE status IN ('claimed', 'running')
             AND job_type = 'agent_run'
-            AND COALESCE(heartbeat_at, updated_at) < $2
+            AND COALESCE(heartbeat_at, updated_at) < $2::timestamptz
             AND attempts >= max_attempts
             AND payload_json ? 'run_id'
        ),
@@ -424,19 +424,19 @@ export class PgJobQueueRepository {
                 claimed_by = NULL,
                 claimed_at = NULL,
                 heartbeat_at = NULL,
-                completed_at = $1,
+                completed_at = $1::timestamptz,
                 error = 'job stuck and retry attempts exhausted',
-                updated_at = $1
+                updated_at = $1::timestamptz
           WHERE status IN ('claimed', 'running')
-            AND COALESCE(heartbeat_at, updated_at) < $2
+            AND COALESCE(heartbeat_at, updated_at) < $2::timestamptz
             AND attempts >= max_attempts
           RETURNING id
        ),
        failed_runs AS (
          UPDATE runs
             SET status = 'failed',
-                ended_at = $1,
-                updated_at = $1,
+                ended_at = $1::timestamptz,
+                updated_at = $1::timestamptz,
                 error_message = 'run abandoned: backing job stuck and retry attempts exhausted',
                 error_json = '{"error_code":"run_abandoned","error_text":"run abandoned: backing job stuck and retry attempts exhausted"}'::jsonb
            FROM exhausted_agent_runs
@@ -471,4 +471,3 @@ export class PgJobQueueRepository {
     );
   }
 }
-

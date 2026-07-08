@@ -9,7 +9,7 @@ export const DIARY_PLUGIN_VERSION = "0.1.0";
  * This descriptor is pure metadata for the official plugin control plane.
  * Runtime behavior lives in the package under `plugins/official/diary/` and is
  * loaded from the compiled official plugin artifact at server startup.
- * Memory/context extraction remains opt-in and must go through proposal/intake
+ * Memory/context extraction remains opt-in and must go through proposal/sources
  * boundaries; normal diary editing writes the plugin-owned diary tables
  * directly.
  */

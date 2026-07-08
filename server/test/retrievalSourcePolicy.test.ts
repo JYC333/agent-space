@@ -22,7 +22,7 @@ describe("retrieval source policy", () => {
     expect(sourceConnectionIdsFromSourceRefs([
       { source_type: "source_connection", source_id: SOURCE },
       { source_connection_id: "source-2" },
-      { source_type: "intake_item", source_id: "intake-1" },
+      { source_type: "source_item", source_id: "source-1" },
     ])).toEqual([SOURCE, "source-2"]);
   });
 

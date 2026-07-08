@@ -397,7 +397,7 @@ function RightPanel({
     ...(canUseContextOps ? [{ label: 'Context Health', path: '/context-ops' }] : []),
     { label: 'Maintenance scans', path: '/automations' },
     { label: 'Briefs and reports', path: '/artifacts' },
-    { label: 'Source governance', path: '/intake' },
+    { label: 'Source governance', path: '/sources' },
     { label: 'Retrieval settings', path: '/retrieval-settings' },
   ]
   return (

@@ -5,7 +5,7 @@ import {
   UnknownJobTypeError,
 } from "../src/modules/jobs/handlerRegistry";
 import { JobWorker } from "../src/modules/jobs/worker";
-import type { JobRecord } from "../src/modules/jobs/repository";
+import { PgJobQueueRepository, type JobRecord } from "../src/modules/jobs/repository";
 import { jobEventToOut, jobNotFoundForSpace, jobToOut } from "../src/modules/jobs/routes";
 import { SchedulerRegistry, startSchedulerRegistry } from "../src/modules/scheduler/registry";
 import type { QueryResult, Queryable } from "../src/modules/routeUtils/common";
@@ -244,6 +244,29 @@ describe("JobWorker", () => {
       "complete:job-1",
       "event:warning:Job completion skipped because ownership or status changed",
     ]);
+  });
+});
+
+describe("PgJobQueueRepository", () => {
+  it("casts failJob terminal timestamps inside CASE expressions", async () => {
+    const calls: Array<{ sql: string; params: readonly unknown[] }> = [];
+    const db: Queryable = {
+      async query<Row = Record<string, unknown>>(sql: string, params: readonly unknown[] = []): Promise<QueryResult<Row>> {
+        calls.push({ sql, params });
+        return { rows: [{ status: "failed" } as Row], rowCount: 1 };
+      },
+    };
+
+    const status = await new PgJobQueueRepository(db).failJob(
+      "job-1",
+      "boom",
+      "worker-1",
+      new Date("2026-07-08T02:14:22.455Z"),
+    );
+
+    expect(status).toBe("failed");
+    expect(calls[0]?.sql).toContain("completed_at = CASE WHEN attempts < max_attempts THEN NULL ELSE $3::timestamptz END");
+    expect(calls[0]?.sql).toContain("updated_at = $3::timestamptz");
   });
 });
 
@@ -937,7 +960,7 @@ class FakeAutomationRepository {
     return this.eventAutomations;
   }
 
-  async currentIntakeWatermark(): Promise<null> {
+  async currentSourceWatermark(): Promise<null> {
     return null;
   }
 

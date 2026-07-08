@@ -24,6 +24,7 @@ let container: StartedPostgreSqlContainer | null = null;
 let pool: Pool | null = null;
 let app: FastifyInstance | null = null;
 let enqueuedJobs: Array<{ jobType: string; payload: Record<string, unknown> }> = [];
+let available = false;
 
 const guardState = {
   enabled: true,
@@ -32,13 +33,22 @@ const guardState = {
 };
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer("pgvector/pgvector:pg18").start();
-  pool = new Pool({ connectionString: container.getConnectionUri() });
+  try {
+    container = await new PostgreSqlContainer("pgvector/pgvector:pg18").start();
+    pool = new Pool({ connectionString: container.getConnectionUri() });
+  } catch (err) {
+    console.warn(
+      `[research-atlas-routes] skipped — Docker/Postgres unavailable: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+    return;
+  }
   for (const migration of researchAtlasPlugin.migrations!) {
     await pool.query(migration.sql);
   }
   await pool.query(
-    `CREATE TABLE intake_items (
+    `CREATE TABLE source_items (
        id varchar(36) NOT NULL PRIMARY KEY,
        space_id varchar(36) NOT NULL,
        connection_id varchar(36),
@@ -126,6 +136,7 @@ beforeAll(async () => {
   };
   registerResearchAtlasRoutes(app, pool, fakeCtx);
   await app.ready();
+  available = true;
 }, 60_000);
 
 afterAll(async () => {
@@ -134,16 +145,20 @@ afterAll(async () => {
   await container?.stop();
 });
 
-beforeEach(async () => {
+beforeEach(async (context) => {
+  if (!available || !pool) {
+    context.skip();
+    return;
+  }
   guardState.enabled = true;
   enqueuedJobs = [];
-  await pool!.query(
+  await pool.query(
      `TRUNCATE TABLE
        workspace_source_bindings,
        project_members,
        projects,
        space_memberships,
-       intake_items,
+       source_items,
        research_atlas_sync_cursors,
        research_atlas_saved_views,
        research_atlas_project_groups,
@@ -221,14 +236,14 @@ describe("research atlas routes", () => {
     expect(authors.rows.map((row) => row.raw_author_name)).toEqual(["Ada Lovelace", "Grace Hopper"]);
   });
 
-  it("syncs arXiv intake items with a cursor and source provenance", async () => {
+  it("syncs arXiv source items with a cursor and source provenance", async () => {
     await pool!.query(
-      `INSERT INTO intake_items (
+      `INSERT INTO source_items (
          id, space_id, item_type, title, source_external_id, author, excerpt,
          source_uri, canonical_uri, metadata_json, created_at, updated_at
        ) VALUES ($1, $2, 'feed_entry', $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $10)`,
       [
-        "intake-arxiv-1",
+        "source-arxiv-1",
         guardState.spaceId,
         "A synced arXiv paper",
         "2401.00001",
@@ -248,7 +263,7 @@ describe("research atlas routes", () => {
 
     const sync = await app!.inject({
       method: "POST",
-      url: "/api/v1/atlas/sync/intake",
+      url: "/api/v1/atlas/sync/sources",
     });
     expect(sync.statusCode).toBe(200);
     expect(sync.json()).toEqual({ imported: 1, scanned: 1, last_error: null });
@@ -261,20 +276,20 @@ describe("research atlas routes", () => {
       }),
     ]);
 
-    const source = await pool!.query<{ intake_item_id: string }>(
-      "SELECT intake_item_id FROM research_atlas_source_records WHERE connector = 'intake'",
+    const source = await pool!.query<{ source_item_id: string }>(
+      "SELECT source_item_id FROM research_atlas_source_records WHERE connector = 'source'",
     );
-    expect(source.rows[0]!.intake_item_id).toBe("intake-arxiv-1");
+    expect(source.rows[0]!.source_item_id).toBe("source-arxiv-1");
 
     const status = await app!.inject({ method: "GET", url: "/api/v1/atlas/settings" });
     expect(status.statusCode).toBe(200);
     expect(status.json().cursors).toEqual([
-      expect.objectContaining({ cursor_key: "intake_items", last_error: null }),
+      expect.objectContaining({ cursor_key: "source_items", last_error: null }),
     ]);
 
     const again = await app!.inject({
       method: "POST",
-      url: "/api/v1/atlas/sync/intake",
+      url: "/api/v1/atlas/sync/sources",
     });
     expect(again.statusCode).toBe(200);
     expect(again.json()).toEqual({ imported: 0, scanned: 0, last_error: null });
@@ -845,7 +860,7 @@ describe("research atlas routes", () => {
     expect(list.json().papers).toEqual([
       expect.objectContaining({
         paper_id: paperId,
-        intake_item_id: null,
+        source_item_id: null,
         paper: expect.objectContaining({ id: paperId }),
       }),
     ]);
@@ -866,7 +881,7 @@ describe("research atlas routes", () => {
     expect(remove.json()).toEqual({ deleted: true });
   });
 
-  it("auto-adds intake-synced papers as project candidates for bound sources", async () => {
+  it("auto-adds source-synced papers as project candidates for bound sources", async () => {
     await seedProject("project-atlas-sync", guardState.userId);
     await pool!.query(
       `INSERT INTO workspace_source_bindings
@@ -875,12 +890,12 @@ describe("research atlas routes", () => {
       ["binding-1", guardState.spaceId, "project-atlas-sync", "source-arxiv-1"],
     );
     await pool!.query(
-      `INSERT INTO intake_items (
+      `INSERT INTO source_items (
          id, space_id, connection_id, item_type, title, source_external_id, author, excerpt,
          source_uri, canonical_uri, metadata_json, created_at, updated_at
        ) VALUES ($1, $2, $3, 'feed_entry', $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $11)`,
       [
-        "intake-arxiv-project",
+        "source-arxiv-project",
         guardState.spaceId,
         "source-arxiv-1",
         "A project-bound arXiv paper",
@@ -894,7 +909,7 @@ describe("research atlas routes", () => {
       ],
     );
 
-    const sync = await app!.inject({ method: "POST", url: "/api/v1/atlas/sync/intake" });
+    const sync = await app!.inject({ method: "POST", url: "/api/v1/atlas/sync/sources" });
     expect(sync.statusCode).toBe(200);
     const list = await app!.inject({
       method: "GET",
@@ -904,8 +919,8 @@ describe("research atlas routes", () => {
     expect(list.json().papers).toEqual([
       expect.objectContaining({
         status: "candidate",
-        source: "intake_sync",
-        intake_item_id: "intake-arxiv-project",
+        source: "source_sync",
+        source_item_id: "source-arxiv-project",
         paper: expect.objectContaining({ title: "A project-bound arXiv paper" }),
       }),
     ]);

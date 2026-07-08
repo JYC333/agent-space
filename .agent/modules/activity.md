@@ -4,7 +4,7 @@
 **IMPLEMENTED** — see `server/src/modules/activity/` and `modules/activity-inbox.md` for full detail.
 
 ## Purpose
-Intake boundary for raw inputs. Nothing bypasses this layer into active memory.
+Raw input boundary for raw inputs. Nothing bypasses this layer into active memory.
 
 ## Owns
 - `ActivityRecord` model
@@ -21,6 +21,7 @@ ActivityRecord:
   title, content
   source_run_id, source_task_id, source_session_id, source_url
   subject_user_id, project_id
+  aggregate_key
   status (raw|processed|proposals_generated|failed|archived)
   payload_json, source_integrity_json, entity_refs_json
   occurred_at, processed_at, discarded_at, created_at, updated_at
@@ -37,6 +38,10 @@ proposal generation becomes `proposals_generated`, and worker errors become
 - Activity-derived proposals carry Activity provenance in `provenance_entries`
   and may include `source_activity_id` as a pending-proposal compatibility
   shortcut; accepted Memory provenance is written to `provenance_links`
+- The Inbox holds pointers, never content (BOUNDARIES B24A) — see
+  `modules/activity-inbox.md` for the full rule
+- Pointer/aggregate Activity rows set `aggregate_key` and are not eligible for
+  Activity-to-Memory consolidation
 
 ## Related Files
 - `server/src/modules/activity/`

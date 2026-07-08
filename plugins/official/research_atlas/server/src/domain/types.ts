@@ -112,7 +112,7 @@ export interface SourceRecordRow {
   content_hash: string | null;
   fetched_at: Date;
   fetch_status: string;
-  intake_item_id: string | null;
+  source_item_id: string | null;
   refresh_after: Date | null;
   created_at: Date;
   updated_at: Date;

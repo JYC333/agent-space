@@ -193,7 +193,7 @@ and keep product settings in scoped settings or domain tables. The durable
 `jobs` table remains the execution queue; `scheduler_tasks` is only scheduler
 cursor/state metadata used to decide when to enqueue or fire work.
 Current recurring scheduler cursors include daily capture reports
-(`daily_capture_report`), automation schedules (`automation`), and intake
+(`daily_capture_report`), automation schedules (`automation`), and source
 source connection scans (`source_connection_scan`).
 Do not move execution-queue timestamps such as `jobs.scheduled_at` or
 domain work-item due timestamps such as `memory_maintenance_jobs.run_after`
@@ -237,6 +237,7 @@ When adding a new scheduler:
 | Memory proposal apply | `PgProposalApplyService.accept` — one commit with rollback on failure | Source monitoring only (in-process) |
 | Policy proposal apply | `PgProposalApplyService.accept` — one commit | None |
 | Activity capture | `ActivityService` | None |
+| Sources daily briefing Activity pointer | Source post-processing repository short upsert after successful run; auxiliary failure logged | None |
 | Activity consolidation | One short commit per activity outcome | Low (consolidation model call possible) |
 | Job queue / handlers | Short standalone commits; auxiliary events isolated | Handler execution |
 | Workspace scan | Stale-pass/create-pass commits; filesystem scan | Filesystem scan |

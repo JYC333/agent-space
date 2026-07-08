@@ -71,7 +71,7 @@ Core modules are `always_on=True`. Optional product routes are still mounted by 
 | `context` | kernel | `/context/build` | empty | Frontend context preview/native context build route. |
 | `activity` | product | `/activity*` | yes | Activity records, upload, review/archive, consolidation, and summary runs. |
 | `source_pointers` | product | `/source-pointers*` | empty | Metadata-only cross-space provenance pointers; no read grant. |
-| `intake` | product | `/intake*` | empty | Source connections, intake items, extraction evidence, trust helpers, summary runs. |
+| `sources` | product | `/sources*` | empty | Source connections, source items, extraction evidence, trust helpers, summary runs. |
 | `knowledge` | product | `/knowledge*`, `/notes/collections*` | empty | Knowledge items, notes, sources, entity links, source links, read model, and proposal appliers. |
 | `evolution` | capability | `/evolution*` | empty | Evolution targets/signals, strategy assets, selector decisions, experiences, review prompts, validation reads, and review artifacts. |
 | `tasks` | product | `/tasks*`, `/boards*`, `/me/tasks` | empty | Boards, tasks, task-run links, task evaluation, run-finalized hook. |
@@ -92,7 +92,7 @@ These routes are not `ServerModule` entries. They are mounted by `PluginHost` af
 
 | Plugin | Kind | Routes | Main ownership / notes |
 |---|---|---|---|
-| `diary` | product (official_plugin) | `/diary*` | Personal diary editor, same-day history, reflection job, reminder scheduler. Routes use `ctx.http.pluginGuard()`. Diary entries are editor-owned user documents, not raw ActivityRecord intake; memory/context extraction remains opt-in proposal/intake work. |
+| `diary` | product (official_plugin) | `/diary*` | Personal diary editor, same-day history, reflection job, reminder scheduler. Routes use `ctx.http.pluginGuard()`. Diary entries are editor-owned user documents, not raw ActivityRecord input; memory/context extraction remains opt-in proposal/sources work. |
 | `finance_ledger` | product (official_plugin) | `/finance*` | Space-scoped double-entry finance ledger: books, accounts, commodities, directives, postings, prices, and Beancount import/export. Routes use `ctx.http.pluginGuard()`. Proposal appliers are registered through PluginHost and plugin migrations own finance tables. |
 
 ## Code-Only Support Surfaces

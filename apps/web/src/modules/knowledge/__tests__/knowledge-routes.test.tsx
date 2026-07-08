@@ -80,7 +80,7 @@ vi.mock('../../../api/client', () => {
         sources: { total: 0 },
       }),
     },
-    sourcesApi: { list: vi.fn().mockResolvedValue(emptyPage) },
+    knowledgeSourcesApi: { list: vi.fn().mockResolvedValue(emptyPage) },
     objectSchemaApi: {
       listKinds: vi.fn().mockResolvedValue(emptyPage),
     },

@@ -1,8 +1,0 @@
-import type { ServerModule } from "../../gateway/routeRegistry";
-import { registerRoutes } from "./routes";
-
-export const intakeModule: ServerModule = {
-  name: "intake",
-  registerRoutes,
-};
-

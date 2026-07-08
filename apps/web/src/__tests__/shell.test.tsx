@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { beforeEach, describe, it, expect, vi } from 'vitest'
+import { render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 
 vi.mock('../contexts/ThemeContext', () => ({ useTheme: () => ({ theme: 'light', toggleTheme: vi.fn() }) }))
@@ -23,6 +23,10 @@ import Shell from '../core/Shell'
 const routerFuture = { v7_relativeSplatPath: true, v7_startTransition: true } as const
 
 describe('Shell scene sidebar collapse', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
   // Uses the Agents scene: Knowledge intentionally has no scene sidebar (it switches
   // sections via an in-header breadcrumb), so this generic collapse behaviour is
   // exercised against a module that still owns a scene.
@@ -42,5 +46,18 @@ describe('Shell scene sidebar collapse', () => {
   it('renders the scene sidebar when not collapsed', () => {
     render(<MemoryRouter initialEntries={['/spaces/personal-1/agents']} future={routerFuture}><Shell /></MemoryRouter>)
     expect(screen.getByLabelText('Agents navigation')).toBeInTheDocument()
+  })
+
+  it('renders Library item type routes and digests in the scene sidebar', () => {
+    render(<MemoryRouter initialEntries={['/spaces/personal-1/library/items/pdfs']} future={routerFuture}><Shell /></MemoryRouter>)
+
+    const sidebar = screen.getByLabelText('Library navigation')
+    expect(within(sidebar).getByRole('link', { name: 'All Items' })).toHaveAttribute('href', '/spaces/personal-1/library/items')
+    expect(within(sidebar).getByRole('link', { name: 'Articles' })).toHaveAttribute('href', '/spaces/personal-1/library/items/articles')
+    expect(within(sidebar).getByRole('link', { name: 'Podcasts' })).toHaveAttribute('href', '/spaces/personal-1/library/items/podcasts')
+    const pdfsLink = within(sidebar).getByRole('link', { name: 'PDFs' })
+    expect(pdfsLink).toHaveAttribute('href', '/spaces/personal-1/library/items/pdfs')
+    expect(pdfsLink).toHaveAttribute('aria-current', 'page')
+    expect(within(sidebar).getByRole('link', { name: 'Digests' })).toHaveAttribute('href', '/spaces/personal-1/library/digests')
   })
 })

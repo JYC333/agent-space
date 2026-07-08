@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { SpaceLink as Link } from '../../core/spaceNav'
-import { Inbox, FolderKanban, X } from 'lucide-react'
+import { Inbox, FolderKanban, Newspaper, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { activityApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
@@ -28,7 +28,67 @@ const SOURCE_COLORS: Record<ActivitySourceType, string> = {
   workspace_event: 'muted',
   system_event:    'muted',
   external_source: 'secondary',
-  intake:          'secondary',
+  source:          'secondary',
+}
+
+interface BriefingPointer {
+  connectionId: string
+  date: string
+  counts: { relevant: number; maybe: number; not_relevant: number }
+  runCount: number
+}
+
+interface SourceRecommendationPointer {
+  connectionId: string
+  connectionName: string | null
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function numberValue(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+function briefingPointer(record: ActivityInboxRecord): BriefingPointer | null {
+  if (record.source_type !== 'source') return null
+  const metadata = recordValue(record.metadata_json)
+  const connectionId = stringValue(metadata?.source_connection_id)
+  const date = stringValue(metadata?.briefing_date)
+  const countsRecord = recordValue(metadata?.decision_counts)
+  if (!connectionId || !date || !countsRecord) return null
+  const runIds = Array.isArray(metadata?.post_processing_run_ids)
+    ? metadata.post_processing_run_ids.filter((item): item is string => typeof item === 'string' && item.length > 0)
+    : []
+  return {
+    connectionId,
+    date,
+    counts: {
+      relevant: numberValue(countsRecord.relevant),
+      maybe: numberValue(countsRecord.maybe),
+      not_relevant: numberValue(countsRecord.not_relevant),
+    },
+    runCount: numberValue(metadata?.run_count) || runIds.length,
+  }
+}
+
+function sourceRecommendationPointer(record: ActivityInboxRecord): SourceRecommendationPointer | null {
+  if (record.source_type !== 'source') return null
+  const metadata = recordValue(record.metadata_json)
+  const pointerType = stringValue(metadata?.pointer_type)
+  const connectionId = stringValue(metadata?.source_connection_id)
+  if (pointerType !== 'source_recommendation' || !connectionId) return null
+  return {
+    connectionId,
+    connectionName: stringValue(metadata?.source_connection_name),
+  }
 }
 
 export default function ActivityInboxPage() {
@@ -156,59 +216,85 @@ export default function ActivityInboxPage() {
         )
       )}
 
-      {!loading && records.map(r => (
-        <Card key={r.id}>
-          <div className="flex items-start justify-between gap-4 mb-3">
-            <div>
-              <span className="font-medium text-sm">
-                <Link to={`/activity/${r.id}`} className="text-accent-foreground hover:underline">
-                  {r.title ?? r.content.slice(0, 80)}
-                </Link>
-              </span>
-              {r.title && <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{r.content}</p>}
-            </div>
-            {(r.status === 'raw' || r.status === 'proposals_generated') && (
-              <div className="flex gap-1.5 shrink-0">
-                {r.status === 'raw' && (
-                  <Button
-                    size="sm" variant="secondary"
-                    disabled={busy === r.id}
-                    onClick={() => doReview(r.id)}
-                  >
-                    Mark reviewed
-                  </Button>
+      {!loading && records.map(r => {
+        const briefing = briefingPointer(r)
+        const recommendation = sourceRecommendationPointer(r)
+        const targetPath = briefing
+          ? `/library/digests/${briefing.connectionId}/${briefing.date}`
+          : recommendation
+            ? `/sources?view=pending&connection_id=${encodeURIComponent(recommendation.connectionId)}`
+            : `/activity/${r.id}`
+        return (
+          <Card key={r.id}>
+            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-3">
+              <div>
+                <span className="font-medium text-sm">
+                  <Link to={targetPath} className="text-accent-foreground hover:underline">
+                    {r.title ?? r.content.slice(0, 80)}
+                  </Link>
+                </span>
+                {r.title && <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{r.content}</p>}
+                {briefing && (
+                  <div className="flex gap-1.5 flex-wrap mt-2">
+                    <Badge variant="default">{briefing.counts.relevant} relevant</Badge>
+                    <Badge variant="secondary">{briefing.counts.maybe} maybe</Badge>
+                    <Badge variant="muted">{briefing.counts.not_relevant} not relevant</Badge>
+                    {briefing.runCount > 1 && <Badge variant="outline">{briefing.runCount} runs</Badge>}
+                  </div>
                 )}
-                <Button
-                  size="sm" variant="default"
-                  disabled={busy === r.id}
-                  asChild
-                >
-                  <Link to={`/activity/${r.id}`}>Generate proposals</Link>
-                </Button>
-                <Button
-                  size="sm" variant="ghost"
-                  disabled={busy === r.id}
-                  onClick={() => doArchive(r.id)}
-                >
-                  Archive
-                </Button>
+                {recommendation && (
+                  <div className="flex gap-1.5 flex-wrap mt-2">
+                    <Badge variant="secondary">source recommendation</Badge>
+                    {recommendation.connectionName && <Badge variant="muted">{recommendation.connectionName}</Badge>}
+                  </div>
+                )}
               </div>
-            )}
-          </div>
+              {(r.status === 'raw' || r.status === 'proposals_generated') && (
+                <div className="flex flex-wrap gap-1.5 shrink-0">
+                  {r.status === 'raw' && (
+                    <Button
+                      size="sm" variant="secondary"
+                      disabled={busy === r.id}
+                      onClick={() => doReview(r.id)}
+                    >
+                      Mark reviewed
+                    </Button>
+                  )}
+                  <Button
+                    size="sm" variant="default"
+                    disabled={busy === r.id}
+                    asChild
+                  >
+                    <Link to={targetPath}>
+                      {briefing && <Newspaper className="size-3.5 mr-1" />}
+                      {briefing ? 'Open Digest' : recommendation ? 'Review Source' : 'Generate proposals'}
+                    </Link>
+                  </Button>
+                  <Button
+                    size="sm" variant="ghost"
+                    disabled={busy === r.id}
+                    onClick={() => doArchive(r.id)}
+                  >
+                    Archive
+                  </Button>
+                </div>
+              )}
+            </div>
 
-          <div className="flex gap-1.5 flex-wrap mb-2">
-            <Badge variant={SOURCE_COLORS[r.source_type] as 'default' | 'secondary' | 'muted' ?? 'secondary'}>
-              {r.source_type.replace('_', ' ')}
-            </Badge>
-            <Badge variant="outline">{r.status.replace('_', ' ')}</Badge>
-            <ScopeBadge visibility={r.visibility} omitShared />
-            {r.workspace_id && <Badge variant="muted">ws: {r.workspace_id.slice(0, 8)}…</Badge>}
-            {r.source_run_id && <Badge variant="muted">run: {r.source_run_id.slice(0, 8)}…</Badge>}
-          </div>
+            <div className="flex gap-1.5 flex-wrap mb-2">
+              <Badge variant={SOURCE_COLORS[r.source_type] as 'default' | 'secondary' | 'muted' ?? 'secondary'}>
+                {briefing ? 'briefing' : recommendation ? 'source recommendation' : r.source_type.replace('_', ' ')}
+              </Badge>
+              <Badge variant="outline">{r.status.replace('_', ' ')}</Badge>
+              <ScopeBadge visibility={r.visibility} omitShared />
+              {r.workspace_id && <Badge variant="muted">ws: {r.workspace_id.slice(0, 8)}…</Badge>}
+              {r.source_run_id && <Badge variant="muted">run: {r.source_run_id.slice(0, 8)}…</Badge>}
+            </div>
 
-          <p className="text-xs text-muted-foreground">{fmt(r.created_at)}</p>
-        </Card>
-      ))}
+            <p className="text-xs text-muted-foreground">{fmt(r.created_at)}</p>
+          </Card>
+        )
+      })}
     </div>
   )
 }

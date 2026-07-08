@@ -4,19 +4,19 @@ import { startSchedulerRegistry, type ScheduledTask } from "./registry";
 import { scanDailyReportsAndEnqueue } from "../dailyReports/scheduler";
 import { scanAutomationsAndFire } from "../automations/scheduler";
 import { runScheduledBackup } from "../backups/service";
-import { IntakeExtractionWorker } from "../intake/extractionWorker";
-import { enqueueDueSourceConnectionScans } from "../intake/scanSchedule";
-import { enqueueDueSourcePostProcessingRules } from "../intake/postProcessing/scheduler";
+import { SourceExtractionWorker } from "../sources/extractionWorker";
+import { enqueueDueSourceConnectionScans as enqueueDueSourceConnectionScansForPool } from "../sources/scanSchedule";
+import { enqueueDueSourcePostProcessingRules } from "../sources/postProcessing/scheduler";
 import {
   enqueueDueCustomSourceHandlerRuns,
   reclaimStuckCustomSourceHandlerRuns,
-} from "../intake/customSources/customSourceScanSchedule";
-import { runPendingCustomSourceHandlerRuns } from "../intake/customSources/customSourceScanWorker";
+} from "../sources/customSources/customSourceScanSchedule";
+import { runPendingCustomSourceHandlerRuns } from "../sources/customSources/customSourceScanWorker";
 import {
   enqueueDueSourceRecipeScans,
   runPendingSourceRecipeScans,
-} from "../intake/sourceRecipes/recipeScanWorker";
-import { pruneSupersededCustomSourceHandlerArtifacts } from "../intake/customSources/customSourceArtifactRetention";
+} from "../sources/sourceRecipes/recipeScanWorker";
+import { pruneSupersededCustomSourceHandlerArtifacts } from "../sources/customSources/customSourceArtifactRetention";
 import { runDueMemoryMaintenanceJobs } from "../memory/maintenanceJobs";
 import { withDbTransaction } from "../routeUtils/common";
 import { PgJobQueueRepository } from "../jobs/repository";
@@ -92,15 +92,15 @@ export function startBackgroundServices(
     });
   }
 
-  if (config.intakeExtractionSchedulerEnabled && config.databaseUrl) {
+  if (config.sourceExtractionSchedulerEnabled && config.databaseUrl) {
     tasks.push({
-      name: "intake_extraction_scheduler",
-      intervalSeconds: config.intakeExtractionSchedulerIntervalSeconds,
+      name: "source_extraction_scheduler",
+      intervalSeconds: config.sourceExtractionSchedulerIntervalSeconds,
       run: async () => {
-        const enqueued = await enqueueDueIntakeSourceScans(config);
-        if (enqueued > 0) log?.info(`[scheduler] intake enqueued ${enqueued} source scan job(s)`);
-        const processed = await processPendingIntakeJobs(config, log);
-        if (processed > 0) log?.info(`[scheduler] intake processed ${processed} extraction job(s)`);
+        const enqueued = await enqueueDueSourceConnectionScans(config);
+        if (enqueued > 0) log?.info(`[scheduler] source enqueued ${enqueued} source scan job(s)`);
+        const processed = await processPendingSourceJobs(config, log);
+        if (processed > 0) log?.info(`[scheduler] source processed ${processed} extraction job(s)`);
         const customDb = getDbPool(config.databaseUrl!);
         const reclaimed = await reclaimStuckCustomSourceHandlerRuns(customDb);
         if (reclaimed > 0) log?.warn(`[scheduler] custom source reclaimed ${reclaimed} stuck run(s)`);
@@ -115,7 +115,7 @@ export function startBackgroundServices(
         if (worker) {
           const postProcessingEnqueued = await enqueueDueSourcePostProcessingRules(config, worker.queue);
           if (postProcessingEnqueued > 0) {
-            log?.info(`[scheduler] intake enqueued ${postProcessingEnqueued} post-processing job(s)`);
+            log?.info(`[scheduler] source enqueued ${postProcessingEnqueued} post-processing job(s)`);
           }
         }
       },
@@ -165,18 +165,18 @@ export async function pruneMemoryAccessLogs(config: ServerConfig): Promise<numbe
   return result.rowCount ?? 0;
 }
 
-export async function enqueueDueIntakeSourceScans(config: ServerConfig): Promise<number> {
+export async function enqueueDueSourceConnectionScans(config: ServerConfig): Promise<number> {
   if (!config.databaseUrl) return 0;
-  return enqueueDueSourceConnectionScans(getDbPool(config.databaseUrl), 25);
+  return enqueueDueSourceConnectionScansForPool(getDbPool(config.databaseUrl), 25);
 }
 
-async function processPendingIntakeJobs(
+async function processPendingSourceJobs(
   config: ServerConfig,
   log?: { warn(message: string): void },
 ): Promise<number> {
   if (!config.databaseUrl) return 0;
   const db = getDbPool(config.databaseUrl);
-  const worker = new IntakeExtractionWorker(db, config);
+  const worker = new SourceExtractionWorker(db, config);
   const pending = await db.query<{ id: string; space_id: string }>(
     `SELECT id, space_id
        FROM extraction_jobs
@@ -197,7 +197,7 @@ async function processPendingIntakeJobs(
       count += 1;
     } catch (err) {
       log?.warn(
-        `[intake-extraction] job ${row.id} failed: ${err instanceof Error ? err.message : String(err)}`,
+        `[source-extraction] job ${row.id} failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }

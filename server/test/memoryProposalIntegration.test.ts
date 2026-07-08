@@ -54,7 +54,7 @@ afterAll(async () => {
 beforeEach(async () => {
   if (!available || !pool) return;
   await pool.query(
-    "TRUNCATE retrieval_edges, retrieval_chunks, retrieval_aliases, retrieval_objects, extracted_evidence, source_snapshots, intake_items, provenance_links, proposals, memory_entries, projects",
+    "TRUNCATE retrieval_edges, retrieval_chunks, retrieval_aliases, retrieval_objects, extracted_evidence, source_snapshots, source_items, provenance_links, proposals, memory_entries, projects",
   );
 });
 

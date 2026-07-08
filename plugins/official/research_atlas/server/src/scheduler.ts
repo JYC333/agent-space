@@ -1,16 +1,16 @@
 import type { PluginHostContext, PluginScheduledTask, Queryable } from "@agent-space/protocol" with { "resolution-mode": "import" };
 import { JOB_TYPE_RESEARCH_ATLAS_ENRICH_ENTITY } from "./jobs";
-import { listEnabledAtlasSpaceIds, runResearchAtlasIntakeSync } from "./sync";
+import { listEnabledAtlasSpaceIds, runResearchAtlasSourceSync } from "./sync";
 
-export function buildResearchAtlasIntakeSyncTask(db: Queryable): PluginScheduledTask {
+export function buildResearchAtlasSourceSyncTask(db: Queryable): PluginScheduledTask {
   return {
-    name: "research_atlas_intake_sync",
+    name: "research_atlas_source_sync",
     intervalSeconds: 600,
     runOnStart: false,
     async run() {
       const spaces = await listEnabledAtlasSpaceIds(db);
       for (const spaceId of spaces) {
-        await runResearchAtlasIntakeSync(db, { spaceId, userId: "system" });
+        await runResearchAtlasSourceSync(db, { spaceId, userId: "system" });
       }
     },
   };
@@ -48,6 +48,6 @@ export function buildResearchAtlasRefreshSweepTask(ctx: PluginHostContext): Plug
 }
 
 export function registerResearchAtlasScheduler(ctx: PluginHostContext): void {
-  ctx.scheduler.register(buildResearchAtlasIntakeSyncTask(ctx.db));
+  ctx.scheduler.register(buildResearchAtlasSourceSyncTask(ctx.db));
   ctx.scheduler.register(buildResearchAtlasRefreshSweepTask(ctx));
 }

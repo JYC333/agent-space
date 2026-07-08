@@ -641,7 +641,7 @@
   },
   {
     "request": {
-      "action": "intake.item_create",
+      "action": "source.item_create",
       "space_id": "s1"
     },
     "decision": {
@@ -653,9 +653,9 @@
       "policy_source": "registry",
       "approval_capability": null,
       "audit_code": null,
-      "resource_type": "intake_item",
-      "message": "No rule matched; registry default for 'intake.item_create' is allow",
-      "action": "intake.item_create"
+      "resource_type": "source_item",
+      "message": "No rule matched; registry default for 'source.item_create' is allow",
+      "action": "source.item_create"
     }
   },
   {

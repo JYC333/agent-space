@@ -2,11 +2,11 @@ import { randomUUID } from "node:crypto";
 import type { Queryable } from "@agent-space/protocol" with { "resolution-mode": "import" };
 import { researchAtlasService } from "./domain/service";
 import { nonEmptyString, publicationYearFromDate } from "./domain/identifiers";
-import { addProjectCandidatesForIntakeItem } from "./projectOverlay";
+import { addProjectCandidatesForSourceItem } from "./projectOverlay";
 
-const INTAKE_CURSOR_KEY = "intake_items";
+const SOURCE_CURSOR_KEY = "source_items";
 
-interface IntakeItemRow {
+interface SourceItemRow {
   id: string;
   space_id: string;
   connection_id: string | null;
@@ -37,14 +37,14 @@ export async function listEnabledAtlasSpaceIds(db: Queryable): Promise<string[]>
   return result.rows.map((row) => row.space_id);
 }
 
-export async function runResearchAtlasIntakeSync(
+export async function runResearchAtlasSourceSync(
   db: Queryable,
   input: { spaceId: string; userId: string },
 ): Promise<{ imported: number; scanned: number; last_error: string | null }> {
-  const cursor = await getCursor(db, input.spaceId, INTAKE_CURSOR_KEY);
-  const items = await listArxivIntakeItems(db, input.spaceId, cursor, 50);
+  const cursor = await getCursor(db, input.spaceId, SOURCE_CURSOR_KEY);
+  const items = await listArxivSourceItems(db, input.spaceId, cursor, 50);
   let imported = 0;
-  let lastSeen: IntakeItemRow | null = null;
+  let lastSeen: SourceItemRow | null = null;
   try {
     for (const item of items) {
       lastSeen = item;
@@ -55,8 +55,8 @@ export async function runResearchAtlasIntakeSync(
       const importedPaper = await researchAtlasService.importPaperMetadata(db, {
         spaceId: input.spaceId,
         userId: input.userId,
-        connector: "intake",
-        intakeItemId: item.id,
+        connector: "source",
+        sourceItemId: item.id,
         paper: {
           title: item.title,
           abstract: item.excerpt,
@@ -73,30 +73,30 @@ export async function runResearchAtlasIntakeSync(
             : splitAuthors(item.author)).map((name) => ({ name })),
           best_oa_url: nonEmptyString(metadata.pdf_url) ?? item.canonical_uri ?? item.source_uri,
           metadata_json: {
-            intake_item_id: item.id,
+            source_item_id: item.id,
             source_uri: item.source_uri,
             canonical_uri: item.canonical_uri,
             arxiv_categories: metadata.categories ?? null,
           },
         },
       });
-      await addProjectCandidatesForIntakeItem(db, {
+      await addProjectCandidatesForSourceItem(db, {
         spaceId: input.spaceId,
         userId: input.userId,
         paperId: importedPaper.paper.id,
-        intakeItemId: item.id,
+        sourceItemId: item.id,
         connectionId: item.connection_id,
       });
       imported += 1;
     }
-    await upsertCursor(db, input.spaceId, INTAKE_CURSOR_KEY, lastSeen ? {
+    await upsertCursor(db, input.spaceId, SOURCE_CURSOR_KEY, lastSeen ? {
       created_at: lastSeen.created_at.toISOString(),
       id: lastSeen.id,
     } : cursor, null);
     return { imported, scanned: items.length, last_error: null };
   } catch (err) {
-    const message = err instanceof Error ? err.message : "intake sync failed";
-    await upsertCursor(db, input.spaceId, INTAKE_CURSOR_KEY, cursor, message);
+    const message = err instanceof Error ? err.message : "source sync failed";
+    await upsertCursor(db, input.spaceId, SOURCE_CURSOR_KEY, cursor, message);
     return { imported, scanned: items.length, last_error: message };
   }
 }
@@ -156,12 +156,12 @@ async function upsertCursor(
   );
 }
 
-async function listArxivIntakeItems(
+async function listArxivSourceItems(
   db: Queryable,
   spaceId: string,
   cursor: CursorWatermark,
   limit: number,
-): Promise<IntakeItemRow[]> {
+): Promise<SourceItemRow[]> {
   const params: unknown[] = [spaceId];
   let cursorSql = "";
   if (cursor.created_at && cursor.id) {
@@ -169,10 +169,10 @@ async function listArxivIntakeItems(
     cursorSql = `AND (created_at, id) > ($${params.length - 1}::timestamptz, $${params.length})`;
   }
   params.push(limit);
-  const result = await db.query<IntakeItemRow>(
+  const result = await db.query<SourceItemRow>(
     `SELECT id, space_id, connection_id, title, source_external_id, author, excerpt, source_uri,
             canonical_uri, metadata_json, created_at, updated_at
-       FROM intake_items
+       FROM source_items
       WHERE space_id = $1
         AND deleted_at IS NULL
         AND item_type = 'feed_entry'

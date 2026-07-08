@@ -53,7 +53,7 @@ export interface HomeSummaryOut {
     target_path: string;
     priority: "high" | "normal" | "low";
   }>;
-  intake_summary: {
+  source_summary: {
     open_items: number;
     new_items_today: number;
     pending_extraction_jobs: number;

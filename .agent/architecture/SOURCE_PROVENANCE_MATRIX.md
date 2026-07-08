@@ -10,7 +10,7 @@ to read or write, pick by role, not by proximity.
 | Role | Definition |
 |---|---|
 | **Canonical** | Source of truth. Other tables derive from this. |
-| **Intake candidate** | Unvalidated ingested content awaiting review. Deleted or promoted, never kept long-term. |
+| **Sources candidate** | Unvalidated ingested content awaiting review. Deleted or promoted, never kept long-term. |
 | **Review artifact** | Proposals or packets that an LLM or human must evaluate before anything is written to canonical tables. |
 | **Derived index** | Computed for retrieval/embedding. Never authoritative. Re-derivable from canonical. |
 | **Audit lineage** | Immutable record of provenance relationships. Written once, never updated. |
@@ -24,26 +24,26 @@ to read or write, pick by role, not by proximity.
 The user-facing, managed connection to an external data source (URL, file, API,
 credential set). Every ingest pipeline starts here. `status = 'active'` means
 the connection is live and eligible for re-indexing. `deleted_at` is the
-soft-delete gate; hard delete is prohibited once any intake_items reference it.
+soft-delete gate; hard delete is prohibited once any source_items reference it.
 
 ### `source_snapshots`
-**Role: Intake candidate**
+**Role: Sources candidate**
 A versioned content snapshot fetched from `source_connections` during ingestion.
 Contains raw content before extraction. Expires after `extracted_evidence` rows
 are promoted or rejected. Do not treat as canonical—`source_connections` is the
 authority on what a source *is*; `source_snapshots` is what it *said* at a
 point in time.
 
-### `intake_items`
-**Role: Intake candidate**
+### `source_items`
+**Role: Sources candidate**
 Raw ingested units (one per document, chunk, or API record) before semantic
-extraction. Created by `intake_extraction` jobs. Deleted once downstream
+extraction. Created by `source_extraction` jobs. Deleted once downstream
 proposals are accepted or the item is superseded by a newer snapshot. Not
 queryable for knowledge retrieval.
 
 ### `extracted_evidence`
-**Role: Intake candidate → transitions to Review artifact**
-LLM-generated extraction from an `intake_item` (claims, entities, relations).
+**Role: Sources candidate → transitions to Review artifact**
+LLM-generated extraction from an `source_item` (claims, entities, relations).
 Created as a review artifact for human inspection; becomes stale once the
 downstream `claim_create`/`knowledge_create` proposals are accepted or rejected.
 Not a durable record—do not index or expose to agents.
@@ -56,7 +56,7 @@ Join table between `extracted_evidence` and pending proposal rows
 
 ### `sources` (in `space_objects`)
 **Role: Canonical**
-A knowledge object of type `"source"` — the *processed* artifact after intake
+A knowledge object of type `"source"` — the *processed* artifact after source
 completes. Status `"processed"` (not `"active"`) is the canonical signal that
 the source object is ready. This is the object agents see; `source_connections`
 is the infrastructure record the system sees.
@@ -76,7 +76,7 @@ Same pattern as `knowledge_item_sources` but for `claims`. Written during
 ### `provenance_links`
 **Role: Audit lineage**
 Generic many-to-many between a canonical object (`target_type`, `target_id`) and
-the intake artifact (`source_type`, `source_id`) that produced it. Covers note,
+the source artifact (`source_type`, `source_id`) that produced it. Covers note,
 memory, and other object types that lack a dedicated `*_sources` join table. Read
 by `loadSourceConnectionIdsForTargets` to resolve the `connection_id` for each
 target.
@@ -120,7 +120,7 @@ status alone.**
 | Operation | Correct writer |
 |---|---|
 | New source connection | `source_connections` INSERT via source routes |
-| New intake content | `intake_items` INSERT via extraction job |
+| New source content | `source_items` INSERT via extraction job |
 | Promote claim/knowledge | `claim_create` / `knowledge_create` proposal apply |
 | Update canonical object | `claim_update` / `knowledge_update` proposal apply |
 | Index for retrieval | `retrieval_objects` UPSERT via retrieval engine (derived) |

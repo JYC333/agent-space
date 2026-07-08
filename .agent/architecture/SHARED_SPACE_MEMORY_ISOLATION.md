@@ -81,15 +81,15 @@ memory was wrong for multi-member spaces**. Previously:
 
 - `memoryApplyRepository.applyCreate` defaulted to
   `target_visibility ?? visibility ?? "space_shared"`.
-- The intake/consolidation summary proposal
-  (`server/src/modules/intake/repository.ts`) emits memory proposals with
+- The source/consolidation summary proposal
+  (`server/src/modules/sources/repository.ts`) emits memory proposals with
   `target_scope: "user"` but no explicit visibility, so they landed on that
   `space_shared` default.
 - `proposalRepository.createMemoryProposal` defaulted to `"private"` — both
   inconsistent and unusable in a shared space (the placement invariant rejects
   `private` there on apply).
 
-Net effect was: in a shared space, assistant/intake-derived memory tended to
+Net effect was: in a shared space, assistant/sources-derived memory tended to
 become `space_shared` on apply — exactly the "错位" the user worried about. This
 is now corrected by the space-type-aware defaults in §5; the problem was
 **specific to multi-member spaces** (a single-member `personal` space is
@@ -166,7 +166,7 @@ visibility is:
    (`memoryApplyRepository.applyCreate`) now computes the no-visibility default
    from `spaces.type`: personal → `space_shared` (unchanged), multi-member →
    `restricted` owner-only, with `owner_user_id` attributed to the proposal's
-   creating user (`created_by_user_id`). This covers the intake/consolidation
+   creating user (`created_by_user_id`). This covers the source/consolidation
    and runtime-materialized paths, which do not set an explicit visibility. The
    public-API `proposalRepository.createMemoryProposal` default was reconciled
    the same way (personal → `private`, multi-member → `restricted`) so an

@@ -219,7 +219,7 @@ export const researchAtlasService = {
       connector?: string | null;
       metadata?: PaperMetadataInput | null;
       connectorEmail?: string | null;
-      intakeItemId?: string | null;
+      sourceItemId?: string | null;
     },
   ) {
     const paper = await researchAtlasRepository.findCanonicalPaper(db, input.spaceId, input.paperId);
@@ -239,7 +239,7 @@ export const researchAtlasService = {
       externalId,
       entityType: "paper",
       payload: metadata as Record<string, unknown>,
-      intakeItemId: input.intakeItemId ?? null,
+      sourceItemId: input.sourceItemId ?? null,
       refreshAfter: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
     });
     await researchAtlasRepository.linkEntitySource(db, {
@@ -261,7 +261,7 @@ export const researchAtlasService = {
       userId: string;
       paper: ImportFilePaperInput;
       connector: string;
-      intakeItemId?: string | null;
+      sourceItemId?: string | null;
       enqueue?: (paperId: string, connector: string) => Promise<{ jobId: string }>;
     },
   ) {
@@ -282,7 +282,7 @@ export const researchAtlasService = {
         doi,
         arxiv_id: arxivId,
       },
-      intakeItemId: input.intakeItemId ?? null,
+      sourceItemId: input.sourceItemId ?? null,
     });
     return {
       paper: refreshed.paper,
