@@ -1,5 +1,5 @@
 {
-  "id": "5333f07c-270f-4fa5-b768-7dcf35e1c150",
+  "id": "65365f62-9909-4569-ba9f-9f981217b2fe",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -2575,6 +2575,12 @@
         "system_prompt": {
           "name": "system_prompt",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "prompt_provenance_json": {
+          "name": "prompt_provenance_json",
+          "type": "jsonb",
           "primaryKey": false,
           "notNull": false
         },
@@ -19463,6 +19469,271 @@
       },
       "isRLSEnabled": false
     },
+    "public.prompt_deployment_refs": {
+      "name": "prompt_deployment_refs",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar(36)",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "space_id": {
+          "name": "space_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "asset_id": {
+          "name": "asset_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "scope_type": {
+          "name": "scope_type",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "scope_id": {
+          "name": "scope_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "label": {
+          "name": "label",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "version_id": {
+          "name": "version_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'active'"
+        },
+        "promoted_by_user_id": {
+          "name": "promoted_by_user_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "promoted_from_proposal_id": {
+          "name": "promoted_from_proposal_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "ix_prompt_deployment_refs_asset_label": {
+          "name": "ix_prompt_deployment_refs_asset_label",
+          "columns": [
+            {
+              "expression": "asset_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "label",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ix_prompt_deployment_refs_space_id": {
+          "name": "ix_prompt_deployment_refs_space_id",
+          "columns": [
+            {
+              "expression": "space_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ix_prompt_deployment_refs_version_id": {
+          "name": "ix_prompt_deployment_refs_version_id",
+          "columns": [
+            {
+              "expression": "version_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "uq_prompt_deployment_refs_active_scope_label": {
+          "name": "uq_prompt_deployment_refs_active_scope_label",
+          "columns": [
+            {
+              "expression": "COALESCE(\"space_id\", '')",
+              "asc": true,
+              "isExpression": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "asset_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "scope_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "COALESCE(\"scope_id\", '')",
+              "asc": true,
+              "isExpression": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "label",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "(status)::text = 'active'::text",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "prompt_deployment_refs_space_id_fkey": {
+          "name": "prompt_deployment_refs_space_id_fkey",
+          "tableFrom": "prompt_deployment_refs",
+          "tableTo": "spaces",
+          "columnsFrom": [
+            "space_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "prompt_deployment_refs_asset_id_fkey": {
+          "name": "prompt_deployment_refs_asset_id_fkey",
+          "tableFrom": "prompt_deployment_refs",
+          "tableTo": "evolvable_assets",
+          "columnsFrom": [
+            "asset_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "prompt_deployment_refs_version_id_fkey": {
+          "name": "prompt_deployment_refs_version_id_fkey",
+          "tableFrom": "prompt_deployment_refs",
+          "tableTo": "evolvable_asset_versions",
+          "columnsFrom": [
+            "version_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "prompt_deployment_refs_promoted_by_user_id_fkey": {
+          "name": "prompt_deployment_refs_promoted_by_user_id_fkey",
+          "tableFrom": "prompt_deployment_refs",
+          "tableTo": "users",
+          "columnsFrom": [
+            "promoted_by_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "prompt_deployment_refs_promoted_from_proposal_id_fkey": {
+          "name": "prompt_deployment_refs_promoted_from_proposal_id_fkey",
+          "tableFrom": "prompt_deployment_refs",
+          "tableTo": "proposals",
+          "columnsFrom": [
+            "promoted_from_proposal_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "ck_prompt_deployment_refs_label": {
+          "name": "ck_prompt_deployment_refs_label",
+          "value": "(label)::text ~ '^[a-z][a-z0-9_.-]{0,63}$'::text"
+        },
+        "ck_prompt_deployment_refs_scope_type": {
+          "name": "ck_prompt_deployment_refs_scope_type",
+          "value": "(scope_type)::text = ANY (ARRAY[('system'::character varying)::text, ('space'::character varying)::text, ('project'::character varying)::text, ('user'::character varying)::text, ('agent'::character varying)::text])"
+        },
+        "ck_prompt_deployment_refs_status": {
+          "name": "ck_prompt_deployment_refs_status",
+          "value": "(status)::text = ANY (ARRAY[('active'::character varying)::text, ('archived'::character varying)::text])"
+        },
+        "ck_prompt_deployment_refs_scope_id": {
+          "name": "ck_prompt_deployment_refs_scope_id",
+          "value": "(((scope_type)::text = 'system'::text) AND (scope_id IS NULL)) OR (((scope_type)::text <> 'system'::text) AND (scope_id IS NOT NULL))"
+        },
+        "ck_prompt_deployment_refs_space_id": {
+          "name": "ck_prompt_deployment_refs_space_id",
+          "value": "(((scope_type)::text = 'system'::text) AND (space_id IS NULL)) OR (((scope_type)::text <> 'system'::text) AND (space_id IS NOT NULL))"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.project_corpus_items": {
       "name": "project_corpus_items",
       "schema": "",
@@ -26626,113 +26897,6 @@
         "ck_retrieval_objects_source_connections_array": {
           "name": "ck_retrieval_objects_source_connections_array",
           "value": "jsonb_typeof(source_connection_ids_json) = 'array'::text"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.space_retrieval_prompts": {
-      "name": "space_retrieval_prompts",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "varchar(36)",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "space_id": {
-          "name": "space_id",
-          "type": "varchar(36)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "task": {
-          "name": "task",
-          "type": "varchar(64)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "system_prompt": {
-          "name": "system_prompt",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "user_template": {
-          "name": "user_template",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "ix_space_retrieval_prompts_space_id": {
-          "name": "ix_space_retrieval_prompts_space_id",
-          "columns": [
-            {
-              "expression": "space_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "space_retrieval_prompts_space_id_fkey": {
-          "name": "space_retrieval_prompts_space_id_fkey",
-          "tableFrom": "space_retrieval_prompts",
-          "tableTo": "spaces",
-          "columnsFrom": [
-            "space_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "uq_space_retrieval_prompts_space_task": {
-          "name": "uq_space_retrieval_prompts_space_task",
-          "nullsNotDistinct": false,
-          "columns": [
-            "space_id",
-            "task"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {
-        "ck_space_retrieval_prompts_task": {
-          "name": "ck_space_retrieval_prompts_task",
-          "value": "(task)::text = ANY (ARRAY[('query_rewrite'::character varying)::text])"
-        },
-        "ck_space_retrieval_prompts_system_prompt": {
-          "name": "ck_space_retrieval_prompts_system_prompt",
-          "value": "length(btrim(system_prompt)) > 0"
-        },
-        "ck_space_retrieval_prompts_user_template": {
-          "name": "ck_space_retrieval_prompts_user_template",
-          "value": "strpos(user_template, '{query}'::text) > 0"
         }
       },
       "isRLSEnabled": false

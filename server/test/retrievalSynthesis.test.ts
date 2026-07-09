@@ -42,7 +42,7 @@ describe("retrieval synthesis: prompt token budget (§2.6)", () => {
       title: `Doc ${index}`,
       text: "z".repeat(1000),
     }));
-    const prompt = buildSynthesisPrompt("query", docs);
+    const prompt = buildSynthesisPrompt("query", docs, "registry synthesis system");
     const bodyChars = (prompt.user.match(/z/g) ?? []).length;
     expect(bodyChars).toBeLessThanOrEqual(SYNTHESIS_TOTAL_TEXT_MAX_CHARS);
     // Every source still appears (title + citation marker preserved).
@@ -175,7 +175,9 @@ describe("retrieval synthesis: ProviderSynthesizer", () => {
       },
     } as unknown as ProviderCommandStore;
 
-    const result = await new ProviderSynthesizer(store).synthesize(
+    const result = await new ProviderSynthesizer(store, {
+      systemPromptResolver: async () => "registry synthesis system",
+    }).synthesize(
       "space-1",
       "user-1",
       "alpha",
@@ -185,5 +187,22 @@ describe("retrieval synthesis: ProviderSynthesizer", () => {
     expect(result).toBeNull();
     expect(requestedProviderId).toBeDefined();
     expect(requestedProviderId).not.toBe("");
+  });
+
+  it("returns null when the registry prompt cannot be resolved", async () => {
+    const store = {
+      async getTaskChain() {
+        throw new Error("provider should not be called without a prompt");
+      },
+      async getInvocationTarget() {
+        throw new Error("provider should not be called without a prompt");
+      },
+    } as unknown as ProviderCommandStore;
+
+    const result = await new ProviderSynthesizer(store, {
+      systemPromptResolver: async () => null,
+    }).synthesize("space-1", "user-1", "alpha", [candidate({ objectId: "a" })]);
+
+    expect(result).toBeNull();
   });
 });

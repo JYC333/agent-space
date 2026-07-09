@@ -1,5 +1,5 @@
 import type {
-  Memory, Session, Message, Task, CondenserPresetPromptOut,
+  Memory, Session, Message, Task,
   ContextPackage, Feature, Workspace, WorkspaceCreateBody, WorkspaceUpdateBody, Page,
   ReflectResult, ApiError,
   RuntimeToolDefinition, RuntimeToolInstallResult, RuntimeToolStatus, RuntimeToolLatest, SpaceRuntimeToolPolicyOut,
@@ -7,7 +7,6 @@ import type {
   NetworkProfileOut, NetworkProfileCreateBody, NetworkProfileUpdateBody, CliCredentialProfileOut,
   CliCredentialAvailableProfileOut,
   CurrentUser, SpaceWithMembership, SpaceMember, SpaceInvitationOut, SpaceSnapshotDefaults,
-  RetrievalPromptTask, SpaceRetrievalPrompt, SpaceRetrievalPromptUpdate,
   SpaceRetrievalSettings, SpaceRetrievalSettingsUpdate,
   Job, JobEvent, ActivityInboxRecord,
   Board, TaskRunCreateBody, Run, RunStatusOut, TaskRunListItem,
@@ -34,6 +33,10 @@ import type {
   EvolutionRunListItem, EvolutionRunResult, EvolutionProposal, EvolutionValidationResult,
   EvolutionStrategy, EvolutionSelectorDecision, EvolutionExperience,
   EvolvableAsset, EvolvableAssetVersion, EvolvableAssetPin, EvolvableAssetEvaluationRun, ResolvedEvolvableAssetVersion,
+  PromptAssetDetail, PromptAssetSummary, PromptType, PromptVersion,
+  PromptDeploymentRef, PromptEvaluationRequest, PromptEvaluationResult,
+  PromptPromotionRequest, PromptRenderPreviewRequest, PromptRenderPreviewResult,
+  PromptRollbackRequest, PromptVersionCreateRequest,
   Project, ProjectCreate, ProjectUpdate, ProjectWorkspaceLinkCreate, ProjectWorkspaceLinkOut, ProjectSummary,
   CapabilityDefinition, CapabilityPackDescriptor, WorkflowTemplate, ProjectWorkflowProfile, WorkflowRunDraftRequest, WorkflowRunDraftResponse,
   ProjectPresetDescriptor, ProjectPresetSelection,
@@ -414,14 +417,44 @@ export const knowledgeSourcesApi = {
 export const sessionsApi = {
   list:       (params: Record<string, string> = {}) =>
     get<Page<Session>>('/sessions?' + new URLSearchParams(params)),
-  condenserPresetPrompts: () =>
-    get<CondenserPresetPromptOut[]>('/sessions/condenser-preset-prompts'),
   create:     (data: Partial<Session>)              => post<Session>('/sessions', data),
   get:        (id: string)                          => get<Session>(`/sessions/${id}`),
   messages:   (id: string)                          => get<Message[]>(`/sessions/${id}/messages`),
   addMessage: (id: string, data: { role: string; content: string }) =>
     post<Message>(`/sessions/${id}/messages`, data),
   reflect:    (id: string)                          => post<ReflectResult>(`/sessions/${id}/reflect`),
+}
+
+// ── Prompt Registry ──────────────────────────────────────────────────────
+export const promptsApi = {
+  listAssets: (params: { prompt_type?: PromptType | '' } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.prompt_type) q.prompt_type = params.prompt_type
+    const query = new URLSearchParams(q).toString()
+    return get<PromptAssetSummary[]>(query ? `/prompts/assets?${query}` : '/prompts/assets')
+  },
+  getAsset: (assetKey: string) =>
+    get<PromptAssetDetail>(`/prompts/assets/${encodeURIComponent(assetKey)}`),
+  listVersions: (assetKey: string) =>
+    get<PromptVersion[]>(`/prompts/assets/${encodeURIComponent(assetKey)}/versions`),
+  createVersion: (assetKey: string, body: PromptVersionCreateRequest) =>
+    post<PromptVersion>(`/prompts/assets/${encodeURIComponent(assetKey)}/versions`, body),
+  renderPreview: (assetKey: string, body: PromptRenderPreviewRequest) =>
+    post<PromptRenderPreviewResult>(`/prompts/assets/${encodeURIComponent(assetKey)}/render-preview`, body),
+  evaluate: (assetKey: string, body: PromptEvaluationRequest) =>
+    post<PromptEvaluationResult>(`/prompts/assets/${encodeURIComponent(assetKey)}/evaluate`, body),
+  promote: (assetKey: string, body: PromptPromotionRequest) =>
+    post<Proposal>(`/prompts/assets/${encodeURIComponent(assetKey)}/promote`, body),
+  listDeployments: (assetKey: string, params: { include_history?: boolean } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.include_history !== undefined) q.include_history = String(params.include_history)
+    const query = new URLSearchParams(q).toString()
+    return get<PromptDeploymentRef[]>(`/prompts/assets/${encodeURIComponent(assetKey)}/deployments${query ? `?${query}` : ''}`)
+  },
+  setDeployment: (assetKey: string, label: string, body: PromptPromotionRequest) =>
+    put<PromptDeploymentRef>(`/prompts/assets/${encodeURIComponent(assetKey)}/deployments/${encodeURIComponent(label)}`, body),
+  rollback: (assetKey: string, body: PromptRollbackRequest) =>
+    post<PromptDeploymentRef>(`/prompts/assets/${encodeURIComponent(assetKey)}/rollback`, body),
 }
 
 // ── Boards (task surfaces) ────────────────────────────────────────────────
@@ -1756,10 +1789,6 @@ export const spacesApi = {
     get<SpaceRetrievalSettings>(`/spaces/${spaceId}/retrieval-settings`),
   updateRetrievalSettings: (spaceId: string, data: SpaceRetrievalSettingsUpdate) =>
     patch<SpaceRetrievalSettings>(`/spaces/${spaceId}/retrieval-settings`, data),
-  getRetrievalPrompt: (spaceId: string, task: RetrievalPromptTask) =>
-    get<SpaceRetrievalPrompt>(`/spaces/${spaceId}/retrieval-prompts/${task}`),
-  updateRetrievalPrompt: (spaceId: string, task: RetrievalPromptTask, data: SpaceRetrievalPromptUpdate) =>
-    patch<SpaceRetrievalPrompt>(`/spaces/${spaceId}/retrieval-prompts/${task}`, data),
 }
 
 // ── Providers ─────────────────────────────────────────────────────────────

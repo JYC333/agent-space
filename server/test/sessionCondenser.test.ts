@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildCondensePrompt,
   buildLlmSummary,
   buildPatternSummary,
   LLM_CONDENSER_VERSION,
@@ -89,65 +88,6 @@ describe("resolveCondenserProfile", () => {
     expect(resolveCondenserProfile("nonsense")).toBe("adaptive");
     expect(resolveCondenserProfile(null)).toBe("adaptive");
     expect(resolveCondenserProfile(undefined)).toBe("adaptive");
-  });
-});
-
-describe("buildCondensePrompt", () => {
-  const turns = [
-    message("m-1", "user", "deploy the server"),
-    message("m-2", "assistant", "use compose"),
-  ];
-
-  it("always enforces factual + same-language rules and includes the transcript", () => {
-    const prompt = buildCondensePrompt({ messages: turns });
-    expect(prompt.system).toContain("strictly factual");
-    expect(prompt.system).toContain("same language as the conversation");
-    expect(prompt.user).toContain("user: deploy the server");
-    expect(prompt.user).toContain("assistant: use compose");
-  });
-
-  it("selects scenario-specific instructions per profile", () => {
-    expect(buildCondensePrompt({ profile: "coding", messages: turns }).system).toContain(
-      "coding assistant",
-    );
-    expect(buildCondensePrompt({ profile: "coding", messages: turns }).user).toContain(
-      "completed steps vs. remaining steps",
-    );
-    expect(buildCondensePrompt({ profile: "project", messages: turns }).user).toContain(
-      "project objective",
-    );
-    // Unknown profile falls back to the adaptive default.
-    const adaptive = buildCondensePrompt({ profile: "nope", messages: turns });
-    expect(adaptive.user).toContain("When the conversation involves coding or a project");
-  });
-
-  it("uses per-agent custom prompt overrides while keeping shared guardrails", () => {
-    const prompt = buildCondensePrompt({
-      config: {
-        profile: "coding",
-        custom_system: "Summarize for this specific agent.",
-        custom_instructions: "Preserve only goals, decisions, and next actions.",
-      },
-      messages: turns,
-    });
-
-    expect(prompt.system).toContain("Summarize for this specific agent.");
-    expect(prompt.system).toContain("strictly factual");
-    expect(prompt.system).toContain("same language as the conversation");
-    expect(prompt.system).not.toContain("coding assistant");
-    expect(prompt.user).toContain("Preserve only goals, decisions, and next actions.");
-    expect(prompt.user).not.toContain("completed steps vs. remaining steps");
-    expect(prompt.user).toContain("user: deploy the server");
-  });
-
-  it("switches to incremental update mode when a prior summary is given", () => {
-    const prompt = buildCondensePrompt({
-      priorSummary: "User wants to deploy.",
-      messages: turns,
-    });
-    expect(prompt.user).toContain("Existing summary:");
-    expect(prompt.user).toContain("User wants to deploy.");
-    expect(prompt.user).toContain("New turns:");
   });
 });
 

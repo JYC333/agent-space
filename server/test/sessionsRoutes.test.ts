@@ -155,36 +155,6 @@ describe("session summary internal route", () => {
 });
 
 describe("session read routes", () => {
-  it("serves condenser preset prompts from the sessions authority", async () => {
-    __setSessionIdentityForTests({ spaceId: "space-1", userId: "user-1" });
-    withRepo({});
-    app = buildServer(sessionsConfig(), { logger: false });
-
-    const res = await app.inject({
-      method: "GET",
-      url: "/api/v1/sessions/condenser-preset-prompts",
-    });
-
-    expect(res.statusCode).toBe(200);
-    const body = res.json() as Array<{
-      profile: string;
-      instructions: string;
-      effective_system: string;
-      shared_system_rules: string;
-    }>;
-    const coding = body.find((item) => item.profile === "coding");
-    expect(body.map((item) => item.profile)).toEqual([
-      "adaptive",
-      "general",
-      "coding",
-      "project",
-    ]);
-    expect(coding?.instructions).toContain("completed steps vs. remaining steps");
-    expect(coding?.effective_system).toContain("coding assistant");
-    expect(coding?.effective_system).toContain("strictly factual");
-    expect(coding?.shared_system_rules).toContain("same language as the conversation");
-  });
-
   it("serves the session list from the server read model with space/user scope", async () => {
     __setSessionIdentityForTests({ spaceId: "space-1", userId: "user-1" });
     withRepo({

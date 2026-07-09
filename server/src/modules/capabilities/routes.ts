@@ -17,6 +17,7 @@ import { getBuiltInCapabilityPack, listBuiltInCapabilityPacks } from "./packRegi
 import { PgCapabilitiesRepository } from "./repository";
 import { CapabilitiesService } from "./service";
 import { previewSkillImport, type SkillFetcher, type SkillImportOptions } from "./skillImporter";
+import type { WorkflowRunPromptResolver } from "./workflowPrompts";
 import { getBuiltInWorkflowTemplate, listBuiltInWorkflowTemplates } from "./workflowRegistry";
 
 type CapabilitiesRepositoryFactory = (context: ModuleContext) => PgCapabilitiesRepository;
@@ -27,6 +28,7 @@ type CapabilitiesIdentityOverride =
 let repositoryFactoryOverride: CapabilitiesRepositoryFactory | null = null;
 let identityOverride: CapabilitiesIdentityOverride | null = null;
 let importOptionsOverride: SkillFetcher | SkillImportOptions | null = null;
+let workflowRunPromptResolverOverride: WorkflowRunPromptResolver | null = null;
 
 export function __setCapabilitiesRepositoryFactoryForTests(
   factory: CapabilitiesRepositoryFactory | null,
@@ -46,12 +48,22 @@ export function __setCapabilitiesSkillFetcherForTests(
   importOptionsOverride = importOptions;
 }
 
+export function __setCapabilitiesWorkflowRunPromptResolverForTests(
+  resolver: WorkflowRunPromptResolver | null,
+): void {
+  workflowRunPromptResolverOverride = resolver;
+}
+
 function repository(context: ModuleContext): PgCapabilitiesRepository {
   return repositoryFactoryOverride?.(context) ?? PgCapabilitiesRepository.fromConfig(context.config);
 }
 
 function service(context: ModuleContext): CapabilitiesService {
-  return new CapabilitiesService(repository(context), importOptionsOverride ?? undefined);
+  return new CapabilitiesService(
+    repository(context),
+    importOptionsOverride ?? undefined,
+    workflowRunPromptResolverOverride ?? undefined,
+  );
 }
 
 export function registerRoutes(app: FastifyInstance, context: ModuleContext): void {

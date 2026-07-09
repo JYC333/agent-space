@@ -9,8 +9,14 @@ import {
   type SpaceUserIdentity,
 } from "../routeUtils/common";
 import { insertProposalRow } from "../proposals/reviewPackets";
-import { assertProjectWriter } from "../projects/access";
-import { isSpaceOwnerOrAdmin } from "../access/roles";
+import {
+  assertAssetAllowsTargetScope,
+  assertCanReadAssetOwnerScope,
+  assertCanWriteAssetOwnerScope,
+  canViewScopedRef,
+  normalizeVersionScopeForWrite,
+  type EvolvableAssetAccessRow,
+} from "./assetAccess";
 
 const EVALUATION_STATUSES = new Set(["queued", "running", "passed", "failed", "blocked", "cancelled"]);
 
@@ -43,13 +49,50 @@ interface EvaluationRunRow {
   created_by_user_id: string | null;
   created_at: unknown;
   updated_at: unknown;
+  candidate_space_id?: string | null;
+  candidate_scope_type?: string;
+  candidate_scope_id?: string | null;
 }
 
-const EVALUATION_RUN_COLUMNS = `
-  id, asset_id, candidate_version_id, baseline_version_id, evolution_target_id, run_id,
-  eval_suite_ref_json, evaluator_version, model_provider_ref_json, status, metrics_json,
-  blockers_json, output_artifact_id, report_artifact_id, created_by_user_id, created_at, updated_at
+const EVALUATION_RUN_COLUMN_NAMES = [
+  "id",
+  "asset_id",
+  "candidate_version_id",
+  "baseline_version_id",
+  "evolution_target_id",
+  "run_id",
+  "eval_suite_ref_json",
+  "evaluator_version",
+  "model_provider_ref_json",
+  "status",
+  "metrics_json",
+  "blockers_json",
+  "output_artifact_id",
+  "report_artifact_id",
+  "created_by_user_id",
+  "created_at",
+  "updated_at",
+] as const;
+
+const EVALUATION_RUN_COLUMNS = EVALUATION_RUN_COLUMN_NAMES.join(", ");
+const EVALUATION_RUN_COLUMNS_FROM_RUN = EVALUATION_RUN_COLUMN_NAMES.map((name) => `r.${name}`).join(", ");
+
+interface AssetRow extends EvolvableAssetAccessRow {
+  id: string;
+  asset_key: string;
+}
+
+const ASSET_COLUMNS = `
+  id, asset_key, space_id, owner_scope_type, owner_scope_id, metadata_json
 `;
+
+interface VersionRefRow {
+  status: string;
+  version: number;
+  space_id: string | null;
+  scope_type: string;
+  scope_id: string | null;
+}
 
 function evaluationRunOut(row: EvaluationRunRow): Record<string, unknown> {
   return {
@@ -83,13 +126,23 @@ export class EvolvableAssetEvaluationRepository {
   constructor(private readonly db: Queryable) {}
 
   async listEvaluationRuns(identity: SpaceUserIdentity, assetId: string): Promise<Record<string, unknown>[]> {
-    await this.requireAsset(identity.spaceId, assetId);
+    await this.requireReadableAsset(identity, assetId);
     const result = await this.db.query<EvaluationRunRow>(
-      `SELECT ${EVALUATION_RUN_COLUMNS} FROM evolvable_asset_evaluation_runs
-        WHERE asset_id = $1 ORDER BY created_at DESC, id ASC`,
+      `SELECT ${EVALUATION_RUN_COLUMNS_FROM_RUN},
+              v.space_id AS candidate_space_id,
+              v.scope_type AS candidate_scope_type,
+              v.scope_id AS candidate_scope_id
+         FROM evolvable_asset_evaluation_runs r
+         JOIN evolvable_asset_versions v ON v.id = r.candidate_version_id AND v.asset_id = r.asset_id
+        WHERE r.asset_id = $1
+        ORDER BY r.created_at DESC, r.id ASC`,
       [assetId],
     );
-    return result.rows.map(evaluationRunOut);
+    const out: Record<string, unknown>[] = [];
+    for (const row of result.rows) {
+      if (await canViewVersionRef(this.db, identity, row)) out.push(evaluationRunOut(row));
+    }
+    return out;
   }
 
   async recordEvaluationRun(
@@ -98,9 +151,11 @@ export class EvolvableAssetEvaluationRepository {
     versionId: string,
     body: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
-    await this.requireAsset(identity.spaceId, assetId);
+    const asset = await this.requireWritableAsset(identity, assetId);
     const version = await this.versionRow(assetId, versionId);
     if (!version) throw new HttpError(422, "versionId does not reference a version of this asset");
+    await normalizeVersionScopeForWrite(this.db, identity, version.scope_type, version.scope_id);
+    assertAssetAllowsTargetScope(asset, identity, version.scope_type, version.scope_id);
     if (version.status !== "candidate" && version.status !== "testing") {
       throw new HttpError(422, "Only a candidate or testing version can record an evaluation run");
     }
@@ -110,8 +165,12 @@ export class EvolvableAssetEvaluationRepository {
     if (!evaluatorVersion) throw new HttpError(422, "evaluator_version is required");
     const status = enumValue(body.status, EVALUATION_STATUSES, "status") ?? "queued";
     const baselineVersionId = optionalString(body.baseline_version_id);
-    if (baselineVersionId && !(await this.versionRow(assetId, baselineVersionId))) {
-      throw new HttpError(422, "baseline_version_id does not reference a version of this asset");
+    if (baselineVersionId) {
+      const baseline = await this.versionRow(assetId, baselineVersionId);
+      if (!baseline) throw new HttpError(422, "baseline_version_id does not reference a version of this asset");
+      if (!(await canViewVersionRef(this.db, identity, baseline))) {
+        throw new HttpError(422, "baseline_version_id does not reference a visible version of this asset");
+      }
     }
     const id = randomUUID();
     const now = new Date().toISOString();
@@ -164,48 +223,52 @@ export class EvolvableAssetEvaluationRepository {
     versionId: string,
     body: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
-    const asset = await this.requireAsset(identity.spaceId, assetId);
+    const asset = await this.requireWritableAsset(identity, assetId);
     const version = await this.versionRow(assetId, versionId);
     if (!version) throw new HttpError(422, "versionId does not reference a version of this asset");
+    await normalizeVersionScopeForWrite(this.db, identity, version.scope_type, version.scope_id);
+    assertAssetAllowsTargetScope(asset, identity, version.scope_type, version.scope_id);
     if (version.status !== "candidate" && version.status !== "testing") {
       throw new HttpError(422, "Only a candidate or testing version can be proposed for promotion");
     }
     const targetScopeType = optionalString(body.target_scope_type);
-    if (!targetScopeType || !["project", "space", "system"].includes(targetScopeType)) {
-      throw new HttpError(422, "target_scope_type must be one of project, space, system");
+    if (!targetScopeType || !["project", "space", "system", "user", "agent"].includes(targetScopeType)) {
+      throw new HttpError(422, "target_scope_type must be one of project, space, system, user, agent");
     }
     const targetScopeId = optionalString(body.target_scope_id);
     if (targetScopeType !== "system" && !targetScopeId) {
-      throw new HttpError(422, "target_scope_id is required for target_scope_type project/space");
+      throw new HttpError(422, "target_scope_id is required for non-system target_scope_type");
     }
     if (targetScopeType === "system" && targetScopeId) {
       throw new HttpError(422, "target_scope_id must be omitted for target_scope_type system");
     }
-    await assertCanProposePromotionScope(this.db, identity, targetScopeType, targetScopeId ?? null);
+    const normalizedTargetScopeId = await normalizeVersionScopeForWrite(this.db, identity, targetScopeType, targetScopeId ?? null);
+    assertAssetAllowsTargetScope(asset, identity, targetScopeType, normalizedTargetScopeId);
     const payload = {
       proposal_type: "evolvable_asset_version_promote",
       asset_id: assetId,
       candidate_version_id: versionId,
       target_scope_type: targetScopeType,
-      target_scope_id: targetScopeId,
+      target_scope_id: normalizedTargetScopeId,
       pin_after_approval: body.pin_after_approval === true,
       deprecate_previous: body.deprecate_previous === true,
       evaluation_run_ids: Array.isArray(body.evaluation_run_ids)
         ? body.evaluation_run_ids.filter((v): v is string => typeof v === "string")
         : [],
       reason: optionalString(body.reason),
+      deployment_label: optionalString(body.deployment_label),
     };
     const row = await insertProposalRow(this.db, {
       spaceId: identity.spaceId,
       proposalType: "evolvable_asset_version_promote",
-      title: `Promote ${asset.asset_key} v${version.version} to ${targetScopeType}${targetScopeId ? `:${targetScopeId}` : ""}`,
+      title: `Promote ${asset.asset_key} v${version.version} to ${targetScopeType}${normalizedTargetScopeId ? `:${normalizedTargetScopeId}` : ""}`,
       summary: optionalString(body.reason),
       payload,
       rationale: optionalString(body.reason) ?? "Asset version promotion",
       createdByUserId: identity.userId,
       visibility: "space_shared",
       riskLevel: targetScopeType === "system" ? "high" : "medium",
-      projectId: targetScopeType === "project" ? targetScopeId : null,
+      projectId: targetScopeType === "project" ? normalizedTargetScopeId : null,
     });
     return {
       proposal_id: row.id,
@@ -214,43 +277,49 @@ export class EvolvableAssetEvaluationRepository {
     };
   }
 
-  private async requireAsset(spaceId: string, assetId: string): Promise<{ asset_key: string }> {
-    const result = await this.db.query<{ asset_key: string }>(
-      `SELECT asset_key FROM evolvable_assets WHERE id = $1 AND (space_id = $2 OR space_id IS NULL) LIMIT 1`,
-      [assetId, spaceId],
+  private async requireReadableAsset(identity: SpaceUserIdentity, assetId: string): Promise<AssetRow> {
+    const result = await this.db.query<AssetRow>(
+      `SELECT ${ASSET_COLUMNS} FROM evolvable_assets WHERE id = $1 AND (space_id = $2 OR space_id IS NULL) LIMIT 1`,
+      [assetId, identity.spaceId],
     );
     const row = result.rows[0];
     if (!row) throw new HttpError(404, "Evolvable asset not found");
+    await assertCanReadAssetOwnerScope(this.db, identity, row);
     return row;
   }
 
-  private async versionRow(assetId: string, versionId: string): Promise<{ status: string; version: number } | null> {
-    const result = await this.db.query<{ status: string; version: number }>(
-      `SELECT status, version FROM evolvable_asset_versions WHERE asset_id = $1 AND id = $2 LIMIT 1`,
+  private async requireWritableAsset(identity: SpaceUserIdentity, assetId: string): Promise<AssetRow> {
+    const row = await this.requireReadableAsset(identity, assetId);
+    await assertCanWriteAssetOwnerScope(this.db, identity, row);
+    return row;
+  }
+
+  private async versionRow(assetId: string, versionId: string): Promise<VersionRefRow | null> {
+    const result = await this.db.query<VersionRefRow>(
+      `SELECT status, version, space_id, scope_type, scope_id FROM evolvable_asset_versions WHERE asset_id = $1 AND id = $2 LIMIT 1`,
       [assetId, versionId],
     );
     return result.rows[0] ?? null;
   }
 }
 
-async function assertCanProposePromotionScope(
+async function canViewVersionRef(
   db: Queryable,
   identity: SpaceUserIdentity,
-  scopeType: string,
-  scopeId: string | null,
-): Promise<void> {
-  if (scopeType === "project") {
-    await assertProjectWriter(db, identity.spaceId, scopeId as string, identity.userId);
-    return;
-  }
-  if (scopeType === "space" && scopeId !== identity.spaceId) {
-    throw new HttpError(422, "space promotion target_scope_id must match the active space_id");
-  }
-  const membership = await db.query<{ role: string }>(
-    `SELECT role FROM space_memberships WHERE space_id = $1 AND user_id = $2 AND status = 'active' LIMIT 1`,
-    [identity.spaceId, identity.userId],
-  );
-  if (!isSpaceOwnerOrAdmin(membership.rows[0]?.role)) {
-    throw new HttpError(403, `Requires space owner/admin role to propose a ${scopeType}-scoped asset promotion`);
-  }
+  version: {
+    space_id?: string | null;
+    scope_type?: string;
+    scope_id?: string | null;
+    candidate_space_id?: string | null;
+    candidate_scope_type?: string;
+    candidate_scope_id?: string | null;
+  },
+): Promise<boolean> {
+  const spaceId = version.space_id ?? version.candidate_space_id ?? null;
+  const scopeType = version.scope_type ?? version.candidate_scope_type;
+  const scopeId = version.scope_id ?? version.candidate_scope_id ?? null;
+  if (!scopeType) return false;
+  if (spaceId === null) return scopeType === "system";
+  if (spaceId !== identity.spaceId) return false;
+  return canViewScopedRef(db, identity, scopeType, scopeId);
 }

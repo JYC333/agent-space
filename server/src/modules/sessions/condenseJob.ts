@@ -105,11 +105,7 @@ async function resolveCondenserConfig(
   const raw = condenser as Record<string, unknown>;
   const config: CondenserPromptConfig = {};
   const profile = stringValue(raw.profile);
-  const customSystem = stringValue(raw.custom_system);
-  const customInstructions = stringValue(raw.custom_instructions);
   if (profile) config.profile = profile;
-  if (customSystem) config.custom_system = customSystem;
-  if (customInstructions) config.custom_instructions = customInstructions;
   return Object.keys(config).length > 0 ? config : null;
 }
 

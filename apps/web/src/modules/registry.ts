@@ -418,6 +418,16 @@ export const MODULE_REGISTRY: Module[] = [
     perspectiveType: 'neutral',
     component: lazy(() => import('./evolution/EvolutionPage')),
   },
+  {
+    id: 'prompt_library', label: 'Prompt Library', path: '/prompts',
+    section: 'dev', group: 'system', icon: 'scroll-text',
+    description: 'Inspect prompt assets, versions, previews, evaluation evidence, and deployment state.',
+    source: 'built_in', capabilityId: undefined,
+    enabled: true, visible: true, planned: false,
+    perspectiveType: 'space-scoped',
+    requiresSpaceAdmin: true,
+    component: lazy(() => import('./prompts/PromptLibraryPage')),
+  },
 
   // ── Workspace ─────────────────────────────────────────────────────────────
   {

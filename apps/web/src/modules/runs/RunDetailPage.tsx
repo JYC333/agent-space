@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
 import { SpaceLink as Link } from '../../core/spaceNav'
-import { ArrowLeft, ExternalLink, FlaskConical } from 'lucide-react'
+import { ArrowLeft, ExternalLink, FileCode2, FlaskConical } from 'lucide-react'
 import { toast } from 'sonner'
 import { artifactsApi, runsApi } from '../../api/client'
 import { errMsg } from '../../lib/utils'
@@ -18,11 +18,55 @@ import { ScopeBadge } from '../../components/ScopeBadge'
 import { useSpace } from '../../contexts/SpaceContext'
 import { PersonalContextPanel } from './PersonalContextPanel'
 import { isGrantDerivedProposal } from '../memory/EgressReviewNotice'
+import { promptLibraryPath } from '../prompts/paths'
 
 type RunDetailTab = 'activities' | 'artifacts' | 'proposals'
 
 function fmt(dt: string | null | undefined) {
   return dt ? new Date(dt).toLocaleString() : '—'
+}
+
+interface PromptRef {
+  key: string
+  label: string
+  versionId: string | null
+  contentHash: string | null
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value : null
+}
+
+function promptRefsForRun(run: Run): PromptRef[] {
+  const refs: PromptRef[] = []
+  if (run.prompt_asset_key) {
+    refs.push({
+      key: run.prompt_asset_key,
+      label: 'run',
+      versionId: run.prompt_version_id ?? null,
+      contentHash: run.prompt_content_hash ?? null,
+    })
+  }
+
+  const prompts = isRecord(run.output_json?.prompts) ? run.output_json.prompts : null
+  if (prompts) {
+    for (const [label, value] of Object.entries(prompts)) {
+      if (!isRecord(value)) continue
+      const key = stringOrNull(value.asset_key)
+      if (!key || refs.some(ref => ref.key === key && ref.label === label)) continue
+      refs.push({
+        key,
+        label,
+        versionId: stringOrNull(value.version_id),
+        contentHash: stringOrNull(value.content_hash),
+      })
+    }
+  }
+  return refs
 }
 
 export default function RunDetailPage() {
@@ -156,6 +200,7 @@ export default function RunDetailPage() {
     : r.instructed_by_agent_id
       ? `Agent ${r.instructed_by_agent_id}`
       : '—'
+  const promptRefs = promptRefsForRun(r)
 
   return (
     <div className="p-6 space-y-6 max-w-4xl">
@@ -225,6 +270,35 @@ export default function RunDetailPage() {
                 {r.resolved_model.disclosure_note}
               </p>
             )}
+          </Card>
+        )}
+        {promptRefs.length > 0 && (
+          <Card className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <FileCode2 className="size-4 text-muted-foreground" />
+              <h2 className="text-sm font-semibold">Prompt provenance</h2>
+            </div>
+            <div className="space-y-2">
+              {promptRefs.map(ref => (
+                <div key={`${ref.label}:${ref.key}`} className="grid gap-2 rounded-md border border-border p-3 sm:grid-cols-[minmax(0,1fr)_180px_120px] sm:items-center">
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-medium uppercase text-muted-foreground">{ref.label}</div>
+                    <Link to={promptLibraryPath(ref.key)} className="inline-flex min-w-0 max-w-full items-center gap-1 text-sm hover:underline">
+                      <span className="truncate font-mono">{ref.key}</span>
+                      <ExternalLink className="size-3 shrink-0" />
+                    </Link>
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-medium uppercase text-muted-foreground">Version</div>
+                    <div className="truncate font-mono text-xs">{ref.versionId ?? 'unresolved'}</div>
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-medium uppercase text-muted-foreground">Hash</div>
+                    <div className="truncate font-mono text-xs">{ref.contentHash?.slice(0, 12) ?? 'none'}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
           </Card>
         )}
         <PersonalContextPanel

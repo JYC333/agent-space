@@ -1,13 +1,21 @@
 import type { Pool } from "./pool";
+import { syncBuiltinPrompts } from "../modules/prompts/builtins";
 
 interface Logger {
   info: (msg: string) => void;
 }
 
-export async function runBuiltInSeeds(pool: Pool, log: Logger): Promise<void> {
+export async function runBuiltInSeeds(pool: Pool, log: Logger, catalogRoot: string): Promise<void> {
   await seedEvolutionStrategyAssets(pool);
   await seedSourceConnectors(pool);
-  log.info("[seeds] built-in assets upserted");
+  const promptSync = await syncBuiltinPrompts(pool, catalogRoot);
+  log.info(
+    [
+      "[seeds] built-in assets upserted",
+      `prompt_assets=${promptSync.assetKeys.length}`,
+      `prompt_versions_created=${promptSync.versionsCreated.length}`,
+    ].join(" "),
+  );
 }
 
 async function seedEvolutionStrategyAssets(pool: Pool): Promise<void> {

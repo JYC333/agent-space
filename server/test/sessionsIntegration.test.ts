@@ -347,10 +347,40 @@ describe("PgSessionRepository against real Postgres", () => {
       });
     }
     let seenSystem = "";
+    let seenResolverProfile: string | null | undefined;
+    let seenResolverMessages: readonly { content: string }[] = [];
     const summary = await repo.condenseSession(SPACE, USER, created.id, {
       keepRecent: 4,
       condenseBatch: 2,
       profile: "coding",
+      condenserPromptResolver: async (input) => {
+        seenResolverProfile = input.profile;
+        seenResolverMessages = input.messages;
+        const prompt = {
+          system: "registry condenser coding system",
+          user: `registry condenser user prompt: ${input.messages.map((message) => message.content).join(", ")}`,
+        };
+        return {
+          ...prompt,
+          resolveResult: {
+            asset_key: "session.condenser.coding",
+            version_id: "condenser-version",
+            content_hash: "condenser-hash",
+            scope_type: "system",
+            scope_id: null,
+            resolution_trace: ["system_baseline"],
+            fallback_reason: null,
+            rendered_messages: [
+              { role: "system", content: prompt.system },
+              { role: "user", content: prompt.user },
+            ],
+            rendered_text: null,
+            rendered_hash: "rendered-hash",
+            validation_warnings: [],
+            validation_errors: [],
+          },
+        } as never;
+      },
       summarize: async (prompt) => {
         seenSystem = prompt.system;
         return "LLM running summary.";
@@ -359,7 +389,23 @@ describe("PgSessionRepository against real Postgres", () => {
     expect(summary!.condenser_version).toBe("llm.v1");
     expect(summary!.summary_text).toBe("LLM running summary.");
     expect(summary!.source_message_count).toBe(4);
-    expect(seenSystem).toContain("coding assistant");
+    expect(seenSystem).toContain("coding");
+    expect(seenResolverProfile).toBe("coding");
+    expect(seenResolverMessages.map((message) => message.content)).toEqual([
+      "message 0",
+      "message 1",
+      "message 2",
+      "message 3",
+    ]);
+    const stored = await pool!.query<{ summary_json: { prompts?: Record<string, unknown> } }>(
+      "SELECT summary_json FROM session_summaries WHERE id = $1",
+      [summary!.id],
+    );
+    expect(stored.rows[0]?.summary_json.prompts?.condenser).toMatchObject({
+      asset_key: "session.condenser.coding",
+      version_id: "condenser-version",
+      content_hash: "condenser-hash",
+    });
 
     const latest = await repo.getLatestSummaryForContext(SPACE, created.id);
     expect(latest!.condenser_version).toBe("llm.v1");

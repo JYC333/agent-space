@@ -47,7 +47,7 @@ afterAll(async () => {
 beforeEach(async () => {
   if (!available || !pool) return;
   await pool.query(
-    `TRUNCATE evolution_experiences, evolvable_asset_evaluation_runs, evolvable_asset_pins,
+    `TRUNCATE evolution_experiences, evolvable_asset_evaluation_runs, evolvable_asset_pins, prompt_deployment_refs,
        evolvable_asset_versions, evolvable_assets, proposals, projects, space_memberships, users, spaces CASCADE`,
   );
   const now = new Date().toISOString();
@@ -247,7 +247,7 @@ describe("Evolvable asset evaluation runs + promotion applier (real Postgres)", 
     expect(experiences.rows.some((row) => row.experience_key === `evolvable_asset_promotion:${secondVersion.id}`)).toBe(true);
   });
 
-  it("rejects promotion for a user without project writer authority", async () => {
+  it("rejects promotion for a user without asset management authority", async () => {
     if (!available) return;
     const { assetId, versionId } = await createCandidateVersion();
     await passEvaluation(assetId, versionId);
@@ -255,7 +255,7 @@ describe("Evolvable asset evaluation runs + promotion applier (real Postgres)", 
       target_scope_type: "project",
       target_scope_id: PROJECT,
     });
-    await expect(applyProposal(proposal.proposal_id as string, OUTSIDER)).rejects.toThrow(/writer|owner/i);
+    await expect(applyProposal(proposal.proposal_id as string, OUTSIDER)).rejects.toThrow(/permission|writer|owner/i);
   });
 
   it("sets the asset's current_system_version_id when promoting to system scope", async () => {
@@ -267,5 +267,34 @@ describe("Evolvable asset evaluation runs + promotion applier (real Postgres)", 
 
     const asset = await repo().getAsset(identity, assetId);
     expect(asset.current_system_version_id).toBe(versionId);
+  });
+
+  it("writes a prompt deployment ref when an accepted promotion carries deployment_label", async () => {
+    if (!available) return;
+    const { assetId, versionId } = await createCandidateVersion();
+    await passEvaluation(assetId, versionId);
+    const proposal = await evalRepo().createPromotionProposal(identity, assetId, versionId, {
+      target_scope_type: "project",
+      target_scope_id: PROJECT,
+      deployment_label: "production",
+    });
+    const applied = await applyProposal(proposal.proposal_id as string, OWNER);
+    expect(applied.result).toMatchObject({ version_id: versionId, deployment_label: "production" });
+
+    const refs = await pool!.query<{ version_id: string; scope_type: string; scope_id: string; status: string; promoted_from_proposal_id: string }>(
+      `SELECT version_id, scope_type, scope_id, status, promoted_from_proposal_id
+         FROM prompt_deployment_refs
+        WHERE asset_id = $1 AND label = 'production'`,
+      [assetId],
+    );
+    expect(refs.rows).toEqual([
+      {
+        version_id: versionId,
+        scope_type: "project",
+        scope_id: PROJECT,
+        status: "active",
+        promoted_from_proposal_id: proposal.proposal_id,
+      },
+    ]);
   });
 });

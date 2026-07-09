@@ -156,6 +156,8 @@ describe("agents CRUD routes", () => {
     let agentId = "";
     let versionId = "";
     let runtimeProfileId = "";
+    let insertedSystemPrompt: string | null = null;
+    let insertedPromptProvenance: Record<string, unknown> | null = null;
     let insertedRuntimeConfig: Record<string, unknown> = {};
     let insertedContextPolicy: Record<string, unknown> = {};
     let insertedScheduleConfig: Record<string, unknown> = {};
@@ -171,9 +173,13 @@ describe("agents CRUD routes", () => {
         }
         if (sql.startsWith("INSERT INTO agent_versions")) {
           versionId = String(params[0]);
+          insertedSystemPrompt = params[6] === null ? null : String(params[6]);
           insertedRuntimeConfig = JSON.parse(String(params[8])) as Record<string, unknown>;
           insertedContextPolicy = JSON.parse(String(params[9])) as Record<string, unknown>;
           insertedScheduleConfig = JSON.parse(String(params[16])) as Record<string, unknown>;
+          insertedPromptProvenance = params[18]
+            ? JSON.parse(String(params[18])) as Record<string, unknown>
+            : null;
           return { rows: [{ id: versionId }], rowCount: 1 };
         }
         if (sql.startsWith("INSERT INTO agent_runtime_profiles")) {
@@ -223,7 +229,7 @@ describe("agents CRUD routes", () => {
                 provider_name: null,
                 provider_type: null,
                 model_name: null,
-                system_prompt: "Review carefully.",
+                system_prompt: insertedSystemPrompt,
                 runtime_policy_json: { default_adapter_type: "capability" },
               },
             ],
@@ -236,7 +242,54 @@ describe("agents CRUD routes", () => {
     };
     const pool = {
       connect: vi.fn(async () => client),
-      query: vi.fn(async () => ({ rows: [], rowCount: 0 })),
+      query: vi.fn(async (sql: string) => {
+        if (sql.includes("FROM model_providers")) {
+          return { rows: [], rowCount: 0 };
+        }
+        if (sql.includes("FROM evolvable_assets")) {
+          return {
+            rows: [{
+              id: "prompt-asset",
+              space_id: null,
+              asset_type: "prompt_template",
+              asset_key: "agent_template.coding_reviewer.system",
+              display_name: "Coding Reviewer System Prompt",
+              description: null,
+              owner_scope_type: "system",
+              owner_scope_id: null,
+              status: "active",
+              current_system_version_id: "prompt-version",
+              default_eval_suite_ref_json: null,
+              metadata_json: { prompt_type: "agent_system" },
+              created_at: "2026-06-17T00:00:00.000Z",
+              updated_at: "2026-06-17T00:00:00.000Z",
+            }],
+            rowCount: 1,
+          };
+        }
+        if (sql.includes("FROM prompt_deployment_refs")) {
+          return { rows: [{ version_id: "prompt-version" }], rowCount: 1 };
+        }
+        if (sql.includes("FROM evolvable_asset_versions")) {
+          return {
+            rows: [{
+              id: "prompt-version",
+              space_id: null,
+              scope_type: "system",
+              scope_id: null,
+              content_hash: "prompt-hash",
+              status: "approved",
+              content_json: {
+                schema_version: "prompt_asset.v1",
+                prompt_type: "agent_system",
+                messages: [{ role: "system", content: "Registry reviewer prompt." }],
+              },
+            }],
+            rowCount: 1,
+          };
+        }
+        return { rows: [], rowCount: 0 };
+      }),
     };
     vi.mocked(getDbPool).mockReturnValue(pool as never);
     app = buildServer(config(), { logger: false });
@@ -247,7 +300,6 @@ describe("agents CRUD routes", () => {
       payload: {
         name: "Reviewer",
         description: "Prefilled and edited",
-        system_prompt: "Review carefully.",
         adapter_type: "capability",
         runtime_config_json: { adapter_type: "capability" },
         context_policy_json: {
@@ -268,6 +320,12 @@ describe("agents CRUD routes", () => {
     expect(insertedRuntimeConfig).toMatchObject({ adapter_type: "capability" });
     expect(insertedContextPolicy).toMatchObject({ condenser: { profile: "coding" } });
     expect(insertedScheduleConfig).toEqual({ enabled: false, cron: null });
+    expect(insertedSystemPrompt).toBe("Registry reviewer prompt.");
+    expect(insertedPromptProvenance).toMatchObject({
+      asset_key: "agent_template.coding_reviewer.system",
+      version_id: "prompt-version",
+      content_hash: "prompt-hash",
+    });
   });
 
   it("lists runtime profiles for an agent", async () => {

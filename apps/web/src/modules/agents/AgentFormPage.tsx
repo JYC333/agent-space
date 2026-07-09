@@ -1,14 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useSpaceNavigate as useNavigate, SpaceLink as Link } from '../../core/spaceNav'
-import { ChevronDown, ChevronRight, Loader2, Plus } from 'lucide-react'
+import { ChevronDown, ChevronRight, FileCode2, Loader2, Plus } from 'lucide-react'
 import { toast } from 'sonner'
-import { agentTemplatesApi, agentsApi, credentialsApi, providersApi, runtimeToolsApi, sessionsApi, type ModelProviderOut } from '../../api/client'
+import { agentTemplatesApi, agentsApi, credentialsApi, providersApi, runtimeToolsApi, type ModelProviderOut } from '../../api/client'
 import type {
   AgentTemplateOut,
   AgentTemplateVersionOut,
   CliCredentialAvailableProfileOut,
-  CondenserPresetPromptOut,
   CreateAgentFromTemplateBody,
   SpaceRuntimeToolPolicyOut,
 } from '../../types/api'
@@ -21,7 +20,6 @@ import { Card, CardTitle } from '../../components/ui/card'
 import { Badge } from '../../components/ui/badge'
 import { errMsg } from '../../lib/utils'
 import { SafetyView } from './ConfigCards'
-import CondenserPresetPromptPreview from './CondenserPresetPromptPreview'
 import {
   RetrievalToolDomainControls,
   mergeRetrievalToolDomains,
@@ -41,6 +39,7 @@ import {
   sessionCondenserConfig,
   type SessionCondenserProfile,
 } from './policyMap'
+import { promptLibraryPath } from '../prompts/paths'
 
 const CREATE_NOTE: Record<string, string> = {
   activity_reflector: 'This agent processes captures / activity records into typed proposals and a reflection summary for review.',
@@ -151,6 +150,10 @@ function scheduleFromConfig(config: Record<string, unknown> | null | undefined) 
   }
 }
 
+function condenserPromptAssetKey(profile: SessionCondenserProfile): string {
+  return `session.condenser.${profile}`
+}
+
 export default function AgentFormPage() {
   const { templateId } = useParams()
   const navigate = useNavigate()
@@ -169,7 +172,6 @@ export default function AgentFormPage() {
   const [runtime, setRuntime] = useState<string>('model_api')
   const [cliProfiles, setCliProfiles] = useState<CliCredentialAvailableProfileOut[]>([])
   const [runtimePolicies, setRuntimePolicies] = useState<SpaceRuntimeToolPolicyOut[]>([])
-  const [condenserPresets, setCondenserPresets] = useState<CondenserPresetPromptOut[]>([])
   const [credentialProfileId, setCredentialProfileId] = useState<string>('')
   const [runtimeToolVersion, setRuntimeToolVersion] = useState<string>('')
   const [scheduleMode, setScheduleMode] = useState<'manual' | 'daily' | 'cron'>('manual')
@@ -181,9 +183,6 @@ export default function AgentFormPage() {
   const [maxTokens, setMaxTokens] = useState('')
   const [temperature, setTemperature] = useState('')
   const [condenseProfile, setCondenseProfile] = useState<SessionCondenserProfile>('adaptive')
-  const [condenseCustomSystem, setCondenseCustomSystem] = useState('')
-  const [condenseCustomInstructions, setCondenseCustomInstructions] = useState('')
-  const [summaryPromptOpen, setSummaryPromptOpen] = useState(false)
   const [retrievalToolDomains, setRetrievalToolDomains] = useState<RetrievalToolDomainState>({
     memory: false,
     project_public_summary: false,
@@ -195,12 +194,10 @@ export default function AgentFormPage() {
       credentialsApi.available().catch(() => [] as CliCredentialAvailableProfileOut[]),
       runtimeToolsApi.spacePolicies().catch(() => [] as SpaceRuntimeToolPolicyOut[]),
       providersApi.list().catch(() => [] as ModelProviderOut[]),
-      sessionsApi.condenserPresetPrompts().catch(() => [] as CondenserPresetPromptOut[]),
     ])
-      .then(([profiles, policies, providers, presets]) => {
+      .then(([profiles, policies, providers]) => {
         setCliProfiles(profiles.filter(c => c.logged_in))
         setRuntimePolicies(policies)
-        setCondenserPresets(presets)
         const provider = providers.find(p => p.is_default && p.enabled) ?? null
         setDefaultProvider(provider)
         if (provider?.default_model) {
@@ -210,7 +207,6 @@ export default function AgentFormPage() {
       .catch(() => {
         setCliProfiles([])
         setRuntimePolicies([])
-        setCondenserPresets([])
         setDefaultProvider(null)
       })
   }, [])
@@ -229,7 +225,7 @@ export default function AgentFormPage() {
         if (!t.current_version_id) return
         const v = await agentTemplatesApi.getVersion(t.id, t.current_version_id)
         setVersion(v)
-        setSystemPrompt(v.system_prompt ?? '')
+        setSystemPrompt('')
         const runtimePolicy = v.runtime_policy_json as Record<string, unknown>
         const nextRuntime = typeof runtimePolicy.default_adapter_type === 'string' ? runtimePolicy.default_adapter_type : 'model_api'
         setRuntime(nextRuntime)
@@ -249,9 +245,6 @@ export default function AgentFormPage() {
         setOutputs(Object.fromEntries(allowedOutputTypes(v).map(id => [id, true])))
         const condenser = sessionCondenserConfig(v)
         setCondenseProfile(condenser.profile)
-        setCondenseCustomSystem(condenser.custom_system)
-        setCondenseCustomInstructions(condenser.custom_instructions)
-        setSummaryPromptOpen(Boolean(condenser.custom_system || condenser.custom_instructions))
         setRetrievalToolDomains({ memory: false, project_public_summary: false, source: false })
       })
       .catch(err => toast.error(errMsg(err)))
@@ -303,8 +296,6 @@ export default function AgentFormPage() {
     const enabledInputs = Object.entries(inputs).filter(([, on]) => on).map(([key]) => key)
     return buildCondenserConfigContextPolicy(buildContextPolicy(base, enabledInputs), {
       profile: condenseProfile,
-      custom_system: condenseCustomSystem,
-      custom_instructions: condenseCustomInstructions,
     })
   }
 
@@ -537,41 +528,19 @@ export default function AgentFormPage() {
                 {selectedCondenseProfile && (
                   <p className="mt-1 text-xs text-muted-foreground">{selectedCondenseProfile.detail}</p>
                 )}
-                <div className="mt-3">
-                  <CondenserPresetPromptPreview profile={condenseProfile} presets={condenserPresets} />
-                </div>
-                <div className="mt-3 space-y-3">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setSummaryPromptOpen(open => !open)}
-                  >
-                    {summaryPromptOpen ? <ChevronDown className="size-4 mr-1" /> : <ChevronRight className="size-4 mr-1" />}
-                    Custom prompt
-                  </Button>
-                  {summaryPromptOpen && (
-                    <div className="space-y-3 rounded-md border border-border bg-muted/20 p-3">
-                      <label className="space-y-1.5 block">
-                        <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Custom system prompt</span>
-                        <Textarea
-                          value={condenseCustomSystem}
-                          onChange={e => setCondenseCustomSystem(e.target.value)}
-                          rows={4}
-                          placeholder="Leave empty to use the selected profile's system prompt"
-                        />
-                      </label>
-                      <label className="space-y-1.5 block">
-                        <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Custom summary instructions</span>
-                        <Textarea
-                          value={condenseCustomInstructions}
-                          onChange={e => setCondenseCustomInstructions(e.target.value)}
-                          rows={6}
-                          placeholder="Leave empty to use the selected profile's instructions"
-                        />
-                      </label>
+                <div className="mt-3 rounded-md border border-border bg-muted/20 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-xs font-medium text-muted-foreground">Prompt asset</div>
+                      <div className="truncate font-mono text-xs">{condenserPromptAssetKey(condenseProfile)}</div>
                     </div>
-                  )}
+                    <Button asChild type="button" size="sm" variant="outline">
+                      <Link to={promptLibraryPath(condenserPromptAssetKey(condenseProfile))}>
+                        <FileCode2 className="size-4 mr-1" />
+                        Open prompt
+                      </Link>
+                    </Button>
+                  </div>
                 </div>
               </div>
 

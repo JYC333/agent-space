@@ -1,14 +1,18 @@
 import type { QueryRewriter } from "..";
+import { getDbPool } from "../../../db/pool";
 import { completeProviderText } from "../../providers/invocation/invocation";
 import type { ProviderCommandStore } from "../../providers/commands/store";
 import { writePolicyAudit } from "../../policy/auditWriter";
 import type { RetrievalEgressPolicy } from "../egress/egressPolicy";
+import { resolveRetrievalQueryRewritePrompt, type ResolvedQueryRewritePrompt } from "../promptRegistry";
 import { DEFAULT_QUERY_REWRITE_MAX_TOKENS, RETRIEVAL_QUERY_REWRITE_TASK } from "./config";
-import {
-  buildQueryRewritePrompt,
-  parseQueryRewriteVariants,
-  type QueryRewritePromptTemplate,
-} from "./prompt";
+import { parseQueryRewriteVariants } from "./prompt";
+
+export type QueryRewritePromptResolver = (
+  spaceId: string,
+  viewerUserId: string,
+  query: string,
+) => Promise<ResolvedQueryRewritePrompt | null>;
 
 export interface ProviderQueryRewriterOptions {
   /** Caller's own provider; the task chain is tried first, this is the safety net. */
@@ -17,8 +21,8 @@ export interface ProviderQueryRewriterOptions {
   databaseUrl?: string | null;
   /** Search surface tag recorded in the audit metadata (never the query text). */
   surface?: string | null;
-  /** Space-scoped prompt template. The default is used when omitted. */
-  prompt?: QueryRewritePromptTemplate | null;
+  /** Test/integration seam for resolving the registry-backed prompt. */
+  promptResolver?: QueryRewritePromptResolver | null;
   /** Space/provider egress policy. External providers are blocked when disabled. */
   egressPolicy?: RetrievalEgressPolicy | null;
 }
@@ -38,7 +42,7 @@ export class ProviderQueryRewriter implements QueryRewriter {
   private readonly providerId: string | null;
   private readonly databaseUrl: string | null;
   private readonly surface: string | null;
-  private readonly prompt: QueryRewritePromptTemplate | null;
+  private readonly promptResolver: QueryRewritePromptResolver | null;
   private readonly egressPolicy: RetrievalEgressPolicy | null;
 
   constructor(
@@ -48,14 +52,15 @@ export class ProviderQueryRewriter implements QueryRewriter {
     this.providerId = options.providerId ?? null;
     this.databaseUrl = options.databaseUrl ?? null;
     this.surface = options.surface ?? null;
-    this.prompt = options.prompt ?? null;
+    this.promptResolver = options.promptResolver ?? defaultPromptResolver(this.databaseUrl);
     this.egressPolicy = options.egressPolicy ?? null;
   }
 
   async rewrite(spaceId: string, viewerUserId: string, query: string): Promise<string[] | null> {
     const trimmed = query.trim();
     if (!trimmed) return null;
-    const prompt = buildQueryRewritePrompt(trimmed, this.prompt ?? undefined);
+    const prompt = await this.promptResolver?.(spaceId, viewerUserId, trimmed);
+    if (!prompt) return null;
     let completion: { text: string; model: string };
     try {
       completion = await completeProviderText(this.store, spaceId, {
@@ -121,4 +126,10 @@ export class ProviderQueryRewriter implements QueryRewriter {
       );
     }
   }
+}
+
+function defaultPromptResolver(databaseUrl: string | null): QueryRewritePromptResolver | null {
+  if (!databaseUrl) return null;
+  return async (spaceId, viewerUserId, query) =>
+    resolveRetrievalQueryRewritePrompt(getDbPool(databaseUrl), { spaceId, userId: viewerUserId, query });
 }

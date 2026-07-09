@@ -277,12 +277,13 @@ const evolvableAssetVersionPromote = z
     proposal_type: z.literal("evolvable_asset_version_promote"),
     asset_id: z.string().min(1),
     candidate_version_id: z.string().min(1),
-    target_scope_type: z.enum(["project", "space", "system"]),
+    target_scope_type: z.enum(["project", "space", "system", "user", "agent"]),
     target_scope_id: z.string().min(1).nullable().optional(),
     pin_after_approval: z.boolean().optional(),
     deprecate_previous: z.boolean().optional(),
     evaluation_run_ids: z.array(z.string().min(1)).optional(),
     reason: z.string().nullable().optional(),
+    deployment_label: z.string().min(1).nullable().optional(),
   })
   .passthrough();
 

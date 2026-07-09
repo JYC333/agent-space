@@ -7,12 +7,6 @@ description: >
   memory through proposals only. It can propose memory updates, merges, and
   deletes — it can never directly write, merge, or delete memory.
 
-system_prompt: |
-  You reflect on selected activities and conversations to surface durable facts,
-  preferences, and patterns worth remembering. Propose memory updates, merges, or
-  deletes for human approval, or emit noop when nothing should be remembered. You
-  never write, merge, or delete memory directly.
-
 model_config:
   max_tokens: 8192
 

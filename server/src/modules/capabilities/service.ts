@@ -11,11 +11,17 @@ import type {
   WorkflowRunDraft,
   WorkflowTemplate,
 } from "./types";
+import {
+  workflowRunPromptResolver,
+  type ResolvedWorkflowRunPrompt,
+  type WorkflowRunPromptResolver,
+} from "./workflowPrompts";
 
 export class CapabilitiesService {
   constructor(
     private readonly repository: PgCapabilitiesRepository,
     private readonly importOptions?: SkillFetcher | SkillImportOptions,
+    private readonly runPromptResolver?: WorkflowRunPromptResolver,
   ) {}
 
   async listCapabilityDefinitions(identity: SpaceUserIdentity): Promise<CapabilityDefinition[]> {
@@ -206,11 +212,13 @@ export class CapabilitiesService {
     const requestConfig =
       request.config_json === undefined ? {} : normalizeWorkflowProfileConfig(request.config_json);
     return buildWorkflowRunDraft({
+      identity,
       projectId,
       template,
       profile,
       request,
       requestConfig,
+      runPromptResolver: this.resolveWorkflowRunPrompt(),
     });
   }
 
@@ -227,17 +235,23 @@ export class CapabilitiesService {
     const requestConfig =
       request.config_json === undefined ? {} : normalizeWorkflowProfileConfig(request.config_json);
     return buildWorkflowRunDraft({
+      identity,
       projectId,
       template,
       profile: null,
       request,
       requestConfig,
+      runPromptResolver: this.resolveWorkflowRunPrompt(),
     });
   }
 
   private requireWorkflowTemplate(value: unknown): void {
     const id = requiredString(value, "workflow_template_id");
     if (!getBuiltInWorkflowTemplate(id)) throw new HttpError(422, "invalid workflow_template_id");
+  }
+
+  private resolveWorkflowRunPrompt(): WorkflowRunPromptResolver {
+    return this.runPromptResolver ?? workflowRunPromptResolver(this.repository.queryable());
   }
 }
 
@@ -252,14 +266,16 @@ async function parseWorkflowRunDraftRequest(body: Record<string, unknown>): Prom
   return validation.data as Record<string, unknown>;
 }
 
-function buildWorkflowRunDraft(input: {
+async function buildWorkflowRunDraft(input: {
+  identity: SpaceUserIdentity;
   projectId: string;
   template: WorkflowTemplate;
   profile: ProjectWorkflowProfile | null;
   request: Record<string, unknown>;
   requestConfig: Record<string, unknown>;
-}): WorkflowRunDraft {
-  const { projectId, template, profile, request, requestConfig } = input;
+  runPromptResolver: WorkflowRunPromptResolver;
+}): Promise<WorkflowRunDraft> {
+  const { identity, projectId, template, profile, request, requestConfig } = input;
   const config = {
     ...template.default_config_json,
     ...(profile?.config_json ?? {}),
@@ -285,6 +301,22 @@ function buildWorkflowRunDraft(input: {
   if (!optionalString(request.prompt) && !optionalString(config.query)) {
     warnings.push("workflow_query_missing");
   }
+  const requestPrompt = optionalString(request.prompt);
+  const resolvedPrompt = requestPrompt
+    ? null
+    : await input.runPromptResolver({
+        identity,
+        projectId,
+        template,
+        profile,
+        config,
+        outputArtifactTypes: effectiveOutputArtifactTypes,
+      });
+  if (!requestPrompt && !resolvedPrompt) {
+    throw new HttpError(500, "Workflow run prompt is not resolvable");
+  }
+  const prompt = requestPrompt ?? resolvedPrompt!.prompt;
+  const promptRef = promptReference(resolvedPrompt);
   return {
     workflow_template: template,
     workflow_profile: profile,
@@ -300,14 +332,16 @@ function buildWorkflowRunDraft(input: {
       runtime_profile_id: runtimeProfileId,
       workspace_id: optionalString(request.workspace_id),
       session_id: optionalString(request.session_id),
-      prompt: optionalString(request.prompt) ??
-        renderWorkflowPrompt(template, profile, config, effectiveOutputArtifactTypes),
+      prompt,
       instruction: optionalString(request.instruction),
       adapter_type: null,
       capability_id: capabilityId,
       capabilities_json: template.capability_ids,
       model_provider_id: null,
       model: null,
+      prompt_asset_key: promptRef.assetKey,
+      prompt_version_id: promptRef.versionId,
+      prompt_content_hash: promptRef.contentHash,
     },
     warnings,
   };
@@ -361,42 +395,19 @@ function validateOutputArtifactTypes(
   }
 }
 
-function renderWorkflowPrompt(
-  template: WorkflowTemplate,
-  profile: ProjectWorkflowProfile | null,
-  config: Record<string, unknown>,
-  outputArtifactTypes: string[],
-): string {
-  const query = optionalString(config.query);
-  const sourceMode = optionalString(config.source_mode);
-  const lines = [
-    `Workflow: ${template.name}`,
-    `Workflow template: ${template.id}`,
-    `Workflow preset: ${profile?.name ?? "Unsaved run"}`,
-    "",
-    template.description,
-  ];
-  if (query) {
-    lines.push("", "Research question:", query);
-  }
-  if (sourceMode) {
-    lines.push("", `Source mode: ${sourceMode}`);
-  }
-  lines.push(
-    "",
-    "Capabilities:",
-    ...template.capability_ids.map((id) => `- ${id}`),
-    "",
-    "Expected outputs:",
-    ...outputArtifactTypes.map((artifactType) => `- ${artifactType}`),
-    "",
-    "Use the workflow template and saved preset/request configuration as the run contract. Persist durable memory changes through proposals only.",
-  );
-  return lines.join("\n");
-}
-
 function arrayOfStrings(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
     : [];
+}
+
+function promptReference(
+  resolvedPrompt: ResolvedWorkflowRunPrompt | null,
+): { assetKey: string | null; versionId: string | null; contentHash: string | null } {
+  if (!resolvedPrompt) return { assetKey: null, versionId: null, contentHash: null };
+  return {
+    assetKey: resolvedPrompt.resolveResult.asset_key,
+    versionId: resolvedPrompt.resolveResult.version_id,
+    contentHash: resolvedPrompt.resolveResult.content_hash,
+  };
 }

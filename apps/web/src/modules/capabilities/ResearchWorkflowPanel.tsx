@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { FileText, Play, Plus, RefreshCw } from 'lucide-react'
+import { FileCode2, FileText, Play, Plus, RefreshCw, Route } from 'lucide-react'
 import { toast } from 'sonner'
 import { agentsApi, capabilitiesFrameworkApi, projectWorkflowProfilesApi } from '../../api/client'
+import { SpaceLink as Link } from '../../core/spaceNav'
 import { errMsg } from '../../lib/utils'
 import type {
   AgentOut,
@@ -19,6 +20,7 @@ import { Label } from '../../components/ui/label'
 import { Select } from '../../components/ui/select'
 import { Textarea } from '../../components/ui/textarea'
 import { ContextArtifactPicker } from '../artifacts/ContextArtifactPicker'
+import { promptLibraryPath } from '../prompts/paths'
 
 interface WorkspaceOption {
   id: string
@@ -39,6 +41,16 @@ const SOURCE_MODE_OPTIONS = [
   { value: 'runtime_native', label: 'Runtime native' },
   { value: 'manual_urls', label: 'Prompt URLs' },
 ]
+
+const AUTO_RESEARCH_FLOW = [
+  { key: 'intake', label: 'Intake', detail: 'question and deliverable scope' },
+  { key: 'source_discovery', label: 'Source discovery', detail: 'project context and permitted search paths' },
+  { key: 'screening', label: 'Screening', detail: 'relevance, quality, and exclusions' },
+  { key: 'extraction', label: 'Extraction', detail: 'evidence and claim capture' },
+  { key: 'synthesis', label: 'Synthesis', detail: 'answer, caveats, and alternatives' },
+  { key: 'citation_checks', label: 'Citation checks', detail: 'coverage and contradiction checks' },
+  { key: 'final_report', label: 'Final report', detail: 'artifact-ready output' },
+] as const
 
 function stringArray(value: unknown): string[] {
   return Array.isArray(value)
@@ -343,6 +355,7 @@ export function ResearchWorkflowPanel({
   const runtimeProviderLabel =
     selectedRuntimeProfile?.model?.provider_name ?? selectedAgent?.model?.provider_name ?? 'space/default provider'
   const runtimeModelLabel = selectedRuntimeProfile?.model?.model ?? selectedAgent?.model?.model ?? null
+  const promptAssetKeys = effectiveTemplate?.prompt_asset_keys ?? []
 
   return (
     <Card className="p-4 space-y-4">
@@ -526,6 +539,48 @@ export function ResearchWorkflowPanel({
           )}
 
           {effectiveTemplate && (
+            <div className="rounded-md border border-border bg-background/70 p-3 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Route className="size-4 text-muted-foreground" />
+                  <span className="text-sm font-medium">Auto research flow</span>
+                </div>
+                <Badge variant="secondary">research preset</Badge>
+              </div>
+              <div className="grid gap-2">
+                {AUTO_RESEARCH_FLOW.map((step, index) => (
+                  <div key={step.key} className="grid grid-cols-[22px_minmax(0,1fr)] gap-2">
+                    <div className="flex h-5 w-5 items-center justify-center rounded-full border border-border text-[10px] font-medium">
+                      {index + 1}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-xs font-medium text-foreground">{step.label}</div>
+                      <div className="text-[11px] text-muted-foreground">{step.detail}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="border-t border-border pt-3">
+                <div className="mb-2 text-[11px] font-medium uppercase text-muted-foreground">Prompt chain</div>
+                {promptAssetKeys.length > 0 ? (
+                  <div className="space-y-1.5">
+                    {promptAssetKeys.map(assetKey => (
+                      <Button key={assetKey} asChild variant="outline" size="sm" className="w-full justify-start overflow-hidden">
+                        <Link to={promptLibraryPath(assetKey)}>
+                          <FileCode2 className="size-3.5 mr-1 shrink-0" />
+                          <span className="truncate font-mono text-xs">{assetKey}</span>
+                        </Link>
+                      </Button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground">No prompt assets are registered for this template.</p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {effectiveTemplate && (
             <div className="grid gap-2 sm:grid-cols-2">
               <div>
                 <div className="text-[11px] font-medium uppercase text-muted-foreground">Source</div>
@@ -555,6 +610,22 @@ export function ResearchWorkflowPanel({
               )}
               <div>
                 <div className="text-[11px] font-medium uppercase text-muted-foreground mb-1">Prompt preview</div>
+                {(draft.run_create_body.prompt_asset_key || draft.run_create_body.prompt_version_id || draft.run_create_body.prompt_content_hash) && (
+                  <div className="mb-2 grid gap-2 text-xs sm:grid-cols-3">
+                    <div className="rounded-md border border-border px-2 py-1.5">
+                      <div className="text-[10px] uppercase text-muted-foreground">Asset</div>
+                      <div className="truncate font-mono">{draft.run_create_body.prompt_asset_key ?? 'inline'}</div>
+                    </div>
+                    <div className="rounded-md border border-border px-2 py-1.5">
+                      <div className="text-[10px] uppercase text-muted-foreground">Version</div>
+                      <div className="truncate font-mono">{draft.run_create_body.prompt_version_id ?? 'unresolved'}</div>
+                    </div>
+                    <div className="rounded-md border border-border px-2 py-1.5">
+                      <div className="text-[10px] uppercase text-muted-foreground">Hash</div>
+                      <div className="truncate font-mono">{draft.run_create_body.prompt_content_hash?.slice(0, 12) ?? 'none'}</div>
+                    </div>
+                  </div>
+                )}
                 <pre className="text-xs whitespace-pre-wrap rounded-md border border-border bg-background/60 p-3 max-h-56 overflow-auto">
                   {draft.run_create_body.prompt}
                 </pre>

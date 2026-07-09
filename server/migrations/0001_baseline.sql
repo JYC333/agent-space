@@ -176,6 +176,7 @@ CREATE TABLE "agent_versions" (
 	"model_provider_id" varchar(36),
 	"model_name" varchar(256),
 	"system_prompt" text,
+	"prompt_provenance_json" jsonb,
 	"model_config_json" jsonb NOT NULL,
 	"runtime_config_json" jsonb NOT NULL,
 	"context_policy_json" jsonb NOT NULL,
@@ -1559,6 +1560,26 @@ CREATE TABLE "policy_decision_records" (
 	CONSTRAINT "ck_policy_decision_records_risk_level" CHECK ((risk_level)::text = ANY (ARRAY[('low'::character varying)::text, ('medium'::character varying)::text, ('high'::character varying)::text, ('critical'::character varying)::text]))
 );
 --> statement-breakpoint
+CREATE TABLE "prompt_deployment_refs" (
+	"id" varchar(36) PRIMARY KEY NOT NULL,
+	"space_id" varchar(36),
+	"asset_id" varchar(36) NOT NULL,
+	"scope_type" varchar(16) NOT NULL,
+	"scope_id" varchar(36),
+	"label" varchar(64) NOT NULL,
+	"version_id" varchar(36) NOT NULL,
+	"status" varchar(16) DEFAULT 'active' NOT NULL,
+	"promoted_by_user_id" varchar(36),
+	"promoted_from_proposal_id" varchar(36),
+	"created_at" timestamp with time zone NOT NULL,
+	"updated_at" timestamp with time zone NOT NULL,
+	CONSTRAINT "ck_prompt_deployment_refs_label" CHECK ((label)::text ~ '^[a-z][a-z0-9_.-]{0,63}$'::text),
+	CONSTRAINT "ck_prompt_deployment_refs_scope_type" CHECK ((scope_type)::text = ANY (ARRAY[('system'::character varying)::text, ('space'::character varying)::text, ('project'::character varying)::text, ('user'::character varying)::text, ('agent'::character varying)::text])),
+	CONSTRAINT "ck_prompt_deployment_refs_status" CHECK ((status)::text = ANY (ARRAY[('active'::character varying)::text, ('archived'::character varying)::text])),
+	CONSTRAINT "ck_prompt_deployment_refs_scope_id" CHECK ((((scope_type)::text = 'system'::text) AND (scope_id IS NULL)) OR (((scope_type)::text <> 'system'::text) AND (scope_id IS NOT NULL))),
+	CONSTRAINT "ck_prompt_deployment_refs_space_id" CHECK ((((scope_type)::text = 'system'::text) AND (space_id IS NULL)) OR (((scope_type)::text <> 'system'::text) AND (space_id IS NOT NULL)))
+);
+--> statement-breakpoint
 CREATE TABLE "project_corpus_items" (
 	"id" varchar(36) PRIMARY KEY NOT NULL,
 	"space_id" varchar(36) NOT NULL,
@@ -2142,20 +2163,6 @@ CREATE TABLE "retrieval_objects" (
 	"updated_at" timestamp with time zone NOT NULL,
 	"source_updated_at" timestamp with time zone,
 	CONSTRAINT "ck_retrieval_objects_source_connections_array" CHECK (jsonb_typeof(source_connection_ids_json) = 'array'::text)
-);
---> statement-breakpoint
-CREATE TABLE "space_retrieval_prompts" (
-	"id" varchar(36) PRIMARY KEY NOT NULL,
-	"space_id" varchar(36) NOT NULL,
-	"task" varchar(64) NOT NULL,
-	"system_prompt" text NOT NULL,
-	"user_template" text NOT NULL,
-	"created_at" timestamp with time zone NOT NULL,
-	"updated_at" timestamp with time zone NOT NULL,
-	CONSTRAINT "uq_space_retrieval_prompts_space_task" UNIQUE("space_id","task"),
-	CONSTRAINT "ck_space_retrieval_prompts_task" CHECK ((task)::text = ANY (ARRAY[('query_rewrite'::character varying)::text])),
-	CONSTRAINT "ck_space_retrieval_prompts_system_prompt" CHECK (length(btrim(system_prompt)) > 0),
-	CONSTRAINT "ck_space_retrieval_prompts_user_template" CHECK (strpos(user_template, '{query}'::text) > 0)
 );
 --> statement-breakpoint
 CREATE TABLE "external_run_records" (
@@ -3438,6 +3445,11 @@ ALTER TABLE "personal_memory_grants" ADD CONSTRAINT "personal_memory_grants_targ
 ALTER TABLE "policies" ADD CONSTRAINT "fk_policies_created_from_proposal_id_proposals" FOREIGN KEY ("created_from_proposal_id") REFERENCES "public"."proposals"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "policies" ADD CONSTRAINT "fk_policies_supersedes_policy_id_policies" FOREIGN KEY ("supersedes_policy_id") REFERENCES "public"."policies"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "policies" ADD CONSTRAINT "policies_space_id_fkey" FOREIGN KEY ("space_id") REFERENCES "public"."spaces"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "prompt_deployment_refs" ADD CONSTRAINT "prompt_deployment_refs_space_id_fkey" FOREIGN KEY ("space_id") REFERENCES "public"."spaces"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "prompt_deployment_refs" ADD CONSTRAINT "prompt_deployment_refs_asset_id_fkey" FOREIGN KEY ("asset_id") REFERENCES "public"."evolvable_assets"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "prompt_deployment_refs" ADD CONSTRAINT "prompt_deployment_refs_version_id_fkey" FOREIGN KEY ("version_id") REFERENCES "public"."evolvable_asset_versions"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "prompt_deployment_refs" ADD CONSTRAINT "prompt_deployment_refs_promoted_by_user_id_fkey" FOREIGN KEY ("promoted_by_user_id") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "prompt_deployment_refs" ADD CONSTRAINT "prompt_deployment_refs_promoted_from_proposal_id_fkey" FOREIGN KEY ("promoted_from_proposal_id") REFERENCES "public"."proposals"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "project_corpus_items" ADD CONSTRAINT "project_corpus_items_added_by_user_id_fkey" FOREIGN KEY ("added_by_user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "project_corpus_items" ADD CONSTRAINT "project_corpus_items_evidence_id_fkey" FOREIGN KEY ("evidence_id") REFERENCES "public"."extracted_evidence"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "project_corpus_items" ADD CONSTRAINT "project_corpus_items_object_id_fkey" FOREIGN KEY ("object_id","space_id") REFERENCES "public"."space_objects"("id","space_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -3556,7 +3568,6 @@ ALTER TABLE "retrieval_edges" ADD CONSTRAINT "retrieval_edges_space_id_fkey" FOR
 ALTER TABLE "retrieval_feedback_events" ADD CONSTRAINT "retrieval_feedback_events_actor_user_id_fkey" FOREIGN KEY ("actor_user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "retrieval_feedback_events" ADD CONSTRAINT "retrieval_feedback_events_space_id_fkey" FOREIGN KEY ("space_id") REFERENCES "public"."spaces"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "retrieval_objects" ADD CONSTRAINT "retrieval_objects_space_id_fkey" FOREIGN KEY ("space_id") REFERENCES "public"."spaces"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "space_retrieval_prompts" ADD CONSTRAINT "space_retrieval_prompts_space_id_fkey" FOREIGN KEY ("space_id") REFERENCES "public"."spaces"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "external_run_records" ADD CONSTRAINT "external_run_records_run_id_fkey" FOREIGN KEY ("run_id") REFERENCES "public"."runs"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "external_run_records" ADD CONSTRAINT "external_run_records_space_id_fkey" FOREIGN KEY ("space_id") REFERENCES "public"."spaces"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "run_evaluations" ADD CONSTRAINT "run_evaluations_run_id_fkey" FOREIGN KEY ("run_id") REFERENCES "public"."runs"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -4164,6 +4175,10 @@ CREATE INDEX "ix_policy_decision_records_run_id" ON "policy_decision_records" US
 CREATE INDEX "ix_policy_decision_records_space_action_created" ON "policy_decision_records" USING btree ("space_id","action","created_at");--> statement-breakpoint
 CREATE INDEX "ix_policy_decision_records_space_created" ON "policy_decision_records" USING btree ("space_id","created_at");--> statement-breakpoint
 CREATE INDEX "ix_policy_decision_records_space_id" ON "policy_decision_records" USING btree ("space_id");--> statement-breakpoint
+CREATE INDEX "ix_prompt_deployment_refs_asset_label" ON "prompt_deployment_refs" USING btree ("asset_id","label");--> statement-breakpoint
+CREATE INDEX "ix_prompt_deployment_refs_space_id" ON "prompt_deployment_refs" USING btree ("space_id");--> statement-breakpoint
+CREATE INDEX "ix_prompt_deployment_refs_version_id" ON "prompt_deployment_refs" USING btree ("version_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "uq_prompt_deployment_refs_active_scope_label" ON "prompt_deployment_refs" USING btree (COALESCE("space_id", ''),"asset_id","scope_type",COALESCE("scope_id", ''),"label") WHERE (status)::text = 'active'::text;--> statement-breakpoint
 CREATE INDEX "ix_project_corpus_items_added_by_user_id" ON "project_corpus_items" USING btree ("added_by_user_id");--> statement-breakpoint
 CREATE INDEX "ix_project_corpus_items_evidence_id" ON "project_corpus_items" USING btree ("evidence_id");--> statement-breakpoint
 CREATE INDEX "ix_project_corpus_items_object_id" ON "project_corpus_items" USING btree ("object_id");--> statement-breakpoint
@@ -4282,7 +4297,6 @@ CREATE INDEX "ix_retrieval_objects_source_connections" ON "retrieval_objects" US
 CREATE INDEX "ix_retrieval_objects_space_id" ON "retrieval_objects" USING btree ("space_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "ix_retrieval_objects_space_object_unique" ON "retrieval_objects" USING btree ("space_id","object_type","object_id");--> statement-breakpoint
 CREATE INDEX "ix_retrieval_objects_status" ON "retrieval_objects" USING btree ("status");--> statement-breakpoint
-CREATE INDEX "ix_space_retrieval_prompts_space_id" ON "space_retrieval_prompts" USING btree ("space_id");--> statement-breakpoint
 CREATE INDEX "ix_external_run_records_run_id" ON "external_run_records" USING btree ("run_id");--> statement-breakpoint
 CREATE INDEX "ix_external_run_records_runtime_adapter_type" ON "external_run_records" USING btree ("runtime_adapter_type");--> statement-breakpoint
 CREATE INDEX "ix_external_run_records_space_id" ON "external_run_records" USING btree ("space_id");--> statement-breakpoint

@@ -109,3 +109,6 @@ export * from "./sourceCustomSourceHandlers.js";
 
 // Source Level 2 Source recipe contracts
 export * from "./sourceRecipes.js";
+
+// Centralized prompt registry contracts
+export * from "./prompts.js";

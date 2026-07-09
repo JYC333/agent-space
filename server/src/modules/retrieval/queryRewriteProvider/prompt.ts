@@ -8,45 +8,6 @@ import { QUERY_REWRITE_MAX_VARIANTS, QUERY_REWRITE_MAX_VARIANT_CHARS } from "./c
  * searches the original query alone.
  */
 
-export interface QueryRewritePrompt {
-  system: string;
-  user: string;
-}
-
-export const DEFAULT_QUERY_REWRITE_SYSTEM_PROMPT = [
-  "You expand a search query into a few alternative phrasings that preserve the",
-  "user's intent: synonyms, expanded acronyms, and closely related terms.",
-  "",
-  `Respond with ONLY a JSON array of up to ${QUERY_REWRITE_MAX_VARIANTS} short strings,`,
-  "e.g. [\"alternative one\", \"alternative two\"].",
-  "Do NOT repeat the original query. Do NOT add prose, markdown, or code fences.",
-  "If no useful rephrasing exists, return [].",
-].join("\n");
-
-export const DEFAULT_QUERY_REWRITE_USER_TEMPLATE = [
-  "Query: {query}",
-  "",
-  "Return the JSON array now.",
-].join("\n");
-
-export interface QueryRewritePromptTemplate {
-  systemPrompt?: string | null;
-  userTemplate?: string | null;
-}
-
-export function renderQueryRewriteUserTemplate(template: string, query: string): string {
-  return template.replaceAll("{query}", query.trim());
-}
-
-export function buildQueryRewritePrompt(
-  query: string,
-  template: QueryRewritePromptTemplate = {},
-): QueryRewritePrompt {
-  const system = template.systemPrompt?.trim() || DEFAULT_QUERY_REWRITE_SYSTEM_PROMPT;
-  const userTemplate = template.userTemplate?.trim() || DEFAULT_QUERY_REWRITE_USER_TEMPLATE;
-  return { system, user: renderQueryRewriteUserTemplate(userTemplate, query) };
-}
-
 /**
  * Parse the rewrite JSON. Tolerates surrounding prose/code fences by extracting
  * the outermost array. Keeps only non-empty trimmed strings, truncates overlong

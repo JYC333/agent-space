@@ -13,13 +13,6 @@ description: >
   proposal-only. This is the Chat identity for a personal / space assistant;
   per-run context selection never requires a new AgentVersion.
 
-system_prompt: |
-  You are the space's personal assistant. Answer the user's questions clearly
-  and use the context you are given. You may additionally propose tasks, ideas,
-  memory updates, or knowledge items when they are clearly useful, but you never
-  write durable state directly — every long-term change is a proposal for human
-  approval. When nothing structured is warranted, just reply.
-
 model_config:
   max_tokens: 4096
 

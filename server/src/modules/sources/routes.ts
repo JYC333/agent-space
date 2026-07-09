@@ -28,7 +28,6 @@ import {
   persistRetrievalBriefArtifact,
   type RetrievalObjectType,
 } from "../retrieval";
-import { readSpaceRetrievalPrompt } from "../retrieval/prompts";
 import { readSpaceRetrievalSettings, resolveRetrievalSearchControls } from "../retrieval/settings";
 import { ProviderQueryEmbedder } from "../retrieval/embedding/queryEmbedder";
 import { ProviderQueryRewriter } from "../retrieval/queryRewriteProvider/providerQueryRewriter";
@@ -62,9 +61,6 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       const retrievalSettings = await readSpaceRetrievalSettings(pool, identity.spaceId);
       const controls = resolveRetrievalSearchControls(body, retrievalSettings);
       const store = resolveProviderCommandStore(context.config);
-      const queryRewritePrompt = retrievalSettings.queryRewriteEnabled
-        ? await readSpaceRetrievalPrompt(pool, identity.spaceId, "query_rewrite")
-        : null;
       const egressPolicy = { externalEgressEnabled: retrievalSettings.externalEgressEnabled };
       const search = new RetrievalSearchService(pool, sourceRetrievalRegistry, {
         egressPolicy,
@@ -86,7 +82,6 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
           ? new ProviderQueryRewriter(store, {
               databaseUrl: context.config.databaseUrl,
               surface: "source_search",
-              prompt: queryRewritePrompt,
               egressPolicy,
             })
           : undefined,

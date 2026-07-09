@@ -64,7 +64,6 @@ import {
   persistObjectSchemaSuggestionReportArtifact,
   scanObjectSchemaSuggestions,
 } from "./objectSchemaSuggestions";
-import { readSpaceRetrievalPrompt } from "../retrieval/prompts";
 import { readSpaceRetrievalSettings, resolveRetrievalSearchControls } from "../retrieval/settings";
 import { canInitiateContextOpsScan, canReviewSpaceOpsPackets } from "../contextOps/reviewPolicy";
 import { enqueueRetrievalEmbeddingBackfill } from "../retrieval/embedding/job";
@@ -102,9 +101,6 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       const retrievalSettings = await readSpaceRetrievalSettings(pool, identity.spaceId);
       const controls = resolveRetrievalSearchControls(body, retrievalSettings);
       const store = resolveProviderCommandStore(context.config);
-      const queryRewritePrompt = retrievalSettings.queryRewriteEnabled
-        ? await readSpaceRetrievalPrompt(pool, identity.spaceId, "query_rewrite")
-        : null;
       const egressPolicy = { externalEgressEnabled: retrievalSettings.externalEgressEnabled };
       const search = new RetrievalSearchService(pool, knowledgeRetrievalRegistry, {
         egressPolicy,
@@ -131,7 +127,6 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
           ? new ProviderQueryRewriter(store, {
               databaseUrl: context.config.databaseUrl,
               surface: "knowledge_search",
-              prompt: queryRewritePrompt,
               egressPolicy,
             })
           : undefined,
@@ -799,9 +794,6 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       const retrievalSettings = await readSpaceRetrievalSettings(pool, identity.spaceId);
       const controls = resolveRetrievalSearchControls(body, retrievalSettings);
       const store = resolveProviderCommandStore(context.config);
-      const queryRewritePrompt = retrievalSettings.queryRewriteEnabled
-        ? await readSpaceRetrievalPrompt(pool, identity.spaceId, "query_rewrite")
-        : null;
       const egressPolicy = { externalEgressEnabled: retrievalSettings.externalEgressEnabled };
       const search = new RetrievalSearchService(pool, knowledgeRetrievalRegistry, {
         egressPolicy,
@@ -819,7 +811,6 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
           ? new ProviderQueryRewriter(store, {
               databaseUrl: context.config.databaseUrl,
               surface: "knowledge_explain",
-              prompt: queryRewritePrompt,
               egressPolicy,
             })
           : undefined,

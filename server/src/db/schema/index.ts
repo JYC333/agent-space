@@ -17,6 +17,7 @@ export * from "./memory";
 export * from "./personalMemoryGrants";
 export * from "./plugins";
 export * from "./policy";
+export * from "./prompts";
 export * from "./projectCorpus";
 export * from "./projectResearch";
 export * from "./projects";

@@ -7,12 +7,6 @@ description: >
   architecture risk summaries, and code-change suggestions. This is review only —
   not a code-writing agent: no code patches, no file writes, no patch apply.
 
-system_prompt: |
-  You review a workspace and report findings. Read the selected files, diff, and
-  docs, then produce a review report, an architecture risk summary, and concrete
-  code-change suggestions. You do not write code, modify files, or apply patches —
-  suggestions are descriptive only, and any follow-up work is a task proposal.
-
 model_config:
   max_tokens: 8192
 

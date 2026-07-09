@@ -51,6 +51,7 @@ vi.mock('../../../api/client', () => ({
         output_artifact_types: ['research_brief.v1', 'research_source_table.v1'],
         proposal_policy: {},
         recommended_runtime_adapters: ['model_api'],
+        prompt_asset_keys: ['workflow.research.technical_survey.run'],
       },
     ]),
   },
@@ -87,6 +88,7 @@ vi.mock('../../../api/client', () => ({
         output_artifact_types: ['research_brief.v1', 'research_source_table.v1'],
         proposal_policy: {},
         recommended_runtime_adapters: ['model_api'],
+        prompt_asset_keys: ['workflow.research.technical_survey.run'],
       },
       workflow_profile: null,
       capability_ids: ['research.source_collect'],
@@ -117,6 +119,7 @@ vi.mock('../../../api/client', () => ({
         output_artifact_types: ['research_brief.v1', 'research_source_table.v1'],
         proposal_policy: {},
         recommended_runtime_adapters: ['model_api'],
+        prompt_asset_keys: ['workflow.research.technical_survey.run'],
       },
       workflow_profile: {
         id: 'profile-1',

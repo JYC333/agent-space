@@ -170,30 +170,6 @@ function fakeSpaceRepo(overrides: Partial<SpaceRepository> = {}): SpaceRepositor
         updated_at: "2026-06-15T12:00:00.000Z",
       };
     },
-    async getRetrievalPrompt(_userId, spaceId, task) {
-      return {
-        space_id: spaceId,
-        task,
-        system_prompt: "default system",
-        user_template: "Query: {query}",
-        default_system_prompt: "default system",
-        default_user_template: "Query: {query}",
-        created_at: "2026-06-15T12:00:00.000Z",
-        updated_at: "2026-06-15T12:00:00.000Z",
-      };
-    },
-    async updateRetrievalPrompt(_userId, spaceId, task, data) {
-      return {
-        space_id: spaceId,
-        task,
-        system_prompt: data.system_prompt ?? "default system",
-        user_template: data.user_template ?? "Query: {query}",
-        default_system_prompt: "default system",
-        default_user_template: "Query: {query}",
-        created_at: "2026-06-15T12:00:00.000Z",
-        updated_at: "2026-06-15T12:00:00.000Z",
-      };
-    },
     ...overrides,
   };
 }
@@ -539,42 +515,6 @@ describe("native server auth routes", () => {
       context_ops_scan_mode: "members",
       embedding_dimensions: 768,
       max_results_default: 12,
-    });
-  });
-
-  it("serves space retrieval prompt settings locally", async () => {
-    __setAuthRepositoryForTests(fakeRepo());
-    __setSpaceRepositoryForTests(fakeSpaceRepo());
-    app = server();
-
-    const current = await app.inject({
-      method: "GET",
-      url: "/api/v1/spaces/space-1/retrieval-prompts/query_rewrite",
-    });
-    expect(current.statusCode).toBe(200);
-    expect(current.json()).toMatchObject({
-      space_id: "space-1",
-      task: "query_rewrite",
-      system_prompt: "default system",
-      user_template: "Query: {query}",
-      default_system_prompt: "default system",
-      default_user_template: "Query: {query}",
-    });
-
-    const updated = await app.inject({
-      method: "PATCH",
-      url: "/api/v1/spaces/space-1/retrieval-prompts/query_rewrite",
-      headers: { "content-type": "application/json" },
-      payload: JSON.stringify({
-        system_prompt: "custom system",
-        user_template: "Rewrite: {query}",
-      }),
-    });
-    expect(updated.statusCode).toBe(200);
-    expect(updated.json()).toMatchObject({
-      task: "query_rewrite",
-      system_prompt: "custom system",
-      user_template: "Rewrite: {query}",
     });
   });
 

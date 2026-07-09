@@ -7,6 +7,7 @@ import {
   __setCapabilitiesIdentityForTests,
   __setCapabilitiesRepositoryFactoryForTests,
   __setCapabilitiesSkillFetcherForTests,
+  __setCapabilitiesWorkflowRunPromptResolverForTests,
 } from "../src/modules/capabilities";
 import type {
   CapabilityDefinition,
@@ -20,6 +21,7 @@ afterEach(async () => {
   __setCapabilitiesIdentityForTests(null);
   __setCapabilitiesRepositoryFactoryForTests(null);
   __setCapabilitiesSkillFetcherForTests(null);
+  __setCapabilitiesWorkflowRunPromptResolverForTests(null);
   await app?.close();
   app = undefined;
 });
@@ -242,6 +244,7 @@ describe("capabilities routes", () => {
 
   it("builds a run draft from an enabled project workflow profile", async () => {
     __setCapabilitiesIdentityForTests({ spaceId: "space-1", userId: "user-1" });
+    __setCapabilitiesWorkflowRunPromptResolverForTests(workflowPromptResolverForTests);
     const repo = fakeRepository();
     __setCapabilitiesRepositoryFactoryForTests(() => repo);
     app = buildServer(config(), { logger: false });
@@ -279,6 +282,9 @@ describe("capabilities routes", () => {
         runtime_profile_id: "runtime-profile-1",
         adapter_type: null,
         capability_id: "research.source_collect",
+        prompt_asset_key: "workflow.research.technical_survey.run",
+        prompt_version_id: "workflow-prompt-version",
+        prompt_content_hash: "workflow-prompt-hash",
         capabilities_json: [
           "research.source_collect",
           "research.source_summarize",
@@ -318,6 +324,7 @@ describe("capabilities routes", () => {
 
   it("builds a run draft directly from a workflow template without saving a preset", async () => {
     __setCapabilitiesIdentityForTests({ spaceId: "space-1", userId: "user-1" });
+    __setCapabilitiesWorkflowRunPromptResolverForTests(workflowPromptResolverForTests);
     __setCapabilitiesRepositoryFactoryForTests(() => fakeRepository());
     app = buildServer(config(), { logger: false });
 
@@ -356,11 +363,13 @@ describe("capabilities routes", () => {
     });
     expect(draft.json().run_create_body.prompt).toContain("Workflow preset: Unsaved run");
     expect(draft.json().run_create_body.prompt).toContain("LLM eval harnesses");
+    expect(draft.json().run_create_body.prompt_asset_key).toBe("workflow.research.technical_survey.run");
     expect(draft.json().warnings).not.toContain("agent_required_to_execute_run_draft");
   });
 
   it("rejects workflow draft output types outside the selected template", async () => {
     __setCapabilitiesIdentityForTests({ spaceId: "space-1", userId: "user-1" });
+    __setCapabilitiesWorkflowRunPromptResolverForTests(workflowPromptResolverForTests);
     __setCapabilitiesRepositoryFactoryForTests(() => fakeRepository());
     app = buildServer(config(), { logger: false });
 
@@ -381,6 +390,7 @@ describe("capabilities routes", () => {
 
   it("carries a selected agent into the run draft and rejects unknown fields", async () => {
     __setCapabilitiesIdentityForTests({ spaceId: "space-1", userId: "user-1" });
+    __setCapabilitiesWorkflowRunPromptResolverForTests(workflowPromptResolverForTests);
     const repo = fakeRepository();
     __setCapabilitiesRepositoryFactoryForTests(() => repo);
     app = buildServer(config(), { logger: false });
@@ -439,6 +449,57 @@ describe("capabilities routes", () => {
     expect(list.statusCode).toBe(404);
   });
 });
+
+async function workflowPromptResolverForTests(input: {
+  template: { id: string; name: string; description: string; capability_ids: string[] };
+  profile: ProjectWorkflowProfile | null;
+  config: Record<string, unknown>;
+  outputArtifactTypes: readonly string[];
+}) {
+  const query = typeof input.config.query === "string" && input.config.query.trim()
+    ? input.config.query.trim()
+    : null;
+  const sourceMode = typeof input.config.source_mode === "string" && input.config.source_mode.trim()
+    ? input.config.source_mode.trim()
+    : null;
+  const lines = [
+    `Workflow: ${input.template.name}`,
+    `Workflow template: ${input.template.id}`,
+    `Workflow preset: ${input.profile?.name ?? "Unsaved run"}`,
+    "",
+    input.template.description,
+  ];
+  if (query) lines.push("", "Research question:", query);
+  if (sourceMode) lines.push("", `Source mode: ${sourceMode}`);
+  lines.push(
+    "",
+    "Capabilities:",
+    ...input.template.capability_ids.map((id) => `- ${id}`),
+    "",
+    "Expected outputs:",
+    ...input.outputArtifactTypes.map((artifactType) => `- ${artifactType}`),
+    "",
+    "Use the workflow template and saved preset/request configuration as the run contract. Persist durable memory changes through proposals only.",
+  );
+  const prompt = lines.join("\n");
+  return {
+    prompt,
+    resolveResult: {
+      asset_key: `workflow.${input.template.id}.run`,
+      version_id: "workflow-prompt-version",
+      content_hash: "workflow-prompt-hash",
+      scope_type: "system",
+      scope_id: null,
+      resolution_trace: ["system_baseline"],
+      fallback_reason: null,
+      rendered_messages: null,
+      rendered_text: prompt,
+      rendered_hash: "rendered-hash",
+      validation_warnings: [],
+      validation_errors: [],
+    },
+  } as never;
+}
 
 function proposalOut(id: string, identity: SpaceUserIdentity, proposalType: string) {
   return {

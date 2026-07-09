@@ -636,22 +636,6 @@ export type SpaceRetrievalSettingsUpdate = Partial<Pick<
   | 'max_results_default'
   | 'ranking_config'
 >>
-export type RetrievalPromptTask = 'query_rewrite'
-export interface SpaceRetrievalPrompt {
-  space_id: string
-  task: RetrievalPromptTask
-  system_prompt: string
-  user_template: string
-  default_system_prompt: string
-  default_user_template: string
-  created_at: string
-  updated_at: string
-}
-export type SpaceRetrievalPromptUpdate = Partial<Pick<
-  SpaceRetrievalPrompt,
-  | 'system_prompt'
-  | 'user_template'
->>
 export type RetrievalFeedbackSignal = 'opened' | 'dwell' | 'used' | 'explicit_relevant' | 'accepted' | 'pinned'
 export interface RetrievalFeedbackRequest {
   query: string
@@ -2100,16 +2084,6 @@ export interface Message {
   created_at: string
 }
 
-export type CondenserPresetProfile = 'adaptive' | 'general' | 'coding' | 'project'
-
-export interface CondenserPresetPromptOut {
-  profile: CondenserPresetProfile
-  system: string
-  instructions: string
-  shared_system_rules: string
-  effective_system: string
-}
-
 /** One synchronous Personal Assistant chat turn result (`ChatTurnOut`). */
 export interface ChatTurnOut {
   session_id: string
@@ -2247,6 +2221,9 @@ export interface Run {
   mode: string
   prompt: string | null
   instruction: string | null
+  prompt_asset_key?: string | null
+  prompt_version_id?: string | null
+  prompt_content_hash?: string | null
   scheduled_at: string | null
   started_at: string | null
   ended_at: string | null
@@ -3008,6 +2985,180 @@ export interface ResolvedEvolvableAssetVersion {
   fallbackReason: string | null
 }
 
+export type PromptType =
+  | 'chat'
+  | 'text'
+  | 'workflow'
+  | 'retrieval_query'
+  | 'retrieval_rerank'
+  | 'retrieval_synthesis'
+  | 'condenser'
+  | 'agent_system'
+
+export type PromptAssetScopeType = 'system' | 'space' | 'project' | 'user' | 'agent'
+
+export type PromptVersionStatus =
+  | 'draft'
+  | 'candidate'
+  | 'testing'
+  | 'approved'
+  | 'deprecated'
+  | 'archived'
+
+export type PromptVersionSource =
+  | 'built_in'
+  | 'user_authored'
+  | 'evolved'
+  | 'imported'
+  | 'generated'
+
+export interface PromptMessage {
+  role: 'system' | 'user' | 'assistant'
+  content: string
+}
+
+export interface PromptAssetContent {
+  schema_version?: 'prompt_asset.v1'
+  prompt_type?: PromptType
+  messages?: PromptMessage[] | null
+  template?: string | null
+  variables_schema?: Record<string, unknown>
+  output_schema?: Record<string, unknown>
+  model_config?: Record<string, unknown>
+  rendering?: Record<string, unknown>
+  safety?: Record<string, unknown>
+  [key: string]: unknown
+}
+
+export interface PromptAssetSummary {
+  id: string
+  space_id: string | null
+  asset_key: string
+  display_name: string
+  description: string | null
+  prompt_type: PromptType | null
+  status: 'active' | 'disabled' | 'archived'
+  owner_scope_type: PromptAssetScopeType
+  owner_scope_id: string | null
+  current_system_version_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface PromptAssetDetail extends PromptAssetSummary {
+  metadata_json: Record<string, unknown>
+}
+
+export interface PromptVersion {
+  id: string
+  asset_id: string
+  space_id: string | null
+  scope_type: PromptAssetScopeType
+  scope_id: string | null
+  parent_version_id: string | null
+  version: number
+  status: PromptVersionStatus
+  source: PromptVersionSource
+  content: PromptAssetContent | null
+  content_hash: string | null
+  eval_summary_json: Record<string, unknown> | null
+  promotion_proposal_id: string | null
+  created_by_user_id: string | null
+  approved_by_user_id: string | null
+  created_at: string
+  updated_at: string
+  stale_parent: boolean
+}
+
+export interface PromptVersionCreateRequest {
+  scope_type?: PromptAssetScopeType
+  scope_id?: string | null
+  parent_version_id?: string | null
+  source?: PromptVersionSource
+  content_ref?: string | null
+  content_hash?: string | null
+  content_json: PromptAssetContent
+}
+
+export interface PromptDeploymentRef {
+  id: string
+  space_id: string | null
+  asset_id: string
+  scope_type: PromptAssetScopeType
+  scope_id: string | null
+  label: string
+  version_id: string
+  status: 'active' | 'archived'
+  promoted_by_user_id: string | null
+  promoted_from_proposal_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface PromptRenderPreviewRequest {
+  version_id?: string | null
+  content_json?: PromptAssetContent
+  variables?: Record<string, unknown>
+}
+
+export interface PromptRenderPreviewResult {
+  asset_key: string
+  version_id: string | null
+  rendered_messages: PromptMessage[] | null
+  rendered_text: string | null
+  validation_warnings: string[]
+  validation_errors: string[]
+}
+
+export interface PromptEvaluationRequest {
+  version_id: string
+  eval_suite_ref: Record<string, unknown>
+  evaluator_version: string
+  status?: 'queued' | 'running' | 'passed' | 'failed' | 'blocked' | 'cancelled'
+  baseline_version_id?: string | null
+  run_id?: string | null
+  model_provider_ref?: Record<string, unknown> | null
+  metrics?: Record<string, unknown>
+  blockers?: unknown[]
+  output_artifact_id?: string | null
+  report_artifact_id?: string | null
+}
+
+export interface PromptEvaluationResult {
+  id: string
+  asset_id: string
+  candidate_version_id: string
+  baseline_version_id: string | null
+  run_id: string | null
+  eval_suite_ref: Record<string, unknown>
+  evaluator_version: string
+  status: string
+  metrics: Record<string, unknown>
+  blockers: unknown[]
+  output_artifact_id: string | null
+  report_artifact_id: string | null
+  created_by_user_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface PromptPromotionRequest {
+  version_id: string
+  label?: string
+  scope_type?: PromptAssetScopeType
+  scope_id?: string | null
+  deprecate_previous?: boolean
+  evaluation_run_ids?: string[]
+  reason?: string | null
+}
+
+export interface PromptRollbackRequest {
+  label?: string
+  scope_type?: PromptAssetScopeType
+  scope_id?: string | null
+  version_id?: string | null
+}
+
 export interface AgentModelSummary {
   provider_id: string | null
   provider_name: string | null
@@ -3048,6 +3199,7 @@ export interface AgentVersionOut {
   model_provider_id: string | null
   model_name: string | null
   system_prompt: string | null
+  prompt_provenance_json: Record<string, unknown> | null
   model_config_json: Record<string, unknown>
   runtime_config_json: Record<string, unknown>
   context_policy_json: Record<string, unknown>
@@ -3241,6 +3393,9 @@ export interface RunCreateBody {
   capabilities_json?: string[]
   model_provider_id?: string | null
   model?: string | null
+  prompt_asset_key?: string | null
+  prompt_version_id?: string | null
+  prompt_content_hash?: string | null
   context_artifact_ids?: string[]
 }
 
@@ -3339,6 +3494,7 @@ export interface WorkflowTemplate {
   output_artifact_types: string[]
   proposal_policy: Record<string, unknown>
   recommended_runtime_adapters: string[]
+  prompt_asset_keys: string[]
 }
 
 export interface ProjectWorkflowProfile {

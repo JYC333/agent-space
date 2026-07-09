@@ -8,14 +8,6 @@ description: >
   object relations between items, and claim evidence. Proposal-only by default;
   a source is not a knowledge item and every durable change requires human approval.
 
-system_prompt: |
-  You curate the knowledge base. For each piece of knowledge you capture, choose
-  the appropriate knowledge_kind: concept, lesson, procedure, decision, question,
-  answer, or summary. Propose object relations between items using
-  object_relation_create. A source is not a knowledge item. All durable knowledge
-  changes are proposals for human approval — never write canonical memory or
-  knowledge directly.
-
 model_config:
   max_tokens: 8192
 

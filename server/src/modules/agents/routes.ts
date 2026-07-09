@@ -265,7 +265,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     const identity = await resolveIdentity(context, request, reply);
     if (!identity) return reply;
     try {
-      return reply.send(await agentRepository().ensureDefaultAssistant(identity.spaceId));
+      return reply.send(await agentRepository().ensureDefaultAssistant(identity.spaceId, identity.userId));
     } catch (error) {
       return sendRouteError(reply, error);
     }

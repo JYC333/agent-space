@@ -67,8 +67,6 @@ export type SessionCondenserProfile = 'adaptive' | 'general' | 'coding' | 'proje
 
 export interface SessionCondenserConfig {
   profile: SessionCondenserProfile
-  custom_system: string
-  custom_instructions: string
 }
 
 export const CONDENSER_PROFILE_OPTIONS: {
@@ -102,10 +100,6 @@ function asCondenserProfile(value: unknown): SessionCondenserProfile {
   return value === 'general' || value === 'coding' || value === 'project' || value === 'adaptive'
     ? value
     : 'adaptive'
-}
-
-function asString(value: unknown): string {
-  return typeof value === 'string' ? value : ''
 }
 
 // ── Input contexts ────────────────────────────────────────────────────────────
@@ -183,8 +177,6 @@ export function sessionCondenserConfig(version: { context_policy_json?: unknown 
   const condenser = asObj(policy.condenser)
   return {
     profile: asCondenserProfile(condenser.profile),
-    custom_system: asString(condenser.custom_system),
-    custom_instructions: asString(condenser.custom_instructions),
   }
 }
 
@@ -206,16 +198,13 @@ export function buildCondenserConfigContextPolicy(
   base: Record<string, unknown>,
   config: SessionCondenserConfig,
 ): Record<string, unknown> {
+  const condenserBase = { ...asObj(base.condenser) }
+  delete condenserBase.custom_system
+  delete condenserBase.custom_instructions
   const condenser: Record<string, unknown> = {
-    ...asObj(base.condenser),
+    ...condenserBase,
     profile: config.profile,
   }
-  const customSystem = config.custom_system.trim()
-  const customInstructions = config.custom_instructions.trim()
-  if (customSystem) condenser.custom_system = customSystem
-  else delete condenser.custom_system
-  if (customInstructions) condenser.custom_instructions = customInstructions
-  else delete condenser.custom_instructions
   return {
     ...base,
     condenser,

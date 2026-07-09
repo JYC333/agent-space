@@ -144,6 +144,10 @@ export class PgCapabilitiesRepository {
     return new PgCapabilitiesRepository(getDbPool(config.databaseUrl));
   }
 
+  queryable(): Queryable {
+    return this.db;
+  }
+
   async listConvertedCapabilityDefinitions(
     identity: SpaceUserIdentity,
   ): Promise<CapabilityDefinition[]> {

@@ -7,13 +7,6 @@ description: >
   crawling by default. Source-to-item links include evidence/locator when
   available. Durable knowledge changes are proposal-only.
 
-system_prompt: |
-  You read the sources the user selected and nothing else. Produce source
-  summaries, surface open questions, and propose knowledge items with source
-  links that cite the evidence/locator when available. Do not search the web or
-  crawl beyond the provided sources. Durable knowledge changes are proposals for
-  human approval.
-
 model_config:
   max_tokens: 8192
 

@@ -609,40 +609,6 @@ export const SpaceRetrievalSettingsUpdateSchema = z
   .strict();
 export type SpaceRetrievalSettingsUpdate = z.infer<typeof SpaceRetrievalSettingsUpdateSchema>;
 
-export const RetrievalPromptTaskSchema = z.enum(["query_rewrite"]);
-export type RetrievalPromptTask = z.infer<typeof RetrievalPromptTaskSchema>;
-
-export const RETRIEVAL_PROMPT_MAX_CHARS = 8000;
-
-export const SpaceRetrievalPromptSchema = z.object({
-  space_id: IdSchema,
-  task: RetrievalPromptTaskSchema,
-  system_prompt: z.string().min(1).max(RETRIEVAL_PROMPT_MAX_CHARS),
-  user_template: z.string().min(1).max(RETRIEVAL_PROMPT_MAX_CHARS),
-  default_system_prompt: z.string().min(1).max(RETRIEVAL_PROMPT_MAX_CHARS),
-  default_user_template: z.string().min(1).max(RETRIEVAL_PROMPT_MAX_CHARS),
-  created_at: ISODateTimeSchema,
-  updated_at: ISODateTimeSchema,
-});
-export type SpaceRetrievalPrompt = z.infer<typeof SpaceRetrievalPromptSchema>;
-
-export const SpaceRetrievalPromptUpdateSchema = z
-  .object({
-    system_prompt: z.string().trim().min(1).max(RETRIEVAL_PROMPT_MAX_CHARS).optional(),
-    user_template: z.string().trim().min(1).max(RETRIEVAL_PROMPT_MAX_CHARS).optional(),
-  })
-  .strict()
-  .refine(
-    (value) => value.system_prompt !== undefined || value.user_template !== undefined,
-    "At least one prompt field is required",
-  )
-  .refine(
-    (value) =>
-      value.user_template === undefined || value.user_template.includes("{query}"),
-    "user_template must include {query}",
-  );
-export type SpaceRetrievalPromptUpdate = z.infer<typeof SpaceRetrievalPromptUpdateSchema>;
-
 // Positive-only retrieval feedback. There is intentionally no skipped/not-clicked
 // negative signal: absence of interaction is ambiguous and must not lower rank.
 export const RetrievalFeedbackSignalSchema = z.enum([

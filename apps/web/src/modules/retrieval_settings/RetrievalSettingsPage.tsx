@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
-import { ChevronDown, ChevronRight, Database, Search, ShieldAlert, SlidersHorizontal } from 'lucide-react'
+import { Database, FileCode2, Search, ShieldAlert, SlidersHorizontal } from 'lucide-react'
 import { toast } from 'sonner'
 import { providersApi, spacesApi, type ModelProviderOut, type ProviderTaskPolicyOut } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
+import { SpaceLink as Link } from '../../core/spaceNav'
 import { errMsg } from '../../lib/utils'
 import type {
   ContextOpsReviewMode,
@@ -13,7 +14,6 @@ import type {
   RetrievalRuntimeRankingConfig,
   RetrievalSearchMode,
   RetrievalToolMode,
-  SpaceRetrievalPrompt,
   SpaceRetrievalSettings,
 } from '../../types/api'
 import { Card, CardTitle } from '../../components/ui/card'
@@ -23,6 +23,7 @@ import { Label } from '../../components/ui/label'
 import { Select } from '../../components/ui/select'
 import { Badge } from '../../components/ui/badge'
 import ProviderSelector from '../providers/ProviderSelector'
+import { promptLibraryPath } from '../prompts/paths'
 
 const SEARCH_MODE_OPTIONS: Array<{ value: RetrievalSearchMode; label: string }> = [
   { value: 'exact', label: 'Exact' },
@@ -258,7 +259,7 @@ function TaskPolicyEditor({
           <Search className="mt-0.5 size-3.5 shrink-0" />
           <span>
             {task === 'retrieval_query_rewrite'
-              ? 'Query rewrite uses a normal chat provider plus the space prompt configured below.'
+              ? 'Query rewrite uses a normal chat provider plus the registry prompt linked below.'
               : 'Context Brief synthesis uses a normal chat provider and only sees revalidated sources.'}
           </span>
         </div>
@@ -282,34 +283,25 @@ export default function RetrievalSettingsPage() {
   const waitingForSpace = Boolean(activeSpaceId && !activeSpace && spaces.length === 0)
 
   const [settings, setSettings] = useState<SpaceRetrievalSettings | null>(null)
-  const [rewritePrompt, setRewritePrompt] = useState<SpaceRetrievalPrompt | null>(null)
   const [taskPolicies, setTaskPolicies] = useState<TaskPolicyMap>({})
   const [taskSelections, setTaskSelections] = useState<TaskSelections>({})
   const [taskSaving, setTaskSaving] = useState<Partial<Record<RetrievalTask, boolean>>>({})
   const [maxResults, setMaxResults] = useState('50')
   const [embeddingDimensions, setEmbeddingDimensions] = useState('2560')
-  const [rewriteSystemPrompt, setRewriteSystemPrompt] = useState('')
-  const [rewriteUserTemplate, setRewriteUserTemplate] = useState('')
-  const [rewritePromptOpen, setRewritePromptOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [promptSaving, setPromptSaving] = useState(false)
 
   const load = useCallback(async () => {
     if (!activeSpaceId) {
       setSettings(null)
-      setRewritePrompt(null)
       setTaskPolicies({})
       setTaskSelections({})
-      setRewriteSystemPrompt('')
-      setRewriteUserTemplate('')
       return
     }
     setLoading(true)
     try {
-      const [next, prompt, policies] = await Promise.all([
+      const [next, policies] = await Promise.all([
         spacesApi.getRetrievalSettings(activeSpaceId),
-        spacesApi.getRetrievalPrompt(activeSpaceId, 'query_rewrite'),
         providersApi.taskPolicies().catch(error => {
           toast.error(errMsg(error))
           return []
@@ -327,21 +319,15 @@ export default function RetrievalSettingsPage() {
         }),
       ) as TaskSelections
       setSettings(withRankingConfigDefaults(next))
-      setRewritePrompt(prompt)
       setTaskPolicies(policyMap)
       setTaskSelections(selections)
       setMaxResults(String(next.max_results_default))
       setEmbeddingDimensions(String(next.embedding_dimensions))
-      setRewriteSystemPrompt(prompt.system_prompt)
-      setRewriteUserTemplate(prompt.user_template)
     } catch (error) {
       toast.error(errMsg(error))
       setSettings(null)
-      setRewritePrompt(null)
       setTaskPolicies({})
       setTaskSelections({})
-      setRewriteSystemPrompt('')
-      setRewriteUserTemplate('')
     } finally {
       setLoading(false)
     }
@@ -442,41 +428,6 @@ export default function RetrievalSettingsPage() {
     })
   }
 
-  async function saveRewritePrompt() {
-    if (!activeSpaceId || !manageable) return
-    const system = rewriteSystemPrompt.trim()
-    const template = rewriteUserTemplate.trim()
-    if (!system) {
-      toast.error('Rewrite system prompt is required')
-      return
-    }
-    if (!template.includes('{query}')) {
-      toast.error('Rewrite user template must include {query}')
-      return
-    }
-    setPromptSaving(true)
-    try {
-      const updated = await spacesApi.updateRetrievalPrompt(activeSpaceId, 'query_rewrite', {
-        system_prompt: system,
-        user_template: template,
-      })
-      setRewritePrompt(updated)
-      setRewriteSystemPrompt(updated.system_prompt)
-      setRewriteUserTemplate(updated.user_template)
-      toast.success('Rewrite prompt saved')
-    } catch (error) {
-      toast.error(errMsg(error))
-    } finally {
-      setPromptSaving(false)
-    }
-  }
-
-  function resetRewritePromptDraft() {
-    if (!rewritePrompt) return
-    setRewriteSystemPrompt(rewritePrompt.default_system_prompt)
-    setRewriteUserTemplate(rewritePrompt.default_user_template)
-  }
-
   async function save() {
     if (!activeSpaceId || !settings || !manageable) return
     const parsedMax = Number(maxResults)
@@ -562,7 +513,7 @@ export default function RetrievalSettingsPage() {
                 <ShieldAlert className="size-3.5" /> Read-only
               </CardTitle>
               <p className="text-sm text-muted-foreground">
-                You can view this space's retrieval models and rewrite prompt. Only owners or admins can change them.
+                You can view this space's retrieval models and prompt asset references. Only owners or admins can change them.
               </p>
             </Card>
           )}
@@ -791,63 +742,25 @@ export default function RetrievalSettingsPage() {
           </Card>
 
           <Card>
-            <button
-              type="button"
-              className="flex w-full items-start justify-between gap-3 text-left"
-              onClick={() => setRewritePromptOpen(open => !open)}
-              aria-expanded={rewritePromptOpen}
-            >
-              <span className="min-w-0">
-                <CardTitle className="flex items-center gap-2">
-                  <SlidersHorizontal className="size-3.5" /> Advanced rewrite prompt
-                </CardTitle>
-                <span className="mt-1 block text-xs text-muted-foreground">
-                  View or edit the prompt template used by the query rewrite chat model.
-                </span>
-              </span>
-              {rewritePromptOpen ? (
-                <ChevronDown className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-              ) : (
-                <ChevronRight className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-              )}
-            </button>
-            {rewritePromptOpen && (
-              <div className="mt-4 space-y-4">
-                <div className="space-y-1.5">
-                  <Label>System prompt</Label>
-                  <textarea
-                    value={rewriteSystemPrompt}
-                    readOnly={readOnly}
-                    onChange={event => setRewriteSystemPrompt(event.target.value)}
-                    className="min-h-36 w-full resize-y rounded-md border border-border bg-input px-3 py-2 text-sm leading-5 read-only:cursor-default read-only:opacity-80"
-                    spellCheck={false}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label>User template</Label>
-                  <textarea
-                    value={rewriteUserTemplate}
-                    readOnly={readOnly}
-                    onChange={event => setRewriteUserTemplate(event.target.value)}
-                    className="min-h-24 w-full resize-y rounded-md border border-border bg-input px-3 py-2 text-sm leading-5 font-mono read-only:cursor-default read-only:opacity-80"
-                    spellCheck={false}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Include {'{query}'} where the search query should be inserted.
-                  </p>
-                </div>
-                {!readOnly && (
-                  <div className="flex flex-wrap justify-end gap-2">
-                    <Button type="button" variant="outline" disabled={promptSaving || !rewritePrompt} onClick={resetRewritePromptDraft}>
-                      Reset draft
-                    </Button>
-                    <Button type="button" disabled={promptSaving} onClick={() => { void saveRewritePrompt() }}>
-                      {promptSaving ? 'Saving...' : 'Save rewrite prompt'}
-                    </Button>
-                  </div>
-                )}
-              </div>
-            )}
+            <CardTitle className="flex items-center gap-2">
+              <FileCode2 className="size-3.5" /> Retrieval prompts
+            </CardTitle>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Prompt text, versions, evaluation, and deployment are managed through the centralized registry.
+            </p>
+            <div className="mt-3 grid gap-2 sm:grid-cols-3">
+              {[
+                { key: 'retrieval.query_rewrite', label: 'Query rewrite' },
+                { key: 'retrieval.rerank', label: 'Rerank' },
+                { key: 'retrieval.synthesis', label: 'Context Brief synthesis' },
+              ].map(prompt => (
+                <Button key={prompt.key} asChild variant="outline" size="sm" className="justify-start overflow-hidden">
+                  <Link to={promptLibraryPath(prompt.key)}>
+                    <span className="truncate">{prompt.label}</span>
+                  </Link>
+                </Button>
+              ))}
+            </div>
           </Card>
 
           <Card>

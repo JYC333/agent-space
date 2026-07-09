@@ -22,6 +22,7 @@ export const WorkflowTemplateSchema = z
     output_artifact_types: z.array(z.string().min(1)),
     proposal_policy: JsonObjectSchema,
     recommended_runtime_adapters: z.array(z.string().min(1)),
+    prompt_asset_keys: z.array(z.string().min(1)).default([]),
   })
   .passthrough();
 export type WorkflowTemplate = z.infer<typeof WorkflowTemplateSchema>;
@@ -78,6 +79,9 @@ export const WorkflowRunCreateBodyDraftSchema = z
     instruction: z.string().nullish(),
     capability_id: z.string().min(1).nullish(),
     capabilities_json: z.array(z.string().min(1)).default([]),
+    prompt_asset_key: z.string().min(1).nullish(),
+    prompt_version_id: IdSchema.nullish(),
+    prompt_content_hash: z.string().nullish(),
   })
   .passthrough();
 export type WorkflowRunCreateBodyDraft = z.infer<

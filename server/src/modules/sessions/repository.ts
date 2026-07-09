@@ -9,7 +9,6 @@ import type {
   SessionPage,
 } from "@agent-space/protocol" with { "resolution-mode": "import" };
 import {
-  buildCondensePrompt,
   buildLlmSummary,
   buildPatternSummary,
   DEFAULT_CONDENSE_BATCH,
@@ -18,6 +17,8 @@ import {
   type CondenserPromptConfig,
   type SessionSummaryBody,
 } from "./condenser";
+import { withPromptProvenance } from "../prompts/provenance";
+import { resolveCondenserPrompt, type ResolvedCondenserPrompt } from "./promptRegistry";
 
 /**
  * LLM summarizer callback. Given a built prompt, returns the summary text (or
@@ -42,6 +43,14 @@ export interface CondenseSessionOptions {
    * written as `llm.v1`; otherwise the deterministic `pattern.v1` is used.
    */
   summarize?: SessionSummarizer;
+  /** Test seam for injecting an already resolved registry prompt. */
+  condenserPromptResolver?: (input: {
+    spaceId: string;
+    userId: string;
+    profile?: string | null;
+    priorSummary?: string | null;
+    messages: readonly CondenserMessage[];
+  }) => Promise<ResolvedCondenserPrompt | null>;
 }
 
 export interface CreateSessionInput {
@@ -422,7 +431,7 @@ export class PgSessionRepository {
       sessionId,
       summarizableCount,
     );
-    const body = await this.buildSummaryBody(slice, coveredCount, active, options);
+    const body = await this.buildSummaryBody(spaceId, userId, slice, coveredCount, active, options);
     if (!body) return active;
 
     // Version must exceed every existing version (active or superseded) to
@@ -499,6 +508,8 @@ export class PgSessionRepository {
    * to the deterministic `pattern.v1`.
    */
   private async buildSummaryBody(
+    spaceId: string,
+    userId: string,
     slice: CondenserMessage[],
     coveredCount: number,
     active: SessionSummaryForContext | null,
@@ -508,16 +519,38 @@ export class PgSessionRepository {
       try {
         const priorSummary = active?.summary_text ?? null;
         const delta = priorSummary ? slice.slice(coveredCount) : slice;
-        const prompt = buildCondensePrompt({
-          config: options.condenser ?? null,
-          profile: options.profile ?? null,
+        const resolvePromptForCondense = options.condenserPromptResolver ??
+          ((input: {
+            spaceId: string;
+            userId: string;
+            profile?: string | null;
+            priorSummary?: string | null;
+            messages: readonly CondenserMessage[];
+          }) => resolveCondenserPrompt(this.db, input));
+        const resolvedPrompt = await resolvePromptForCondense({
+          spaceId,
+          userId,
+          profile: options.condenser?.profile ?? options.profile ?? null,
           priorSummary,
           messages: delta,
         });
-        const text = await options.summarize(prompt);
+        if (!resolvedPrompt) return buildPatternSummary(slice);
+        const text = await options.summarize({
+          system: resolvedPrompt.system,
+          user: resolvedPrompt.user,
+        });
         if (text) {
           const llmBody = buildLlmSummary(slice, text);
-          if (llmBody) return llmBody;
+          if (llmBody) {
+            return {
+              ...llmBody,
+              summary_json: withPromptProvenance(
+                llmBody.summary_json,
+                "condenser",
+                resolvedPrompt.resolveResult,
+              ),
+            };
+          }
         }
       } catch {
         // Fall through to the deterministic fallback below.

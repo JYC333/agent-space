@@ -189,9 +189,9 @@ decisions are local to `build()` and stored only in `ContextBundle` / `ContextSn
   per-agent overrides for the selected profile's condenser prompt; blank/absent
   values use the built-in profile prompt. Shared factuality and same-language
   guardrails are always appended server-side.
-- The frontend reads built-in profile prompts through
-  `GET /api/v1/sessions/condenser-preset-prompts`; it does not duplicate the
-  preset prompt text.
+- Built-in condenser profile prompts are registered as Prompt Library assets
+  (`session.condenser.<profile>`). The frontend links to those assets instead
+  of duplicating preset prompt text or reading a sessions-owned prompt route.
 
 Supported `item_type` values in a `ContextBundle` / `ContextSnapshotItem`:
 
@@ -402,9 +402,11 @@ PgSessionRepository.condenseSession(space_id, user_id, session_id, options?) -> 
 PgSessionRepository.getLatestSummaryForContext(space_id, session_id) -> SessionSummaryForContext | null
 ```
 
-- Pure builders live in `server/src/modules/sessions/condenser.ts`
-  (`buildPatternSummary`, `buildCondensePrompt`, `buildLlmSummary`); the
-  repository owns only the DB read/write and the fallback chain around them.
+- Deterministic summary builders live in `server/src/modules/sessions/condenser.ts`
+  (`buildPatternSummary`, `buildLlmSummary`). LLM condenser prompts resolve
+  through `server/src/modules/sessions/promptRegistry.ts` and the centralized
+  Prompt Library assets; the repository owns the DB read/write and fallback
+  chain around them.
 - Queries messages filtered by **both** `session_id` and `space_id`, non-empty
   content (`content ~ '\S'`), chronological.
 - Summarizes every message older than the recent raw tail
@@ -416,13 +418,12 @@ PgSessionRepository.getLatestSummaryForContext(space_id, session_id) -> SessionS
 - **Two condenser versions, with a fallback chain** (`condenseSession` picks per
   call):
   - `llm.v1` — when an LLM summarizer is supplied (the `session_condense` job
-    supplies one via the `session_condense` provider task). `buildCondensePrompt`
-    selects a **scenario profile** (`adaptive` default / `general` / `coding` /
-    `project`) from `AgentVersion.context_policy_json.condenser.profile` and
-    applies optional per-agent prompt overrides from
-    `condenser.custom_system/custom_instructions`, feeding the prior summary plus
-    only the newly aged-out turns (incremental, to bound token cost). The model
-    writes a real running summary.
+    supplies one via the `session_condense` provider task). The condenser prompt
+    registry selects a **scenario profile** (`adaptive` default / `general` /
+    `coding` / `project`) from `AgentVersion.context_policy_json.condenser.profile`
+    and resolves `session.condenser.<profile>` through the Prompt Library,
+    feeding the prior summary plus only the newly aged-out turns (incremental, to
+    bound token cost). The model writes a real running summary.
   - `pattern.v1` — deterministic fallback (role counts + keyword + highlight
     digest, no model call). Used when no summarizer is supplied, no provider is
     configured for the `session_condense` task, or the LLM call fails / returns
@@ -653,8 +654,9 @@ After applying `policy_change`:
 - **Vector/embedding search**: MemoryRetriever embedding stage is a stub that delegates to keyword.
 - **Cross-space federation**: PersonalMemoryGrant exists but FederatedAccess / PublishProjection are not yet built.
 - **Session condensing**: implemented. The `session_condense` background job runs
-  the LLM condenser (`condenser_version="llm.v1"`, scenario profiles plus
-  per-agent prompt overrides) with the deterministic `pattern.v1` as fallback.
+  the LLM condenser (`condenser_version="llm.v1"`, registry-backed scenario
+  profiles plus per-agent prompt overrides) with the deterministic `pattern.v1`
+  as fallback.
   Tool-call message preservation in the conversation window remains future
   scheduler scope (P6/P7).
 - **ContextCompiler budget_trace persistence**: `CompiledContext.budget_trace` is not yet persisted into `ContextSnapshot`. Future work may add it under `token_budget_json["compiler_budget_trace"]`.

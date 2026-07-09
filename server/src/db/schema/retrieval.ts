@@ -1,4 +1,4 @@
-import { pgTable, index, uniqueIndex, unique, check, foreignKey, varchar, text, integer, doublePrecision, jsonb, timestamp, type PgTableExtraConfigValue } from "drizzle-orm/pg-core";
+import { pgTable, index, uniqueIndex, check, foreignKey, varchar, text, integer, doublePrecision, jsonb, timestamp, type PgTableExtraConfigValue } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { retrievalObjectType, tsVector, pgVector } from "./_types";
 import { users } from "./auth";
@@ -164,25 +164,4 @@ export const retrievalFeedbackEvents = pgTable("retrieval_feedback_events", {
 		}),
 	check("ck_retrieval_feedback_events_dwell_ms", sql`(dwell_ms IS NULL) OR (dwell_ms >= 0)`),
 	check("ck_retrieval_feedback_events_signal_type", sql`(signal_type)::text = ANY (ARRAY[('opened'::character varying)::text, ('dwell'::character varying)::text, ('used'::character varying)::text, ('explicit_relevant'::character varying)::text, ('accepted'::character varying)::text, ('pinned'::character varying)::text])`),
-]);
-
-export const spaceRetrievalPrompts = pgTable("space_retrieval_prompts", {
-	id: varchar({ length: 36 }).primaryKey().notNull(),
-	spaceId: varchar("space_id", { length: 36 }).notNull(),
-	task: varchar({ length: 64 }).notNull(),
-	systemPrompt: text("system_prompt").notNull(),
-	userTemplate: text("user_template").notNull(),
-	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).notNull(),
-	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).notNull(),
-}, (table): PgTableExtraConfigValue[] => [
-	index("ix_space_retrieval_prompts_space_id").using("btree", table.spaceId.asc().nullsLast()),
-	foreignKey({
-			columns: [table.spaceId],
-			foreignColumns: [spaces.id],
-			name: "space_retrieval_prompts_space_id_fkey"
-		}).onDelete("cascade"),
-	unique("uq_space_retrieval_prompts_space_task").on(table.spaceId, table.task),
-	check("ck_space_retrieval_prompts_task", sql`(task)::text = ANY (ARRAY[('query_rewrite'::character varying)::text])`),
-	check("ck_space_retrieval_prompts_system_prompt", sql`length(btrim(system_prompt)) > 0`),
-	check("ck_space_retrieval_prompts_user_template", sql`strpos(user_template, '{query}'::text) > 0`),
 ]);

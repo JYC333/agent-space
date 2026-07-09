@@ -28,9 +28,9 @@ embedding-capable providers (OpenAI-compatible, Ollama, ZeroEntropy, Cohere, or 
 `other`), `retrieval_rerank` is reserved for native rerank providers
 (ZeroEntropy or Cohere), and `retrieval_query_rewrite` uses ordinary chat providers.
 The provider task-policy route enforces the same compatibility rules as the UI.
-Query rewrite prompt text is not stored in the provider policy; it is
-space-scoped in `space_retrieval_prompts` and rendered before the chat provider
-call.
+Query rewrite prompt text is not stored in the provider policy; it is resolved
+through the Prompt Library asset `retrieval.query_rewrite` before the chat
+provider call.
 
 The Providers page remains the single place to create and maintain provider
 credentials, but it labels provider capabilities explicitly (`Chat`,

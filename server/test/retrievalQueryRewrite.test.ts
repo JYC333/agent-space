@@ -1,9 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { mergeRewriteVariants, MAX_REWRITE_VARIANTS } from "../src/modules/retrieval/queryRewrite";
-import {
-  buildQueryRewritePrompt,
-  parseQueryRewriteVariants,
-} from "../src/modules/retrieval/queryRewriteProvider/prompt";
+import { parseQueryRewriteVariants } from "../src/modules/retrieval/queryRewriteProvider/prompt";
 import { ProviderQueryRewriter } from "../src/modules/retrieval/queryRewriteProvider/providerQueryRewriter";
 import { __setProviderHttpClientForTests } from "../src/modules/providers/invocation/invocation";
 import type { ProviderCommandStore } from "../src/modules/providers/commands/store";
@@ -59,19 +56,6 @@ describe("query-rewrite prompt parsing", () => {
     expect(parseQueryRewriteVariants('["   "]')).toBeNull();
   });
 
-  it("builds a prompt that carries the query and asks for JSON only", () => {
-    const prompt = buildQueryRewritePrompt("find alpha");
-    expect(prompt.user).toContain("Query: find alpha");
-    expect(prompt.system).toContain("JSON array");
-  });
-
-  it("renders a custom prompt template with the query placeholder", () => {
-    const prompt = buildQueryRewritePrompt("find alpha", {
-      systemPrompt: "custom system",
-      userTemplate: "Rewrite this: {query}",
-    });
-    expect(prompt).toEqual({ system: "custom system", user: "Rewrite this: find alpha" });
-  });
 });
 
 describe("ProviderQueryRewriter", () => {
@@ -130,20 +114,25 @@ describe("ProviderQueryRewriter", () => {
     );
   }
 
+  const registryPromptResolver = async (_spaceId: string, _viewerUserId: string, query: string) => ({
+    system: "registry rewrite system: respond with a JSON array",
+    user: `Query: ${query}\n\nReturn the JSON array now.`,
+  });
+
   it("returns the parsed variants on a clean response", async () => {
     __setProviderHttpClientForTests({
       async fetch() {
         return chatResponse('["postgres indexing strategies", "db index tuning"]');
       },
     });
-    const rewriter = new ProviderQueryRewriter(fakeStore(), { providerId: "p1" });
+    const rewriter = new ProviderQueryRewriter(fakeStore(), { providerId: "p1", promptResolver: registryPromptResolver });
     expect(await rewriter.rewrite("space-1", "viewer-1", "pg indexes")).toEqual([
       "postgres indexing strategies",
       "db index tuning",
     ]);
   });
 
-  it("sends the space-scoped prompt template to the provider", async () => {
+  it("sends the resolved registry prompt to the provider", async () => {
     let requestBody: Record<string, unknown> | null = null;
     __setProviderHttpClientForTests({
       async fetch(_url, init) {
@@ -153,10 +142,10 @@ describe("ProviderQueryRewriter", () => {
     });
     const rewriter = new ProviderQueryRewriter(fakeStore(), {
       providerId: "p1",
-      prompt: {
-        systemPrompt: "custom rewrite system",
-        userTemplate: "Rewrite query: {query}",
-      },
+      promptResolver: async (_spaceId, _viewerUserId, query) => ({
+        system: "custom rewrite system",
+        user: `Rewrite query: ${query}`,
+      }),
     });
 
     await rewriter.rewrite("space-1", "viewer-1", "pg indexes");
@@ -175,7 +164,7 @@ describe("ProviderQueryRewriter", () => {
         return new Response("upstream boom", { status: 500 });
       },
     });
-    const rewriter = new ProviderQueryRewriter(fakeStore(), { providerId: "p1" });
+    const rewriter = new ProviderQueryRewriter(fakeStore(), { providerId: "p1", promptResolver: registryPromptResolver });
     expect(await rewriter.rewrite("space-1", "viewer-1", "pg indexes")).toBeNull();
   });
 
@@ -189,6 +178,7 @@ describe("ProviderQueryRewriter", () => {
     });
     const rewriter = new ProviderQueryRewriter(fakeStore(), {
       providerId: "p1",
+      promptResolver: registryPromptResolver,
       egressPolicy: { externalEgressEnabled: false },
     });
 
@@ -209,6 +199,7 @@ describe("ProviderQueryRewriter", () => {
     });
     const rewriter = new ProviderQueryRewriter(fakeLocalStore(), {
       providerId: "local",
+      promptResolver: registryPromptResolver,
       egressPolicy: { externalEgressEnabled: false },
     });
 
@@ -224,8 +215,25 @@ describe("ProviderQueryRewriter", () => {
         return chatResponse("I cannot rewrite this query.");
       },
     });
-    const rewriter = new ProviderQueryRewriter(fakeStore(), { providerId: "p1" });
+    const rewriter = new ProviderQueryRewriter(fakeStore(), { providerId: "p1", promptResolver: registryPromptResolver });
     expect(await rewriter.rewrite("space-1", "viewer-1", "pg indexes")).toBeNull();
+  });
+
+  it("returns null when the registry prompt cannot be resolved", async () => {
+    let fetchCalls = 0;
+    __setProviderHttpClientForTests({
+      async fetch() {
+        fetchCalls += 1;
+        return chatResponse('["should not happen"]');
+      },
+    });
+    const rewriter = new ProviderQueryRewriter(fakeStore(), {
+      providerId: "p1",
+      promptResolver: async () => null,
+    });
+
+    expect(await rewriter.rewrite("space-1", "viewer-1", "pg indexes")).toBeNull();
+    expect(fetchCalls).toBe(0);
   });
 
   it("returns null for an empty query without calling the provider", async () => {

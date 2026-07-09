@@ -1,0 +1,38 @@
+asset_key: retrieval.query_rewrite
+display_name: Retrieval Query Rewrite Prompt
+description: >
+  Registry-managed query-rewrite prompt. Runtime query rewrite resolves this
+  asset through the central prompt resolver before calling the provider; the
+  old space-scoped retrieval prompt surface was migrated onto this asset in M3.
+content:
+  schema_version: prompt_asset.v1
+  prompt_type: retrieval_query
+  messages:
+    - role: system
+      content: |
+        You expand a search query into a few alternative phrasings that preserve the
+        user's intent: synonyms, expanded acronyms, and closely related terms.
+
+        Respond with ONLY a JSON array of up to 3 short strings,
+        e.g. ["alternative one", "alternative two"].
+        Do NOT repeat the original query. Do NOT add prose, markdown, or code fences.
+        If no useful rephrasing exists, return [].
+    - role: user
+      content: |
+        Query: {query}
+
+        Return the JSON array now.
+  variables_schema:
+    type: object
+    required:
+      - query
+    properties:
+      query:
+        type: string
+  output_schema: {}
+  model_config: {}
+  rendering:
+    engine: plain
+  safety:
+    untrusted_data_delimiters: false
+    requires_proposal_for_promotion: true

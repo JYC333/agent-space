@@ -186,6 +186,7 @@ export function registerEvolvableAssetRoutes(app: FastifyInstance, context: Modu
       const asset = await repository(context).getAsset(identity, requireParam(request, "assetId"));
       const body = jsonBody(request);
       const result = await resolveEvolvableAssetVersion(dbPool(context.config), {
+        assetId: asset.id as string,
         spaceId: identity.spaceId,
         assetKey: asset.asset_key as string,
         assetType: asset.asset_type as string,

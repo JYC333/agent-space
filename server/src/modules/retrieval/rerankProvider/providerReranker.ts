@@ -1,4 +1,5 @@
 import type { RerankCandidate, RerankScore, Reranker } from "..";
+import { getDbPool } from "../../../db/pool";
 import {
   completeProviderRerank,
   completeProviderText,
@@ -7,8 +8,14 @@ import {
 import type { ProviderCommandStore } from "../../providers/commands/store";
 import { retrievalEgressAllowed, ALLOW_ALL_EGRESS, type RetrievalEgressPolicy } from "../egress/egressPolicy";
 import { writePolicyAudit } from "../../policy/auditWriter";
+import { resolveRetrievalRerankSystemPrompt } from "../promptRegistry";
 import { DEFAULT_RERANK_MAX_TOKENS, RETRIEVAL_RERANK_TASK } from "./config";
 import { buildRerankPrompt, parseRerankScores } from "./prompt";
+
+export type RerankSystemPromptResolver = (
+  spaceId: string,
+  viewerUserId: string,
+) => Promise<string | null>;
 
 export interface ProviderRerankerOptions {
   /** Caller's own provider; the task chain is tried first, this is the safety net. */
@@ -17,6 +24,8 @@ export interface ProviderRerankerOptions {
   databaseUrl?: string | null;
   /** Search surface tag recorded in the audit metadata (never content). */
   surface?: string | null;
+  /** Test/integration seam for resolving the registry-backed system prompt. */
+  systemPromptResolver?: RerankSystemPromptResolver | null;
   /** W9 egress policy; when egress is disabled the reranker sends nothing. */
   egressPolicy?: RetrievalEgressPolicy;
 }
@@ -36,6 +45,7 @@ export class ProviderReranker implements Reranker {
   private readonly providerId: string | null;
   private readonly databaseUrl: string | null;
   private readonly surface: string | null;
+  private readonly systemPromptResolver: RerankSystemPromptResolver | null;
   private readonly egressPolicy: RetrievalEgressPolicy;
 
   constructor(
@@ -45,6 +55,7 @@ export class ProviderReranker implements Reranker {
     this.providerId = options.providerId ?? null;
     this.databaseUrl = options.databaseUrl ?? null;
     this.surface = options.surface ?? null;
+    this.systemPromptResolver = options.systemPromptResolver ?? defaultSystemPromptResolver(this.databaseUrl);
     this.egressPolicy = options.egressPolicy ?? ALLOW_ALL_EGRESS;
   }
 
@@ -76,7 +87,9 @@ export class ProviderReranker implements Reranker {
     const nativeScores = await this.tryNativeRerank(spaceId, viewerUserId, query, eligible, effectivePolicy);
     if (nativeScores !== "unsupported") return nativeScores;
 
-    const prompt = buildRerankPrompt(query, eligible);
+    const systemPrompt = await this.systemPromptResolver?.(spaceId, viewerUserId);
+    if (!systemPrompt) return null;
+    const prompt = buildRerankPrompt(query, eligible, systemPrompt);
     let completion: { text: string; model: string };
     try {
       completion = await completeProviderText(this.store, spaceId, {
@@ -218,4 +231,10 @@ function uniqueSourceConnectionIds(candidates: readonly RerankCandidate[]): stri
     }
   }
   return out;
+}
+
+function defaultSystemPromptResolver(databaseUrl: string | null): RerankSystemPromptResolver | null {
+  if (!databaseUrl) return null;
+  return async (spaceId, viewerUserId) =>
+    resolveRetrievalRerankSystemPrompt(getDbPool(databaseUrl), { spaceId, userId: viewerUserId });
 }

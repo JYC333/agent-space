@@ -8,9 +8,10 @@
  *   of role counts, top keywords, and a compact highlight transcript. Free,
  *   instant, fully reproducible, but it does not understand meaning. Used as the
  *   always-available fallback.
- * - `llm.v1` — an LLM writes a real running summary (`buildCondensePrompt`
- *   produces the prompt; `buildLlmSummary` wraps the returned text into a body).
- *   Higher quality and language-agnostic, at the cost of a model call.
+ * - `llm.v1` — an LLM writes a real running summary from a prompt resolved
+ *   through the centralized prompt registry; `buildLlmSummary` wraps the
+ *   returned text into a body. Higher quality and language-agnostic, at the
+ *   cost of a model call.
  *
  * Either way the output is derived context (never a `MemoryEntry`, never a
  * `Proposal`) and is freely regenerable.
@@ -124,16 +125,6 @@ export const DEFAULT_CONDENSER_PROFILE: CondenserProfile = "adaptive";
 
 export interface CondenserPromptConfig {
   profile?: CondenserProfile | string | null;
-  custom_system?: string | null;
-  custom_instructions?: string | null;
-}
-
-export interface CondenserPresetPrompt {
-  profile: CondenserProfile;
-  system: string;
-  instructions: string;
-  shared_system_rules: string;
-  effective_system: string;
 }
 
 export function resolveCondenserProfile(
@@ -142,130 +133,6 @@ export function resolveCondenserProfile(
   return value === "general" || value === "coding" || value === "project" || value === "adaptive"
     ? value
     : DEFAULT_CONDENSER_PROFILE;
-}
-
-// Appended to every profile system prompt: the cross-cutting rules.
-const SHARED_SYSTEM_RULES =
-  " Be strictly factual — never invent details that are not present. Write the " +
-  "summary in the same language as the conversation. Output a concise running " +
-  "summary with no preamble.";
-
-const PROFILE_PROMPTS: Record<CondenserProfile, { system: string; instructions: string }> = {
-  adaptive: {
-    system:
-      "You condense the earlier part of a conversation with a personal assistant " +
-      "so it can be dropped from context without losing continuity. The " +
-      "conversation may mix everyday discussion with coding and project work.",
-    instructions:
-      "Summarize the conversation so far. Include:\n" +
-      "- The user's goals, requests, and stated preferences\n" +
-      "- Key facts, decisions, and conclusions reached\n" +
-      "- Open questions and anything left unresolved\n" +
-      "- The current state and the natural next step\n" +
-      "When the conversation involves coding or a project, also preserve the " +
-      "concrete technical state: relevant file paths and identifiers, commands or " +
-      "config values, technical decisions, errors encountered and how they were " +
-      "resolved, and what remains to be done. Include technical detail only when " +
-      "the conversation contains it. Keep it concise but do not drop actionable " +
-      "specifics.",
-  },
-  general: {
-    system:
-      "You condense the earlier part of a personal-assistant conversation so it " +
-      "can be dropped from context without losing continuity.",
-    instructions:
-      "Summarize the conversation so far in short prose, covering the user's " +
-      "goals and requests, the key facts and decisions established, any open " +
-      "questions, and the current state with the natural next step.",
-  },
-  coding: {
-    system:
-      "You are a conversation summarizer for a coding assistant. Your summary " +
-      "replaces the earlier conversation, so it must preserve everything needed " +
-      "to keep working without repeating past steps.",
-    instructions:
-      "Summarize the conversation so far. You MUST include:\n" +
-      "1. The original task or goal the user requested\n" +
-      "2. A checklist of completed steps vs. remaining steps\n" +
-      "3. Key file paths, identifiers, commands, config values, and intermediate results\n" +
-      "4. Any errors encountered and how they were resolved\n" +
-      "5. The current state and what to do next\n" +
-      "Be concise but preserve ALL actionable details. Do NOT omit code, search " +
-      "results, or computed values that will be needed.",
-  },
-  project: {
-    system:
-      "You summarize project-oriented conversations. Your summary replaces the " +
-      "earlier conversation, so it must preserve the project's state and direction.",
-    instructions:
-      "Summarize the conversation so far. Include:\n" +
-      "- The project objective and scope\n" +
-      "- Decisions made and their rationale\n" +
-      "- Milestones or tasks: done vs. remaining\n" +
-      "- Blockers, risks, and open questions\n" +
-      "- Owners and deadlines if mentioned\n" +
-      "- Current status and the next step\n" +
-      "Be concise but keep all actionable specifics.",
-  },
-};
-
-const CONDENSER_PROFILE_ORDER: readonly CondenserProfile[] = [
-  "adaptive",
-  "general",
-  "coding",
-  "project",
-];
-
-export function listCondenserPresetPrompts(): CondenserPresetPrompt[] {
-  return CONDENSER_PROFILE_ORDER.map((profile) => {
-    const prompt = PROFILE_PROMPTS[profile];
-    return {
-      profile,
-      system: prompt.system,
-      instructions: prompt.instructions,
-      shared_system_rules: SHARED_SYSTEM_RULES.trim(),
-      effective_system: `${prompt.system}${SHARED_SYSTEM_RULES}`,
-    };
-  });
-}
-
-/**
- * Build the LLM condense prompt for a scenario profile. `priorSummary` (when
- * present) lets the model update a running summary incrementally from only the
- * new turns, bounding token cost; `messages` are the turns to fold in.
- */
-export function buildCondensePrompt(input: {
-  profile?: CondenserProfile | string | null;
-  config?: CondenserPromptConfig | null;
-  priorSummary?: string | null;
-  messages: readonly CondenserMessage[];
-}): { system: string; user: string } {
-  const profile = resolveCondenserProfile(
-    typeof input.config?.profile === "string"
-      ? input.config.profile
-      : typeof input.profile === "string"
-        ? input.profile
-        : null,
-  );
-  const prompt = PROFILE_PROMPTS[profile];
-  const systemBase = nonEmptyString(input.config?.custom_system) ?? prompt.system;
-  const instructions = nonEmptyString(input.config?.custom_instructions) ?? prompt.instructions;
-  const prior = (input.priorSummary ?? "").trim();
-  const transcript = input.messages
-    .filter((message) => message.content.trim().length > 0)
-    .map((message) => `${message.role}: ${collapseWhitespace(message.content)}`)
-    .join("\n")
-    .slice(0, CONDENSE_PROMPT_MAX_CHARS);
-
-  const user = prior
-    ? `${instructions}\n\n` +
-      "Update this running summary so it also covers the new turns below.\n\n" +
-      `Existing summary:\n${prior}\n\n` +
-      `New turns:\n${transcript}\n\n` +
-      "Updated running summary:"
-    : `${instructions}\n\nTurns:\n${transcript}\n\nRunning summary:`;
-
-  return { system: `${systemBase}${SHARED_SYSTEM_RULES}`, user };
 }
 
 /**
@@ -355,10 +222,6 @@ function tokenize(text: string): string[] {
   return matches.filter(
     (word) => word.length >= MIN_KEYWORD_LENGTH && !STOPWORDS.has(word),
   );
-}
-
-function nonEmptyString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 function pickHighlights(

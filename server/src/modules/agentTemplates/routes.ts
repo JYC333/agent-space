@@ -14,6 +14,8 @@ import {
   sendRouteError,
 } from "../routeUtils/common";
 import { PgAgentRepository } from "../agents";
+import { agentTemplateSystemPromptKey, resolveAgentSystemPrompt, type ResolvedAgentSystemPrompt } from "../agents/promptRegistry";
+import { promptProvenanceOf } from "../prompts/provenance";
 
 interface TemplateSpec {
   id: string;
@@ -123,6 +125,12 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
         optionalString(runtimeConfig.adapter_type) ??
         optionalString(runtimePolicy.default_adapter_type) ??
         "model_api";
+      const requestSystemPrompt = optionalString(body.system_prompt);
+      const resolvedSystemPrompt = requestSystemPrompt
+        ? null
+        : await resolveTemplateSystemPrompt(context, identity, template.key);
+      const systemPrompt = requestSystemPrompt ?? resolvedSystemPrompt?.system ?? null;
+      if (!systemPrompt) throw new HttpError(500, "Agent template system prompt is not resolvable");
       const agent = await PgAgentRepository.fromConfig(context.config).create({
         spaceId: identity.spaceId,
         userId: identity.userId,
@@ -131,7 +139,10 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
           ? template.description
           : optionalString(body.description),
         visibility: "private",
-        systemPrompt: optionalString(body.system_prompt) ?? version.system_prompt,
+        systemPrompt,
+        promptProvenanceJson: resolvedSystemPrompt
+          ? promptProvenanceOf(resolvedSystemPrompt.resolveResult)
+          : null,
         defaultModelProviderId: providerId,
         defaultModel: model,
         adapterType,
@@ -150,6 +161,20 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       return sendRouteError(reply, error);
     }
   });
+}
+
+async function resolveTemplateSystemPrompt(
+  context: ModuleContext,
+  identity: { spaceId: string; userId: string },
+  templateKey: string,
+): Promise<ResolvedAgentSystemPrompt> {
+  const resolved = await resolveAgentSystemPrompt(dbPool(context.config), {
+    spaceId: identity.spaceId,
+    userId: identity.userId,
+    assetKey: agentTemplateSystemPromptKey(templateKey),
+  });
+  if (!resolved) throw new HttpError(500, "Agent template system prompt is not resolvable");
+  return resolved;
 }
 
 async function listSpecs(catalogRoot: string): Promise<TemplateSpec[]> {
@@ -232,7 +257,10 @@ function templateVersionToOut(template: TemplateSpec): Record<string, unknown> &
     id: versionId(template),
     template_id: template.id,
     version: optionalString(doc.version) ?? "v1",
-    system_prompt: optionalString(doc.system_prompt),
+    // Template system prompts are managed by catalog/prompts and resolved by
+    // prompt asset key at create time. Do not expose the legacy template.yaml
+    // copy as an editable default.
+    system_prompt: null,
     model_config_json: objectValue(doc.model_config),
     context_policy_json: objectValue(doc.context_policy),
     memory_policy_json: objectValue(doc.memory_policy),

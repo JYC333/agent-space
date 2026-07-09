@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { SpaceLink as Link } from '../../core/spaceNav'
-import { ChevronDown, ChevronRight, Loader2, MessageSquare, Ban, Power } from 'lucide-react'
+import { FileCode2, Loader2, MessageSquare, Ban, Power } from 'lucide-react'
 import { toast } from 'sonner'
-import { agentsApi, credentialsApi, runtimeToolsApi, sessionsApi } from '../../api/client'
-import type { AgentOut, AgentRuntimeProfileOut, AgentVersionOut, Run, Proposal, CliCredentialAvailableProfileOut, SpaceRuntimeToolPolicyOut, CondenserPresetPromptOut } from '../../types/api'
+import { agentsApi, credentialsApi, runtimeToolsApi } from '../../api/client'
+import type { AgentOut, AgentRuntimeProfileOut, AgentVersionOut, Run, Proposal, CliCredentialAvailableProfileOut, SpaceRuntimeToolPolicyOut } from '../../types/api'
 import { Button } from '../../components/ui/button'
 import { Card, CardTitle } from '../../components/ui/card'
 import { Badge, StatusBadge } from '../../components/ui/badge'
@@ -23,7 +23,6 @@ import {
   type SessionCondenserProfile,
 } from './policyMap'
 import AssistantSettingsPanel from './AssistantSettingsPanel'
-import CondenserPresetPromptPreview from './CondenserPresetPromptPreview'
 import ProviderSelector from '../providers/ProviderSelector'
 import {
   RetrievalToolDomainControls,
@@ -31,6 +30,7 @@ import {
   readRetrievalToolDomains,
   type RetrievalToolDomainState,
 } from './RetrievalToolDomainControls'
+import { promptLibraryPath } from '../prompts/paths'
 
 export default function AgentDetailPage() {
   const { agentId } = useParams()
@@ -38,7 +38,6 @@ export default function AgentDetailPage() {
   const [version, setVersion] = useState<AgentVersionOut | null>(null)
   const [versions, setVersions] = useState<AgentVersionOut[]>([])
   const [runtimeProfiles, setRuntimeProfiles] = useState<AgentRuntimeProfileOut[]>([])
-  const [condenserPresets, setCondenserPresets] = useState<CondenserPresetPromptOut[]>([])
   const [runs, setRuns] = useState<Run[]>([])
   const [proposals, setProposals] = useState<Proposal[]>([])
   const [loading, setLoading] = useState(true)
@@ -47,17 +46,15 @@ export default function AgentDetailPage() {
 
   const reload = useCallback(async () => {
     if (!agentId) return
-    const [a, vs, rs, rps, presets] = await Promise.all([
+    const [a, vs, rs, rps] = await Promise.all([
       agentsApi.get(agentId),
       agentsApi.listVersions(agentId).catch(() => [] as AgentVersionOut[]),
       agentsApi.listRunsForAgent(agentId).catch(() => [] as Run[]),
       agentsApi.listRuntimeProfiles(agentId).catch(() => [] as AgentRuntimeProfileOut[]),
-      sessionsApi.condenserPresetPrompts().catch(() => [] as CondenserPresetPromptOut[]),
     ])
     setAgent(a)
     setVersions(vs)
     setRuntimeProfiles(rps)
-    setCondenserPresets(presets)
     setRuns(rs)
     setVersion(vs.find(v => v.id === a.current_version_id) ?? vs[0] ?? null)
     agentsApi.listProposals(agentId, 'pending').then(setProposals).catch(() => setProposals([]))
@@ -150,7 +147,7 @@ export default function AgentDetailPage() {
           <OverviewTab agent={agent} version={version} runs={runs} proposals={proposals} onSaved={reload} />
         </TabsContent>
         <TabsContent value="inputs">
-          {version ? <InputsTab agentId={agent.id} version={version} presets={condenserPresets} onSaved={reload} /> : <Card><NoVersion /></Card>}
+          {version ? <InputsTab agentId={agent.id} version={version} onSaved={reload} /> : <Card><NoVersion /></Card>}
         </TabsContent>
         <TabsContent value="outputs">
           <Card>{version ? <OutputsView version={version} /> : <NoVersion />}</Card>
@@ -227,10 +224,9 @@ function NoVersion() {
 
 // ── Inputs / context ─────────────────────────────────────────────────────────
 
-function InputsTab({ agentId, version, presets, onSaved }: {
+function InputsTab({ agentId, version, onSaved }: {
   agentId: string
   version: AgentVersionOut
-  presets: CondenserPresetPromptOut[]
   onSaved: () => Promise<void>
 }) {
   return (
@@ -238,35 +234,29 @@ function InputsTab({ agentId, version, presets, onSaved }: {
       <Card className="space-y-4">
         <InputsView version={version} />
       </Card>
-      <CondenserProfileCard agentId={agentId} version={version} presets={presets} onSaved={onSaved} />
+      <CondenserProfileCard agentId={agentId} version={version} onSaved={onSaved} />
     </div>
   )
 }
 
-function CondenserProfileCard({ agentId, version, presets, onSaved }: {
+function condenserPromptAssetKey(profile: SessionCondenserProfile): string {
+  return `session.condenser.${profile}`
+}
+
+function CondenserProfileCard({ agentId, version, onSaved }: {
   agentId: string
   version: AgentVersionOut
-  presets: CondenserPresetPromptOut[]
   onSaved: () => Promise<void>
 }) {
   const current = sessionCondenserConfig(version)
   const [profile, setProfile] = useState<SessionCondenserProfile>(current.profile)
-  const [customSystem, setCustomSystem] = useState(current.custom_system)
-  const [customInstructions, setCustomInstructions] = useState(current.custom_instructions)
-  const [promptOpen, setPromptOpen] = useState(Boolean(current.custom_system || current.custom_instructions))
   const [saving, setSaving] = useState(false)
   const selected = CONDENSER_PROFILE_OPTIONS.find(option => option.value === profile)
-  const changed =
-    profile !== current.profile ||
-    customSystem.trim() !== current.custom_system.trim() ||
-    customInstructions.trim() !== current.custom_instructions.trim()
+  const changed = profile !== current.profile
 
   useEffect(() => {
     setProfile(current.profile)
-    setCustomSystem(current.custom_system)
-    setCustomInstructions(current.custom_instructions)
-    setPromptOpen(Boolean(current.custom_system || current.custom_instructions))
-  }, [current.profile, current.custom_system, current.custom_instructions, version.id])
+  }, [current.profile, version.id])
 
   async function save() {
     setSaving(true)
@@ -274,8 +264,6 @@ function CondenserProfileCard({ agentId, version, presets, onSaved }: {
       await agentsApi.updateConfig(agentId, {
         context_policy_json: buildCondenserConfigContextPolicy(version.context_policy_json, {
           profile,
-          custom_system: customSystem,
-          custom_instructions: customInstructions,
         }),
       })
       toast.success('Session summary settings updated (new version created)')
@@ -308,39 +296,19 @@ function CondenserProfileCard({ agentId, version, presets, onSaved }: {
         </select>
       </label>
       {selected && <p className="text-xs text-muted-foreground">{selected.detail}</p>}
-      <CondenserPresetPromptPreview profile={profile} presets={presets} />
-      <div className="space-y-3">
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          onClick={() => setPromptOpen(open => !open)}
-        >
-          {promptOpen ? <ChevronDown className="size-4 mr-1" /> : <ChevronRight className="size-4 mr-1" />}
-          Custom prompt
-        </Button>
-        {promptOpen && (
-          <div className="space-y-3 rounded-md border border-border bg-muted/20 p-3">
-            <label className="space-y-1.5 block">
-              <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Custom system prompt</span>
-              <Textarea
-                value={customSystem}
-                onChange={event => setCustomSystem(event.target.value)}
-                rows={4}
-                placeholder="Leave empty to use the selected profile's system prompt"
-              />
-            </label>
-            <label className="space-y-1.5 block">
-              <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Custom summary instructions</span>
-              <Textarea
-                value={customInstructions}
-                onChange={event => setCustomInstructions(event.target.value)}
-                rows={6}
-                placeholder="Leave empty to use the selected profile's instructions"
-              />
-            </label>
+      <div className="rounded-md border border-border bg-muted/20 p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="min-w-0">
+            <div className="text-xs font-medium text-muted-foreground">Prompt asset</div>
+            <div className="truncate font-mono text-xs">{condenserPromptAssetKey(profile)}</div>
           </div>
-        )}
+          <Button asChild type="button" size="sm" variant="outline">
+            <Link to={promptLibraryPath(condenserPromptAssetKey(profile))}>
+              <FileCode2 className="size-4 mr-1" />
+              Open prompt
+            </Link>
+          </Button>
+        </div>
       </div>
       <Button size="sm" onClick={save} disabled={saving || !changed}>
         {saving ? <Loader2 className="size-4 animate-spin" /> : 'Save summary settings'}
@@ -360,6 +328,7 @@ function OverviewTab({ agent, version, runs, proposals, onSaved }: {
   const [systemPrompt, setSystemPrompt] = useState(agent.system_prompt ?? '')
   const [saving, setSaving] = useState(false)
   const lastRun = runs[0]
+  const promptRef = promptRefFromProvenance(version?.prompt_provenance_json)
 
   async function save() {
     setSaving(true)
@@ -416,6 +385,15 @@ function OverviewTab({ agent, version, runs, proposals, onSaved }: {
           <p className="text-sm text-muted-foreground">Created directly (not from a template).</p>
         )}
         <p className="text-xs text-muted-foreground mt-2">Current version: <span className="font-mono">{version?.version_label ?? '—'}</span></p>
+        {promptRef && (
+          <p className="mt-2 flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+            <FileCode2 className="size-3.5 shrink-0" />
+            <Link className="min-w-0 truncate underline" to={promptLibraryPath(promptRef.assetKey)}>
+              {promptRef.assetKey}
+            </Link>
+            {promptRef.versionId && <span className="font-mono">v:{shortHash(promptRef.versionId)}</span>}
+          </p>
+        )}
       </Card>
 
       <div className="grid grid-cols-2 gap-4">
@@ -865,6 +843,7 @@ function VersionsTab({ agentId, versions, currentId, onSaved }: {
           {open === v.id && (
             <pre className="mt-3 text-xs bg-muted rounded-md p-3 overflow-auto max-h-80">{JSON.stringify({
               system_prompt: v.system_prompt,
+              prompt_provenance_json: v.prompt_provenance_json,
               model_config_json: v.model_config_json,
               context_policy_json: v.context_policy_json,
               memory_policy_json: v.memory_policy_json,
@@ -877,6 +856,21 @@ function VersionsTab({ agentId, versions, currentId, onSaved }: {
       <p className="text-xs text-muted-foreground">Restoring copies the selected version's config into a new version — old versions are never mutated.</p>
     </div>
   )
+}
+
+function promptRefFromProvenance(value: unknown): { assetKey: string; versionId: string | null } | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const record = value as Record<string, unknown>
+  const assetKey = typeof record.asset_key === 'string' && record.asset_key.trim() ? record.asset_key : null
+  if (!assetKey) return null
+  return {
+    assetKey,
+    versionId: typeof record.version_id === 'string' && record.version_id.trim() ? record.version_id : null,
+  }
+}
+
+function shortHash(value: string): string {
+  return value.length > 12 ? value.slice(0, 12) : value
 }
 
 // ── Runs ──────────────────────────────────────────────────────────────────────

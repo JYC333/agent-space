@@ -20,6 +20,12 @@ import {
   type RuntimeAdapterType,
 } from "../runtimeAdapters/specs";
 import {
+  AGENT_DEFAULT_ASSISTANT_SYSTEM_PROMPT_KEY,
+  AGENT_SYSTEM_EVOLVER_SYSTEM_PROMPT_KEY,
+  resolveAgentSystemPrompt,
+} from "./promptRegistry";
+import { promptProvenanceOf, type PromptProvenance } from "../prompts/provenance";
+import {
   DEFAULT_MEMORY_POLICY,
   DEFAULT_MODEL_CONFIG,
   DEFAULT_RUNTIME_CONFIG,
@@ -61,6 +67,7 @@ export interface AgentRecord {
   provider_type?: string | null;
   model_name?: string | null;
   system_prompt?: string | null;
+  prompt_provenance_json?: unknown;
   runtime_adapter_type?: string | null;
   runtime_policy_json?: unknown;
 }
@@ -92,6 +99,7 @@ export interface AgentVersionRecord {
   model_provider_id: string | null;
   model_name: string | null;
   system_prompt: string | null;
+  prompt_provenance_json: PromptProvenance | null;
   model_config_json: Record<string, unknown>;
   runtime_config_json: Record<string, unknown>;
   context_policy_json: Record<string, unknown>;
@@ -221,6 +229,7 @@ const VERSION_COLUMN_NAMES = [
   "output_policy_json",
   "schedule_config_json",
   "output_schema_json",
+  "prompt_provenance_json",
   "source_proposal_id",
   "source_activity_id",
   "created_at",
@@ -569,6 +578,7 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
     visibility?: string | null;
     roleInstruction?: string | null;
     systemPrompt?: string | null;
+    promptProvenanceJson?: PromptProvenance | null;
     defaultModelProviderId?: string | null;
     defaultModel?: string | null;
     adapterType?: string | null;
@@ -604,6 +614,7 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
         status: "active",
         agentKind: "standard",
         systemPrompt: input.systemPrompt ?? null,
+        promptProvenanceJson: input.promptProvenanceJson ?? null,
         modelProviderId: providerId,
         modelName,
         modelConfigJson: input.modelConfigJson ?? {
@@ -721,6 +732,7 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
       }
       const versionPatch: Partial<AgentVersionRecord> = {
         system_prompt: Object.hasOwn(patch, "systemPrompt") ? patch.systemPrompt ?? null : current.system_prompt,
+        prompt_provenance_json: Object.hasOwn(patch, "systemPrompt") ? null : current.prompt_provenance_json,
         model_provider_id: modelProviderId,
         model_name: modelName,
         model_config_json: patch.modelConfigJson
@@ -751,6 +763,7 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
         modelProviderId: versionPatch.model_provider_id ?? null,
         modelName: versionPatch.model_name ?? null,
         systemPrompt: versionPatch.system_prompt ?? null,
+        promptProvenanceJson: versionPatch.prompt_provenance_json ?? null,
         modelConfigJson: versionPatch.model_config_json ?? DEFAULT_MODEL_CONFIG,
         runtimeConfigJson,
         contextPolicyJson: versionPatch.context_policy_json ?? {},
@@ -829,6 +842,7 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
         modelProviderId: source.model_provider_id,
         modelName: source.model_name,
         systemPrompt: source.system_prompt,
+        promptProvenanceJson: source.prompt_provenance_json,
         modelConfigJson: source.model_config_json,
         runtimeConfigJson: source.runtime_config_json,
         contextPolicyJson: source.context_policy_json,
@@ -868,9 +882,15 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
     return result.rows[0] ? agentOut(result.rows[0]) : null;
   }
 
-  async ensureDefaultAssistant(spaceId: string): Promise<AgentOut> {
+  async ensureDefaultAssistant(spaceId: string, userId: string): Promise<AgentOut> {
     const existing = await this.getDefaultAssistant(spaceId);
     if (existing) return existing;
+    const resolvedPrompt = await resolveAgentSystemPrompt(this.pool, {
+      spaceId,
+      userId,
+      assetKey: AGENT_DEFAULT_ASSISTANT_SYSTEM_PROMPT_KEY,
+    });
+    if (!resolvedPrompt) throw new HttpError(500, "Default assistant prompt is not resolvable");
     return withTransaction(this.pool, async (client) => {
       const current = await client.query<AgentRecord>(
         `SELECT ${AGENT_COLUMNS}
@@ -895,7 +915,8 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
         roleInstruction: null,
         status: "active",
         agentKind: "system_assistant",
-        systemPrompt: "You are the space's contextual personal assistant.",
+        systemPrompt: resolvedPrompt.system,
+        promptProvenanceJson: promptProvenanceOf(resolvedPrompt.resolveResult),
         modelProviderId: null,
         modelName: null,
         modelConfigJson: DEFAULT_MODEL_CONFIG,
@@ -930,9 +951,15 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
     return result.rows[0] ? agentOut(result.rows[0]) : null;
   }
 
-  async ensureSystemEvolver(spaceId: string): Promise<AgentOut> {
+  async ensureSystemEvolver(spaceId: string, userId: string): Promise<AgentOut> {
     const existing = await this.getSystemEvolver(spaceId);
     if (existing) return existing;
+    const resolvedPrompt = await resolveAgentSystemPrompt(this.pool, {
+      spaceId,
+      userId,
+      assetKey: AGENT_SYSTEM_EVOLVER_SYSTEM_PROMPT_KEY,
+    });
+    if (!resolvedPrompt) throw new HttpError(500, "System evolver prompt is not resolvable");
     return withTransaction(this.pool, async (client) => {
       const current = await client.query<AgentRecord>(
         `SELECT ${AGENT_COLUMNS}
@@ -957,7 +984,8 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
         roleInstruction: null,
         status: "active",
         agentKind: "system_evolver",
-        systemPrompt: "You are the system evolution agent. Analyze signals and produce structured evolution plans.",
+        systemPrompt: resolvedPrompt.system,
+        promptProvenanceJson: promptProvenanceOf(resolvedPrompt.resolveResult),
         modelProviderId: null,
         modelName: null,
         modelConfigJson: DEFAULT_MODEL_CONFIG,
@@ -1120,6 +1148,7 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
       status: string;
       agentKind: string;
       systemPrompt: string | null;
+      promptProvenanceJson: PromptProvenance | null;
       modelProviderId: string | null;
       modelName: string | null;
       modelConfigJson: Record<string, unknown>;
@@ -1162,6 +1191,7 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
       modelProviderId: input.modelProviderId,
       modelName: input.modelName,
       systemPrompt: input.systemPrompt,
+      promptProvenanceJson: input.promptProvenanceJson,
       modelConfigJson: input.modelConfigJson,
       runtimeConfigJson: input.runtimeConfigJson,
       contextPolicyJson: input.contextPolicyJson,
@@ -1430,6 +1460,7 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
       modelProviderId: string | null;
       modelName: string | null;
       systemPrompt: string | null;
+      promptProvenanceJson?: PromptProvenance | null;
       modelConfigJson: Record<string, unknown>;
       runtimeConfigJson: Record<string, unknown>;
       contextPolicyJson: Record<string, unknown>;
@@ -1451,13 +1482,15 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
          system_prompt, model_config_json, runtime_config_json,
          context_policy_json, memory_policy_json, capabilities_json,
          tool_permissions_json, runtime_policy_json, tool_policy_json,
-         output_policy_json, schedule_config_json, output_schema_json, created_at
+         output_policy_json, schedule_config_json, output_schema_json,
+         prompt_provenance_json, created_at
        ) VALUES (
          $1, $2, $3, $4, $5, $6,
          $7, $8::jsonb, $9::jsonb,
          $10::jsonb, $11::jsonb, $12::jsonb,
          $13::jsonb, $14::jsonb, $15::jsonb,
-         $16::jsonb, $17::jsonb, $18::jsonb, $19
+         $16::jsonb, $17::jsonb, $18::jsonb,
+         $19::jsonb, $20
        )
        RETURNING id`,
       [
@@ -1479,6 +1512,7 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
         JSON.stringify(input.outputPolicyJson),
         JSON.stringify(input.scheduleConfigJson),
         JSON.stringify(input.outputSchemaJson),
+        input.promptProvenanceJson ? JSON.stringify(input.promptProvenanceJson) : null,
         now,
       ],
     );

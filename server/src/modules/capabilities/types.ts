@@ -65,6 +65,7 @@ export interface WorkflowTemplate {
   output_artifact_types: string[];
   proposal_policy: Record<string, unknown>;
   recommended_runtime_adapters: string[];
+  prompt_asset_keys: string[];
 }
 
 export interface ProjectWorkflowProfile {
@@ -102,6 +103,9 @@ export interface WorkflowRunDraft {
     capabilities_json?: string[];
     model_provider_id?: string | null;
     model?: string | null;
+    prompt_asset_key?: string | null;
+    prompt_version_id?: string | null;
+    prompt_content_hash?: string | null;
   };
   warnings: string[];
 }

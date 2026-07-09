@@ -127,6 +127,7 @@ function workflow(
       capability_changes: "proposal_required",
     },
     recommended_runtime_adapters: ["model_api", "claude_code", "codex_cli"],
+    prompt_asset_keys: [`workflow.${id}.run`],
   };
 }
 
@@ -168,4 +169,3 @@ export const RESEARCH_PACK: CapabilityPackDescriptor = {
   source_kind: "builtin",
   status: "available",
 };
-

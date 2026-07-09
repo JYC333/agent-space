@@ -69,6 +69,7 @@ Core modules are `always_on=True`. Optional product routes are still mounted by 
 | `sessions` | product | `/sessions*`, `/internal/sessions/session-summary/get-latest` | empty | Conversation sessions, messages, and latest summary read. |
 | `agentTemplates` | product | `/agent-templates*` | empty | Catalog-backed template list/read/create-agent surfaces. |
 | `agents` | product | `/agents*` | empty | Agent profiles, versions, assistant chat/settings, template services, agent-scoped run/proposal reads. |
+| `prompts` | capability | `/prompts/assets*` | empty | Prompt asset facade over evolvable assets, built-in manifest sync, immutable prompt versions, rendering/preview, evaluation evidence, labeled deployment refs, production promotion proposals, rollback, and runtime resolution. |
 | `personalMemoryGrants` | kernel | `/personal-memory-grants*` | empty | Personal memory grant preview/create/list/revoke/audit. |
 | `memory` | kernel | `/memory*` | yes, lazy | Memory entries, read logging, search, and memory proposal creation. |
 | `context` | kernel | `/context/build` | empty | Frontend context preview/native context build route. |

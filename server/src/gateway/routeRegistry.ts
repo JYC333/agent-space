@@ -54,6 +54,7 @@ import { relationsModule } from "../modules/relations";
 import { academicModule } from "../modules/academic";
 import { graphModule } from "../modules/graph";
 import { evolutionModule } from "../modules/evolution";
+import { promptsModule } from "../modules/prompts";
 import { tasksModule } from "../modules/tasks";
 import { workspaceProfilesModule } from "../modules/workspaceProfiles";
 import { workspacesModule } from "../modules/workspaces";
@@ -128,6 +129,7 @@ export const SERVER_MODULES: readonly ServerModule[] = [
   academicModule,
   graphModule,
   evolutionModule,
+  promptsModule,
   tasksModule,
   workspaceProfilesModule,
   workspacesModule,

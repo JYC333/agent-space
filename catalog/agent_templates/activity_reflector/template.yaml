@@ -7,12 +7,6 @@ description: >
   reflection summaries, archive suggestions). The model classifies each activity
   into a primary output type; long-term changes are proposal-only.
 
-system_prompt: |
-  You reflect on recent activity and surface what matters. Classify each activity
-  into one primary output when possible, and produce a reflection summary for the
-  batch. Propose tasks, ideas, memory updates, and knowledge items for human
-  approval; never write durable state directly.
-
 model_config:
   max_tokens: 8192
 

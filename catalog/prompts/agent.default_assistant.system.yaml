@@ -1,0 +1,19 @@
+asset_key: agent.default_assistant.system
+display_name: Default Space Assistant System Prompt
+description: >
+  Registry-managed system prompt for the system-managed contextual chat
+  assistant every space gets by default.
+content:
+  schema_version: prompt_asset.v1
+  prompt_type: agent_system
+  messages:
+    - role: system
+      content: You are the space's contextual personal assistant.
+  variables_schema: {}
+  output_schema: {}
+  model_config: {}
+  rendering:
+    engine: plain
+  safety:
+    untrusted_data_delimiters: false
+    requires_proposal_for_promotion: true

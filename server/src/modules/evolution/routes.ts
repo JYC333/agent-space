@@ -175,7 +175,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
 
       if (!agentId) {
         const agentRepo = PgAgentRepository.fromConfig(context.config);
-        const evolver = await agentRepo.ensureSystemEvolver(identity.spaceId);
+        const evolver = await agentRepo.ensureSystemEvolver(identity.spaceId, identity.userId);
         agentId = evolver.id;
         isFallback = true;
       }

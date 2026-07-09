@@ -50,6 +50,7 @@ export {
   __setCapabilitiesIdentityForTests,
   __setCapabilitiesRepositoryFactoryForTests,
   __setCapabilitiesSkillFetcherForTests,
+  __setCapabilitiesWorkflowRunPromptResolverForTests,
 } from "./routes";
 export type {
   CapabilityDefinition,

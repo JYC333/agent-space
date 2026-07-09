@@ -97,7 +97,7 @@ async function main(): Promise<void> {
   if (config.databaseUrl) {
     void runBuiltInSeeds(getDbPool(config.databaseUrl), {
       info: (msg) => app.log.info(msg),
-    }).catch((err) => app.log.error(err, "[seeds] built-in seed failed"));
+    }, config.catalogRoot).catch((err) => app.log.error(err, "[seeds] built-in seed failed"));
   }
 
   void registerSystemCoreWorkspace(config, {

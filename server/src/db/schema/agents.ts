@@ -95,6 +95,7 @@ export const agentVersions = pgTable("agent_versions", {
 	modelProviderId: varchar("model_provider_id", { length: 36 }),
 	modelName: varchar("model_name", { length: 256 }),
 	systemPrompt: text("system_prompt"),
+	promptProvenanceJson: jsonb("prompt_provenance_json"),
 	modelConfigJson: jsonb("model_config_json").notNull(),
 	runtimeConfigJson: jsonb("runtime_config_json").notNull(),
 	contextPolicyJson: jsonb("context_policy_json").notNull(),

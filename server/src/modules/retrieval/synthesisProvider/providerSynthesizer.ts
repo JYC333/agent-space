@@ -1,12 +1,19 @@
 import type { BriefCandidate, SynthesisResult, Synthesizer } from "..";
+import { getDbPool } from "../../../db/pool";
 import { completeProviderText } from "../../providers/invocation/invocation";
 import type { ProviderCommandStore } from "../../providers/commands/store";
 import { retrievalEgressAllowed, ALLOW_ALL_EGRESS, type RetrievalEgressPolicy } from "../egress/egressPolicy";
 import { writePolicyAudit } from "../../policy/auditWriter";
+import { resolveRetrievalSynthesisSystemPrompt } from "../promptRegistry";
 import { DEFAULT_SYNTHESIS_MAX_TOKENS, RETRIEVAL_SYNTHESIS_TASK } from "./config";
 import { buildSynthesisPrompt, parseSynthesis, type SynthesisDoc } from "./prompt";
 
 const TASK_POLICY_REQUIRED_PROVIDER_ID = "__retrieval_synthesis_task_policy_required__";
+
+export type SynthesisSystemPromptResolver = (
+  spaceId: string,
+  viewerUserId: string,
+) => Promise<string | null>;
 
 export interface ProviderSynthesizerOptions {
   /** Explicit fallback provider after the task chain. Omit to require the task policy. */
@@ -15,6 +22,8 @@ export interface ProviderSynthesizerOptions {
   databaseUrl?: string | null;
   /** Brief surface tag recorded in the audit metadata (never content). */
   surface?: string | null;
+  /** Test/integration seam for resolving the registry-backed system prompt. */
+  systemPromptResolver?: SynthesisSystemPromptResolver | null;
   /** W9 egress policy; when egress is disabled the synthesizer sends nothing. */
   egressPolicy?: RetrievalEgressPolicy;
 }
@@ -36,6 +45,7 @@ export class ProviderSynthesizer implements Synthesizer {
   private readonly providerId: string | null;
   private readonly databaseUrl: string | null;
   private readonly surface: string | null;
+  private readonly systemPromptResolver: SynthesisSystemPromptResolver | null;
   private readonly egressPolicy: RetrievalEgressPolicy;
 
   constructor(
@@ -45,6 +55,7 @@ export class ProviderSynthesizer implements Synthesizer {
     this.providerId = options.providerId ?? null;
     this.databaseUrl = options.databaseUrl ?? null;
     this.surface = options.surface ?? null;
+    this.systemPromptResolver = options.systemPromptResolver ?? defaultSystemPromptResolver(this.databaseUrl);
     this.egressPolicy = options.egressPolicy ?? ALLOW_ALL_EGRESS;
   }
 
@@ -75,7 +86,9 @@ export class ProviderSynthesizer implements Synthesizer {
     });
     if (docs.length === 0) return null;
 
-    const prompt = buildSynthesisPrompt(query, docs);
+    const systemPrompt = await this.systemPromptResolver?.(spaceId, viewerUserId);
+    if (!systemPrompt) return null;
+    const prompt = buildSynthesisPrompt(query, docs, systemPrompt);
     let completion: { text: string; model: string };
     try {
       completion = await completeProviderText(this.store, spaceId, {
@@ -163,4 +176,10 @@ function uniqueSourceConnectionIds(candidates: readonly BriefCandidate[]): strin
     }
   }
   return out;
+}
+
+function defaultSystemPromptResolver(databaseUrl: string | null): SynthesisSystemPromptResolver | null {
+  if (!databaseUrl) return null;
+  return async (spaceId, viewerUserId) =>
+    resolveRetrievalSynthesisSystemPrompt(getDbPool(databaseUrl), { spaceId, userId: viewerUserId });
 }

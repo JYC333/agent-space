@@ -20,6 +20,7 @@ import { EvolutionRepository } from "../src/modules/evolution/repository";
 import type { SpaceUserIdentity } from "../src/modules/routeUtils/common";
 
 const MIGRATIONS_DIR = join(process.cwd(), "migrations");
+const CATALOG_ROOT = join(process.cwd(), "..", "catalog");
 
 let container: StartedPostgreSqlContainer | undefined;
 let pool: Pool | undefined;
@@ -34,7 +35,7 @@ beforeAll(async () => {
     // seeded at runtime, not embedded in the migration — see
     // server/src/db/seeds.ts. Tests below select strategies by key and need
     // them present.
-    await runBuiltInSeeds(pool, { info: () => {} });
+    await runBuiltInSeeds(pool, { info: () => {} }, CATALOG_ROOT);
     available = true;
   } catch (err) {
     console.warn(

@@ -21,6 +21,7 @@ const PROJECT = "55555555-5555-4555-8555-555555555555";
 const PROJECT_B = "77777777-7777-4777-8777-777777777777";
 const AGENT = "66666666-6666-4666-8666-666666666666";
 const OUTSIDER = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const OTHER_SPACE = "22222222-2222-4222-8222-222222222222";
 
 let container: StartedPostgreSqlContainer | undefined;
 let pool: Pool | undefined;
@@ -80,11 +81,15 @@ function repo(): EvolvableAssetRepository {
 
 const identity: SpaceUserIdentity = { spaceId: SPACE, userId: OWNER };
 
-async function createAsset(assetKey = "academic.paper_screening_assistant"): Promise<Record<string, unknown>> {
+async function createAsset(
+  assetKey = "academic.paper_screening_assistant",
+  overrides: Record<string, unknown> = {},
+): Promise<Record<string, unknown>> {
   return repo().createAsset(identity, {
     asset_type: "prompt_template",
     asset_key: assetKey,
     display_name: "Paper Screening Assistant",
+    ...overrides,
   });
 }
 
@@ -115,11 +120,98 @@ async function createApprovedVersion(
   return version.id as string;
 }
 
+async function createSystemAsset(assetKey: string): Promise<string> {
+  const id = randomUUID();
+  const now = new Date().toISOString();
+  await pool!.query(
+    `INSERT INTO evolvable_assets (
+       id, space_id, asset_type, asset_key, display_name, description, owner_scope_type, owner_scope_id,
+       status, metadata_json, created_at, updated_at
+     ) VALUES ($1, NULL, 'prompt_template', $2, $2, NULL, 'system', NULL, 'active', '{}'::jsonb, $3, $3)`,
+    [id, assetKey, now],
+  );
+  return id;
+}
+
+async function insertApprovedVersion(
+  assetId: string,
+  version: number,
+  spaceId: string | null,
+  scopeType: string,
+  scopeId: string | null,
+  content: Record<string, unknown>,
+): Promise<string> {
+  const id = randomUUID();
+  const now = new Date().toISOString();
+  await pool!.query(
+    `INSERT INTO evolvable_asset_versions (
+       id, asset_id, space_id, scope_type, scope_id, version, status, source,
+       content_json, created_at, updated_at
+     ) VALUES ($1, $2, $3, $4, $5, $6, 'approved', 'built_in', $7::jsonb, $8, $8)`,
+    [id, assetId, spaceId, scopeType, scopeId, version, JSON.stringify(content), now],
+  );
+  return id;
+}
+
 describe("Evolvable asset/version/pin (real Postgres)", () => {
   it("rejects a duplicate asset_key in the same space", async () => {
     if (!available) return;
     await createAsset();
     await expect(createAsset()).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it("requires space owner/admin for public assets but allows member-owned private assets", async () => {
+    if (!available) return;
+    const outsiderIdentity: SpaceUserIdentity = { spaceId: SPACE, userId: OUTSIDER };
+
+    await expect(
+      repo().createAsset(outsiderIdentity, {
+        asset_type: "prompt_template",
+        asset_key: "public.member_denied",
+        display_name: "Member Denied",
+      }),
+    ).rejects.toMatchObject({ statusCode: 403 });
+
+    const privateAsset = await repo().createAsset(outsiderIdentity, {
+      asset_type: "prompt_template",
+      asset_key: "private.member_prompt",
+      display_name: "Member Private Prompt",
+      owner_scope_type: "user",
+    });
+    expect(privateAsset).toMatchObject({ owner_scope_type: "user", owner_scope_id: OUTSIDER });
+
+    await expect(repo().getAsset(identity, privateAsset.id as string)).rejects.toMatchObject({ statusCode: 404 });
+    await expect(repo().getAsset(outsiderIdentity, privateAsset.id as string)).resolves.toMatchObject({
+      id: privateAsset.id,
+      owner_scope_id: OUTSIDER,
+    });
+    const ownerAssetIds = (await repo().listAssets(identity, { assetType: "prompt_template" })).map((asset) => asset.id);
+    expect(ownerAssetIds).not.toContain(privateAsset.id);
+  });
+
+  it("only lets the owner evolve a user-owned private asset", async () => {
+    if (!available) return;
+    const outsiderIdentity: SpaceUserIdentity = { spaceId: SPACE, userId: OUTSIDER };
+    const privateAsset = await repo().createAsset(outsiderIdentity, {
+      asset_type: "prompt_template",
+      asset_key: "private.owner_only",
+      display_name: "Owner Only",
+      owner_scope_type: "user",
+    });
+    const draft = await repo().createVersion(outsiderIdentity, privateAsset.id as string, {
+      scope_type: "user",
+      scope_id: OUTSIDER,
+      content_json: { system_prompt: "private" },
+    });
+
+    await expect(
+      repo().updateVersionContent(identity, privateAsset.id as string, draft.id as string, {
+        content_json: { system_prompt: "stolen" },
+      }),
+    ).rejects.toMatchObject({ statusCode: 404 });
+    await expect(
+      repo().transitionVersionStatus(identity, privateAsset.id as string, draft.id as string, { status: "candidate" }),
+    ).rejects.toMatchObject({ statusCode: 404 });
   });
 
   it("allows editing a draft version but rejects edits once it is a candidate", async () => {
@@ -167,7 +259,7 @@ describe("Evolvable asset/version/pin (real Postgres)", () => {
 
   it("only lists scoped versions visible to the caller", async () => {
     if (!available) return;
-    const asset = await createAsset();
+    const asset = await createAsset("academic.visible_scopes", { metadata_json: { allow_user_override: true } });
     const spaceVersion = await repo().createVersion(identity, asset.id as string, { scope_type: "space", content_json: { prompt: "space" } });
     const projectVersion = await repo().createVersion(identity, asset.id as string, {
       scope_type: "project",
@@ -276,7 +368,7 @@ describe("Evolvable asset/version/pin (real Postgres)", () => {
     if (!available) return;
     const asset = await createAsset();
     const vA = await createApprovedVersion(asset.id as string, "project", { system_prompt: "for project A" });
-    const vB = await createApprovedVersion(asset.id as string, "project", { system_prompt: "for project B" });
+    const vB = await createApprovedVersion(asset.id as string, "project", { system_prompt: "for project B" }, PROJECT_B);
     await repo().setPin(identity, asset.id as string, "project", PROJECT, { version_id: vA });
     await repo().setPin(identity, asset.id as string, "project", PROJECT_B, { version_id: vB });
 
@@ -307,6 +399,29 @@ describe("Evolvable asset/version/pin (real Postgres)", () => {
     await expect(
       repo().setPin(outsiderIdentity, asset.id as string, "agent", AGENT, { version_id: version }),
     ).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it("rejects user-scoped versions and pins on public assets unless user override is enabled", async () => {
+    if (!available) return;
+    const asset = await createAsset("public.no_user_override");
+    await expect(
+      repo().createVersion(identity, asset.id as string, {
+        scope_type: "user",
+        scope_id: OWNER,
+        content_json: { system_prompt: "personal" },
+      }),
+    ).rejects.toMatchObject({ statusCode: 403 });
+
+    const overridable = await createAsset("public.allow_user_override", { metadata_json: { allow_user_override: true } });
+    const userVersion = await createApprovedVersion(overridable.id as string, "user", { system_prompt: "personal" });
+    await expect(repo().setPin(identity, overridable.id as string, "user", OWNER, { version_id: userVersion })).resolves.toMatchObject({
+      scope_type: "user",
+      scope_id: OWNER,
+      version_id: userVersion,
+    });
+
+    const outsiderIdentity: SpaceUserIdentity = { spaceId: SPACE, userId: OUTSIDER };
+    await expect(repo().listPins(outsiderIdentity, overridable.id as string)).resolves.toHaveLength(0);
   });
 
   it("resolves project pin over space-approved version, and space-approved over system baseline", async () => {
@@ -344,6 +459,42 @@ describe("Evolvable asset/version/pin (real Postgres)", () => {
     expect(result.fallbackReason).toBeTruthy();
   });
 
+  it("does not expose another space's versions on a shared system asset", async () => {
+    if (!available) return;
+    await pool!.query(`INSERT INTO spaces (id, name, type, created_at, updated_at) VALUES ($1,'Other','personal',now(),now())`, [
+      OTHER_SPACE,
+    ]);
+    const assetKey = "shared.system.prompt";
+    const assetId = await createSystemAsset(assetKey);
+    const systemVersion = await insertApprovedVersion(assetId, 1, null, "system", null, {
+      system_prompt: "system baseline",
+    });
+    await pool!.query(`UPDATE evolvable_assets SET current_system_version_id = $2 WHERE id = $1`, [assetId, systemVersion]);
+    const otherSpaceVersion = await insertApprovedVersion(assetId, 2, OTHER_SPACE, "space", OTHER_SPACE, {
+      system_prompt: "other space override",
+    });
+
+    const listed = await repo().listVersions(identity, assetId);
+    expect(listed.map((version) => version.id)).toContain(systemVersion);
+    expect(listed.map((version) => version.id)).not.toContain(otherSpaceVersion);
+
+    const resolved = await resolveEvolvableAssetVersion(pool!, { spaceId: SPACE, assetKey });
+    expect(resolved.versionId).toBe(systemVersion);
+    expect(resolved.resolutionTrace[0]).toContain("system_baseline");
+
+    await expect(
+      resolveEvolvableAssetVersion(pool!, {
+        spaceId: SPACE,
+        assetKey,
+        explicitVersionId: otherSpaceVersion,
+      }),
+    ).rejects.toMatchObject({ statusCode: 422 });
+
+    await expect(
+      repo().setPin(identity, assetId, "space", SPACE, { version_id: otherSpaceVersion }),
+    ).rejects.toMatchObject({ statusCode: 422 });
+  });
+
   it("uses a space pin before the latest space-approved version", async () => {
     if (!available) return;
     const asset = await createAsset();
@@ -376,7 +527,7 @@ describe("Evolvable asset/version/pin (real Postgres)", () => {
 
   it("ignores a user pin unless allowUserPin is explicitly set", async () => {
     if (!available) return;
-    const asset = await createAsset();
+    const asset = await createAsset("academic.user_pin_resolution", { metadata_json: { allow_user_override: true } });
     const systemVersion = await createApprovedVersion(asset.id as string, "system", { system_prompt: "system baseline" });
     const userVersion = await createApprovedVersion(asset.id as string, "user", { system_prompt: "user personal" });
     await repo().setPin(identity, asset.id as string, "user", OWNER, { version_id: userVersion });
@@ -415,9 +566,9 @@ describe("Evolvable asset/version/pin (real Postgres)", () => {
     if (!available) return;
     const asset = await createAsset();
     await pool!.query(`INSERT INTO spaces (id, name, type, created_at, updated_at) VALUES ($1,'Other','personal',now(),now())`, [
-      "22222222-2222-4222-8222-222222222222",
+      OTHER_SPACE,
     ]);
-    const otherIdentity: SpaceUserIdentity = { spaceId: "22222222-2222-4222-8222-222222222222", userId: OWNER };
+    const otherIdentity: SpaceUserIdentity = { spaceId: OTHER_SPACE, userId: OWNER };
     await expect(repo().getAsset(otherIdentity, asset.id as string)).rejects.toMatchObject({ statusCode: 404 });
   });
 });
