@@ -1,19 +1,21 @@
 import { defineConfig } from "drizzle-kit";
 
-// Generator-only config: drizzle-kit is never used to apply migrations
-// against a live database (no `drizzle-kit migrate` / `push`). It only
-// diffs `src/db/schema/**` against `drizzle/meta/` snapshots and writes
-// plain `.sql` files into `drizzle/`. Those files are generator artifacts;
-// `npm run schema:generate` copies the applicable ones into
-// `server/migrations/` under the next sequential baseline-style prefix,
-// which is what the server migration runner (`src/db/migrator.ts`) applies.
+// Generator-only config: Drizzle schema is the authoring source, but
+// drizzle-kit is never used to apply migrations against a live database
+// (no `drizzle-kit migrate` / `push`). It diffs `src/db/schema/**` against
+// `drizzle/meta/` snapshots and writes plain `.sql` files into `drizzle/`.
+// Those files are generator artifacts; `npm run schema:generate` copies the
+// applicable ones into `server/migrations/` under the next sequential
+// baseline-style prefix, which is what the server migration runner
+// (`src/db/migrator.ts`) applies.
 //
 // `generate`/`check` (the day-to-day and CI commands) are purely file-based
-// — they diff `schema` against `drizzle/meta/*.json` and never touch a
-// database — so SERVER_DATABASE_URL is not required for them. Only the
-// one-time bootstrap `pull` (and `push`, which this project doesn't use)
-// need real credentials; they'll fail with an ordinary connection error if
-// SERVER_DATABASE_URL is unset.
+// and never touch a database, so SERVER_DATABASE_URL is not required for them.
+// `schema:check` writes Drizzle output into a temporary directory and compares
+// it to the committed snapshot so startup/build checks do not mutate the repo.
+// Only the one-time bootstrap `pull` (and `push`, which this project doesn't
+// use) need real credentials; they'll fail with an ordinary connection error
+// if SERVER_DATABASE_URL is unset.
 
 export default defineConfig({
   dialect: "postgresql",

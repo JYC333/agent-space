@@ -1,4 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { ArrowLeft, CheckCircle2, Library, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 import { sourcesApi } from '../../../api/client'
@@ -62,6 +63,9 @@ function groupPresets(presets: SourcePreset[]) {
 
 export default function SourcePresetsPage() {
   const { activeSpaceId, activeSpaceName } = useSpace()
+  const [searchParams] = useSearchParams()
+  const projectId = searchParams.get('project_id')
+  const requestedPresetId = searchParams.get('preset')
   const [presets, setPresets] = useState<SourcePreset[]>([])
   const [selectedPresetId, setSelectedPresetId] = useState('')
   const [loading, setLoading] = useState(true)
@@ -101,13 +105,16 @@ export default function SourcePresetsPage() {
     try {
       const response = await sourcesApi.sourcePresets()
       setPresets(response.items)
-      setSelectedPresetId(current => response.items.some(item => item.id === current) ? current : response.items[0]?.id ?? '')
+      setSelectedPresetId(current => {
+        if (requestedPresetId && response.items.some(item => item.id === requestedPresetId)) return requestedPresetId
+        return response.items.some(item => item.id === current) ? current : response.items[0]?.id ?? ''
+      })
     } catch (e) {
       toast.error(errMsg(e))
     } finally {
       setLoading(false)
     }
-  }, [activeSpaceId])
+  }, [activeSpaceId, requestedPresetId])
 
   useEffect(() => { load() }, [load])
 
@@ -162,7 +169,18 @@ export default function SourcePresetsPage() {
       })
       setCreatedConnection(row)
       await createPostProcessingPreset(row)
-      toast.success(`arXiv source created: ${row.name}`)
+      if (projectId) {
+        await sourcesApi.createProjectSourceBinding({
+          project_id: projectId,
+          source_connection_id: row.id,
+          binding_key: 'default',
+          backfill_history: true,
+          extraction_policy: { profile_key: 'academic_paper_v1' },
+        })
+        toast.success(`arXiv source created and added to project: ${row.name}`)
+      } else {
+        toast.success(`arXiv source created: ${row.name}`)
+      }
       setArxivName('')
       setArxivSchedule(emptyScheduleFormValue())
       if (arxivMode === 'search') setArxivQuery('')
@@ -231,7 +249,9 @@ export default function SourcePresetsPage() {
             <Library className="size-5 text-accent-foreground" />
           </div>
           <div className="min-w-0">
-            <h1 className="text-xl font-semibold tracking-tight">Preset Sources</h1>
+            <h1 className="text-xl font-semibold tracking-tight">
+              {projectId ? 'Add preset source to project' : 'Preset Sources'}
+            </h1>
             <p className="text-sm text-muted-foreground">Viewing: {activeSpaceName ?? activeSpaceId}</p>
           </div>
         </div>
@@ -241,9 +261,9 @@ export default function SourcePresetsPage() {
             Refresh
           </Button>
           <Button variant="outline" asChild>
-            <Link to="/sources">
+            <Link to={projectId ? `/projects/${projectId}/sources` : '/sources'}>
               <ArrowLeft className="size-4" />
-              Sources
+              {projectId ? 'Project sources' : 'Sources'}
             </Link>
           </Button>
         </div>
@@ -351,9 +371,9 @@ export default function SourcePresetsPage() {
                   <div className="mt-3 flex items-center justify-between gap-3">
                     <p className="text-sm font-medium truncate">{createdConnection.name}</p>
                     <Button type="button" size="sm" variant="outline" asChild>
-                      <Link to={`/sources/sources/${createdConnection.id}`}>
+                      <Link to={projectId ? `/projects/${projectId}/sources` : `/sources/sources/${createdConnection.id}`}>
                         <CheckCircle2 className="size-3.5" />
-                        Details
+                        {projectId ? 'Project sources' : 'Details'}
                       </Link>
                     </Button>
                   </div>

@@ -474,7 +474,8 @@ not replaced by Source.
 
 ## Related Files
 - `server/src/modules/knowledge/` - API, service, schemas, read models, and proposal appliers
-- `server/migrations/` - canonical schema tables (incl. `notes`, `object_relations`, `cards`, `card_review_states`, `card_reviews`)
+- `server/src/db/schema/` - Drizzle schema declarations for canonical tables (incl. `notes`, `object_relations`, `cards`, `card_review_states`, `card_reviews`)
+- `server/migrations/` - generated/applied SQL artifacts
 - `server/test/` - live schema and API tests for Knowledge/Cards surfaces
 - `server/src/modules/policy/` - Knowledge policy actions wired via proposal
 - `server/src/gateway/routeRegistry.ts` - active backend module registry entry

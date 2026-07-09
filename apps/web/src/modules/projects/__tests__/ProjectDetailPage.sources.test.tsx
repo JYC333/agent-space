@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ReactNode } from 'react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import ProjectDetailPage from '../ProjectDetailPage'
-import { sourcesApi, sourceReaderApi, projectsApi, workspacesApi } from '../../../api/client'
+import { automationsApi, sourcesApi, sourceReaderApi, projectsApi, workspacesApi, projectPresetsApi, projectResearchApi } from '../../../api/client'
 
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn() },
@@ -54,6 +54,38 @@ vi.mock('../../../api/client', () => ({
     linkWorkspace: vi.fn(),
     unlinkWorkspace: vi.fn(),
   },
+  projectPresetsApi: {
+    getProjectPreset: vi.fn().mockResolvedValue({ preset_key: null }),
+  },
+  projectResearchApi: {
+    profile: vi.fn().mockRejectedValue(new Error('404 Research profile not found')),
+    upsertProfile: vi.fn(),
+    approveProfile: vi.fn(),
+    workflows: vi.fn().mockResolvedValue([]),
+    startWorkflow: vi.fn(),
+    runStage: vi.fn(),
+    checkpoints: vi.fn().mockResolvedValue([]),
+    decideCheckpoint: vi.fn(),
+    screeningCriteria: vi.fn().mockResolvedValue({
+      id: null,
+      project_id: 'project-1',
+      include_keywords: [],
+      exclude_keywords: [],
+      methods: [],
+      date_range_start: null,
+      date_range_end: null,
+      venues: [],
+      required_evidence_fields: [],
+      created_at: null,
+      updated_at: null,
+    }),
+    upsertScreeningCriteria: vi.fn(),
+    literatureMatrix: vi.fn().mockResolvedValue([]),
+    rebuildLiteratureMatrix: vi.fn(),
+    synthesis: vi.fn().mockResolvedValue([]),
+    artifacts: vi.fn(),
+    runIntegrity: vi.fn(),
+  },
   workspacesApi: {
     list: vi.fn().mockResolvedValue({ items: [], total: 0, limit: 200, offset: 0 }),
   },
@@ -102,15 +134,16 @@ vi.mock('../../../api/client', () => ({
       limit: 100,
       offset: 0,
     }),
-    workspaceBindings: vi.fn().mockResolvedValue([{
+    projectSourceBindings: vi.fn().mockResolvedValue([{
       id: 'binding-1',
       space_id: 'space-1',
-      workspace_id: 'workspace-1',
       project_id: 'project-1',
       source_connection_id: 'conn-1',
       binding_key: 'engineering',
       status: 'active',
       priority: 0,
+      delivery_scope: 'project_members',
+      collection_notifications_enabled: true,
       filters_json: {},
       routing_policy_json: {},
       extraction_policy_json: {},
@@ -118,15 +151,16 @@ vi.mock('../../../api/client', () => ({
       created_at: '2026-06-30T00:00:00.000Z',
       updated_at: '2026-06-30T00:00:00.000Z',
     }]),
-    createWorkspaceBinding: vi.fn().mockResolvedValue({
+    createProjectSourceBinding: vi.fn().mockResolvedValue({
       id: 'binding-new',
       space_id: 'space-1',
-      workspace_id: 'workspace-1',
       project_id: 'project-1',
       source_connection_id: 'conn-1',
       binding_key: 'default',
       status: 'active',
       priority: 0,
+      delivery_scope: 'project_members',
+      collection_notifications_enabled: true,
       filters_json: {},
       routing_policy_json: {},
       extraction_policy_json: {},
@@ -134,12 +168,14 @@ vi.mock('../../../api/client', () => ({
       created_at: '2026-06-30T00:00:00.000Z',
       updated_at: '2026-06-30T00:00:00.000Z',
     }),
-    backfillWorkspaceBinding: vi.fn().mockResolvedValue({
+    backfillProjectSourceBinding: vi.fn().mockResolvedValue({
       binding_id: 'binding-1',
-      workspace_id: 'workspace-1',
       project_id: 'project-1',
       source_connection_id: 'conn-1',
       created_links: 2,
+      reactivated_links: 0,
+      archived_links: 0,
+      evidence_links: 2,
     }),
     createManualUrl: vi.fn().mockResolvedValue({
       id: 'item-new',
@@ -209,40 +245,53 @@ vi.mock('../../../api/client', () => ({
       created_at: '2026-06-30T00:00:00.000Z',
       updated_at: '2026-06-30T00:00:00.000Z',
     }),
-    items: vi.fn().mockResolvedValue({
+    projectItems: vi.fn().mockResolvedValue({
       items: [{
-        id: 'item-1',
+        id: 'project-item-1',
         space_id: 'space-1',
-        connection_id: 'conn-1',
-        item_type: 'feed_entry',
-        source_object_type: null,
-        source_object_id: null,
-        created_by_user_id: 'user-1',
-        title: 'Release item',
-        source_uri: 'https://example.test/item',
-        canonical_uri: 'https://example.test/item',
-        source_domain: 'example.test',
-        source_external_id: 'guid-1',
-        author: null,
-        occurred_at: null,
-        first_seen_at: '2026-06-30T00:00:00.000Z',
-        last_seen_at: '2026-06-30T00:00:00.000Z',
-        content_hash: null,
-        excerpt: null,
-        library_status: 'new',
-        read_status: 'unread',
-        content_state: 'metadata_only',
-        retention_policy: 'metadata_only',
-        relevance_score: null,
-        novelty_score: null,
-        raw_artifact_id: null,
-        extracted_artifact_id: null,
-        summary_artifact_id: null,
-        search_index_ref: null,
-        embedding_index_ref: null,
-        metadata_json: null,
+        project_id: 'project-1',
+        project_source_binding_id: 'binding-1',
+        source_connection_id: 'conn-1',
+        source_item_id: 'item-1',
+        status: 'active',
+        matched_at: '2026-06-30T00:00:00.000Z',
+        match_reason: 'project_source_binding:binding-1',
         created_at: '2026-06-30T00:00:00.000Z',
         updated_at: '2026-06-30T00:00:00.000Z',
+        item: {
+          id: 'item-1',
+          space_id: 'space-1',
+          connection_id: 'conn-1',
+          item_type: 'feed_entry',
+          source_object_type: null,
+          source_object_id: null,
+          created_by_user_id: 'user-1',
+          title: 'Release item',
+          source_uri: 'https://example.test/item',
+          canonical_uri: 'https://example.test/item',
+          source_domain: 'example.test',
+          source_external_id: 'guid-1',
+          author: null,
+          occurred_at: null,
+          first_seen_at: '2026-06-30T00:00:00.000Z',
+          last_seen_at: '2026-06-30T00:00:00.000Z',
+          content_hash: null,
+          excerpt: null,
+          library_status: 'new',
+          read_status: 'unread',
+          content_state: 'metadata_only',
+          retention_policy: 'metadata_only',
+          relevance_score: null,
+          novelty_score: null,
+          raw_artifact_id: null,
+          extracted_artifact_id: null,
+          summary_artifact_id: null,
+          search_index_ref: null,
+          embedding_index_ref: null,
+          metadata_json: null,
+          created_at: '2026-06-30T00:00:00.000Z',
+          updated_at: '2026-06-30T00:00:00.000Z',
+        },
       }],
       total: 1,
       limit: 5,
@@ -314,20 +363,44 @@ describe('ProjectDetailPage Source consumption', () => {
     renderPage()
 
     expect(await screen.findByText('Project One')).toBeInTheDocument()
-    expect(screen.getByText('Engineering feed')).toBeInTheDocument()
-    expect(screen.getByText('Release item')).toBeInTheDocument()
-    expect(screen.getByText('Useful evidence')).toBeInTheDocument()
+    expect(await screen.findByText('Engineering feed')).toBeInTheDocument()
+    expect(await screen.findByText('Release item')).toBeInTheDocument()
+    expect(await screen.findByText('Useful evidence')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /^link source$/i })).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: /manage in sources/i })).toHaveAttribute('href', '/sources?project_id=project-1')
+    expect(screen.getByRole('link', { name: /manage sources/i })).toHaveAttribute('href', '/projects/project-1/sources')
     expect(screen.queryByText(/create connection/i)).toBeNull()
 
     await waitFor(() => {
-      expect(sourcesApi.workspaceBindings).toHaveBeenCalledWith({ project_id: 'project-1' })
-      expect(sourcesApi.items).toHaveBeenCalledWith({ project_id: 'project-1', limit: 5 })
+      expect(sourcesApi.projectSourceBindings).toHaveBeenCalledWith({ project_id: 'project-1' })
+      expect(sourcesApi.projectItems).toHaveBeenCalledWith({ project_id: 'project-1', limit: 5 })
       expect(sourcesApi.evidence).toHaveBeenCalledWith({ project_id: 'project-1', status: 'active', limit: 5 })
+      expect(automationsApi.list).toHaveBeenCalledWith({ project_id: 'project-1' })
+      expect(projectPresetsApi.getProjectPreset).toHaveBeenCalledWith('project-1')
       expect(sourcesApi.createConnection).not.toHaveBeenCalled()
       expect(sourcesApi.createSourceRecipe).not.toHaveBeenCalled()
       expect(sourcesApi.createCustomSourceDraft).not.toHaveBeenCalled()
+    })
+  })
+
+  it('renders the Academic Research workbench from the creation-time project preset', async () => {
+    vi.mocked(projectPresetsApi.getProjectPreset).mockResolvedValueOnce({ preset_key: 'academic_research' })
+    renderPage()
+
+    expect(await screen.findByText('Auto research workflow')).toBeInTheDocument()
+    expect(screen.getByText('Research question to literature intake to screening matrix to synthesis to integrity gate.')).toBeInTheDocument()
+    expect(screen.getByText('Research corpus')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /start auto research/i })).toBeDisabled()
+    expect(screen.getByRole('link', { name: /add arxiv source/i })).toHaveAttribute(
+      'href',
+      '/sources/source-presets?project_id=project-1&preset=arxiv',
+    )
+    expect(screen.getByRole('link', { name: /citation graph/i })).toHaveAttribute(
+      'href',
+      '/graph?project_id=project-1&lens_id=academic_citation_v1',
+    )
+    await waitFor(() => {
+      expect(projectResearchApi.workflows).toHaveBeenCalledWith('project-1')
+      expect(projectResearchApi.literatureMatrix).toHaveBeenCalledWith('project-1')
     })
   })
 
@@ -338,7 +411,7 @@ describe('ProjectDetailPage Source consumption', () => {
     fireEvent.click(button)
 
     await waitFor(() => {
-      expect(sourcesApi.backfillWorkspaceBinding).toHaveBeenCalledWith('binding-1')
+      expect(sourcesApi.backfillProjectSourceBinding).toHaveBeenCalledWith('binding-1')
     })
   })
 
@@ -381,22 +454,20 @@ describe('ProjectDetailPage Source consumption', () => {
       limit: 200,
       offset: 0,
     })
-    vi.mocked(sourcesApi.workspaceBindings).mockResolvedValue([])
+    vi.mocked(sourcesApi.projectSourceBindings).mockResolvedValue([])
 
     renderPage()
 
     fireEvent.click(await screen.findByRole('button', { name: /^link source$/i }))
     expect(await screen.findByRole('dialog', { name: /^link source$/i })).toBeInTheDocument()
-    expect(screen.getByText('Project workspace · reference')).toBeInTheDocument()
     expect(screen.getByText('Engineering feed')).toBeInTheDocument()
 
     const buttons = screen.getAllByRole('button', { name: /^link source$/i })
     fireEvent.click(buttons[buttons.length - 1]!)
 
     await waitFor(() => {
-      expect(sourcesApi.createWorkspaceBinding).toHaveBeenCalledWith({
+      expect(sourcesApi.createProjectSourceBinding).toHaveBeenCalledWith({
         project_id: 'project-1',
-        workspace_id: 'workspace-1',
         source_connection_id: 'conn-1',
         backfill_history: true,
       })
@@ -404,15 +475,16 @@ describe('ProjectDetailPage Source consumption', () => {
   })
 
   it('saves a URL directly to a project-linked Source', async () => {
-    vi.mocked(sourcesApi.workspaceBindings).mockResolvedValue([{
+    vi.mocked(sourcesApi.projectSourceBindings).mockResolvedValue([{
       id: 'binding-1',
       space_id: 'space-1',
-      workspace_id: 'workspace-1',
       project_id: 'project-1',
       source_connection_id: 'conn-1',
       binding_key: 'default',
       status: 'active',
       priority: 0,
+      delivery_scope: 'project_members',
+      collection_notifications_enabled: true,
       filters_json: {},
       routing_policy_json: {},
       extraction_policy_json: {},
@@ -443,15 +515,16 @@ describe('ProjectDetailPage Source consumption', () => {
   })
 
   it('attaches an already saved URL to the selected project source', async () => {
-    vi.mocked(sourcesApi.workspaceBindings).mockResolvedValue([{
+    vi.mocked(sourcesApi.projectSourceBindings).mockResolvedValue([{
       id: 'binding-1',
       space_id: 'space-1',
-      workspace_id: 'workspace-1',
       project_id: 'project-1',
       source_connection_id: 'conn-1',
       binding_key: 'default',
       status: 'active',
       priority: 0,
+      delivery_scope: 'project_members',
+      collection_notifications_enabled: true,
       filters_json: {},
       routing_policy_json: {},
       extraction_policy_json: {},
@@ -560,16 +633,17 @@ describe('ProjectDetailPage Source consumption', () => {
       limit: 100,
       offset: 0,
     })
-    vi.mocked(sourcesApi.workspaceBindings).mockResolvedValue([
+    vi.mocked(sourcesApi.projectSourceBindings).mockResolvedValue([
       {
         id: 'binding-1',
         space_id: 'space-1',
-        workspace_id: 'workspace-1',
         project_id: 'project-1',
         source_connection_id: 'conn-1',
         binding_key: 'default',
         status: 'active',
         priority: 0,
+        delivery_scope: 'project_members',
+        collection_notifications_enabled: true,
         filters_json: {},
         routing_policy_json: {},
         extraction_policy_json: {},
@@ -580,12 +654,13 @@ describe('ProjectDetailPage Source consumption', () => {
       {
         id: 'binding-2',
         space_id: 'space-1',
-        workspace_id: 'workspace-1',
         project_id: 'project-1',
         source_connection_id: 'conn-2',
         binding_key: 'default',
         status: 'active',
         priority: 0,
+        delivery_scope: 'project_members',
+        collection_notifications_enabled: true,
         filters_json: {},
         routing_policy_json: {},
         extraction_policy_json: {},
@@ -594,40 +669,53 @@ describe('ProjectDetailPage Source consumption', () => {
         updated_at: '2026-06-30T00:00:00.000Z',
       },
     ])
-    vi.mocked(sourcesApi.items).mockResolvedValue({
+    vi.mocked(sourcesApi.projectItems).mockResolvedValue({
       items: [{
-        id: 'item-1',
+        id: 'project-item-1',
         space_id: 'space-1',
-        connection_id: 'conn-1',
-        item_type: 'external_url',
-        source_object_type: null,
-        source_object_id: null,
-        created_by_user_id: 'user-1',
-        title: 'Saved URL',
-        source_uri: 'https://example.test/item',
-        canonical_uri: 'https://example.test/item',
-        source_domain: 'example.test',
-        source_external_id: null,
-        author: null,
-        occurred_at: null,
-        first_seen_at: '2026-06-30T00:00:00.000Z',
-        last_seen_at: '2026-06-30T00:00:00.000Z',
-        content_hash: null,
-        excerpt: null,
-        library_status: 'new',
-        read_status: 'unread',
-        content_state: 'metadata_only',
-        retention_policy: 'metadata_only',
-        relevance_score: null,
-        novelty_score: null,
-        raw_artifact_id: null,
-        extracted_artifact_id: null,
-        summary_artifact_id: null,
-        search_index_ref: null,
-        embedding_index_ref: null,
-        metadata_json: { created_by: 'manual_url' },
+        project_id: 'project-1',
+        project_source_binding_id: 'binding-1',
+        source_connection_id: 'conn-1',
+        source_item_id: 'item-1',
+        status: 'active',
+        matched_at: '2026-06-30T00:00:00.000Z',
+        match_reason: 'project_source_binding:binding-1',
         created_at: '2026-06-30T00:00:00.000Z',
         updated_at: '2026-06-30T00:00:00.000Z',
+        item: {
+          id: 'item-1',
+          space_id: 'space-1',
+          connection_id: 'conn-1',
+          item_type: 'external_url',
+          source_object_type: null,
+          source_object_id: null,
+          created_by_user_id: 'user-1',
+          title: 'Saved URL',
+          source_uri: 'https://example.test/item',
+          canonical_uri: 'https://example.test/item',
+          source_domain: 'example.test',
+          source_external_id: null,
+          author: null,
+          occurred_at: null,
+          first_seen_at: '2026-06-30T00:00:00.000Z',
+          last_seen_at: '2026-06-30T00:00:00.000Z',
+          content_hash: null,
+          excerpt: null,
+          library_status: 'new',
+          read_status: 'unread',
+          content_state: 'metadata_only',
+          retention_policy: 'metadata_only',
+          relevance_score: null,
+          novelty_score: null,
+          raw_artifact_id: null,
+          extracted_artifact_id: null,
+          summary_artifact_id: null,
+          search_index_ref: null,
+          embedding_index_ref: null,
+          metadata_json: { created_by: 'manual_url' },
+          created_at: '2026-06-30T00:00:00.000Z',
+          updated_at: '2026-06-30T00:00:00.000Z',
+        },
       }],
       total: 1,
       limit: 5,

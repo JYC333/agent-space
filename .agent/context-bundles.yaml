@@ -239,6 +239,22 @@ knowledge:
     - server/src/modules/knowledge
     - apps/web/src/modules/knowledge/KnowledgePage.tsx   # stub exists
 
+relations:
+  docs:
+    - .agent/modules/relations.md
+    - .agent/modules/graph-view.md
+    - .agent/architecture/PROJECTS.md
+    - .agent/BOUNDARIES.md
+  code_roots:
+    - server/src/modules/relations
+    - server/src/modules/academic
+    - server/src/modules/projectPresets
+    - server/src/modules/projectResearch
+    - server/src/modules/graph
+    - server/src/db/schema/relations.ts
+    - server/src/db/schema/academic.ts
+    - server/src/db/schema/projectResearch.ts
+
 cards:
   docs:
     - .agent/modules/spaced-repetition.md

@@ -314,7 +314,7 @@ export const CLAIM_RESOLUTION_STATES = new Set(["unreviewed", "confirmed", "cont
 export const CLAIM_EVIDENCE_ROLES = new Set(["supports", "contradicts", "mentions", "derived_from", "cites", "summarizes"]);
 export const CLAIM_SOURCE_REF_TYPES = new Set(["activity", "artifact", "run_event", "extracted_evidence", "source_snapshot", "external_pointer", "source_item"]);
 export const CLAIM_SOURCE_TRUST_LEVELS = new Set(["trusted", "normal", "untrusted", "unknown"]);
-export const OBJECT_RELATION_TYPES = new Set(["related_to", "references", "depends_on", "part_of", "source_for", "derived_from", "about", "supports", "contradicts", "supersedes", "refines", "same_as"]);
+export const OBJECT_RELATION_TYPES = new Set(["related_to", "references", "depends_on", "part_of", "source_for", "derived_from", "about", "supports", "contradicts", "supersedes", "refines", "same_as", "affiliated_with", "cites", "authored_by"]);
 export const OBJECT_RELATION_STATUSES = new Set(["candidate", "active", "rejected", "archived"]);
 export const RELATION_TYPES = new Set([
   "related_to",

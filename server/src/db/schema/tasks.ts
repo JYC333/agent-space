@@ -47,12 +47,12 @@ export const boards = pgTable("boards", {
 			name: "boards_space_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.workspaceId],
+			columns: [table.workspaceId, table.spaceId],
 			foreignColumns: [workspaces.id, workspaces.spaceId],
 			name: "boards_workspace_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.projectId],
+			columns: [table.projectId, table.spaceId],
 			foreignColumns: [projects.id, projects.spaceId],
 			name: "boards_project_id_fkey"
 		}).onDelete("set null"),
@@ -210,12 +210,12 @@ export const tasks = pgTable("tasks", {
 			name: "tasks_space_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.workspaceId],
+			columns: [table.workspaceId, table.spaceId],
 			foreignColumns: [workspaces.id, workspaces.spaceId],
 			name: "tasks_workspace_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.projectId],
+			columns: [table.projectId, table.spaceId],
 			foreignColumns: [projects.id, projects.spaceId],
 			name: "tasks_project_id_fkey"
 		}).onDelete("set null"),
@@ -341,7 +341,7 @@ export const validationRecipes = pgTable("validation_recipes", {
 			name: "validation_recipes_space_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.workspaceId],
+			columns: [table.workspaceId, table.spaceId],
 			foreignColumns: [workspaces.id, workspaces.spaceId],
 			name: "validation_recipes_workspace_id_fkey"
 		}),

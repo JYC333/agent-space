@@ -43,6 +43,11 @@ interface SourceRecommendationPointer {
   connectionName: string | null
 }
 
+interface ProjectSourceCollectionPointer {
+  projectId: string
+  date: string | null
+}
+
 function recordValue(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -88,6 +93,18 @@ function sourceRecommendationPointer(record: ActivityInboxRecord): SourceRecomme
   return {
     connectionId,
     connectionName: stringValue(metadata?.source_connection_name),
+  }
+}
+
+function projectSourceCollectionPointer(record: ActivityInboxRecord): ProjectSourceCollectionPointer | null {
+  if (record.source_type !== 'source') return null
+  const metadata = recordValue(record.metadata_json)
+  const pointerType = stringValue(metadata?.pointer_type)
+  const projectId = stringValue(metadata?.project_id)
+  if (pointerType !== 'project_source_collection' || !projectId) return null
+  return {
+    projectId,
+    date: stringValue(metadata?.local_date),
   }
 }
 
@@ -219,11 +236,14 @@ export default function ActivityInboxPage() {
       {!loading && records.map(r => {
         const briefing = briefingPointer(r)
         const recommendation = sourceRecommendationPointer(r)
+        const projectCollection = projectSourceCollectionPointer(r)
         const targetPath = briefing
           ? `/library/digests/${briefing.connectionId}/${briefing.date}`
           : recommendation
             ? `/sources?view=pending&connection_id=${encodeURIComponent(recommendation.connectionId)}`
-            : `/activity/${r.id}`
+            : projectCollection
+              ? `/projects/${encodeURIComponent(projectCollection.projectId)}/sources${projectCollection.date ? `?date=${encodeURIComponent(projectCollection.date)}` : ''}`
+              : `/activity/${r.id}`
         return (
           <Card key={r.id}>
             <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-3">
@@ -248,6 +268,12 @@ export default function ActivityInboxPage() {
                     {recommendation.connectionName && <Badge variant="muted">{recommendation.connectionName}</Badge>}
                   </div>
                 )}
+                {projectCollection && (
+                  <div className="flex gap-1.5 flex-wrap mt-2">
+                    <Badge variant="secondary">project sources</Badge>
+                    {projectCollection.date && <Badge variant="muted">{projectCollection.date}</Badge>}
+                  </div>
+                )}
               </div>
               {(r.status === 'raw' || r.status === 'proposals_generated') && (
                 <div className="flex flex-wrap gap-1.5 shrink-0">
@@ -267,7 +293,7 @@ export default function ActivityInboxPage() {
                   >
                     <Link to={targetPath}>
                       {briefing && <Newspaper className="size-3.5 mr-1" />}
-                      {briefing ? 'Open Digest' : recommendation ? 'Review Source' : 'Generate proposals'}
+                      {briefing ? 'Open Digest' : recommendation ? 'Review Source' : projectCollection ? 'Open Sources' : 'Generate proposals'}
                     </Link>
                   </Button>
                   <Button

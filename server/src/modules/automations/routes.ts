@@ -6,6 +6,7 @@ import {
   jsonBody,
   optionalString,
   params,
+  query,
   resolveIdentity,
   sendRouteError,
 } from "../routeUtils/common";
@@ -22,7 +23,10 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     const spaceId = params(request).spaceId ?? identity.spaceId;
     if (spaceId !== identity.spaceId) return reply.code(403).send({ detail: "Access denied" });
     try {
-      const rows = await new PgAutomationRepository(dbPool(context.config)).list(spaceId);
+      const q = query(request);
+      const rows = await new PgAutomationRepository(dbPool(context.config)).list(spaceId, {
+        projectId: optionalString(q.project_id),
+      });
       return reply.send(rows.map(automationToOut));
     } catch (error) {
       return sendRouteError(reply, error);

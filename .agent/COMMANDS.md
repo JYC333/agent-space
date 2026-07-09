@@ -4,6 +4,8 @@
 
 ```bash
 # Start everything (Docker Compose). First run creates ~/.aspace/dev/.env from template.
+# The start script runs `npm run schema:generate` from server/ before image build
+# and migration, so TypeScript schema edits are converted to generated artifacts.
 ./ops/scripts/start.sh
 
 # Other profiles
@@ -31,9 +33,11 @@ npm test
 SERVER_DATABASE_URL=postgresql://... npm run migrate:status
 SERVER_DATABASE_URL=postgresql://... npm run migrate
 
-# Schema changes: edit server/src/db/schema/, then generate + copy into
-# server/migrations/ (see .agent/architecture/DATABASE_AND_TRANSACTIONS.md
-# for the full authoring workflow). No database needed for either command.
+# Schema changes: edit server/src/db/schema/, then generate SQL artifacts.
+# start.sh also runs schema:generate automatically before migrations, but run it
+# explicitly when you want to inspect or commit the generated files before start.
+# Do not hand-edit server/migrations/*.sql for schema changes. No database is
+# needed for either command.
 npm run schema:generate
 npm run schema:check
 ```
@@ -51,10 +55,13 @@ restarts with `node --watch dist/index.js`. Prod still runs compiled JS only.
 ## Database scripts (run from repo root)
 
 ```bash
-# Run migrations (Docker-native by default: the server migration runner runs inside
-# a one-shot server container, using the in-network postgres service).
-# Docker-native mode creates POSTGRES_DB first when the database is missing.
-# The normal start script invokes this helper before starting app services.
+# Run generated migrations (Docker-native by default: the server migration runner
+# runs inside a one-shot server container, using the in-network postgres service).
+# The normal start script first runs schema:generate, then invokes this helper
+# before app services start. The helper runs a no-write Drizzle schema check,
+# then Docker-native mode creates POSTGRES_DB when it is missing, then applies
+# the generated migration SQL. Production image builds also run the same schema
+# check.
 ./ops/scripts/db/migrate.sh [--mode dev|test|prod]
 
 # Host mode: only when DATABASE_URL points to a reachable external Postgres

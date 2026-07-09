@@ -1,0 +1,647 @@
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useParams, useSearchParams } from 'react-router-dom'
+import { SpaceLink as Link } from '../../core/spaceNav'
+import { AlertTriangle, ArrowLeft, BookOpen, FileText, Layers3, Link2, Network, Play, Plus, RefreshCw, Rss, Search, Trash2 } from 'lucide-react'
+import { toast } from 'sonner'
+import { projectPresetsApi, projectsApi, sourcesApi } from '../../api/client'
+import { errMsg } from '../../lib/utils'
+import type { Project, ProjectCorpusItem, ProjectSourceBinding, ProjectSourceItem, SourceConnection, SourceHealth } from '../../types/api'
+import { Button } from '../../components/ui/button'
+import { Card } from '../../components/ui/card'
+import { Badge, StatusBadge } from '../../components/ui/badge'
+import { Input } from '../../components/ui/input'
+import { Label } from '../../components/ui/label'
+import { Select } from '../../components/ui/select'
+import { EmptyState } from '../../components/ui/empty-state'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '../../components/ui/dialog'
+
+function fmt(dt: string | null | undefined) {
+  return dt ? new Date(dt).toLocaleString() : '-'
+}
+
+function corpusTitle(row: ProjectCorpusItem): string {
+  return row.object?.title ?? row.evidence?.title ?? row.source_item?.title ?? 'Untitled corpus item'
+}
+
+function corpusSubtitle(row: ProjectCorpusItem): string {
+  return row.object?.summary
+    ?? row.evidence?.content_excerpt
+    ?? row.source_item?.excerpt
+    ?? row.source_item?.source_uri
+    ?? row.reason
+    ?? row.role
+}
+
+const ACADEMIC_PRESET_KEY = 'academic_research'
+
+function presetKeyFromProject(project: Project): string | null {
+  const value = project.settings_json?.preset
+  return typeof value === 'string' ? value : null
+}
+
+function projectGraphHref(projectId: string, presetKey: string | null): string {
+  const params = new URLSearchParams({ project_id: projectId })
+  if (presetKey === ACADEMIC_PRESET_KEY) params.set('lens_id', 'academic_citation_v1')
+  return `/graph?${params}`
+}
+
+function MetricCard({
+  icon,
+  label,
+  value,
+  detail,
+}: {
+  icon: React.ReactNode
+  label: string
+  value: number
+  detail: string
+}) {
+  return (
+    <Card className="p-4">
+      <div className="flex items-center gap-2 text-muted-foreground">
+        {icon}
+        <span className="text-xs font-medium uppercase tracking-wide">{label}</span>
+      </div>
+      <p className="mt-2 text-2xl font-semibold" style={{ fontFamily: 'var(--font-mono)' }}>
+        {value}
+      </p>
+      <p className="mt-1 text-xs text-muted-foreground">{detail}</p>
+    </Card>
+  )
+}
+
+function AddProjectSourceDialog({
+  open,
+  onOpenChange,
+  projectId,
+  connections,
+  bindings,
+  onAdded,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  projectId: string
+  connections: SourceConnection[]
+  bindings: ProjectSourceBinding[]
+  onAdded: () => void
+}) {
+  const options = connections
+    .filter(connection => !bindings.some(binding => binding.source_connection_id === connection.id && binding.binding_key === 'default'))
+    .map(connection => ({ value: connection.id, label: connection.name }))
+  const [connectionId, setConnectionId] = useState('')
+  const [deliveryScope, setDeliveryScope] = useState<'project_members' | 'source_subscribers'>('project_members')
+  const [backfill, setBackfill] = useState(true)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (!open) return
+    setConnectionId(options[0]?.value ?? '')
+    setDeliveryScope('project_members')
+    setBackfill(true)
+  }, [open, connections, bindings])
+
+  async function submit() {
+    if (!connectionId) return
+    setSaving(true)
+    try {
+      const binding = await sourcesApi.createProjectSourceBinding({
+        project_id: projectId,
+        source_connection_id: connectionId,
+        delivery_scope: deliveryScope,
+        backfill_history: backfill,
+      })
+      const added = binding.backfill_result?.created_links ?? 0
+      toast.success(added > 0 ? `Source added; ${added} project items linked` : 'Source added')
+      onAdded()
+      onOpenChange(false)
+    } catch (error) {
+      toast.error(errMsg(error))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Add source</DialogTitle>
+          <DialogDescription>Bind an existing source to this project.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4 py-2">
+          <div className="space-y-1.5">
+            <Label>Source</Label>
+            {options.length === 0 ? (
+              <p className="text-xs text-muted-foreground">No unbound sources are available.</p>
+            ) : (
+              <Select value={connectionId} options={options} onChange={setConnectionId} />
+            )}
+          </div>
+          <div className="space-y-1.5">
+            <Label>Delivery</Label>
+            <Select
+              value={deliveryScope}
+              onChange={value => setDeliveryScope(value as 'project_members' | 'source_subscribers')}
+              options={[
+                { value: 'project_members', label: 'Project members' },
+                { value: 'source_subscribers', label: 'Source subscribers' },
+              ]}
+            />
+          </div>
+          <label className="flex items-start gap-2 rounded-md border border-border px-3 py-2 text-xs">
+            <input
+              type="checkbox"
+              className="mt-0.5 accent-primary"
+              checked={backfill}
+              onChange={event => setBackfill(event.target.checked)}
+            />
+            <span>
+              <span className="block font-medium text-foreground">Backfill existing items</span>
+              <span className="text-muted-foreground">Link already collected source items and evidence into this project.</span>
+            </span>
+          </label>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button onClick={submit} disabled={saving || !connectionId}>{saving ? 'Adding...' : 'Add source'}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+export default function ProjectSourcesPage() {
+  const { projectId = '' } = useParams()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [project, setProject] = useState<Project | null>(null)
+  const [projectPresetKey, setProjectPresetKey] = useState<string | null>(null)
+  const [connections, setConnections] = useState<SourceConnection[]>([])
+  const [bindings, setBindings] = useState<ProjectSourceBinding[]>([])
+  const [health, setHealth] = useState<SourceHealth[]>([])
+  const [items, setItems] = useState<ProjectSourceItem[]>([])
+  const [corpusItems, setCorpusItems] = useState<ProjectCorpusItem[]>([])
+  const [sourceFilter, setSourceFilter] = useState('')
+  const [typeFilter, setTypeFilter] = useState('')
+  const [dateFilter, setDateFilter] = useState(() => searchParams.get('date') ?? '')
+  const [query, setQuery] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [addOpen, setAddOpen] = useState(false)
+  const [busyBindingId, setBusyBindingId] = useState<string | null>(null)
+  const [syncingCorpus, setSyncingCorpus] = useState(false)
+  const [busyCorpusItemId, setBusyCorpusItemId] = useState<string | null>(null)
+
+  const connectionById = useMemo(
+    () => Object.fromEntries(connections.map(connection => [connection.id, connection])) as Record<string, SourceConnection>,
+    [connections],
+  )
+  const healthByBindingId = useMemo(
+    () => Object.fromEntries(health.map(row => [row.binding_id ?? '', row])) as Record<string, SourceHealth>,
+    [health],
+  )
+
+  const load = useCallback(async () => {
+    if (!projectId) return
+    setLoading(true)
+    try {
+      const [projectRow, projectPresetSelection, connectionPage, bindingRows, healthRows, itemPage, corpusPage] = await Promise.all([
+        projectsApi.get(projectId),
+        projectPresetsApi.getProjectPreset(projectId).catch(() => ({ preset_key: null })),
+        sourcesApi.connections({ limit: 200 }),
+        sourcesApi.projectSourceBindings({ project_id: projectId }),
+        sourcesApi.projectSourceHealth(projectId),
+        sourcesApi.projectItems({
+          project_id: projectId,
+          source_connection_id: sourceFilter || undefined,
+          item_type: typeFilter || undefined,
+          matched_date: dateFilter || undefined,
+          q: query || undefined,
+          limit: 50,
+        }),
+        projectsApi.corpus(projectId, {
+          q: query || undefined,
+          limit: 50,
+        }),
+      ])
+      setProject(projectRow)
+      setProjectPresetKey(projectPresetSelection.preset_key ?? presetKeyFromProject(projectRow))
+      setConnections(connectionPage.items)
+      setBindings(bindingRows)
+      setHealth(healthRows)
+      setItems(itemPage.items)
+      setCorpusItems(corpusPage.items)
+    } catch (error) {
+      toast.error(errMsg(error))
+    } finally {
+      setLoading(false)
+    }
+  }, [projectId, sourceFilter, typeFilter, dateFilter, query])
+
+  useEffect(() => { load() }, [load])
+
+  useEffect(() => {
+    const nextDate = searchParams.get('date') ?? ''
+    setDateFilter(current => current === nextDate ? current : nextDate)
+  }, [searchParams])
+
+  function updateDateFilter(value: string) {
+    setDateFilter(value)
+    setSearchParams(previous => {
+      const next = new URLSearchParams(previous)
+      if (value) next.set('date', value)
+      else next.delete('date')
+      return next
+    }, { replace: true })
+  }
+
+  async function backfill(binding: ProjectSourceBinding) {
+    setBusyBindingId(binding.id)
+    try {
+      const result = await sourcesApi.backfillProjectSourceBinding(binding.id)
+      toast.success(`Backfilled ${result.created_links} new project items`)
+      await load()
+    } catch (error) {
+      toast.error(errMsg(error))
+    } finally {
+      setBusyBindingId(null)
+    }
+  }
+
+  async function runScan(binding: ProjectSourceBinding) {
+    setBusyBindingId(binding.id)
+    try {
+      await sourcesApi.scanConnection(binding.source_connection_id)
+      toast.success('Source scan queued')
+      await load()
+    } catch (error) {
+      toast.error(errMsg(error))
+    } finally {
+      setBusyBindingId(null)
+    }
+  }
+
+  async function togglePause(binding: ProjectSourceBinding) {
+    setBusyBindingId(binding.id)
+    try {
+      await sourcesApi.updateProjectSourceBinding(binding.id, {
+        status: binding.status === 'paused' ? 'active' : 'paused',
+      })
+      await load()
+    } catch (error) {
+      toast.error(errMsg(error))
+    } finally {
+      setBusyBindingId(null)
+    }
+  }
+
+  async function remove(binding: ProjectSourceBinding) {
+    if (!confirm('Remove this source from the project?')) return
+    setBusyBindingId(binding.id)
+    try {
+      await sourcesApi.deleteProjectSourceBinding(binding.id)
+      toast.success('Source removed from project')
+      await load()
+    } catch (error) {
+      toast.error(errMsg(error))
+    } finally {
+      setBusyBindingId(null)
+    }
+  }
+
+  async function syncCorpus() {
+    if (!projectId) return
+    setSyncingCorpus(true)
+    try {
+      const result = await projectsApi.backfillCorpusFromSources(projectId)
+      toast.success(`Synced ${result.source_items + result.source_objects + result.evidence_items + result.evidence_objects} corpus links`)
+      await load()
+    } catch (error) {
+      toast.error(errMsg(error))
+    } finally {
+      setSyncingCorpus(false)
+    }
+  }
+
+  async function updateCorpusItem(row: ProjectCorpusItem, patch: Partial<Pick<ProjectCorpusItem, 'triage_status' | 'read_status'>>) {
+    setBusyCorpusItemId(row.id)
+    try {
+      const updated = await projectsApi.updateCorpusItem(projectId, row.id, patch)
+      setCorpusItems(current => current.map(item => item.id === row.id ? updated : item))
+    } catch (error) {
+      toast.error(errMsg(error))
+    } finally {
+      setBusyCorpusItemId(null)
+    }
+  }
+
+  const attentionCount = health.filter(row => row.status === 'attention' || row.status === 'failing').length
+  const isAcademicProject = projectPresetKey === ACADEMIC_PRESET_KEY
+
+  return (
+    <div className="p-6 space-y-6">
+      <Link
+        to={projectId ? `/projects/${projectId}` : '/projects'}
+        className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+      >
+        <ArrowLeft className="size-3" />
+        Project
+      </Link>
+
+      <div className="flex items-start justify-between gap-4 flex-wrap pb-4 border-b border-border">
+        <div className="flex items-start gap-4">
+          <div
+            className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0 mt-0.5"
+            style={{
+              background: 'color-mix(in oklch, var(--primary) 12%, transparent)',
+              border: '1px solid color-mix(in oklch, var(--primary) 35%, transparent)',
+            }}
+          >
+            {isAcademicProject
+              ? <BookOpen className="size-5 text-accent-foreground" />
+              : <Rss className="size-5 text-accent-foreground" />}
+          </div>
+          <div className="space-y-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h1 className="text-xl font-semibold tracking-tight">{project?.name ?? 'Project sources'}</h1>
+              <Badge variant="outline">{isAcademicProject ? 'Literature sources' : 'Sources'}</Badge>
+              {isAcademicProject && <Badge variant="secondary">Academic Research</Badge>}
+            </div>
+            <p className="text-sm text-muted-foreground max-w-2xl">
+              {isAcademicProject
+                ? 'Monitor literature sources, paper collection health, and the project paper corpus.'
+                : 'Monitor bound sources, collection health, and source items collected for this project.'}
+            </p>
+            {project && <p className="text-xs text-muted-foreground">Updated {fmt(project.updated_at)}</p>}
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" className="gap-1.5 shrink-0" asChild disabled={!projectId}>
+            <Link to={projectGraphHref(projectId, projectPresetKey)}>
+              <Network className="size-4" />
+              Open graph
+            </Link>
+          </Button>
+          {isAcademicProject && projectId && (
+            <Button variant="secondary" className="gap-1.5 shrink-0" asChild>
+              <Link to={`/sources/source-presets?project_id=${projectId}&preset=arxiv`}>
+                <BookOpen className="size-4" />
+                Add arXiv
+              </Link>
+            </Button>
+          )}
+          <Button className="gap-1.5 shrink-0" onClick={() => setAddOpen(true)} disabled={!projectId}>
+            <Plus className="size-4" />
+            Add source
+          </Button>
+        </div>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-4">
+        <MetricCard
+          icon={<Link2 className="size-3.5" />}
+          label="Bound sources"
+          value={bindings.length}
+          detail="Sources routed into this project"
+        />
+        <MetricCard
+          icon={<AlertTriangle className="size-3.5" />}
+          label="Needs attention"
+          value={attentionCount}
+          detail="Bindings with source health issues"
+        />
+        <MetricCard
+          icon={<FileText className="size-3.5" />}
+          label={isAcademicProject ? 'Collected papers' : 'Collected items'}
+          value={items.length}
+          detail="Items matching the current filters"
+        />
+        <MetricCard
+          icon={<Layers3 className="size-3.5" />}
+          label={isAcademicProject ? 'Paper corpus' : 'Corpus items'}
+          value={corpusItems.length}
+          detail="Project objects, evidence, and source items"
+        />
+      </div>
+
+      <section className="space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Source bindings</h2>
+          {loading && <Badge variant="muted">Loading</Badge>}
+        </div>
+        <div className="space-y-2">
+          {bindings.length === 0 ? (
+            <Card className="p-0">
+              <EmptyState
+                title="No sources bound."
+                description="Add a source to start collecting matching items into this project."
+                action={
+                  <Button size="sm" onClick={() => setAddOpen(true)} disabled={!projectId}>
+                    <Plus className="size-3.5" />
+                    Add source
+                  </Button>
+                }
+              />
+            </Card>
+          ) : bindings.map(binding => {
+            const connection = connectionById[binding.source_connection_id]
+            const rowHealth = healthByBindingId[binding.id]
+            const busy = busyBindingId === binding.id
+            return (
+              <Card key={binding.id} className="p-4">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="font-medium">{connection?.name ?? binding.source_connection_id}</p>
+                      <StatusBadge status={rowHealth?.status ?? binding.status} />
+                      <Badge variant="outline">{binding.delivery_scope.replace('_', ' ')}</Badge>
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground truncate">{connection?.endpoint_url ?? binding.binding_key}</p>
+                    {rowHealth && (
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        Last success {fmt(rowHealth.last_success_at)} · next run {fmt(rowHealth.next_run_at)}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button size="sm" variant="outline" className="gap-1.5" disabled={busy} onClick={() => runScan(binding)}>
+                      <Play className="size-3.5" />
+                      Run scan
+                    </Button>
+                    <Button size="sm" variant="outline" className="gap-1.5" disabled={busy || binding.status !== 'active'} onClick={() => backfill(binding)}>
+                      <RefreshCw className="size-3.5" />
+                      Backfill
+                    </Button>
+                    <Button size="sm" variant="secondary" disabled={busy} onClick={() => togglePause(binding)}>
+                      {binding.status === 'paused' ? 'Resume' : 'Pause'}
+                    </Button>
+                    <Button size="sm" variant="ghost" className="gap-1.5 text-destructive" disabled={busy} onClick={() => remove(binding)}>
+                      <Trash2 className="size-3.5" />
+                      Remove
+                    </Button>
+                  </div>
+                </div>
+              </Card>
+            )
+          })}
+        </div>
+      </section>
+
+      <section className="space-y-3">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Project corpus</h2>
+            <p className="mt-1 text-xs text-muted-foreground">Project-level triage and read state over collected source items, evidence, and graph objects.</p>
+          </div>
+          <Button size="sm" variant="outline" className="gap-1.5" onClick={syncCorpus} disabled={syncingCorpus || !projectId}>
+            <RefreshCw className={syncingCorpus ? 'size-3.5 animate-spin' : 'size-3.5'} />
+            Sync corpus
+          </Button>
+        </div>
+        <div className="space-y-2">
+          {corpusItems.length === 0 ? (
+            <Card className="p-0">
+              <EmptyState
+                title="No corpus items."
+                description="Sync the project corpus after collected source items, evidence, or object links are available."
+              />
+            </Card>
+          ) : corpusItems.map(row => {
+            const busy = busyCorpusItemId === row.id
+            return (
+              <Card key={row.id} className="p-4">
+                <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="font-medium truncate">{corpusTitle(row)}</p>
+                      <Badge variant="outline">{row.object ? row.object.object_type ?? 'object' : row.evidence ? 'evidence' : 'source item'}</Badge>
+                      <StatusBadge status={row.triage_status} />
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground line-clamp-2">{corpusSubtitle(row)}</p>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      <Badge variant="muted">{row.role}</Badge>
+                      <Badge variant="muted">{row.read_status}</Badge>
+                      {row.relevance && <Badge variant="outline">{row.relevance}</Badge>}
+                      {row.source_item?.source_domain && <Badge variant="muted">{row.source_item.source_domain}</Badge>}
+                    </div>
+                  </div>
+                  <div className="grid w-full gap-2 sm:grid-cols-2 xl:w-[19rem]">
+                    <Select
+                      value={row.triage_status}
+                      disabled={busy}
+                      onChange={value => updateCorpusItem(row, { triage_status: value as ProjectCorpusItem['triage_status'] })}
+                      options={[
+                        { value: 'new', label: 'New' },
+                        { value: 'relevant', label: 'Relevant' },
+                        { value: 'maybe', label: 'Maybe' },
+                        { value: 'included', label: 'Included' },
+                        { value: 'excluded', label: 'Excluded' },
+                      ]}
+                    />
+                    <Select
+                      value={row.read_status}
+                      disabled={busy}
+                      onChange={value => updateCorpusItem(row, { read_status: value as ProjectCorpusItem['read_status'] })}
+                      options={[
+                        { value: 'unread', label: 'Unread' },
+                        { value: 'skimmed', label: 'Skimmed' },
+                        { value: 'read', label: 'Read' },
+                        { value: 'discussed', label: 'Discussed' },
+                      ]}
+                    />
+                  </div>
+                </div>
+              </Card>
+            )
+          })}
+        </div>
+      </section>
+
+      <section className="space-y-3">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Collected items</h2>
+          <div className="grid w-full gap-2 sm:grid-cols-2 lg:w-auto lg:grid-cols-[16rem_10rem_9rem_10rem]">
+            <div className="relative w-full">
+              <Search className="pointer-events-none absolute left-2 top-2.5 size-4 text-muted-foreground" />
+              <Input className="pl-8" placeholder="Search items" value={query} onChange={event => setQuery(event.target.value)} />
+            </div>
+            <Select
+              className="w-full"
+              value={sourceFilter}
+              onChange={setSourceFilter}
+              options={[
+                { value: '', label: 'All sources' },
+                ...bindings.map(binding => ({
+                  value: binding.source_connection_id,
+                  label: connectionById[binding.source_connection_id]?.name ?? binding.source_connection_id,
+                })),
+              ]}
+            />
+            <Select
+              className="w-full"
+              value={typeFilter}
+              onChange={setTypeFilter}
+              options={[
+                { value: '', label: 'All types' },
+                { value: 'external_url', label: 'Articles' },
+                { value: 'pdf', label: 'PDFs' },
+                { value: 'book', label: 'Books' },
+                { value: 'podcast', label: 'Podcasts' },
+                { value: 'video', label: 'Videos' },
+                { value: 'email', label: 'Emails' },
+              ]}
+            />
+            <Input
+              type="date"
+              className="w-full"
+              value={dateFilter}
+              onChange={event => updateDateFilter(event.target.value)}
+              aria-label="Collected date"
+            />
+          </div>
+        </div>
+        <div className="space-y-2">
+          {items.length === 0 ? (
+            <Card className="p-0">
+              <EmptyState
+                title="No collected items."
+                description="No project source items match the current filters."
+              />
+            </Card>
+          ) : items.map(row => (
+            <Card key={row.id} className="p-4">
+              <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+                <div className="min-w-0">
+                  <p className="font-medium truncate">{row.item.title || 'Untitled item'}</p>
+                  <p className="mt-1 text-xs text-muted-foreground line-clamp-2">{row.item.excerpt ?? row.item.source_uri ?? row.item.item_type}</p>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    <Badge variant="outline">{row.item.item_type}</Badge>
+                    {row.item.source_domain && <Badge variant="muted">{row.item.source_domain}</Badge>}
+                    <Badge variant="muted">matched {fmt(row.matched_at)}</Badge>
+                  </div>
+                </div>
+                <Button size="sm" variant="outline" asChild>
+                  <Link to={`/library/items/${row.item.id}`}>Open reader</Link>
+                </Button>
+              </div>
+            </Card>
+          ))}
+        </div>
+      </section>
+
+      <AddProjectSourceDialog
+        open={addOpen}
+        onOpenChange={setAddOpen}
+        projectId={projectId}
+        connections={connections}
+        bindings={bindings}
+        onAdded={load}
+      />
+    </div>
+  )
+}

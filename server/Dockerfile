@@ -33,10 +33,13 @@ RUN ln -s /app/server/node_modules ../packages/protocol/node_modules \
 # ---- build: compile TS -> dist ------------------------------------------------
 FROM deps AS build
 COPY server/tsconfig.json ./
+COPY server/drizzle.config.ts ./
+COPY server/drizzle ./drizzle
 COPY server/src ./src
 COPY server/migrations ./migrations
 COPY server/scripts ./scripts
 COPY plugins /app/plugins
+RUN npm run schema:check
 RUN npm run build
 
 # ---- dev-runtime: full deps + writable dist for compose hot reload ------------
@@ -45,6 +48,8 @@ ENV NODE_ENV=development
 
 COPY catalog /app/catalog
 COPY server/tsconfig.json ./
+COPY server/drizzle.config.ts ./
+COPY server/drizzle ./drizzle
 COPY server/scripts ./scripts
 COPY server/src ./src
 COPY server/migrations ./migrations

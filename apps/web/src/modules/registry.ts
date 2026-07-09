@@ -171,17 +171,6 @@ export const MODULE_REGISTRY: Module[] = [
     perspectiveType: 'space-scoped',
     component: lazy(() => import('../plugins/finance_ledger/FinancePageAdapter')),
   },
-  {
-    id: 'research_atlas', label: 'Research Atlas', path: '/atlas',
-    section: 'knowledge', group: 'knowledge', icon: 'network',
-    description: 'Space-scoped scholarly graph for papers, scholars, institutions, venues, and literature workflows.',
-    source: 'official_plugin', pluginId: 'research_atlas', capabilityId: undefined,
-    enabled: false, visible: true, planned: false,
-    perspectiveType: 'space-scoped',
-    hasSubRoutes: true,
-    component: lazy(() => import('../plugins/research_atlas/ResearchAtlasPageAdapter')),
-  },
-
   // ── Daily ─────────────────────────────────────────────────────────────────
   {
     id: 'today', label: 'Today', path: '/today',

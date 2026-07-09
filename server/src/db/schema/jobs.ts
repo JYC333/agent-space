@@ -52,7 +52,7 @@ export const jobs = pgTable("jobs", {
 			name: "jobs_user_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.workspaceId],
+			columns: [table.workspaceId, table.spaceId],
 			foreignColumns: [workspaces.id, workspaces.spaceId],
 			name: "jobs_workspace_id_fkey"
 		}),

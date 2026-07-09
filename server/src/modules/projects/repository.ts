@@ -458,46 +458,6 @@ export class PgProjectRepository {
       clauses.push(`role = $${params.length}`);
     }
     await this.db.query(`DELETE FROM project_workspaces WHERE ${clauses.join(" AND ")}`, params);
-    await this.archiveWorkspaceSourceBindingsIfUnlinked(identity.spaceId, projectId, workspaceId);
-  }
-
-  private async archiveWorkspaceSourceBindingsIfUnlinked(
-    spaceId: string,
-    projectId: string,
-    workspaceId: string,
-  ): Promise<void> {
-    const now = new Date().toISOString();
-    await this.db.query(
-      `WITH archived_bindings AS (
-         UPDATE workspace_source_bindings wsb
-            SET status = 'archived',
-                updated_at = $4
-          WHERE wsb.space_id = $1
-            AND wsb.project_id = $2
-            AND wsb.workspace_id = $3
-            AND wsb.status <> 'archived'
-            AND NOT EXISTS (
-              SELECT 1
-                FROM project_workspaces pw
-               WHERE pw.space_id = wsb.space_id
-                 AND pw.project_id = wsb.project_id
-                 AND pw.workspace_id = wsb.workspace_id
-            )
-          RETURNING wsb.id
-       )
-       UPDATE evidence_links el
-          SET status = 'archived',
-              updated_at = $4
-        WHERE el.space_id = $1
-          AND el.target_type = 'project'
-          AND el.target_id = $2
-          AND el.status = 'active'
-          AND el.reason IN (
-            SELECT 'workspace_source_binding:' || archived_bindings.id
-              FROM archived_bindings
-          )`,
-      [spaceId, projectId, workspaceId, now],
-    );
   }
 
   // --- Project membership (the project-level memory access ACL) -------------

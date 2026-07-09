@@ -444,3 +444,85 @@ export const SourceRunSummaryDTOSchema = z
   })
   .passthrough();
 export type SourceRunSummaryDTO = z.infer<typeof SourceRunSummaryDTOSchema>;
+
+export const PROJECT_SOURCE_DELIVERY_SCOPE_VALUES = [
+  "project_members",
+  "source_subscribers",
+] as const;
+
+export const SOURCE_HEALTH_STATUS_VALUES = [
+  "healthy",
+  "running",
+  "attention",
+  "failing",
+  "paused",
+] as const;
+
+export const ProjectSourceBindingDTOSchema = z
+  .object({
+    id: IdSchema,
+    space_id: IdSchema,
+    project_id: IdSchema,
+    source_connection_id: IdSchema,
+    binding_key: z.string(),
+    status: z.enum(["active", "paused", "archived"]),
+    priority: z.number().int(),
+    delivery_scope: z.enum(PROJECT_SOURCE_DELIVERY_SCOPE_VALUES),
+    collection_notifications_enabled: z.boolean(),
+    filters_json: z.record(z.unknown()),
+    routing_policy_json: z.record(z.unknown()),
+    extraction_policy_json: z.record(z.unknown()),
+    created_by_user_id: IdSchema.nullish(),
+    created_at: ISODateTimeSchema,
+    updated_at: ISODateTimeSchema,
+  })
+  .passthrough();
+export type ProjectSourceBindingDTO = z.infer<typeof ProjectSourceBindingDTOSchema>;
+
+export const ProjectSourceItemDTOSchema = z
+  .object({
+    id: IdSchema,
+    space_id: IdSchema,
+    project_id: IdSchema,
+    project_source_binding_id: IdSchema,
+    source_connection_id: IdSchema.nullish(),
+    source_item_id: IdSchema,
+    status: z.enum(["active", "archived"]),
+    matched_at: ISODateTimeSchema,
+    match_reason: z.string().nullish(),
+    created_at: ISODateTimeSchema,
+    updated_at: ISODateTimeSchema,
+    item: z.record(z.unknown()),
+  })
+  .passthrough();
+export type ProjectSourceItemDTO = z.infer<typeof ProjectSourceItemDTOSchema>;
+
+export const SourceHealthDTOSchema = z
+  .object({
+    binding_id: IdSchema.nullish(),
+    project_id: IdSchema.nullish(),
+    source_connection_id: IdSchema,
+    source_name: z.string(),
+    status: z.enum(SOURCE_HEALTH_STATUS_VALUES),
+    last_success_at: ISODateTimeSchema.nullish(),
+    last_failure_at: ISODateTimeSchema.nullish(),
+    last_error: z.string().nullish(),
+    next_run_at: ISODateTimeSchema.nullish(),
+    queued_jobs: z.number().int().nonnegative(),
+    running_jobs: z.number().int().nonnegative(),
+    recent_new_items: z.number().int().nonnegative(),
+    consecutive_failures: z.number().int().nonnegative(),
+  })
+  .passthrough();
+export type SourceHealthDTO = z.infer<typeof SourceHealthDTOSchema>;
+
+export const ProjectSourceSummaryDTOSchema = z
+  .object({
+    project_id: IdSchema,
+    bound_source_count: z.number().int().nonnegative(),
+    today_new_items: z.number().int().nonnegative(),
+    health_counts: z.record(z.number().int().nonnegative()),
+    recent_items: z.array(ProjectSourceItemDTOSchema),
+  })
+  .passthrough();
+export type ProjectSourceSummaryDTO = z.infer<typeof ProjectSourceSummaryDTOSchema>;

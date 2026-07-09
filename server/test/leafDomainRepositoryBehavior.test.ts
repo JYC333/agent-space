@@ -319,57 +319,55 @@ function extractionJobRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function workspaceBindingRow(params: readonly unknown[]) {
+function projectSourceBindingRow(params: readonly unknown[]) {
   return {
     id: String(params[0] ?? "binding-1"),
     space_id: String(params[1] ?? "space-1"),
-    workspace_id: String(params[2] ?? "workspace-1"),
-    project_id: String(params[3] ?? "project-1"),
-    source_connection_id: String(params[4] ?? "conn-1"),
-    binding_key: String(params[5] ?? "default"),
+    project_id: String(params[2] ?? "project-1"),
+    source_connection_id: String(params[3] ?? "conn-1"),
+    binding_key: String(params[4] ?? "default"),
     status: "active",
-    priority: Number(params[6] ?? 0),
-    filters_json: JSON.parse(String(params[7] ?? "{}")) as Record<string, unknown>,
-    routing_policy_json: JSON.parse(String(params[8] ?? "{}")) as Record<string, unknown>,
-    extraction_policy_json: JSON.parse(String(params[9] ?? "{}")) as Record<string, unknown>,
-    created_by_user_id: typeof params[10] === "string" ? params[10] : null,
-    created_at: String(params[11] ?? "2026-06-16T00:00:00.000Z"),
-    updated_at: String(params[11] ?? "2026-06-16T00:00:00.000Z"),
+    priority: Number(params[5] ?? 0),
+    delivery_scope: String(params[6] ?? "project_members"),
+    collection_notifications_enabled: typeof params[7] === "boolean" ? params[7] : true,
+    filters_json: JSON.parse(String(params[8] ?? "{}")) as Record<string, unknown>,
+    routing_policy_json: JSON.parse(String(params[9] ?? "{}")) as Record<string, unknown>,
+    extraction_policy_json: JSON.parse(String(params[10] ?? "{}")) as Record<string, unknown>,
+    created_by_user_id: typeof params[11] === "string" ? params[11] : null,
+    created_at: String(params[12] ?? "2026-06-16T00:00:00.000Z"),
+    updated_at: String(params[12] ?? "2026-06-16T00:00:00.000Z"),
   };
 }
 
 describe("Leaf domain repository behavior", () => {
-  it("project source item filters include items captured by a bound source snapshot", async () => {
+  it("project source item list reads materialized project item links", async () => {
     const calls: Array<{ sql: string; params: readonly unknown[] }> = [];
     const db = new FakeDb((sql, params) => {
       calls.push({ sql, params });
       if (sql.includes("FROM projects")) return [{ id: "project-1", owner_user_id: "user-1" }];
       if (sql.includes("FROM spaces")) return [{ type: "personal" }];
       if (sql.includes("count(*)::text AS total")) return [{ total: "0" }];
-      if (sql.includes("FROM source_items")) return [];
+      if (sql.includes("FROM project_source_item_links")) return [];
       throw new Error(`unexpected SQL: ${sql}`);
     });
 
-    await new PgSourcesRepository(db, sourcesConfig()).listItems(identity, {
-      libraryStatus: null,
-      readStatus: null,
-      contentState: null,
-      connectionId: null,
+    await new PgSourcesRepository(db, sourcesConfig()).listProjectItems(identity, {
+      projectId: "project-1",
+      sourceConnectionId: null,
       itemType: null,
-      libraryType: null,
       sourceDomain: null,
+      matchedDate: null,
       createdAfter: null,
       occurredAfter: null,
       q: null,
-      projectId: "project-1",
       limit: 20,
       offset: 0,
     });
 
-    const listSql = calls.find((call) => call.sql.includes("FROM source_items") && call.sql.includes("ORDER BY"));
-    expect(listSql?.sql).toContain("FROM source_snapshots ss");
-    expect(listSql?.sql).toContain("ss.source_item_id = si.id");
-    expect(listSql?.sql).toContain("wsb.source_connection_id = ss.connection_id");
+    const listSql = calls.find((call) => call.sql.includes("FROM project_source_item_links") && call.sql.includes("ORDER BY"));
+    expect(listSql?.sql).toContain("JOIN project_source_bindings psb");
+    expect(listSql?.sql).toContain("psb.delivery_scope = 'project_members'");
+    expect(listSql?.sql).not.toContain(`workspace_${"source"}_bindings`);
   });
 
   it("source item library type filters use soft content classification", async () => {
@@ -392,7 +390,6 @@ describe("Leaf domain repository behavior", () => {
       createdAfter: null,
       occurredAfter: null,
       q: null,
-      projectId: null,
       limit: 20,
       offset: 0,
     });
@@ -423,7 +420,6 @@ describe("Leaf domain repository behavior", () => {
       createdAfter: null,
       occurredAfter: null,
       q: null,
-      projectId: null,
       limit: 20,
       offset: 0,
     });
@@ -627,93 +623,64 @@ describe("Leaf domain repository behavior", () => {
     });
   });
 
-  it("requires project scope when creating workspace source bindings", async () => {
+  it("requires project scope when creating project source bindings", async () => {
     const db = new FakeDb(() => {
       throw new Error("no DB call expected");
     });
 
-    await expect(new PgSourcesRepository(db, sourcesConfig()).createWorkspaceBinding(identity, {
-      workspace_id: "workspace-1",
+    await expect(new PgSourcesRepository(db, sourcesConfig()).createProjectSourceBinding(identity, {
       source_connection_id: "conn-1",
     })).rejects.toMatchObject({ statusCode: 422, message: "project_id is required" });
   });
 
-  it("rejects workspace source bindings for workspaces outside the project", async () => {
-    let attemptedInsert = false;
-    const db = new FakeDb((sql) => {
-      if (sql.includes("FROM source_connections")) return [sourceConnectionRow()];
-      if (sql.includes("FROM projects")) return [{ id: "project-1", owner_user_id: "user-1" }];
-      if (sql.includes("FROM workspaces")) return [{ id: "workspace-1" }];
-      if (sql.includes("FROM project_workspaces")) return [];
-      if (sql.includes("INSERT INTO workspace_source_bindings")) {
-        attemptedInsert = true;
-        throw new Error("binding insert should not run");
-      }
-      throw new Error(`unexpected SQL: ${sql}`);
-    });
-
-    await expect(new PgSourcesRepository(db, sourcesConfig()).createWorkspaceBinding(identity, {
-      workspace_id: "workspace-1",
-      project_id: "project-1",
-      source_connection_id: "conn-1",
-    })).rejects.toMatchObject({
-      statusCode: 422,
-      message: "Workspace must be linked to the project before binding source connections",
-    });
-    expect(attemptedInsert).toBe(false);
-  });
-
-  it("creates workspace source bindings only after project writer and workspace link validation", async () => {
+  it("creates project source bindings after project writer validation", async () => {
     let insertParams: readonly unknown[] | null = null;
     const db = new FakeDb((sql, params) => {
       if (sql.includes("FROM source_connections")) return [sourceConnectionRow()];
       if (sql.includes("FROM projects")) return [{ id: "project-1", owner_user_id: "user-1" }];
-      if (sql.includes("FROM workspaces")) return [{ id: "workspace-1" }];
-      if (sql.includes("FROM project_workspaces")) return [{ id: "project-workspace-1" }];
-      if (sql.includes("INSERT INTO workspace_source_bindings")) {
+      if (sql.includes("INSERT INTO project_source_bindings")) {
         insertParams = params;
-        return [workspaceBindingRow(params)];
+        return [projectSourceBindingRow(params)];
       }
       throw new Error(`unexpected SQL: ${sql}`);
     });
 
-    const out = await new PgSourcesRepository(db, sourcesConfig()).createWorkspaceBinding(identity, {
-      workspace_id: "workspace-1",
+    const out = await new PgSourcesRepository(db, sourcesConfig()).createProjectSourceBinding(identity, {
       project_id: "project-1",
       source_connection_id: "conn-1",
     });
 
     expect(out).toMatchObject({
-      workspace_id: "workspace-1",
       project_id: "project-1",
       source_connection_id: "conn-1",
+      delivery_scope: "project_members",
     });
-    expect(insertParams?.[2]).toBe("workspace-1");
-    expect(insertParams?.[3]).toBe("project-1");
-    expect(insertParams?.[4]).toBe("conn-1");
+    expect(insertParams?.[2]).toBe("project-1");
+    expect(insertParams?.[3]).toBe("conn-1");
   });
 
-  it("backfills historical evidence when requested during workspace source binding creation", async () => {
+  it("backfills historical evidence when requested during project source binding creation", async () => {
     let bindingId: string | null = null;
     let backfillParams: readonly unknown[] | null = null;
     const db = new FakeDb((sql, params) => {
+      if (sql.includes("SELECT DISTINCT si.id")) {
+        backfillParams = params;
+        return [];
+      }
       if (sql.includes("INSERT INTO evidence_links")) {
         backfillParams = params;
         return [];
       }
       if (sql.includes("FROM source_connections")) return [sourceConnectionRow()];
       if (sql.includes("FROM projects")) return [{ id: "project-1", owner_user_id: "user-1" }];
-      if (sql.includes("FROM workspaces")) return [{ id: "workspace-1" }];
-      if (sql.includes("FROM project_workspaces")) return [{ id: "project-workspace-1" }];
-      if (sql.includes("INSERT INTO workspace_source_bindings")) {
+      if (sql.includes("INSERT INTO project_source_bindings")) {
         bindingId = String(params[0]);
-        return [workspaceBindingRow(params)];
+        return [projectSourceBindingRow(params)];
       }
       throw new Error(`unexpected SQL: ${sql}`);
     });
 
-    const out = await new PgSourcesRepository(db, sourcesConfig()).createWorkspaceBinding(identity, {
-      workspace_id: "workspace-1",
+    const out = await new PgSourcesRepository(db, sourcesConfig()).createProjectSourceBinding(identity, {
       project_id: "project-1",
       source_connection_id: "conn-1",
       backfill_history: true,
@@ -721,40 +688,38 @@ describe("Leaf domain repository behavior", () => {
 
     expect(out).toMatchObject({
       backfill_result: {
-        workspace_id: "workspace-1",
         project_id: "project-1",
         source_connection_id: "conn-1",
         created_links: 0,
+        evidence_links: 0,
       },
     });
     expect(backfillParams?.[0]).toBe("space-1");
     expect(backfillParams?.[1]).toBe(bindingId);
   });
 
-  it("backfills historical evidence for an existing workspace source binding after validation", async () => {
+  it("backfills historical evidence for an existing project source binding after validation", async () => {
     let backfillParams: readonly unknown[] | null = null;
     const db = new FakeDb((sql, params) => {
-      if (sql.includes("INSERT INTO evidence_links")) {
+      if (sql.includes("SELECT DISTINCT si.id")) {
         backfillParams = params;
         return [];
       }
-      if (sql.includes("FROM workspace_source_bindings")) {
-        return [workspaceBindingRow(["binding-1", "space-1", "workspace-1", "project-1", "conn-1"])];
+      if (sql.includes("FROM project_source_bindings")) {
+        return [projectSourceBindingRow(["binding-1", "space-1", "project-1", "conn-1"])];
       }
       if (sql.includes("FROM projects")) return [{ id: "project-1", owner_user_id: "user-1" }];
-      if (sql.includes("FROM workspaces")) return [{ id: "workspace-1" }];
-      if (sql.includes("FROM project_workspaces")) return [{ id: "project-workspace-1" }];
       throw new Error(`unexpected SQL: ${sql}`);
     });
 
-    const out = await new PgSourcesRepository(db, sourcesConfig()).backfillWorkspaceBinding(identity, "binding-1");
+    const out = await new PgSourcesRepository(db, sourcesConfig()).backfillProjectSourceBinding(identity, "binding-1");
 
     expect(out).toMatchObject({
       binding_id: "binding-1",
-      workspace_id: "workspace-1",
       project_id: "project-1",
       source_connection_id: "conn-1",
       created_links: 0,
+      evidence_links: 0,
     });
     expect(backfillParams?.[0]).toBe("space-1");
     expect(backfillParams?.[1]).toBe("binding-1");

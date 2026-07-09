@@ -910,6 +910,10 @@ class FakeAutomationRepository {
     return this.automation;
   }
 
+  async list(): Promise<AutomationRow[]> {
+    return [this.automation];
+  }
+
   async create(input?: { preflightSnapshot: Record<string, unknown> }): Promise<AutomationRow> {
     if (input) this.createInputs.push(input);
     return this.automation;

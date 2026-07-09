@@ -40,7 +40,7 @@ export const automations = pgTable("automations", {
 			name: "automations_owner_user_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.projectId],
+			columns: [table.projectId, table.spaceId],
 			foreignColumns: [projects.id, projects.spaceId],
 			name: "automations_project_id_fkey"
 		}).onDelete("set null"),
@@ -50,7 +50,7 @@ export const automations = pgTable("automations", {
 			name: "automations_space_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.workspaceId],
+			columns: [table.workspaceId, table.spaceId],
 			foreignColumns: [workspaces.id, workspaces.spaceId],
 			name: "automations_workspace_id_fkey"
 		}),

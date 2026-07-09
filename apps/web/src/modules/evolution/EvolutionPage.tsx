@@ -16,6 +16,10 @@ import type {
   EvolutionTargetCreateBody,
   EvolutionTargetUpdateBody,
   EvolutionValidationResult,
+  EvolvableAsset,
+  EvolvableAssetEvaluationRun,
+  EvolvableAssetPin,
+  EvolvableAssetVersion,
 } from '../../types/api'
 import { Badge, StatusBadge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'
@@ -45,6 +49,129 @@ import {
   riskVariant,
 } from './EvolutionPageParts'
 
+function assetLabel(asset: EvolvableAsset): string {
+  return asset.display_name || asset.asset_key
+}
+
+function jsonSummary(value: unknown): string {
+  if (!value || typeof value !== 'object') return '-'
+  const keys = Object.keys(value as Record<string, unknown>)
+  return keys.length > 0 ? keys.slice(0, 4).join(', ') : '-'
+}
+
+function AssetList({
+  assets,
+  selectedAssetId,
+  onSelect,
+}: {
+  assets: EvolvableAsset[]
+  selectedAssetId: string | null
+  onSelect: (assetId: string) => void
+}) {
+  if (assets.length === 0) {
+    return <EmptyState title="No prompt/template assets." description="Registered evolvable assets will appear here." />
+  }
+  return (
+    <div className="space-y-2">
+      {assets.map(asset => (
+        <button
+          key={asset.id}
+          type="button"
+          className={[
+            'w-full rounded-md border px-3 py-2 text-left transition-colors',
+            selectedAssetId === asset.id ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/40',
+          ].join(' ')}
+          onClick={() => onSelect(asset.id)}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <span className="truncate text-sm font-medium">{assetLabel(asset)}</span>
+            <StatusBadge status={asset.status} />
+          </div>
+          <div className="mt-1 flex flex-wrap gap-1.5">
+            <Badge variant="outline">{asset.asset_type}</Badge>
+            <Badge variant="muted">{asset.owner_scope_type}</Badge>
+          </div>
+          <p className="mt-1 truncate text-xs text-muted-foreground">{asset.asset_key}</p>
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function AssetVersionList({ versions }: { versions: EvolvableAssetVersion[] }) {
+  if (versions.length === 0) {
+    return <EmptyState title="No versions." description="Create a candidate version before evaluation and promotion." />
+  }
+  return (
+    <div className="space-y-2">
+      {versions.map(version => (
+        <div key={version.id} className="rounded-md border border-border p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="secondary">v{version.version}</Badge>
+              <StatusBadge status={version.status} />
+              <Badge variant="outline">{version.scope_type}{version.scope_id ? `:${version.scope_id.slice(-6)}` : ''}</Badge>
+              {version.stale_parent && <Badge variant="warning">stale parent</Badge>}
+            </div>
+            <span className="text-xs text-muted-foreground">{fmt(version.updated_at)}</span>
+          </div>
+          <div className="mt-2 grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
+            <span>source {version.source}</span>
+            <span>parent {version.parent_version_id?.slice(-8) ?? '-'}</span>
+            <span>hash {version.content_hash ?? '-'}</span>
+            <span>content {version.content_ref ?? jsonSummary(version.content_json)}</span>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function AssetPinList({ pins }: { pins: EvolvableAssetPin[] }) {
+  if (pins.length === 0) {
+    return <EmptyState title="No active pins." description="Runtime resolution is using approved scoped versions or system baselines." />
+  }
+  return (
+    <div className="space-y-2">
+      {pins.map(pin => (
+        <div key={pin.id} className="rounded-md border border-border p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="outline">{pin.scope_type}</Badge>
+            <span className="font-mono text-xs">{pin.scope_id}</span>
+            <StatusBadge status={pin.status} />
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">version {pin.version_id.slice(-8)} · {pin.reason ?? 'no reason'}</p>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function AssetEvaluationList({ evaluations }: { evaluations: EvolvableAssetEvaluationRun[] }) {
+  if (evaluations.length === 0) {
+    return <EmptyState title="No evaluation runs." description="Candidate versions need passed evaluation before promotion." />
+  }
+  return (
+    <div className="space-y-2">
+      {evaluations.map(run => (
+        <div key={run.id} className="rounded-md border border-border p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <StatusBadge status={run.status} />
+              <Badge variant="outline">{run.evaluator_version}</Badge>
+              <span className="font-mono text-xs text-muted-foreground">{run.candidate_version_id.slice(-8)}</span>
+            </div>
+            <span className="text-xs text-muted-foreground">{fmt(run.created_at)}</span>
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            suite {String(run.eval_suite_ref.name ?? run.eval_suite_ref.kind ?? '-')} · metrics {jsonSummary(run.metrics)}
+          </p>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export default function EvolutionPage() {
   const { activeSpaceId, preferredSpaceId, spaces } = useSpace()
   const viewSpaceId = activeSpaceId ?? preferredSpaceId
@@ -63,8 +190,14 @@ export default function EvolutionPage() {
   const [runs, setRuns] = useState<EvolutionRunListItem[]>([])
   const [proposals, setProposals] = useState<EvolutionProposal[]>([])
   const [validationResults, setValidationResults] = useState<EvolutionValidationResult[]>([])
+  const [assets, setAssets] = useState<EvolvableAsset[]>([])
+  const [assetVersions, setAssetVersions] = useState<EvolvableAssetVersion[]>([])
+  const [assetPins, setAssetPins] = useState<EvolvableAssetPin[]>([])
+  const [assetEvaluations, setAssetEvaluations] = useState<EvolvableAssetEvaluationRun[]>([])
   const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null)
+  const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null)
   const [targetLoading, setTargetLoading] = useState(false)
+  const [assetLoading, setAssetLoading] = useState(false)
   const [detailTab, setDetailTab] = useState<DetailTab>('definition')
   const [loading, setLoading] = useState(true)
   const [runningTargetId, setRunningTargetId] = useState<string | null>(null)
@@ -84,6 +217,10 @@ export default function EvolutionPage() {
   const selectedTarget = useMemo(
     () => targets.find(target => target.id === selectedTargetId) ?? null,
     [targets, selectedTargetId],
+  )
+  const selectedAsset = useMemo(
+    () => assets.find(asset => asset.id === selectedAssetId) ?? null,
+    [assets, selectedAssetId],
   )
   const selectedRuns = useMemo(
     () => runs.filter(run => run.target_id === selectedTargetId),
@@ -125,7 +262,12 @@ export default function EvolutionPage() {
       setRuns([])
       setProposals([])
       setValidationResults([])
+      setAssets([])
+      setAssetVersions([])
+      setAssetPins([])
+      setAssetEvaluations([])
       setSelectedTargetId(null)
+      setSelectedAssetId(null)
       setLoading(false)
       return
     }
@@ -140,6 +282,7 @@ export default function EvolutionPage() {
         nextRuns,
         nextProposals,
         nextValidationResults,
+        nextAssets,
       ] = await Promise.all([
         evolutionApi.summary(),
         evolutionApi.targets(),
@@ -149,6 +292,7 @@ export default function EvolutionPage() {
         evolutionApi.runs({ limit: 50 }),
         evolutionApi.proposals({ limit: 50 }),
         evolutionApi.validation(),
+        evolutionApi.assets(),
       ])
       const nextActiveTargets = nextTargets.filter(target => target.status !== 'archived')
       const nextArchivedTargets = nextTargets.filter(target => target.status === 'archived')
@@ -161,10 +305,16 @@ export default function EvolutionPage() {
       setRuns(nextRuns)
       setProposals(nextProposals)
       setValidationResults(nextValidationResults)
+      setAssets(nextAssets)
       setSelectedTargetId(current => {
         if (nextTargets.length === 0) return null
         if (current && nextTargets.some(target => target.id === current)) return current
         return nextActiveTargets[0]?.id ?? nextTargets[0].id
+      })
+      setSelectedAssetId(current => {
+        if (nextAssets.length === 0) return null
+        if (current && nextAssets.some(asset => asset.id === current)) return current
+        return nextAssets[0].id
       })
     } catch (e) {
       toast.error(errMsg(e))
@@ -178,7 +328,12 @@ export default function EvolutionPage() {
       setRuns([])
       setProposals([])
       setValidationResults([])
+      setAssets([])
+      setAssetVersions([])
+      setAssetPins([])
+      setAssetEvaluations([])
       setSelectedTargetId(null)
+      setSelectedAssetId(null)
     } finally {
       setLoading(false)
     }
@@ -215,6 +370,51 @@ export default function EvolutionPage() {
   useEffect(() => {
     loadTargetSignals(selectedTargetId)
   }, [loadTargetSignals, selectedTargetId])
+
+  const loadAssetDetails = useCallback(async (assetId: string | null) => {
+    if (!assetId || !viewSpaceId) {
+      setAssetVersions([])
+      setAssetPins([])
+      setAssetEvaluations([])
+      return
+    }
+    setAssetLoading(true)
+    try {
+      const [versions, pins, evaluations] = await Promise.all([
+        evolutionApi.assetVersions(assetId),
+        evolutionApi.assetPins(assetId),
+        evolutionApi.assetEvaluationRuns(assetId),
+      ])
+      setAssetVersions(versions)
+      setAssetPins(pins)
+      setAssetEvaluations(evaluations)
+    } catch (e) {
+      toast.error(errMsg(e))
+      setAssetVersions([])
+      setAssetPins([])
+      setAssetEvaluations([])
+    } finally {
+      setAssetLoading(false)
+    }
+  }, [viewSpaceId])
+
+  useEffect(() => {
+    loadAssetDetails(selectedAssetId)
+  }, [loadAssetDetails, selectedAssetId])
+
+  async function resolveSelectedAsset() {
+    if (!selectedAssetId) return
+    setAssetLoading(true)
+    try {
+      const resolved = await evolutionApi.resolveAsset(selectedAssetId)
+      const fallback = resolved.fallbackReason ? ` · ${resolved.fallbackReason}` : ''
+      toast.success(`Resolved ${resolved.versionId.slice(-8)}${fallback}`)
+    } catch (e) {
+      toast.error(errMsg(e))
+    } finally {
+      setAssetLoading(false)
+    }
+  }
 
   async function runTarget(targetId: string) {
     setRunningTargetId(targetId)
@@ -513,6 +713,53 @@ export default function EvolutionPage() {
                 </div>
               ) : (
                 <EmptyState title="未选择改进目标。" description="先选择或注册一个目标。" />
+              )}
+            </SectionCard>
+          </div>
+
+          <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
+            <SectionCard title="Prompt / workflow assets" count={assets.length}>
+              <AssetList assets={assets} selectedAssetId={selectedAssetId} onSelect={setSelectedAssetId} />
+            </SectionCard>
+
+            <SectionCard title={selectedAsset ? assetLabel(selectedAsset) : 'Asset'} count={assetVersions.length}>
+              {selectedAsset ? (
+                <div className="space-y-4">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="min-w-0 space-y-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant="secondary">{selectedAsset.asset_type}</Badge>
+                        <Badge variant="outline">{selectedAsset.owner_scope_type}</Badge>
+                        <StatusBadge status={selectedAsset.status} />
+                      </div>
+                      <p className="truncate font-mono text-xs text-muted-foreground">{selectedAsset.asset_key}</p>
+                      {selectedAsset.description && <p className="text-sm text-muted-foreground">{selectedAsset.description}</p>}
+                    </div>
+                    <Button size="sm" variant="outline" onClick={resolveSelectedAsset} disabled={assetLoading}>
+                      {assetLoading ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
+                      Resolve default
+                    </Button>
+                  </div>
+
+                  <Tabs defaultValue="versions">
+                    <TabsList className="flex h-auto w-full flex-wrap justify-start">
+                      <TabsTrigger value="versions">Versions</TabsTrigger>
+                      <TabsTrigger value="pins">Pins</TabsTrigger>
+                      <TabsTrigger value="evaluations">Evaluations</TabsTrigger>
+                    </TabsList>
+                    <TabsContent value="versions" className="mt-4">
+                      <AssetVersionList versions={assetVersions} />
+                    </TabsContent>
+                    <TabsContent value="pins" className="mt-4">
+                      <AssetPinList pins={assetPins} />
+                    </TabsContent>
+                    <TabsContent value="evaluations" className="mt-4">
+                      <AssetEvaluationList evaluations={assetEvaluations} />
+                    </TabsContent>
+                  </Tabs>
+                </div>
+              ) : (
+                <EmptyState title="No asset selected." description="Register prompt or workflow-template assets to inspect versions, pins, and evaluations." />
               )}
             </SectionCard>
           </div>

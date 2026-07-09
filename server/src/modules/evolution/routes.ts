@@ -17,9 +17,11 @@ import { RunOrchestrationService } from "../runs/orchestrationService";
 import { RunMaterializationService } from "../runs/materializationService";
 import { resolveRequestId } from "../../gateway/requestContext";
 import { EvolutionRepository } from "./repository";
+import { registerEvolvableAssetRoutes } from "./assetRoutes";
 
 export function registerRoutes(app: FastifyInstance, context: ModuleContext): void {
   const repository = () => new EvolutionRepository(dbPool(context.config));
+  registerEvolvableAssetRoutes(app, context);
 
   app.get("/api/v1/evolution/summary", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);

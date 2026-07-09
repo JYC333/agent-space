@@ -153,16 +153,45 @@ describe('GraphPage', () => {
   it('loads the graph projection from URL query params', async () => {
     renderGraph('/spaces/space-1/graph?mode=local&root_id=n1&depth=2&limit=25')
 
-    await waitFor(() => expect(graphApiMock.projection).toHaveBeenCalledWith({
+    await waitFor(() => expect(graphApiMock.projection).toHaveBeenCalledWith(expect.objectContaining({
       mode: 'local',
       root_id: 'n1',
       depth: 2,
       q: undefined,
       limit: 25,
       include_clusters: false,
-    }))
+    })))
     expect(await screen.findByText('nodes:2')).toBeInTheDocument()
     expect(screen.getByText('2 nodes · 1 edges')).toBeInTheDocument()
+  })
+
+  it('preserves project graph lens params for load, view state, and expansion', async () => {
+    graphApiMock.projection
+      .mockResolvedValueOnce(baseProjection)
+      .mockResolvedValueOnce(expandedProjection)
+    graphApiMock.getViewState.mockResolvedValueOnce({
+      scope_key: 'project:graph:project-1:academic_citation_v1',
+      state_json: {},
+      updated_at: null,
+    })
+    renderGraph('/spaces/space-1/graph?project_id=project-1&lens_id=academic_citation_v1')
+
+    await waitFor(() => expect(graphApiMock.getViewState).toHaveBeenCalledWith('project:graph:project-1:academic_citation_v1'))
+    await waitFor(() => expect(graphApiMock.projection).toHaveBeenCalledWith(expect.objectContaining({
+      mode: 'global',
+      project_id: 'project-1',
+      lens_id: 'academic_citation_v1',
+    })))
+    expect(await screen.findByText('Academic citation lens')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /expand first/i }))
+    await waitFor(() => expect(graphApiMock.projection).toHaveBeenLastCalledWith(expect.objectContaining({
+      mode: 'cluster',
+      root_id: 'cluster:note',
+      project_id: 'project-1',
+      lens_id: 'academic_citation_v1',
+      include_clusters: false,
+    })))
   })
 
   it('merges a cluster expansion into the current projection', async () => {
@@ -174,13 +203,13 @@ describe('GraphPage', () => {
     expect(await screen.findByText('nodes:2')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /expand first/i }))
 
-    await waitFor(() => expect(graphApiMock.projection).toHaveBeenLastCalledWith({
+    await waitFor(() => expect(graphApiMock.projection).toHaveBeenLastCalledWith(expect.objectContaining({
       mode: 'cluster',
       root_id: 'cluster:note',
       depth: 1,
       limit: 300,
       include_clusters: false,
-    }))
+    })))
     expect(await screen.findByText('nodes:3')).toBeInTheDocument()
   })
 
@@ -297,14 +326,14 @@ describe('GraphPage', () => {
     fireEvent.change(screen.getByPlaceholderText('Search graph text'), { target: { value: 'Beta' } })
     fireEvent.click(screen.getByRole('button', { name: /apply/i }))
 
-    await waitFor(() => expect(graphApiMock.projection).toHaveBeenLastCalledWith({
+    await waitFor(() => expect(graphApiMock.projection).toHaveBeenLastCalledWith(expect.objectContaining({
       mode: 'search',
       root_id: undefined,
       depth: 1,
       q: 'Beta',
       limit: 300,
       include_clusters: false,
-    }))
+    })))
     expect(await screen.findByText('nodes:1')).toBeInTheDocument()
 
     await act(async () => {

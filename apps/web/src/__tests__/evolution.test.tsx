@@ -39,6 +39,11 @@ const { evolutionApiMock, providersApiMock, proposalsApiMock } = vi.hoisted(() =
     proposals: vi.fn(),
     validation: vi.fn(),
     runTarget: vi.fn(),
+    assets: vi.fn(),
+    assetVersions: vi.fn(),
+    assetPins: vi.fn(),
+    assetEvaluationRuns: vi.fn(),
+    resolveAsset: vi.fn(),
   },
   providersApiMock: {
     list: vi.fn(),
@@ -88,6 +93,25 @@ interface MockEvolutionData {
   runs?: EvolutionRunListItem[]
   proposals?: EvolutionProposal[]
   validationResults?: EvolutionValidationResult[]
+  assets?: Array<{
+    id: string
+    space_id: string | null
+    asset_type: string
+    asset_key: string
+    display_name: string
+    description: string | null
+    owner_scope_type: string
+    owner_scope_id: string | null
+    status: string
+    current_system_version_id: string | null
+    default_eval_suite_ref: Record<string, unknown> | null
+    metadata_json: Record<string, unknown>
+    created_at: string
+    updated_at: string
+  }>
+  assetVersions?: unknown[]
+  assetPins?: unknown[]
+  assetEvaluationRuns?: unknown[]
   providers?: Array<{
     id: string
     space_id: string
@@ -116,6 +140,10 @@ function mockEvolutionData({
   runs = [],
   proposals = [],
   validationResults = [],
+  assets = [],
+  assetVersions = [],
+  assetPins = [],
+  assetEvaluationRuns = [],
   providers = [{
     id: 'provider-1',
     space_id: 'personal-1',
@@ -181,6 +209,19 @@ function mockEvolutionData({
   evolutionApiMock.runs.mockResolvedValue(runs)
   evolutionApiMock.proposals.mockResolvedValue(proposals)
   evolutionApiMock.validation.mockResolvedValue(validationResults)
+  evolutionApiMock.assets.mockResolvedValue(assets)
+  evolutionApiMock.assetVersions.mockResolvedValue(assetVersions)
+  evolutionApiMock.assetPins.mockResolvedValue(assetPins)
+  evolutionApiMock.assetEvaluationRuns.mockResolvedValue(assetEvaluationRuns)
+  evolutionApiMock.resolveAsset.mockResolvedValue({
+    assetId: assets[0]?.id ?? 'asset-1',
+    versionId: 'version-1',
+    contentRef: null,
+    contentHash: null,
+    contentJson: null,
+    resolutionTrace: ['system_baseline:version-1'],
+    fallbackReason: null,
+  })
   providersApiMock.list.mockResolvedValue(providers)
   evolutionApiMock.runTarget.mockResolvedValue({
     run_id: 'run-1',
@@ -239,6 +280,54 @@ describe('Evolution module', () => {
     expect(screen.getByText('7')).toBeInTheDocument()
     expect(screen.getByText('1')).toBeInTheDocument()
     expect(screen.getByText('3')).toBeInTheDocument()
+  })
+
+  it('renders evolvable prompt/template assets and their version read model', async () => {
+    mockEvolutionData({
+      assets: [{
+        id: 'asset-1',
+        space_id: 'personal-1',
+        asset_type: 'prompt_template',
+        asset_key: 'academic.paper_screening_assistant',
+        display_name: 'Paper Screening Assistant',
+        description: 'Screens candidate papers.',
+        owner_scope_type: 'space',
+        owner_scope_id: null,
+        status: 'active',
+        current_system_version_id: null,
+        default_eval_suite_ref: null,
+        metadata_json: {},
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:00:00Z',
+      }],
+      assetVersions: [{
+        id: 'version-1',
+        asset_id: 'asset-1',
+        scope_type: 'space',
+        scope_id: null,
+        parent_version_id: null,
+        version: 1,
+        status: 'approved',
+        source: 'built_in',
+        content_ref: null,
+        content_hash: 'sha256:test',
+        content_json: { template: 'screen' },
+        eval_summary_json: null,
+        promotion_proposal_id: null,
+        created_by_user_id: null,
+        approved_by_user_id: null,
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:00:00Z',
+        stale_parent: false,
+      }],
+    })
+
+    renderPage()
+
+    expect(await screen.findByText('Prompt / workflow assets')).toBeInTheDocument()
+    expect(await screen.findAllByText('Paper Screening Assistant')).toHaveLength(2)
+    expect(screen.getAllByText('academic.paper_screening_assistant')).toHaveLength(2)
+    expect(screen.getByText('v1')).toBeInTheDocument()
   })
 
   it('renders a selected target and target-scoped signals, runs, proposals, and validation results', async () => {

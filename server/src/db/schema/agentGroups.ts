@@ -45,12 +45,12 @@ export const agentRunGroups = pgTable("agent_run_groups", {
 			name: "agent_run_groups_space_id_fkey"
 		}).onDelete("cascade"),
 	foreignKey({
-			columns: [table.spaceId, table.managerAgentId],
+			columns: [table.managerAgentId, table.spaceId],
 			foreignColumns: [agents.id, agents.spaceId],
 			name: "fk_agent_run_groups_manager_agent_same_space"
 		}).onDelete("set null"),
 	foreignKey({
-			columns: [table.spaceId, table.rootRunId],
+			columns: [table.rootRunId, table.spaceId],
 			foreignColumns: [runs.id, runs.spaceId],
 			name: "fk_agent_run_groups_root_run_same_space"
 		}).onDelete("set null"),
@@ -88,12 +88,12 @@ export const agentRunGroupMembers = pgTable("agent_run_group_members", {
 			name: "agent_run_group_members_space_id_fkey"
 		}).onDelete("cascade"),
 	foreignKey({
-			columns: [table.spaceId, table.agentId],
+			columns: [table.agentId, table.spaceId],
 			foreignColumns: [agents.id, agents.spaceId],
 			name: "fk_agent_run_group_members_agent_same_space"
 		}).onDelete("cascade"),
 	foreignKey({
-			columns: [table.spaceId, table.groupId],
+			columns: [table.groupId, table.spaceId],
 			foreignColumns: [agentRunGroups.id, agentRunGroups.spaceId],
 			name: "fk_agent_run_group_members_group_same_space"
 		}).onDelete("cascade"),
@@ -151,22 +151,22 @@ export const agentRunMessages = pgTable("agent_run_messages", {
 			name: "agent_run_messages_space_id_fkey"
 		}).onDelete("cascade"),
 	foreignKey({
-			columns: [table.spaceId, table.groupId],
+			columns: [table.groupId, table.spaceId],
 			foreignColumns: [agentRunGroups.id, agentRunGroups.spaceId],
 			name: "fk_agent_run_messages_group_same_space"
 		}).onDelete("cascade"),
 	foreignKey({
-			columns: [table.spaceId, table.parentMessageId],
+			columns: [table.parentMessageId, table.spaceId],
 			foreignColumns: [table.id, table.spaceId],
 			name: "fk_agent_run_messages_parent_same_space"
 		}).onDelete("set null"),
 	foreignKey({
-			columns: [table.spaceId, table.runId],
+			columns: [table.runId, table.spaceId],
 			foreignColumns: [runs.id, runs.spaceId],
 			name: "fk_agent_run_messages_run_same_space"
 		}).onDelete("set null"),
 	foreignKey({
-			columns: [table.spaceId, table.senderAgentId],
+			columns: [table.senderAgentId, table.spaceId],
 			foreignColumns: [agents.id, agents.spaceId],
 			name: "fk_agent_run_messages_sender_agent_same_space"
 		}).onDelete("set null"),
@@ -247,37 +247,37 @@ export const runDelegations = pgTable("run_delegations", {
 			name: "run_delegations_target_agent_id_fkey"
 		}).onDelete("restrict"),
 	foreignKey({
-			columns: [table.spaceId, table.childRunId],
+			columns: [table.childRunId, table.spaceId],
 			foreignColumns: [runs.id, runs.spaceId],
 			name: "fk_run_delegations_child_run_same_space"
 		}).onDelete("set null"),
 	foreignKey({
-			columns: [table.spaceId, table.groupId],
+			columns: [table.groupId, table.spaceId],
 			foreignColumns: [agentRunGroups.id, agentRunGroups.spaceId],
 			name: "fk_run_delegations_group_same_space"
 		}).onDelete("cascade"),
 	foreignKey({
-			columns: [table.spaceId, table.parentRunId],
+			columns: [table.parentRunId, table.spaceId],
 			foreignColumns: [runs.id, runs.spaceId],
 			name: "fk_run_delegations_parent_run_same_space"
 		}).onDelete("cascade"),
 	foreignKey({
-			columns: [table.spaceId, table.policyDecisionRecordId],
+			columns: [table.policyDecisionRecordId, table.spaceId],
 			foreignColumns: [policyDecisionRecords.id, policyDecisionRecords.spaceId],
 			name: "fk_run_delegations_policy_decision_same_space"
 		}).onDelete("set null"),
 	foreignKey({
-			columns: [table.spaceId, table.requestMessageId],
+			columns: [table.requestMessageId, table.spaceId],
 			foreignColumns: [agentRunMessages.id, agentRunMessages.spaceId],
 			name: "fk_run_delegations_request_message_same_space"
 		}).onDelete("set null"),
 	foreignKey({
-			columns: [table.spaceId, table.requestingAgentId],
+			columns: [table.requestingAgentId, table.spaceId],
 			foreignColumns: [agents.id, agents.spaceId],
 			name: "fk_run_delegations_requesting_agent_same_space"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.targetAgentId],
+			columns: [table.targetAgentId, table.spaceId],
 			foreignColumns: [agents.id, agents.spaceId],
 			name: "fk_run_delegations_target_agent_same_space"
 		}),

@@ -1,0 +1,355 @@
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { ReactNode } from 'react'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import ProjectSourcesPage from '../ProjectSourcesPage'
+import { projectPresetsApi, projectsApi, sourcesApi } from '../../../api/client'
+
+vi.mock('sonner', () => ({
+  toast: { success: vi.fn(), error: vi.fn() },
+}))
+
+vi.mock('../../../core/spaceNav', () => ({
+  SpaceLink: ({ to, children, ...props }: { to: string; children: ReactNode }) => (
+    <a href={to} {...props}>{children}</a>
+  ),
+}))
+
+vi.mock('../../../api/client', () => ({
+  projectsApi: {
+    get: vi.fn(),
+    corpus: vi.fn(),
+    updateCorpusItem: vi.fn(),
+    backfillCorpusFromSources: vi.fn(),
+  },
+  projectPresetsApi: {
+    getProjectPreset: vi.fn(),
+  },
+  sourcesApi: {
+    connections: vi.fn(),
+    projectSourceBindings: vi.fn(),
+    projectSourceHealth: vi.fn(),
+    projectItems: vi.fn(),
+    createProjectSourceBinding: vi.fn(),
+    backfillProjectSourceBinding: vi.fn(),
+    scanConnection: vi.fn(),
+    updateProjectSourceBinding: vi.fn(),
+    deleteProjectSourceBinding: vi.fn(),
+  },
+}))
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  vi.mocked(projectsApi.get).mockResolvedValue({
+    id: 'project-1',
+    space_id: 'space-1',
+    owner_user_id: 'user-1',
+    name: 'Research Project',
+    description: null,
+    status: 'active',
+    current_focus: null,
+    settings_json: {},
+    archived_at: null,
+    created_at: '2026-07-01T00:00:00.000Z',
+    updated_at: '2026-07-01T00:00:00.000Z',
+  })
+  vi.mocked(projectPresetsApi.getProjectPreset).mockResolvedValue({ preset_key: null })
+  vi.mocked(sourcesApi.connections).mockResolvedValue({
+    items: [{
+      id: 'conn-1',
+      space_id: 'space-1',
+      connector_id: 'connector-1',
+      owner_user_id: 'user-1',
+      credential_id: null,
+      visibility: 'space_discoverable',
+      name: 'Research feed',
+      endpoint_url: 'https://example.test/feed.xml',
+      status: 'active',
+      fetch_frequency: 'daily',
+      capture_policy: 'reference_only',
+      trust_level: 'normal',
+      topic_hints_json: null,
+      consent_json: {},
+      policy_json: {},
+      config_json: {},
+      last_checked_at: null,
+      next_check_at: null,
+      schedule_rule_json: null,
+      handler_kind: 'built_in',
+      active_handler_version_id: null,
+      active_recipe_version_id: null,
+      repair_status: 'ok',
+      last_handler_run_id: null,
+      created_at: '2026-07-01T00:00:00.000Z',
+      updated_at: '2026-07-01T00:00:00.000Z',
+    }],
+    total: 1,
+    limit: 200,
+    offset: 0,
+  })
+  vi.mocked(sourcesApi.projectSourceBindings).mockResolvedValue([{
+    id: 'binding-1',
+    space_id: 'space-1',
+    project_id: 'project-1',
+    source_connection_id: 'conn-1',
+    binding_key: 'default',
+    status: 'active',
+    priority: 0,
+    delivery_scope: 'project_members',
+    collection_notifications_enabled: true,
+    filters_json: {},
+    routing_policy_json: {},
+    extraction_policy_json: {},
+    created_by_user_id: 'user-1',
+    created_at: '2026-07-01T00:00:00.000Z',
+    updated_at: '2026-07-01T00:00:00.000Z',
+  }])
+  vi.mocked(sourcesApi.projectSourceHealth).mockResolvedValue([{
+    binding_id: 'binding-1',
+    project_id: 'project-1',
+    source_connection_id: 'conn-1',
+    source_name: 'Research feed',
+    status: 'healthy',
+    last_success_at: '2026-07-01T00:00:00.000Z',
+    last_failure_at: null,
+    last_error: null,
+    next_run_at: '2026-07-02T00:00:00.000Z',
+    queued_jobs: 0,
+    running_jobs: 0,
+    recent_new_items: 1,
+    consecutive_failures: 0,
+  }])
+  vi.mocked(sourcesApi.projectItems).mockResolvedValue({
+    items: [{
+      id: 'project-item-1',
+      space_id: 'space-1',
+      project_id: 'project-1',
+      project_source_binding_id: 'binding-1',
+      source_connection_id: 'conn-1',
+      source_item_id: 'item-1',
+      status: 'active',
+      matched_at: '2026-07-01T00:00:00.000Z',
+      match_reason: 'project_source_binding:binding-1',
+      created_at: '2026-07-01T00:00:00.000Z',
+      updated_at: '2026-07-01T00:00:00.000Z',
+      item: {
+        id: 'item-1',
+        space_id: 'space-1',
+        connection_id: 'conn-1',
+        item_type: 'external_url',
+        source_object_type: null,
+        source_object_id: null,
+        created_by_user_id: null,
+        title: 'Collected paper',
+        source_uri: 'https://example.test/paper',
+        canonical_uri: 'https://example.test/paper',
+        source_domain: 'example.test',
+        source_external_id: null,
+        author: null,
+        occurred_at: null,
+        first_seen_at: '2026-07-01T00:00:00.000Z',
+        last_seen_at: '2026-07-01T00:00:00.000Z',
+        content_hash: null,
+        excerpt: 'A collected item',
+        library_status: 'new',
+        read_status: 'unread',
+        content_state: 'metadata_only',
+        retention_policy: 'metadata_only',
+        relevance_score: null,
+        novelty_score: null,
+        raw_artifact_id: null,
+        extracted_artifact_id: null,
+        summary_artifact_id: null,
+        search_index_ref: null,
+        embedding_index_ref: null,
+        metadata_json: null,
+        created_at: '2026-07-01T00:00:00.000Z',
+        updated_at: '2026-07-01T00:00:00.000Z',
+      },
+    }],
+    total: 1,
+    limit: 50,
+    offset: 0,
+  })
+  vi.mocked(projectsApi.corpus).mockResolvedValue({
+    items: [{
+      id: 'corpus-1',
+      space_id: 'space-1',
+      project_id: 'project-1',
+      object_id: null,
+      source_item_id: 'item-1',
+      evidence_id: null,
+      source_connection_id: 'conn-1',
+      source_decision_id: null,
+      role: 'candidate',
+      status: 'active',
+      triage_status: 'new',
+      read_status: 'unread',
+      relevance: null,
+      confidence: null,
+      reason: 'project_source_binding:binding-1',
+      added_by_user_id: null,
+      metadata_json: {},
+      created_at: '2026-07-01T00:00:00.000Z',
+      updated_at: '2026-07-01T00:00:00.000Z',
+      last_reviewed_at: null,
+      last_read_at: null,
+      object: null,
+      source_item: {
+        id: 'item-1',
+        item_type: 'external_url',
+        title: 'Collected paper',
+        source_uri: 'https://example.test/paper',
+        source_domain: 'example.test',
+        excerpt: 'A collected item',
+      },
+      evidence: null,
+    }],
+    total: 1,
+    limit: 50,
+    offset: 0,
+  })
+  vi.mocked(projectsApi.updateCorpusItem).mockImplementation((_projectId, _corpusItemId, patch) => Promise.resolve({
+    id: 'corpus-1',
+    space_id: 'space-1',
+    project_id: 'project-1',
+    object_id: null,
+    source_item_id: 'item-1',
+    evidence_id: null,
+    source_connection_id: 'conn-1',
+    source_decision_id: null,
+    role: 'candidate',
+    status: 'active',
+    triage_status: patch.triage_status ?? 'new',
+    read_status: patch.read_status ?? 'unread',
+    relevance: null,
+    confidence: null,
+    reason: 'project_source_binding:binding-1',
+    added_by_user_id: null,
+    metadata_json: {},
+    created_at: '2026-07-01T00:00:00.000Z',
+    updated_at: '2026-07-01T00:00:00.000Z',
+    last_reviewed_at: patch.triage_status ? '2026-07-01T00:00:00.000Z' : null,
+    last_read_at: patch.read_status ? '2026-07-01T00:00:00.000Z' : null,
+    object: null,
+    source_item: {
+      id: 'item-1',
+      item_type: 'external_url',
+      title: 'Collected paper',
+      source_uri: 'https://example.test/paper',
+      source_domain: 'example.test',
+      excerpt: 'A collected item',
+    },
+    evidence: null,
+  }))
+  vi.mocked(projectsApi.backfillCorpusFromSources).mockResolvedValue({
+    project_id: 'project-1',
+    source_items: 1,
+    source_objects: 0,
+    evidence_items: 0,
+    evidence_objects: 0,
+    source_decisions: 0,
+    archived_source_items: 0,
+  })
+  vi.mocked(sourcesApi.backfillProjectSourceBinding).mockResolvedValue({
+    binding_id: 'binding-1',
+    project_id: 'project-1',
+    source_connection_id: 'conn-1',
+    created_links: 1,
+    reactivated_links: 0,
+    archived_links: 0,
+    evidence_links: 1,
+  })
+  vi.mocked(sourcesApi.scanConnection).mockResolvedValue({ id: 'job-1' } as never)
+})
+
+function renderPage(initialEntry = '/spaces/space-1/projects/project-1/sources') {
+  return render(
+    <MemoryRouter initialEntries={[initialEntry]}>
+      <Routes>
+        <Route path="/spaces/:spaceId/projects/:projectId/sources" element={<ProjectSourcesPage />} />
+      </Routes>
+    </MemoryRouter>,
+  )
+}
+
+describe('ProjectSourcesPage', () => {
+  it('renders project source bindings and project items from project APIs', async () => {
+    renderPage()
+
+    expect(await screen.findByText('Research Project')).toBeInTheDocument()
+    expect(screen.getByText('Research feed')).toBeInTheDocument()
+    expect(screen.getAllByText('Collected paper').length).toBeGreaterThanOrEqual(2)
+    expect(screen.getByText('Project corpus')).toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(sourcesApi.projectSourceBindings).toHaveBeenCalledWith({ project_id: 'project-1' })
+      expect(sourcesApi.projectItems).toHaveBeenCalledWith(expect.objectContaining({ project_id: 'project-1', limit: 50 }))
+      expect(projectsApi.corpus).toHaveBeenCalledWith('project-1', expect.objectContaining({ limit: 50 }))
+    })
+  })
+
+  it('opens the academic project graph with the citation lens', async () => {
+    vi.mocked(projectsApi.get).mockResolvedValueOnce({
+      id: 'project-1',
+      space_id: 'space-1',
+      owner_user_id: 'user-1',
+      name: 'Academic Project',
+      description: null,
+      status: 'active',
+      current_focus: null,
+      settings_json: null,
+      archived_at: null,
+      created_at: '2026-07-01T00:00:00.000Z',
+      updated_at: '2026-07-01T00:00:00.000Z',
+    })
+    vi.mocked(projectPresetsApi.getProjectPreset).mockResolvedValueOnce({ preset_key: 'academic_research' })
+    renderPage()
+
+    const graphLink = await screen.findByRole('link', { name: /open graph/i })
+    expect(graphLink).toHaveAttribute('href', '/graph?project_id=project-1&lens_id=academic_citation_v1')
+    expect(screen.getByRole('link', { name: /add arxiv/i })).toHaveAttribute(
+      'href',
+      '/sources/source-presets?project_id=project-1&preset=arxiv',
+    )
+    expect(screen.getByText('Literature sources')).toBeInTheDocument()
+    expect(projectPresetsApi.getProjectPreset).toHaveBeenCalledWith('project-1')
+  })
+
+  it('uses the activity date query as a project item filter', async () => {
+    renderPage('/spaces/space-1/projects/project-1/sources?date=2026-07-01')
+
+    expect(await screen.findByLabelText('Collected date')).toHaveValue('2026-07-01')
+    await waitFor(() => {
+      expect(sourcesApi.projectItems).toHaveBeenCalledWith(expect.objectContaining({
+        project_id: 'project-1',
+        matched_date: '2026-07-01',
+      }))
+    })
+  })
+
+  it('runs scan and backfill from binding actions', async () => {
+    renderPage()
+
+    fireEvent.click(await screen.findByRole('button', { name: /run scan/i }))
+    await waitFor(() => expect(sourcesApi.scanConnection).toHaveBeenCalledWith('conn-1'))
+
+    fireEvent.click(await screen.findByRole('button', { name: /backfill/i }))
+    await waitFor(() => expect(sourcesApi.backfillProjectSourceBinding).toHaveBeenCalledWith('binding-1'))
+  })
+
+  it('syncs project corpus and updates project-level corpus state', async () => {
+    renderPage()
+
+    fireEvent.click(await screen.findByRole('button', { name: /sync corpus/i }))
+    await waitFor(() => expect(projectsApi.backfillCorpusFromSources).toHaveBeenCalledWith('project-1'))
+
+    fireEvent.click(await screen.findByRole('button', { name: /new/i }))
+    fireEvent.click(await screen.findByRole('option', { name: /relevant/i }))
+    await waitFor(() => expect(projectsApi.updateCorpusItem).toHaveBeenCalledWith(
+      'project-1',
+      'corpus-1',
+      { triage_status: 'relevant' },
+    ))
+  })
+})

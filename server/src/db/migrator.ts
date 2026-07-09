@@ -1,14 +1,14 @@
 /**
  * server migration runner.
  *
- * The server owns PostgreSQL schema evolution through explicit ops
+ * Runtime PostgreSQL schema evolution is applied through explicit ops
  * commands. `server/migrations/0001_baseline.sql` is the current consolidated
- * baseline for empty database bootstrap; later applied schema versions are
- * immutable and must be followed by new `NNNN_*.sql` files.
+ * generated baseline for empty database bootstrap; applied schema versions are
+ * immutable for any database that has recorded them.
  *
  * New `NNNN_*.sql` files are normally produced by `npm run schema:generate`
  * (drizzle-kit diffing `server/src/db/schema/` against `server/drizzle/meta/`
- * and copying the result here under the next sequential prefix) rather than
+ * and copying the result here under the next sequential prefix), not
  * hand-written — see the "Schema Authoring" section of
  * `.agent/architecture/DATABASE_AND_TRANSACTIONS.md`. This runner doesn't
  * care which produced a file; it only reads ordered `.sql` files from disk.

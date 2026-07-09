@@ -194,17 +194,17 @@ export const knowledgeItems = pgTable("knowledge_items", {
 	index("ix_knowledge_items_space_slug").using("btree", table.spaceId.asc().nullsLast(), table.slug.asc().nullsLast()),
 	index("ix_knowledge_items_supersedes_item_id").using("btree", table.supersedesItemId.asc().nullsLast()),
 	foreignKey({
-			columns: [table.spaceId, table.redirectToItemId],
+			columns: [table.redirectToItemId, table.spaceId],
 			foreignColumns: [table.objectId, table.spaceId],
 			name: "fk_knowledge_items_redirect_to_item_id_knowledge_items"
 		}).onDelete("set null"),
 	foreignKey({
-			columns: [table.spaceId, table.rootItemId],
+			columns: [table.rootItemId, table.spaceId],
 			foreignColumns: [table.objectId, table.spaceId],
 			name: "fk_knowledge_items_root_item_id_knowledge_items"
 		}).onDelete("set null"),
 	foreignKey({
-			columns: [table.spaceId, table.supersedesItemId],
+			columns: [table.supersedesItemId, table.spaceId],
 			foreignColumns: [table.objectId, table.spaceId],
 			name: "fk_knowledge_items_supersedes_item_id_knowledge_items"
 		}).onDelete("set null"),
@@ -284,7 +284,7 @@ export const spaceObjects = pgTable("space_objects", {
 			name: "space_objects_owner_user_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.primaryProjectId],
+			columns: [table.primaryProjectId, table.spaceId],
 			foreignColumns: [projects.id, projects.spaceId],
 			name: "space_objects_primary_project_id_fkey"
 		}),
@@ -294,21 +294,20 @@ export const spaceObjects = pgTable("space_objects", {
 			name: "space_objects_space_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.workspaceId],
+			columns: [table.workspaceId, table.spaceId],
 			foreignColumns: [workspaces.id, workspaces.spaceId],
 			name: "space_objects_workspace_id_fkey"
 		}),
 	unique("space_objects_id_space_id_key").on(table.id, table.spaceId),
-	check("ck_space_objects_object_type", sql`(object_type)::text = ANY (ARRAY[('knowledge_item'::character varying)::text, ('note'::character varying)::text, ('source'::character varying)::text, ('project'::character varying)::text, ('person'::character varying)::text, ('relationship'::character varying)::text, ('asset'::character varying)::text, ('event'::character varying)::text, ('task'::character varying)::text, ('document'::character varying)::text, ('claim'::character varying)::text])`),
+	check("ck_space_objects_object_type", sql`(object_type)::text = ANY (ARRAY[('knowledge_item'::character varying)::text, ('note'::character varying)::text, ('source'::character varying)::text, ('project'::character varying)::text, ('person'::character varying)::text, ('organization'::character varying)::text, ('relationship'::character varying)::text, ('asset'::character varying)::text, ('event'::character varying)::text, ('task'::character varying)::text, ('document'::character varying)::text, ('claim'::character varying)::text])`),
 	check("ck_space_objects_status", sql`(status)::text = ANY (ARRAY[('draft'::character varying)::text, ('active'::character varying)::text, ('disputed'::character varying)::text, ('superseded'::character varying)::text, ('rejected'::character varying)::text, ('archived'::character varying)::text, ('deleted'::character varying)::text, ('raw'::character varying)::text, ('processing'::character varying)::text, ('processed'::character varying)::text, ('error'::character varying)::text])`),
-	check("ck_space_objects_status_by_type", sql`CHECK (
-CASE (object_type)::text
+	check("ck_space_objects_status_by_type", sql`CASE (object_type)::text
     WHEN 'knowledge_item'::text THEN ((status)::text = ANY (ARRAY[('draft'::character varying)::text, ('active'::character varying)::text, ('superseded'::character varying)::text, ('archived'::character varying)::text, ('deleted'::character varying)::text]))
     WHEN 'note'::text THEN ((status)::text = ANY (ARRAY[('active'::character varying)::text, ('archived'::character varying)::text, ('deleted'::character varying)::text]))
     WHEN 'source'::text THEN ((status)::text = ANY (ARRAY[('raw'::character varying)::text, ('processing'::character varying)::text, ('processed'::character varying)::text, ('archived'::character varying)::text, ('error'::character varying)::text]))
     WHEN 'claim'::text THEN ((status)::text = ANY (ARRAY[('active'::character varying)::text, ('disputed'::character varying)::text, ('superseded'::character varying)::text, ('rejected'::character varying)::text, ('archived'::character varying)::text]))
     ELSE true
-END)`),
+END`),
 	check("ck_space_objects_visibility", sql`(visibility)::text = ANY (ARRAY[('private'::character varying)::text, ('space_shared'::character varying)::text, ('workspace_shared'::character varying)::text, ('restricted'::character varying)::text])`),
 ]);
 
@@ -359,8 +358,7 @@ export const spaceObjectKinds = pgTable("space_object_kinds", {
 	check("ck_space_object_kinds_extraction_policy_object", sql`jsonb_typeof(extraction_policy_json) = 'object'::text`),
 	check("ck_space_object_kinds_field_schema_object", sql`jsonb_typeof(field_schema_json) = 'object'::text`),
 	check("ck_space_object_kinds_key", sql`(key)::text ~ '^[a-z][a-z0-9_]{0,63}$'::text`),
-	check("ck_space_object_kinds_key_by_base_object_type", sql`CHECK (
-CASE (base_object_type)::text
+	check("ck_space_object_kinds_key_by_base_object_type", sql`CASE (base_object_type)::text
     WHEN 'knowledge_item'::text THEN ((key)::text = ANY (ARRAY[('concept'::character varying)::text, ('lesson'::character varying)::text, ('procedure'::character varying)::text, ('decision'::character varying)::text, ('question'::character varying)::text, ('answer'::character varying)::text, ('summary'::character varying)::text]))
     WHEN 'note'::text THEN ((key)::text = 'note'::text)
     WHEN 'source'::text THEN ((key)::text = ANY (ARRAY[('activity_record'::character varying)::text, ('chat_capture'::character varying)::text, ('webpage'::character varying)::text, ('article'::character varying)::text, ('paper'::character varying)::text, ('pdf'::character varying)::text, ('file'::character varying)::text, ('email'::character varying)::text, ('manual_reference'::character varying)::text, ('external_note'::character varying)::text]))
@@ -370,7 +368,7 @@ CASE (base_object_type)::text
     WHEN 'source_item'::text THEN ((key)::text = ANY (ARRAY[('external_url'::character varying)::text, ('feed_entry'::character varying)::text, ('activity_record'::character varying)::text, ('artifact'::character varying)::text, ('run_event'::character varying)::text, ('file'::character varying)::text, ('document'::character varying)::text, ('log'::character varying)::text]))
     WHEN 'extracted_evidence'::text THEN ((key)::text = ANY (ARRAY[('document'::character varying)::text, ('excerpt'::character varying)::text, ('event'::character varying)::text, ('log'::character varying)::text, ('artifact'::character varying)::text, ('claim'::character varying)::text, ('summary'::character varying)::text]))
     ELSE false
-END)`),
+END`),
 	check("ck_space_object_kinds_retrieval_policy_object", sql`jsonb_typeof(retrieval_policy_json) = 'object'::text`),
 	check("ck_space_object_kinds_status", sql`(status)::text = ANY (ARRAY[('draft'::character varying)::text, ('active'::character varying)::text, ('deprecated'::character varying)::text, ('archived'::character varying)::text])`),
 	check("ck_space_object_kinds_ui_config_object", sql`jsonb_typeof(ui_config_json) = 'object'::text`),
@@ -436,12 +434,12 @@ export const knowledgeItemSources = pgTable("knowledge_item_sources", {
 			name: "knowledge_item_sources_created_by_user_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.knowledgeItemId],
+			columns: [table.knowledgeItemId, table.spaceId],
 			foreignColumns: [knowledgeItems.objectId, knowledgeItems.spaceId],
 			name: "knowledge_item_sources_knowledge_item_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.sourceId],
+			columns: [table.sourceId, table.spaceId],
 			foreignColumns: [sources.objectId, sources.spaceId],
 			name: "knowledge_item_sources_source_id_fkey"
 		}),
@@ -525,7 +523,7 @@ export const claims = pgTable("claims", {
 			name: "claims_created_from_proposal_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.holderObjectId],
+			columns: [table.holderObjectId, table.spaceId],
 			foreignColumns: [spaceObjects.id, spaceObjects.spaceId],
 			name: "claims_holder_object_id_fkey"
 		}),
@@ -540,7 +538,7 @@ export const claims = pgTable("claims", {
 			name: "claims_space_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.subjectObjectId],
+			columns: [table.subjectObjectId, table.spaceId],
 			foreignColumns: [spaceObjects.id, spaceObjects.spaceId],
 			name: "claims_subject_object_id_fkey"
 		}),
@@ -579,7 +577,7 @@ export const claimSources = pgTable("claim_sources", {
 	index("ix_claim_sources_source_object_id").using("btree", table.sourceObjectId.asc().nullsLast()),
 	index("ix_claim_sources_space_id").using("btree", table.spaceId.asc().nullsLast()),
 	foreignKey({
-			columns: [table.spaceId, table.claimId],
+			columns: [table.claimId, table.spaceId],
 			foreignColumns: [claims.objectId, claims.spaceId],
 			name: "claim_sources_claim_id_fkey"
 		}).onDelete("cascade"),
@@ -589,12 +587,12 @@ export const claimSources = pgTable("claim_sources", {
 			name: "claim_sources_created_by_user_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.sourceConnectionId],
+			columns: [table.sourceConnectionId, table.spaceId],
 			foreignColumns: [sourceConnections.id, sourceConnections.spaceId],
 			name: "claim_sources_source_connection_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.sourceObjectId],
+			columns: [table.sourceObjectId, table.spaceId],
 			foreignColumns: [spaceObjects.id, spaceObjects.spaceId],
 			name: "claim_sources_source_object_id_fkey"
 		}),
@@ -651,17 +649,17 @@ export const objectRelations = pgTable("object_relations", {
 			name: "object_relations_created_by_user_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.fromObjectId],
+			columns: [table.fromObjectId, table.spaceId],
 			foreignColumns: [spaceObjects.id, spaceObjects.spaceId],
 			name: "object_relations_from_object_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.sourceClaimId],
+			columns: [table.sourceClaimId, table.spaceId],
 			foreignColumns: [claims.objectId, claims.spaceId],
 			name: "object_relations_source_claim_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.sourceObjectId],
+			columns: [table.sourceObjectId, table.spaceId],
 			foreignColumns: [spaceObjects.id, spaceObjects.spaceId],
 			name: "object_relations_source_object_id_fkey"
 		}),
@@ -676,14 +674,14 @@ export const objectRelations = pgTable("object_relations", {
 			name: "object_relations_space_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.toObjectId],
+			columns: [table.toObjectId, table.spaceId],
 			foreignColumns: [spaceObjects.id, spaceObjects.spaceId],
 			name: "object_relations_to_object_id_fkey"
 		}),
 	check("ck_object_relations_confidence", sql`(confidence IS NULL) OR ((confidence >= (0)::double precision) AND (confidence <= (1)::double precision))`),
 	check("ck_object_relations_metadata_object", sql`jsonb_typeof(metadata_json) = 'object'::text`),
 	check("ck_object_relations_no_self", sql`(from_object_id)::text <> (to_object_id)::text`),
-	check("ck_object_relations_relation_type", sql`(relation_type)::text = ANY (ARRAY[('related_to'::character varying)::text, ('references'::character varying)::text, ('depends_on'::character varying)::text, ('part_of'::character varying)::text, ('source_for'::character varying)::text, ('derived_from'::character varying)::text, ('about'::character varying)::text, ('supports'::character varying)::text, ('contradicts'::character varying)::text, ('supersedes'::character varying)::text, ('refines'::character varying)::text, ('same_as'::character varying)::text])`),
+	check("ck_object_relations_relation_type", sql`(relation_type)::text = ANY (ARRAY[('related_to'::character varying)::text, ('references'::character varying)::text, ('depends_on'::character varying)::text, ('part_of'::character varying)::text, ('source_for'::character varying)::text, ('derived_from'::character varying)::text, ('about'::character varying)::text, ('supports'::character varying)::text, ('contradicts'::character varying)::text, ('supersedes'::character varying)::text, ('refines'::character varying)::text, ('same_as'::character varying)::text, ('affiliated_with'::character varying)::text, ('cites'::character varying)::text, ('authored_by'::character varying)::text])`),
 	check("ck_object_relations_status", sql`(status)::text = ANY (ARRAY[('candidate'::character varying)::text, ('active'::character varying)::text, ('rejected'::character varying)::text, ('archived'::character varying)::text])`),
 ]);
 
@@ -706,7 +704,7 @@ export const noteCollections = pgTable("note_collections", {
 	index("ix_note_collections_space_id").using("btree", table.spaceId.asc().nullsLast()),
 	index("ix_note_collections_system_role").using("btree", table.systemRole.asc().nullsLast()),
 	foreignKey({
-			columns: [table.spaceId, table.parentId],
+			columns: [table.parentId, table.spaceId],
 			foreignColumns: [table.id, table.spaceId],
 			name: "note_collections_parent_id_space_id_fkey"
 		}).onDelete("set null"),
@@ -731,12 +729,12 @@ export const noteCollectionItems = pgTable("note_collection_items", {
 	index("ix_note_collection_items_collection_id").using("btree", table.spaceId.asc().nullsLast(), table.collectionId.asc().nullsLast()),
 	index("ix_note_collection_items_note_id").using("btree", table.spaceId.asc().nullsLast(), table.noteId.asc().nullsLast()),
 	foreignKey({
-			columns: [table.spaceId, table.collectionId],
+			columns: [table.collectionId, table.spaceId],
 			foreignColumns: [noteCollections.id, noteCollections.spaceId],
 			name: "note_collection_items_collection_id_space_id_fkey"
 		}).onDelete("cascade"),
 	foreignKey({
-			columns: [table.spaceId, table.noteId],
+			columns: [table.noteId, table.spaceId],
 			foreignColumns: [notes.objectId, notes.spaceId],
 			name: "note_collection_items_note_id_space_id_fkey"
 		}).onDelete("cascade"),
@@ -805,7 +803,7 @@ export const noteLinks = pgTable("note_links", {
 			name: "note_links_created_by_user_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.fromObjectId],
+			columns: [table.fromObjectId, table.spaceId],
 			foreignColumns: [spaceObjects.id, spaceObjects.spaceId],
 			name: "note_links_from_object_id_fkey"
 		}).onDelete("cascade"),
@@ -815,7 +813,7 @@ export const noteLinks = pgTable("note_links", {
 			name: "note_links_space_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.toObjectId],
+			columns: [table.toObjectId, table.spaceId],
 			foreignColumns: [spaceObjects.id, spaceObjects.spaceId],
 			name: "note_links_to_object_id_fkey"
 		}).onDelete("cascade"),

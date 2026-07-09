@@ -5,8 +5,8 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import SourcesPage from '../SourcesPage'
 import SourcePresetsPage from '../sourcePresets/SourcePresetsPage'
 import { scheduleRuleFromForm } from '../sourcePageModel'
-import { sourcesApi, projectsApi, workspacesApi } from '../../../api/client'
-import type { ExtractionJob, SourceConnection, SourceRecipeDefinition, SourceRecipeVersion, Workspace, WorkspaceSourceBinding } from '../../../types/api'
+import { sourcesApi } from '../../../api/client'
+import type { ExtractionJob, SourceConnection, SourceRecipeDefinition, SourceRecipeVersion } from '../../../types/api'
 
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn() },
@@ -26,16 +26,17 @@ vi.mock('../../../api/client', () => ({
   sourcesApi: {
     connectors: vi.fn(),
     connections: vi.fn(),
+    sourceHealth: vi.fn(),
     items: vi.fn(),
     jobs: vi.fn(),
     evidence: vi.fn(),
     evidenceLinks: vi.fn(),
-    workspaceBindings: vi.fn(),
     createConnection: vi.fn(),
     sourcePresets: vi.fn(),
     previewArxivSourcePreset: vi.fn(),
     createArxivSourcePreset: vi.fn(),
     createPostProcessingRule: vi.fn(),
+    createProjectSourceBinding: vi.fn(),
     createManualUrl: vi.fn(),
     updateItem: vi.fn(),
     createCustomSourceDraft: vi.fn(),
@@ -45,19 +46,11 @@ vi.mock('../../../api/client', () => ({
     activateSourceRecipe: vi.fn(),
     scanConnection: vi.fn(),
     updateConnection: vi.fn(),
-    createWorkspaceBinding: vi.fn(),
-    backfillWorkspaceBinding: vi.fn(),
     itemAction: vi.fn(),
     runJob: vi.fn(),
     summarize: vi.fn(),
     updateEvidence: vi.fn(),
     createEvidenceLink: vi.fn(),
-  },
-  workspacesApi: {
-    list: vi.fn(),
-  },
-  projectsApi: {
-    listWorkspaces: vi.fn(),
   },
 }))
 
@@ -152,53 +145,6 @@ function recipeSourceConnection(): SourceConnection {
   }
 }
 
-function workspace(overrides: Partial<Workspace> = {}): Workspace {
-  return {
-    id: 'workspace-1',
-    owner_space_id: 'space-1',
-    created_by_user_id: 'user-1',
-    name: 'Project workspace',
-    slug: 'project-workspace',
-    description: null,
-    workspace_type: 'project',
-    kind: 'standard',
-    repo_url: null,
-    root_path: null,
-    default_branch: null,
-    visibility: 'space_shared',
-    status: 'active',
-    protected: false,
-    system_managed: false,
-    registered_from: null,
-    metadata_json: null,
-    snapshot_retention_days: null,
-    snapshot_max_count: null,
-    created_at: '2026-07-01T00:00:00.000Z',
-    updated_at: '2026-07-01T00:00:00.000Z',
-    ...overrides,
-  }
-}
-
-function workspaceBinding(overrides: Partial<WorkspaceSourceBinding> = {}): WorkspaceSourceBinding {
-  return {
-    id: 'binding-1',
-    space_id: 'space-1',
-    workspace_id: 'workspace-1',
-    project_id: 'project-1',
-    source_connection_id: 'recipe-conn-1',
-    binding_key: 'default',
-    status: 'active',
-    priority: 0,
-    filters_json: {},
-    routing_policy_json: {},
-    extraction_policy_json: {},
-    created_by_user_id: 'user-1',
-    created_at: '2026-07-01T00:00:00.000Z',
-    updated_at: '2026-07-01T00:00:00.000Z',
-    ...overrides,
-  }
-}
-
 function renderPage(initialEntry = '/spaces/space-1/sources') {
   return render(
     <MemoryRouter
@@ -246,6 +192,7 @@ beforeEach(() => {
     },
   ])
   vi.mocked(sourcesApi.connections).mockResolvedValue(emptyPage(100))
+  vi.mocked(sourcesApi.sourceHealth).mockResolvedValue([])
   vi.mocked(sourcesApi.sourcePresets).mockResolvedValue({
     items: [{
       id: 'arxiv',
@@ -264,7 +211,6 @@ beforeEach(() => {
   vi.mocked(sourcesApi.jobs).mockResolvedValue(emptyPage(60))
   vi.mocked(sourcesApi.evidence).mockResolvedValue(emptyPage(80))
   vi.mocked(sourcesApi.evidenceLinks).mockResolvedValue(emptyPage(20))
-  vi.mocked(sourcesApi.workspaceBindings).mockResolvedValue([])
   vi.mocked(sourcesApi.planSourceRecipe).mockResolvedValue({
     source_type: 'rss',
     recipe,
@@ -342,8 +288,6 @@ beforeEach(() => {
     proposal_id: null,
     recipe_version: { ...recipeVersion, status: 'active', activated_at: '2026-07-01T00:01:00.000Z' },
   })
-  vi.mocked(workspacesApi.list).mockResolvedValue(emptyPage(100))
-  vi.mocked(projectsApi.listWorkspaces).mockResolvedValue([])
 })
 
 describe('SourcesPage Create Source', () => {
@@ -488,6 +432,57 @@ describe('SourcesPage Create Source', () => {
     expect(sourcesApi.createSourceRecipe).not.toHaveBeenCalled()
   }, 10_000)
 
+  it('creates an arXiv source and binds it when opened from a project preset workflow', async () => {
+    vi.mocked(sourcesApi.createArxivSourcePreset).mockResolvedValue({
+      ...recipeSourceConnection(),
+      id: 'arxiv-conn-1',
+      name: 'AI agent papers',
+      handler_kind: 'built_in',
+    })
+    vi.mocked(sourcesApi.createProjectSourceBinding).mockResolvedValue({
+      id: 'binding-1',
+      space_id: 'space-1',
+      project_id: 'project-1',
+      source_connection_id: 'arxiv-conn-1',
+      binding_key: 'default',
+      status: 'active',
+      priority: 0,
+      delivery_scope: 'project_members',
+      collection_notifications_enabled: true,
+      filters_json: {},
+      routing_policy_json: {},
+      extraction_policy_json: { profile_key: 'academic_paper_v1' },
+      created_by_user_id: 'user-1',
+      created_at: '2026-07-01T00:00:00.000Z',
+      updated_at: '2026-07-01T00:00:00.000Z',
+    })
+
+    renderPage('/spaces/space-1/sources/source-presets?project_id=project-1&preset=arxiv')
+
+    expect(await screen.findByText('Add preset source to project')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /project sources/i })).toHaveAttribute('href', '/projects/project-1/sources')
+
+    fireEvent.change(screen.getByPlaceholderText('arXiv source name'), {
+      target: { value: 'AI agent papers' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /create source/i }))
+
+    await waitFor(() => {
+      expect(sourcesApi.createArxivSourcePreset).toHaveBeenCalledWith(expect.objectContaining({
+        mode: 'recent_by_category',
+        categories: ['cs.AI'],
+        name: 'AI agent papers',
+      }))
+      expect(sourcesApi.createProjectSourceBinding).toHaveBeenCalledWith({
+        project_id: 'project-1',
+        source_connection_id: 'arxiv-conn-1',
+        binding_key: 'default',
+        backfill_history: true,
+        extraction_policy: { profile_key: 'academic_paper_v1' },
+      })
+    })
+  }, 10_000)
+
   it('runs a manually queued source scan without waiting for the scheduler', async () => {
     vi.mocked(sourcesApi.connections).mockResolvedValue({
       items: [recipeSourceConnection()],
@@ -512,48 +507,4 @@ describe('SourcesPage Create Source', () => {
     })
   })
 
-  it('creates workspace source bindings inside the scoped project boundary', async () => {
-    vi.mocked(sourcesApi.connections).mockResolvedValue({
-      items: [recipeSourceConnection()],
-      total: 1,
-      limit: 100,
-      offset: 0,
-    })
-    vi.mocked(workspacesApi.list).mockResolvedValue({
-      items: [
-        workspace({ id: 'workspace-1', name: 'Linked workspace' }),
-        workspace({ id: 'workspace-other', name: 'Other workspace' }),
-      ],
-      total: 2,
-      limit: 100,
-      offset: 0,
-    })
-    vi.mocked(projectsApi.listWorkspaces).mockResolvedValue([
-      {
-        id: 'project-workspace-1',
-        project_id: 'project-1',
-        workspace_id: 'workspace-1',
-        role: 'reference',
-        created_at: '2026-07-01T00:00:00.000Z',
-        updated_at: '2026-07-01T00:00:00.000Z',
-      },
-    ])
-    vi.mocked(sourcesApi.createWorkspaceBinding).mockResolvedValue(workspaceBinding())
-
-    renderPage('/spaces/space-1/sources?project_id=project-1')
-
-    const bindButton = await screen.findByRole('button', { name: /bind source/i })
-    await waitFor(() => expect(bindButton).not.toBeDisabled())
-    fireEvent.click(bindButton)
-
-    await waitFor(() => {
-      expect(projectsApi.listWorkspaces).toHaveBeenCalledWith('project-1')
-      expect(sourcesApi.createWorkspaceBinding).toHaveBeenCalledWith({
-        workspace_id: 'workspace-1',
-        source_connection_id: 'recipe-conn-1',
-        project_id: 'project-1',
-        backfill_history: true,
-      })
-    })
-  })
 })

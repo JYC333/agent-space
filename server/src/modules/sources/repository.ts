@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { ServerConfig } from "../../config";
 import type { Queryable } from "../routeUtils/common";
 import { canAccessProject } from "../memory/projectAccess";
-import { assertProjectWriter, assertWorkspaceLinkedToProject } from "../projects/access";
+import { assertProjectWriter } from "../projects/access";
 import {
   HttpError,
   countFromRow,
@@ -22,7 +22,6 @@ import { runCustomSourceHandlerScanJob } from "./customSources/customSourceScanW
 import { RECIPE_SCAN_JOB_IMPLEMENTATION, runSourceRecipeScanJob } from "./sourceRecipes/recipeScanWorker";
 import { insertProposalRow } from "../proposals/reviewPackets";
 import {
-  bindingOut,
   buildSummary,
   connectionOut,
   connectorOut,
@@ -31,28 +30,31 @@ import {
   itemOut,
   jobOut,
   normalizeUrl,
+  projectSourceBindingOut,
+  projectSourceItemOut,
+  type ProjectSourceItemOutRow,
   sha256,
   sourceDomain,
   stringList,
 } from "./sourceRepositoryMappers";
 import {
-  BINDING_COLUMNS,
   CONNECTION_COLUMNS,
   CONNECTOR_COLUMNS,
   EVIDENCE_COLUMNS,
   EVIDENCE_LINK_COLUMNS,
   ITEM_COLUMNS,
   JOB_COLUMNS,
+  PROJECT_SOURCE_BINDING_COLUMNS,
   connectionColumnsWithConnectorForAlias,
   evidenceColumnsForAlias,
   itemColumnsForAlias,
   type EvidenceLinkRow,
   type EvidenceRow,
   type ExtractionJobRow,
+  type ProjectSourceBindingRow,
   type SourceItemRow,
   type SourceConnectionRow,
   type SourceConnectorRow,
-  type WorkspaceBindingRow,
 } from "./sourceRepositoryRows";
 import {
   getSourceConnectionScanTask,
@@ -71,7 +73,11 @@ import {
   reindexExtractedEvidenceAndParentForRetrieval,
   reindexSourceItemAndEvidenceForRetrieval,
 } from "./retrievalIndexing";
-import { backfillEvidenceForWorkspaceSourceBinding } from "./evidenceProjectLinker";
+import {
+  materializeProjectSourceItemLinks,
+  recomputeProjectSourceBindingLinks,
+} from "./evidenceProjectLinker";
+import { sourceItemReadableClause } from "./sourceItemAccess";
 
 const EVIDENCE_LINK_TYPES = new Set([
   "supports",
@@ -86,6 +92,7 @@ const SOURCE_CONNECTION_VISIBILITIES = new Set(["private", "space_discoverable"]
 const SOURCE_CONNECTION_SUBSCRIPTION_STATUSES = new Set(["subscribed", "pending", "dismissed", "muted"]);
 const SOURCE_ITEM_LIBRARY_STATUSES = new Set(["open", "new", "triaged", "selected", "ignored", "archived"]);
 const SOURCE_ITEM_READ_STATUSES = new Set(["unread", "skimmed", "read", "discussed"]);
+const PROJECT_SOURCE_DELIVERY_SCOPES = new Set(["project_members", "source_subscribers"]);
 
 const CONNECTION_SUBSCRIPTION_SELECT = [
   "scus.status AS subscription_status",
@@ -543,15 +550,11 @@ export class PgSourcesRepository {
     createdAfter: string | null;
     occurredAfter: string | null;
     q: string | null;
-    projectId: string | null;
     limit: number;
     offset: number;
   }) {
-    if (filters.projectId && !(await canAccessProject(this.db, identity.spaceId, filters.projectId, identity.userId))) {
-      throw new HttpError(404, "Project not found");
-    }
     const params: unknown[] = [identity.spaceId, identity.userId];
-    const clauses = ["si.space_id = $1", "si.deleted_at IS NULL", this.sourceItemReadableClause("si", "$2", true)];
+    const clauses = ["si.space_id = $1", "si.deleted_at IS NULL", sourceItemReadableClause("si", "$2", true)];
     const add = (value: unknown) => {
       params.push(value);
       return `$${params.length}`;
@@ -583,45 +586,6 @@ export class PgSourcesRepository {
     if (filters.sourceDomain) clauses.push(`si.source_domain = ${add(filters.sourceDomain)}`);
     if (filters.createdAfter) clauses.push(`si.created_at >= ${add(filters.createdAfter)}::timestamptz`);
     if (filters.occurredAfter) clauses.push(`si.occurred_at >= ${add(filters.occurredAfter)}::timestamptz`);
-    if (filters.projectId) {
-      const projectParam = add(filters.projectId);
-      clauses.push(
-        `(
-          si.connection_id IN (
-            SELECT wsb.source_connection_id
-              FROM workspace_source_bindings wsb
-             WHERE wsb.space_id = $1
-               AND wsb.project_id = ${projectParam}
-               AND wsb.status = 'active'
-               AND EXISTS (
-                 SELECT 1
-                   FROM project_workspaces pw
-                  WHERE pw.space_id = wsb.space_id
-                    AND pw.project_id = wsb.project_id
-                    AND pw.workspace_id = wsb.workspace_id
-               )
-          )
-          OR EXISTS (
-            SELECT 1
-              FROM source_snapshots ss
-              JOIN workspace_source_bindings wsb
-                ON wsb.space_id = ss.space_id
-               AND wsb.source_connection_id = ss.connection_id
-               AND wsb.project_id = ${projectParam}
-               AND wsb.status = 'active'
-               AND EXISTS (
-                 SELECT 1
-                   FROM project_workspaces pw
-                  WHERE pw.space_id = wsb.space_id
-                    AND pw.project_id = wsb.project_id
-                    AND pw.workspace_id = wsb.workspace_id
-               )
-             WHERE ss.space_id = $1
-               AND ss.source_item_id = si.id
-          )
-        )`,
-      );
-    }
     if (filters.q) {
       clauses.push(`(si.title ILIKE ${add(`%${filters.q}%`)} OR si.excerpt ILIKE $${params.length} OR si.source_uri ILIKE $${params.length} OR si.source_domain ILIKE $${params.length})`);
     }
@@ -671,7 +635,7 @@ export class PgSourcesRepository {
         WHERE si.space_id = $1
           AND si.deleted_at IS NULL
           AND (si.canonical_uri = $2 OR si.source_uri = $2)
-          AND ${this.sourceItemReadableClause("si", "$3", false)}
+          AND ${sourceItemReadableClause("si", "$3", false)}
         LIMIT 1`,
       [identity.spaceId, canonical, identity.userId],
     );
@@ -708,6 +672,10 @@ export class PgSourcesRepository {
     if (body.queue_content === true) {
       await this.createJob({ identity, connectionId: row.connection_id, sourceItemId: row.id, jobType: "manual_url", metadata: { url: canonical } });
     }
+    await materializeProjectSourceItemLinks(this.db, {
+      spaceId: identity.spaceId,
+      sourceItemId: row.id,
+    });
     await this.reindexItemForRetrieval(identity.spaceId, row.id, "source_manual_url");
     return itemOut(row);
   }
@@ -903,30 +871,15 @@ export class PgSourcesRepository {
         `(
           EXISTS (
             SELECT 1
-              FROM source_items ii
-              JOIN workspace_source_bindings wsb
-                ON wsb.space_id = ii.space_id
-               AND (
-                 wsb.source_connection_id = ii.connection_id
-                 OR EXISTS (
-                   SELECT 1
-                     FROM source_snapshots ss
-                    WHERE ss.space_id = ii.space_id
-                      AND ss.source_item_id = ii.id
-                      AND ss.connection_id = wsb.source_connection_id
-                 )
-               )
-               AND wsb.status = 'active'
-               AND EXISTS (
-                 SELECT 1
-                   FROM project_workspaces pw
-                  WHERE pw.space_id = wsb.space_id
-                    AND pw.project_id = wsb.project_id
-                    AND pw.workspace_id = wsb.workspace_id
-               )
-             WHERE ii.space_id = extracted_evidence.space_id
-               AND ii.id = extracted_evidence.source_item_id
-               AND wsb.project_id = ${projectParam}
+              FROM project_source_item_links psil
+              JOIN project_source_bindings psb
+                ON psb.space_id = psil.space_id
+               AND psb.id = psil.project_source_binding_id
+               AND psb.status = 'active'
+             WHERE psil.space_id = extracted_evidence.space_id
+               AND psil.source_item_id = extracted_evidence.source_item_id
+               AND psil.project_id = ${projectParam}
+               AND psil.status = 'active'
           )
           OR EXISTS (
             SELECT 1
@@ -1145,8 +1098,8 @@ export class PgSourcesRepository {
     if (!rows.rows[0]) throw new HttpError(403, "Target is not accessible in this space");
   }
 
-  async listWorkspaceBindings(identity: SpaceUserIdentity, filters: { workspaceId: string | null; sourceConnectionId: string | null; projectId: string | null } = { workspaceId: null, sourceConnectionId: null, projectId: null }) {
-    if (filters.projectId && !(await canAccessProject(this.db, identity.spaceId, filters.projectId, identity.userId))) {
+  async listProjectSourceBindings(identity: SpaceUserIdentity, filters: { projectId: string; sourceConnectionId: string | null }) {
+    if (!(await canAccessProject(this.db, identity.spaceId, filters.projectId, identity.userId))) {
       throw new HttpError(404, "Project not found");
     }
     const params: unknown[] = [identity.spaceId];
@@ -1155,44 +1108,45 @@ export class PgSourcesRepository {
       params.push(value);
       return `$${params.length}`;
     };
-    if (filters.workspaceId) clauses.push(`workspace_id = ${add(filters.workspaceId)}`);
     if (filters.sourceConnectionId) clauses.push(`source_connection_id = ${add(filters.sourceConnectionId)}`);
-    if (filters.projectId) clauses.push(`project_id = ${add(filters.projectId)}`);
-    const rows = await this.db.query<WorkspaceBindingRow>(
-      `SELECT ${BINDING_COLUMNS}
-         FROM workspace_source_bindings
+    clauses.push(`project_id = ${add(filters.projectId)}`);
+    const rows = await this.db.query<ProjectSourceBindingRow>(
+      `SELECT ${PROJECT_SOURCE_BINDING_COLUMNS}
+         FROM project_source_bindings
         WHERE ${clauses.join(" AND ")}
         ORDER BY priority DESC, updated_at DESC, id DESC`,
       params,
     );
-    return rows.rows.map(bindingOut);
+    return rows.rows.map(projectSourceBindingOut);
   }
 
-  async createWorkspaceBinding(identity: SpaceUserIdentity, body: Record<string, unknown>) {
-    const workspaceId = requiredString(body.workspace_id, "workspace_id");
+  async createProjectSourceBinding(identity: SpaceUserIdentity, body: Record<string, unknown>) {
     const sourceConnectionId = requiredString(body.source_connection_id, "source_connection_id");
     const projectId = requiredString(body.project_id, "project_id");
-    if (!(await this.getConnection(identity, sourceConnectionId))) {
+    const connection = await this.getConnectionRow(identity, sourceConnectionId);
+    if (!connection || !(await this.canViewConnectionMetadata(identity, connection))) {
       throw new HttpError(404, "Source connection not found");
     }
     await assertProjectWriter(this.db, identity.spaceId, projectId, identity.userId);
-    await assertWorkspaceLinkedToProject(this.db, identity.spaceId, projectId, workspaceId);
+    const deliveryScope = this.resolveProjectSourceDeliveryScope(identity, connection, body);
     const now = new Date().toISOString();
-    const result = await this.db.query<WorkspaceBindingRow>(
-      `INSERT INTO workspace_source_bindings (
-         id, space_id, workspace_id, project_id, source_connection_id, binding_key,
-         status, priority, filters_json, routing_policy_json, extraction_policy_json,
+    const result = await this.db.query<ProjectSourceBindingRow>(
+      `INSERT INTO project_source_bindings (
+         id, space_id, project_id, source_connection_id, binding_key,
+         status, priority, delivery_scope, collection_notifications_enabled,
+         filters_json, routing_policy_json, extraction_policy_json,
          created_by_user_id, created_at, updated_at
-       ) VALUES ($1, $2, $3, $4, $5, $6, 'active', $7::int, $8::jsonb, $9::jsonb, $10::jsonb, $11, $12, $12)
-       RETURNING ${BINDING_COLUMNS}`,
+       ) VALUES ($1, $2, $3, $4, $5, 'active', $6::int, $7, $8::boolean, $9::jsonb, $10::jsonb, $11::jsonb, $12, $13, $13)
+       RETURNING ${PROJECT_SOURCE_BINDING_COLUMNS}`,
       [
         randomUUID(),
         identity.spaceId,
-        workspaceId,
         projectId,
         sourceConnectionId,
         optionalString(body.binding_key) ?? "default",
         numberValue(body.priority) ?? 0,
+        deliveryScope,
+        booleanBody(body.collection_notifications_enabled, "collection_notifications_enabled", true),
         JSON.stringify(objectValue(body.filters)),
         JSON.stringify(objectValue(body.routing_policy)),
         JSON.stringify(objectValue(body.extraction_policy)),
@@ -1201,26 +1155,91 @@ export class PgSourcesRepository {
       ],
     );
     const row = result.rows[0]!;
-    const out = bindingOut(row);
+    const out = projectSourceBindingOut(row);
     if (!booleanBody(body.backfill_history, "backfill_history", false)) return out;
     return {
       ...out,
-      backfill_result: await this.backfillWorkspaceBindingRow(identity, row),
+      backfill_result: await this.backfillProjectSourceBindingRow(identity, row),
     };
   }
 
-  async backfillWorkspaceBinding(identity: SpaceUserIdentity, bindingId: string) {
-    const row = await this.getWorkspaceBindingRow(identity.spaceId, bindingId);
-    if (!row) throw new HttpError(404, "Workspace source binding not found");
+  async updateProjectSourceBinding(identity: SpaceUserIdentity, bindingId: string, body: Record<string, unknown>) {
+    const row = await this.getProjectSourceBindingRow(identity.spaceId, bindingId);
+    if (!row) throw new HttpError(404, "Project source binding not found");
     await assertProjectWriter(this.db, identity.spaceId, row.project_id, identity.userId);
-    await assertWorkspaceLinkedToProject(this.db, identity.spaceId, row.project_id, row.workspace_id);
-    return this.backfillWorkspaceBindingRow(identity, row);
+    const connection = await this.getConnectionRow(identity, row.source_connection_id);
+    if (!connection) throw new HttpError(404, "Source connection not found");
+    const status = optionalString(body.status) ?? row.status;
+    if (!["active", "paused", "archived"].includes(status)) throw new HttpError(422, "invalid project source binding status");
+    const deliveryScope = body.delivery_scope === undefined
+      ? row.delivery_scope
+      : this.resolveProjectSourceDeliveryScope(identity, connection, body);
+    const now = new Date().toISOString();
+    const updated = await this.db.query<ProjectSourceBindingRow>(
+      `UPDATE project_source_bindings
+          SET binding_key = $3,
+              status = $4,
+              priority = $5::int,
+              delivery_scope = $6,
+              collection_notifications_enabled = $7::boolean,
+              filters_json = $8::jsonb,
+              routing_policy_json = $9::jsonb,
+              extraction_policy_json = $10::jsonb,
+              updated_at = $11
+        WHERE space_id = $1
+          AND id = $2
+        RETURNING ${PROJECT_SOURCE_BINDING_COLUMNS}`,
+      [
+        identity.spaceId,
+        bindingId,
+        optionalString(body.binding_key) ?? row.binding_key,
+        status,
+        numberValue(body.priority) ?? row.priority,
+        deliveryScope,
+        booleanBody(body.collection_notifications_enabled, "collection_notifications_enabled", row.collection_notifications_enabled),
+        JSON.stringify(body.filters === undefined ? row.filters_json ?? {} : objectValue(body.filters)),
+        JSON.stringify(body.routing_policy === undefined ? row.routing_policy_json ?? {} : objectValue(body.routing_policy)),
+        JSON.stringify(body.extraction_policy === undefined ? row.extraction_policy_json ?? {} : objectValue(body.extraction_policy)),
+        now,
+      ],
+    );
+    const out = projectSourceBindingOut(updated.rows[0]!);
+    if (status === "active") {
+      await this.backfillProjectSourceBindingRow(identity, updated.rows[0]!);
+    } else {
+      await this.archiveProjectSourceBindingLinks(identity.spaceId, bindingId, row.project_id);
+    }
+    return out;
   }
 
-  private async getWorkspaceBindingRow(spaceId: string, bindingId: string): Promise<WorkspaceBindingRow | null> {
-    const rows = await this.db.query<WorkspaceBindingRow>(
-      `SELECT ${BINDING_COLUMNS}
-         FROM workspace_source_bindings
+  async deleteProjectSourceBinding(identity: SpaceUserIdentity, bindingId: string) {
+    const row = await this.getProjectSourceBindingRow(identity.spaceId, bindingId);
+    if (!row) throw new HttpError(404, "Project source binding not found");
+    await assertProjectWriter(this.db, identity.spaceId, row.project_id, identity.userId);
+    const now = new Date().toISOString();
+    await this.db.query(
+      `UPDATE project_source_bindings
+          SET status = 'archived',
+              updated_at = $3
+        WHERE space_id = $1
+          AND id = $2`,
+      [identity.spaceId, bindingId, now],
+    );
+    await this.archiveProjectSourceBindingLinks(identity.spaceId, bindingId, row.project_id);
+    return { id: bindingId, status: "archived" };
+  }
+
+  async backfillProjectSourceBinding(identity: SpaceUserIdentity, bindingId: string) {
+    const row = await this.getProjectSourceBindingRow(identity.spaceId, bindingId);
+    if (!row) throw new HttpError(404, "Project source binding not found");
+    await assertProjectWriter(this.db, identity.spaceId, row.project_id, identity.userId);
+    return this.backfillProjectSourceBindingRow(identity, row);
+  }
+
+  private async getProjectSourceBindingRow(spaceId: string, bindingId: string): Promise<ProjectSourceBindingRow | null> {
+    const rows = await this.db.query<ProjectSourceBindingRow>(
+      `SELECT ${PROJECT_SOURCE_BINDING_COLUMNS}
+         FROM project_source_bindings
         WHERE space_id = $1
           AND id = $2`,
       [spaceId, bindingId],
@@ -1228,24 +1247,407 @@ export class PgSourcesRepository {
     return rows.rows[0] ?? null;
   }
 
-  private async backfillWorkspaceBindingRow(
+  private async backfillProjectSourceBindingRow(
     identity: SpaceUserIdentity,
-    row: WorkspaceBindingRow,
+    row: ProjectSourceBindingRow,
   ): Promise<Record<string, unknown>> {
     if (row.status !== "active") {
-      throw new HttpError(422, "Only active workspace source bindings can backfill history");
+      throw new HttpError(422, "Only active project source bindings can backfill history");
     }
-    const createdLinks = await backfillEvidenceForWorkspaceSourceBinding(this.db, {
+    const result = await recomputeProjectSourceBindingLinks(this.db, {
       spaceId: identity.spaceId,
       bindingId: row.id,
     });
     return {
       binding_id: row.id,
-      workspace_id: row.workspace_id,
       project_id: row.project_id,
       source_connection_id: row.source_connection_id,
-      created_links: createdLinks,
+      ...result,
     };
+  }
+
+  async listProjectItems(identity: SpaceUserIdentity, filters: {
+    projectId: string;
+    sourceConnectionId: string | null;
+    itemType: string | null;
+    sourceDomain: string | null;
+    matchedDate: string | null;
+    createdAfter: string | null;
+    occurredAfter: string | null;
+    q: string | null;
+    limit: number;
+    offset: number;
+  }) {
+    if (!(await canAccessProject(this.db, identity.spaceId, filters.projectId, identity.userId))) {
+      throw new HttpError(404, "Project not found");
+    }
+    const params: unknown[] = [identity.spaceId, identity.userId, filters.projectId];
+    const clauses = [
+      "psil.space_id = $1",
+      "psil.project_id = $3",
+      "psil.status = 'active'",
+      "psb.status = 'active'",
+      "si.deleted_at IS NULL",
+      `(psb.delivery_scope = 'project_members' OR ${sourceItemReadableClause("si", "$2", false)})`,
+    ];
+    const add = (value: unknown) => {
+      params.push(value);
+      return `$${params.length}`;
+    };
+    if (filters.sourceConnectionId) clauses.push(`psil.source_connection_id = ${add(filters.sourceConnectionId)}`);
+    if (filters.itemType) clauses.push(`si.item_type = ${add(filters.itemType)}`);
+    if (filters.sourceDomain) clauses.push(`si.source_domain = ${add(filters.sourceDomain)}`);
+    if (filters.matchedDate) {
+      const matchedDate = add(filters.matchedDate);
+      clauses.push(`psil.matched_at >= ${matchedDate}::date AND psil.matched_at < (${matchedDate}::date + interval '1 day')`);
+    }
+    if (filters.createdAfter) clauses.push(`si.created_at >= ${add(filters.createdAfter)}::timestamptz`);
+    if (filters.occurredAfter) clauses.push(`si.occurred_at >= ${add(filters.occurredAfter)}::timestamptz`);
+    if (filters.q) {
+      clauses.push(`(si.title ILIKE ${add(`%${filters.q}%`)} OR si.excerpt ILIKE $${params.length} OR si.source_uri ILIKE $${params.length} OR si.source_domain ILIKE $${params.length})`);
+    }
+    const where = `WHERE ${clauses.join(" AND ")}`;
+    const joins = `
+      FROM project_source_item_links psil
+      JOIN project_source_bindings psb
+        ON psb.space_id = psil.space_id
+       AND psb.id = psil.project_source_binding_id
+      JOIN source_items si
+        ON si.space_id = psil.space_id
+       AND si.id = psil.source_item_id
+      LEFT JOIN source_item_user_states suis
+        ON suis.space_id = si.space_id
+       AND suis.source_item_id = si.id
+       AND suis.user_id = $2`;
+    const total = await this.db.query<{ total: string }>(
+      `SELECT count(*)::text AS total ${joins} ${where}`,
+      params,
+    );
+    const rows = await this.db.query<ProjectSourceItemOutRow>(
+      `SELECT psil.id AS project_link_id,
+              psil.space_id AS project_link_space_id,
+              psil.project_id AS project_link_project_id,
+              psil.project_source_binding_id AS project_link_project_source_binding_id,
+              psil.source_connection_id AS project_link_source_connection_id,
+              psil.source_item_id AS project_link_source_item_id,
+              psil.status AS project_link_status,
+              psil.matched_at AS project_link_matched_at,
+              psil.match_reason AS project_link_match_reason,
+              psil.created_at AS project_link_created_at,
+              psil.updated_at AS project_link_updated_at,
+              ${itemColumnsWithCurrentUserState("si")}
+         ${joins}
+       ${where}
+       ORDER BY psil.matched_at DESC, psil.id DESC
+       LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      [...params, filters.limit, filters.offset],
+    );
+    return page(rows.rows.map(projectSourceItemOut), countFromRow(total.rows[0]), filters.limit, filters.offset);
+  }
+
+  async projectSourceSummary(identity: SpaceUserIdentity, projectId: string) {
+    if (!(await canAccessProject(this.db, identity.spaceId, projectId, identity.userId))) {
+      throw new HttpError(404, "Project not found");
+    }
+    const counts = await this.db.query<{ binding_count: string; today_new_items: string }>(
+      `SELECT
+         (SELECT count(*)::text
+            FROM project_source_bindings
+           WHERE space_id = $1 AND project_id = $2 AND status <> 'archived') AS binding_count,
+         (SELECT count(*)::text
+            FROM project_source_item_links
+           WHERE space_id = $1
+             AND project_id = $2
+             AND status = 'active'
+             AND matched_at >= date_trunc('day', now())) AS today_new_items`,
+      [identity.spaceId, projectId],
+    );
+    const health = await this.projectSourceHealth(identity, projectId);
+    const healthCounts = health.reduce<Record<string, number>>((acc, row) => {
+      acc[row.status] = (acc[row.status] ?? 0) + 1;
+      return acc;
+    }, {});
+    const recentItems = await this.listProjectItems(identity, {
+      projectId,
+      sourceConnectionId: null,
+      itemType: null,
+      sourceDomain: null,
+      matchedDate: null,
+      createdAfter: null,
+      occurredAfter: null,
+      q: null,
+      limit: 5,
+      offset: 0,
+    });
+    return {
+      project_id: projectId,
+      bound_source_count: countFromRow({ total: counts.rows[0]?.binding_count ?? "0" }),
+      today_new_items: countFromRow({ total: counts.rows[0]?.today_new_items ?? "0" }),
+      health_counts: healthCounts,
+      recent_items: recentItems.items,
+    };
+  }
+
+  async sourceHealth(identity: SpaceUserIdentity, filters: { connectionId: string | null }) {
+    const params: unknown[] = [identity.spaceId, identity.userId];
+    const clauses = [
+      "sc.space_id = $1",
+      "sc.deleted_at IS NULL",
+      `(
+        sc.owner_user_id = $2
+        OR sc.visibility = 'space_discoverable'
+        OR scus.status IS NOT NULL
+        OR EXISTS (
+          SELECT 1 FROM space_memberships sm
+           WHERE sm.space_id = sc.space_id
+             AND sm.user_id = $2
+             AND sm.status = 'active'
+             AND sm.role IN ('owner', 'admin')
+        )
+      )`,
+    ];
+    if (filters.connectionId) {
+      params.push(filters.connectionId);
+      clauses.push(`sc.id = $${params.length}`);
+    }
+    const rows = await this.db.query<{
+      source_connection_id: string;
+      source_name: string;
+      connection_status: string;
+      scheduler_status: string | null;
+      next_run_at: unknown;
+      last_run_at: unknown;
+      last_success_at: unknown;
+      last_failure_at: unknown;
+      last_error: string | null;
+      queued_jobs: string;
+      running_jobs: string;
+      recent_new_items: string;
+      consecutive_failures: string;
+    }>(
+      `WITH last_success AS (
+         SELECT DISTINCT ON (space_id, connection_id) space_id, connection_id, completed_at
+           FROM extraction_jobs
+          WHERE space_id = $1 AND connection_id IS NOT NULL AND status = 'succeeded'
+          ORDER BY space_id, connection_id, completed_at DESC NULLS LAST, created_at DESC
+       ),
+       last_failure AS (
+         SELECT DISTINCT ON (space_id, connection_id) space_id, connection_id, completed_at, error_message
+           FROM extraction_jobs
+          WHERE space_id = $1 AND connection_id IS NOT NULL AND status = 'failed'
+          ORDER BY space_id, connection_id, completed_at DESC NULLS LAST, created_at DESC
+       )
+       SELECT sc.id AS source_connection_id,
+              sc.name AS source_name,
+              sc.status AS connection_status,
+              st.status AS scheduler_status,
+              st.next_run_at,
+              st.last_run_at,
+              ls.completed_at AS last_success_at,
+              lf.completed_at AS last_failure_at,
+              lf.error_message AS last_error,
+              (SELECT count(*)::text FROM extraction_jobs ej WHERE ej.space_id = sc.space_id AND ej.connection_id = sc.id AND ej.status = 'pending') AS queued_jobs,
+              (SELECT count(*)::text FROM extraction_jobs ej WHERE ej.space_id = sc.space_id AND ej.connection_id = sc.id AND ej.status = 'running') AS running_jobs,
+              (SELECT count(*)::text FROM source_items si WHERE si.space_id = sc.space_id AND si.connection_id = sc.id AND si.deleted_at IS NULL AND si.first_seen_at >= now() - interval '24 hours') AS recent_new_items,
+              (SELECT count(*)::text
+                 FROM extraction_jobs failed
+                WHERE failed.space_id = sc.space_id
+                  AND failed.connection_id = sc.id
+                  AND failed.status = 'failed'
+                  AND (ls.completed_at IS NULL OR failed.completed_at > ls.completed_at)) AS consecutive_failures
+         FROM source_connections sc
+         LEFT JOIN source_connection_user_subscriptions scus
+           ON scus.space_id = sc.space_id
+          AND scus.source_connection_id = sc.id
+          AND scus.user_id = $2
+         LEFT JOIN scheduler_tasks st
+           ON st.space_id = sc.space_id
+          AND st.task_type = 'source_connection_scan'
+          AND st.task_key = sc.id
+         LEFT JOIN last_success ls
+           ON ls.space_id = sc.space_id
+          AND ls.connection_id = sc.id
+         LEFT JOIN last_failure lf
+           ON lf.space_id = sc.space_id
+          AND lf.connection_id = sc.id
+        WHERE ${clauses.join(" AND ")}
+        ORDER BY sc.updated_at DESC, sc.id DESC`,
+      params,
+    );
+    return rows.rows.map((row) => {
+      const queuedJobs = Number(row.queued_jobs) || 0;
+      const runningJobs = Number(row.running_jobs) || 0;
+      const consecutiveFailures = Number(row.consecutive_failures) || 0;
+      const lastFailureAt = dateIso(row.last_failure_at);
+      const lastSuccessAt = dateIso(row.last_success_at);
+      let status = "healthy";
+      if (row.connection_status === "paused" || row.scheduler_status === "paused") {
+        status = "paused";
+      } else if (runningJobs > 0 || queuedJobs > 0) {
+        status = "running";
+      } else if (consecutiveFailures >= 3) {
+        status = "failing";
+      } else if (lastFailureAt && (!lastSuccessAt || lastFailureAt > lastSuccessAt)) {
+        status = "attention";
+      }
+      return {
+        binding_id: null,
+        project_id: null,
+        source_connection_id: row.source_connection_id,
+        source_name: row.source_name,
+        status,
+        last_success_at: lastSuccessAt,
+        last_failure_at: lastFailureAt,
+        last_error: row.last_error,
+        next_run_at: dateIso(row.next_run_at),
+        queued_jobs: queuedJobs,
+        running_jobs: runningJobs,
+        recent_new_items: Number(row.recent_new_items) || 0,
+        consecutive_failures: consecutiveFailures,
+      };
+    });
+  }
+
+  async projectSourceHealth(identity: SpaceUserIdentity, projectId: string) {
+    if (!(await canAccessProject(this.db, identity.spaceId, projectId, identity.userId))) {
+      throw new HttpError(404, "Project not found");
+    }
+    const rows = await this.db.query<{
+      binding_id: string;
+      project_id: string;
+      source_connection_id: string;
+      source_name: string;
+      binding_status: string;
+      connection_status: string;
+      scheduler_status: string | null;
+      next_run_at: unknown;
+      last_run_at: unknown;
+      last_success_at: unknown;
+      last_failure_at: unknown;
+      last_error: string | null;
+      queued_jobs: string;
+      running_jobs: string;
+      recent_new_items: string;
+      consecutive_failures: string;
+    }>(
+      `WITH last_success AS (
+         SELECT DISTINCT ON (space_id, connection_id) space_id, connection_id, completed_at
+           FROM extraction_jobs
+          WHERE space_id = $1 AND connection_id IS NOT NULL AND status = 'succeeded'
+          ORDER BY space_id, connection_id, completed_at DESC NULLS LAST, created_at DESC
+       ),
+       last_failure AS (
+         SELECT DISTINCT ON (space_id, connection_id) space_id, connection_id, completed_at, error_message
+           FROM extraction_jobs
+          WHERE space_id = $1 AND connection_id IS NOT NULL AND status = 'failed'
+          ORDER BY space_id, connection_id, completed_at DESC NULLS LAST, created_at DESC
+       )
+       SELECT psb.id AS binding_id,
+              psb.project_id,
+              psb.source_connection_id,
+              sc.name AS source_name,
+              psb.status AS binding_status,
+              sc.status AS connection_status,
+              st.status AS scheduler_status,
+              st.next_run_at,
+              st.last_run_at,
+              ls.completed_at AS last_success_at,
+              lf.completed_at AS last_failure_at,
+              lf.error_message AS last_error,
+              (SELECT count(*)::text FROM extraction_jobs ej WHERE ej.space_id = psb.space_id AND ej.connection_id = psb.source_connection_id AND ej.status = 'pending') AS queued_jobs,
+              (SELECT count(*)::text FROM extraction_jobs ej WHERE ej.space_id = psb.space_id AND ej.connection_id = psb.source_connection_id AND ej.status = 'running') AS running_jobs,
+              (SELECT count(*)::text FROM project_source_item_links psil WHERE psil.space_id = psb.space_id AND psil.project_source_binding_id = psb.id AND psil.status = 'active' AND psil.matched_at >= now() - interval '24 hours') AS recent_new_items,
+              (SELECT count(*)::text
+                 FROM extraction_jobs failed
+                WHERE failed.space_id = psb.space_id
+                  AND failed.connection_id = psb.source_connection_id
+                  AND failed.status = 'failed'
+                  AND (ls.completed_at IS NULL OR failed.completed_at > ls.completed_at)) AS consecutive_failures
+         FROM project_source_bindings psb
+         JOIN source_connections sc
+           ON sc.space_id = psb.space_id
+          AND sc.id = psb.source_connection_id
+          AND sc.deleted_at IS NULL
+         LEFT JOIN scheduler_tasks st
+           ON st.space_id = psb.space_id
+          AND st.task_type = 'source_connection_scan'
+          AND st.task_key = psb.source_connection_id
+         LEFT JOIN last_success ls
+           ON ls.space_id = psb.space_id
+          AND ls.connection_id = psb.source_connection_id
+         LEFT JOIN last_failure lf
+           ON lf.space_id = psb.space_id
+          AND lf.connection_id = psb.source_connection_id
+        WHERE psb.space_id = $1
+          AND psb.project_id = $2
+          AND psb.status <> 'archived'
+        ORDER BY psb.priority DESC, psb.updated_at DESC`,
+      [identity.spaceId, projectId],
+    );
+    return rows.rows.map((row) => {
+      const queuedJobs = Number(row.queued_jobs) || 0;
+      const runningJobs = Number(row.running_jobs) || 0;
+      const consecutiveFailures = Number(row.consecutive_failures) || 0;
+      const lastFailureAt = dateIso(row.last_failure_at);
+      const lastSuccessAt = dateIso(row.last_success_at);
+      let status = "healthy";
+      if (row.binding_status === "paused" || row.connection_status === "paused" || row.scheduler_status === "paused") {
+        status = "paused";
+      } else if (runningJobs > 0 || queuedJobs > 0) {
+        status = "running";
+      } else if (consecutiveFailures >= 3) {
+        status = "failing";
+      } else if (lastFailureAt && (!lastSuccessAt || lastFailureAt > lastSuccessAt)) {
+        status = "attention";
+      }
+      return {
+        binding_id: row.binding_id,
+        project_id: row.project_id,
+        source_connection_id: row.source_connection_id,
+        source_name: row.source_name,
+        status,
+        last_success_at: lastSuccessAt,
+        last_failure_at: lastFailureAt,
+        last_error: row.last_error,
+        next_run_at: dateIso(row.next_run_at),
+        queued_jobs: queuedJobs,
+        running_jobs: runningJobs,
+        recent_new_items: Number(row.recent_new_items) || 0,
+        consecutive_failures: consecutiveFailures,
+      };
+    });
+  }
+
+  private async archiveProjectSourceBindingLinks(spaceId: string, bindingId: string, projectId: string): Promise<void> {
+    const now = new Date().toISOString();
+    await this.db.query(
+      `WITH archived_links AS (
+         UPDATE project_source_item_links
+            SET status = 'archived',
+                updated_at = $4
+          WHERE space_id = $1
+            AND project_source_binding_id = $2
+            AND project_id = $3
+            AND status <> 'archived'
+          RETURNING source_item_id
+       )
+       UPDATE evidence_links el
+          SET status = 'archived',
+              updated_at = $4
+        WHERE el.space_id = $1
+          AND el.target_type = 'project'
+          AND el.target_id = $3
+          AND el.status = 'active'
+          AND el.reason = 'project_source_binding:' || $2
+          AND EXISTS (
+            SELECT 1
+              FROM extracted_evidence ev
+              JOIN archived_links al ON al.source_item_id = ev.source_item_id
+             WHERE ev.space_id = el.space_id
+               AND ev.id = el.evidence_id
+          )`,
+      [spaceId, bindingId, projectId, now],
+    );
   }
 
   async createSummaryRun(identity: SpaceUserIdentity, body: Record<string, unknown>) {
@@ -1265,7 +1667,7 @@ export class PgSourcesRepository {
               AND ee.deleted_at IS NULL
               AND (
                 ee.source_item_id IS NULL
-                OR ${this.sourceItemReadableClause("si", "$3", false)}
+                OR ${sourceItemReadableClause("si", "$3", false)}
               )`,
           [identity.spaceId, evidenceIds, identity.userId],
         )
@@ -1277,7 +1679,7 @@ export class PgSourcesRepository {
             WHERE si.space_id = $1
               AND si.id::text = ANY($2::text[])
               AND si.deleted_at IS NULL
-              AND ${this.sourceItemReadableClause("si", "$3", false)}`,
+              AND ${sourceItemReadableClause("si", "$3", false)}`,
           [identity.spaceId, sourceItemIds, identity.userId],
         )
       : { rows: [] as SourceItemRow[] };
@@ -1354,7 +1756,7 @@ export class PgSourcesRepository {
           WHERE si.space_id = $1
             AND si.id::text = ANY($2::text[])
             AND si.deleted_at IS NULL
-            AND ${this.sourceItemReadableClause("si", "$3", false)}`,
+            AND ${sourceItemReadableClause("si", "$3", false)}`,
         [identity.spaceId, evidenceItemIds, identity.userId],
       );
       if (evidenceItems.rows.length !== evidenceItemIds.length) throw new HttpError(404, "Summary source item not found");
@@ -1397,7 +1799,7 @@ export class PgSourcesRepository {
         WHERE si.space_id = $1
           AND si.id = $3
           AND si.deleted_at IS NULL
-          AND ${this.sourceItemReadableClause("si", "$2", false)}`,
+          AND ${sourceItemReadableClause("si", "$2", false)}`,
       [identity.spaceId, identity.userId, itemId],
     );
     return result.rows[0] ?? null;
@@ -1416,21 +1818,6 @@ export class PgSourcesRepository {
       [identity.spaceId, connectionId, identity.userId],
     );
     return result.rows[0] ? this.withConnectionSchedule(result.rows[0]) : null;
-  }
-
-  private sourceItemReadableClause(itemAlias: string, userParam: string, libraryOnly: boolean): string {
-    return `(
-      (${itemAlias}.connection_id IS NULL AND ${itemAlias}.created_by_user_id = ${userParam})
-      OR EXISTS (
-        SELECT 1
-          FROM source_connection_user_subscriptions scus_read
-         WHERE scus_read.space_id = ${itemAlias}.space_id
-           AND scus_read.source_connection_id = ${itemAlias}.connection_id
-           AND scus_read.user_id = ${userParam}
-           AND scus_read.status = 'subscribed'
-           ${libraryOnly ? "AND scus_read.library_enabled = true" : ""}
-      )
-    )`;
   }
 
   private async assertConnectionSubscribed(
@@ -1466,6 +1853,28 @@ export class PgSourcesRepository {
       [identity.spaceId, identity.userId],
     );
     return result.rows[0]?.role === "owner" || result.rows[0]?.role === "admin";
+  }
+
+  private resolveProjectSourceDeliveryScope(
+    identity: SpaceUserIdentity,
+    connection: SourceConnectionRow,
+    body: Record<string, unknown>,
+  ): string {
+    const requested = optionalString(body.delivery_scope);
+    if (requested && !PROJECT_SOURCE_DELIVERY_SCOPES.has(requested)) {
+      throw new HttpError(422, "delivery_scope must be project_members or source_subscribers");
+    }
+    const restrictedSource =
+      connection.visibility !== "space_discoverable" ||
+      Boolean(connection.credential_id) ||
+      connection.handler_kind === "generated_custom" ||
+      connection.connector_type === "custom" ||
+      connection.connector_key === "custom";
+    const scope = requested ?? (restrictedSource ? "source_subscribers" : "project_members");
+    if (scope === "project_members" && restrictedSource && connection.owner_user_id !== identity.userId) {
+      throw new HttpError(403, "Only the source owner can share a private or credentialed source with project members");
+    }
+    return scope;
   }
 
   private async upsertItemUserState(
@@ -1734,7 +2143,7 @@ export class PgSourcesRepository {
           AND ee.deleted_at IS NULL
           AND (
             ee.source_item_id IS NULL
-            OR ${this.sourceItemReadableClause("si", "$3", false)}
+            OR ${sourceItemReadableClause("si", "$3", false)}
           )`,
       [identity.spaceId, evidenceId, identity.userId],
     );

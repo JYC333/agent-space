@@ -8,8 +8,8 @@ import {
 } from "@testcontainers/postgresql";
 import { migrate } from "../src/db/migrator";
 import {
-  backfillEvidenceForWorkspaceSourceBinding,
   linkEvidenceToBoundProjects,
+  recomputeProjectSourceBindingLinks,
 } from "../src/modules/sources/evidenceProjectLinker";
 import { PgRunContextRepository } from "../src/modules/context/repository";
 
@@ -24,7 +24,6 @@ const SPACE = "11111111-1111-4111-8111-111111111111";
 const OWNER = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const PROJECT = "55555555-5555-4555-8555-555555555555";
 const PROJECT_B = "66666666-6666-4666-8666-666666666666";
-const WORKSPACE = "99999999-9999-4999-8999-999999999999";
 const CONNECTOR = "33333333-3333-4333-8333-333333333333";
 const CONNECTION = "44444444-4444-4444-8444-444444444444";
 
@@ -55,8 +54,8 @@ afterAll(async () => {
 beforeEach(async () => {
   if (!available || !pool) return;
   await pool.query(
-    `TRUNCATE evidence_links, extracted_evidence, source_snapshots, source_items, workspace_source_bindings,
-       source_connections, source_connectors, workspaces, project_members, projects,
+    `TRUNCATE evidence_links, extracted_evidence, source_snapshots, source_items, project_source_item_links,
+       project_source_bindings, source_connections, source_connectors, project_members, projects,
        space_memberships, users, spaces CASCADE`,
   );
   const now = new Date().toISOString();
@@ -77,18 +76,6 @@ beforeEach(async () => {
     `INSERT INTO projects (id, space_id, owner_user_id, name, status, created_at, updated_at)
      VALUES ($1,$2,$3,'Research','active',$4,$4), ($5,$2,$3,'Second','active',$4,$4)`,
     [PROJECT, SPACE, OWNER, now, PROJECT_B],
-  );
-  await pool.query(
-    `INSERT INTO workspaces (
-       id, space_id, name, status, workspace_type, kind, visibility, protected, system_managed,
-       created_at, updated_at
-     ) VALUES ($1,$2,'ws','active','project','standard','space_shared',false,false,$3,$3)`,
-    [WORKSPACE, SPACE, now],
-  );
-  await pool.query(
-    `INSERT INTO project_workspaces (id, space_id, project_id, workspace_id, role, created_at, updated_at)
-     VALUES ($1,$2,$3,$5,'reference',$6,$6), ($4,$2,$7,$5,'reference',$6,$6)`,
-    [randomUUID(), SPACE, PROJECT, randomUUID(), WORKSPACE, now, PROJECT_B],
   );
   await pool.query(
     `INSERT INTO source_connectors (
@@ -128,12 +115,13 @@ async function seedBinding(projectId: string, status = "active", bindingKey = "d
   const id = randomUUID();
   const now = new Date().toISOString();
   await pool!.query(
-    `INSERT INTO workspace_source_bindings (
-       id, space_id, workspace_id, project_id, source_connection_id, binding_key,
-       status, priority, filters_json, routing_policy_json, extraction_policy_json,
+    `INSERT INTO project_source_bindings (
+       id, space_id, project_id, source_connection_id, binding_key,
+       status, priority, delivery_scope, collection_notifications_enabled,
+       filters_json, routing_policy_json, extraction_policy_json,
        created_at, updated_at
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,0,'{}'::jsonb,'{}'::jsonb,'{}'::jsonb,$8,$8)`,
-    [id, SPACE, WORKSPACE, projectId, CONNECTION, bindingKey, status, now],
+     ) VALUES ($1,$2,$3,$4,$5,$6,0,'project_members',true,'{}'::jsonb,'{}'::jsonb,'{}'::jsonb,$7,$7)`,
+    [id, SPACE, projectId, CONNECTION, bindingKey, status, now],
   );
   return id;
 }
@@ -192,7 +180,7 @@ describe("Evidence→project auto-link (real Postgres)", () => {
         target_id: PROJECT,
         link_type: "context_candidate",
         status: "active",
-        reason: `workspace_source_binding:${bindingId}`,
+        reason: `project_source_binding:${bindingId}`,
       },
     ]);
 
@@ -205,8 +193,9 @@ describe("Evidence→project auto-link (real Postgres)", () => {
     const { evidenceId } = await seedItemWithEvidence();
     const bindingId = await seedBinding(PROJECT);
 
-    const created = await backfillEvidenceForWorkspaceSourceBinding(pool!, { spaceId: SPACE, bindingId });
-    expect(created).toBe(1);
+    const result = await recomputeProjectSourceBindingLinks(pool!, { spaceId: SPACE, bindingId });
+    expect(result.created_links).toBe(1);
+    expect(result.evidence_links).toBe(1);
 
     const links = await pool!.query(
       `SELECT target_type, target_id, link_type, status, reason FROM evidence_links WHERE evidence_id = $1`,
@@ -218,12 +207,13 @@ describe("Evidence→project auto-link (real Postgres)", () => {
         target_id: PROJECT,
         link_type: "context_candidate",
         status: "active",
-        reason: `workspace_source_binding:${bindingId}`,
+        reason: `project_source_binding:${bindingId}`,
       },
     ]);
 
-    const again = await backfillEvidenceForWorkspaceSourceBinding(pool!, { spaceId: SPACE, bindingId });
-    expect(again).toBe(0);
+    const again = await recomputeProjectSourceBindingLinks(pool!, { spaceId: SPACE, bindingId });
+    expect(again.created_links).toBe(0);
+    expect(again.evidence_links).toBe(0);
   });
 
   it("two bindings to the same project produce one link; distinct projects each get one", async () => {
@@ -267,7 +257,7 @@ describe("Evidence→project auto-link (real Postgres)", () => {
       `SELECT target_id, reason FROM evidence_links WHERE evidence_id = $1`,
       [evidenceId],
     );
-    expect(links.rows).toEqual([{ target_id: PROJECT, reason: `workspace_source_binding:${bindingId}` }]);
+    expect(links.rows).toEqual([{ target_id: PROJECT, reason: `project_source_binding:${bindingId}` }]);
   });
 
   it("auto-linked evidence is returned by context evidence selection for the project", async () => {

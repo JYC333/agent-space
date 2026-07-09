@@ -94,7 +94,7 @@ export const runs = pgTable("runs", {
 	index("ix_runs_working_dir_id").using("btree", table.workingDirId.asc().nullsLast()),
 	index("ix_runs_workspace_id").using("btree", table.workspaceId.asc().nullsLast()),
 	foreignKey({
-			columns: [table.spaceId, table.projectId],
+			columns: [table.projectId, table.spaceId],
 			foreignColumns: [projects.id, projects.spaceId],
 			name: "fk_runs_project_id_projects"
 		}).onDelete("set null"),
@@ -169,32 +169,32 @@ export const runs = pgTable("runs", {
 			name: "runs_space_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.workspaceId],
+			columns: [table.workspaceId, table.spaceId],
 			foreignColumns: [workspaces.id, workspaces.spaceId],
 			name: "runs_workspace_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.delegationId],
+			columns: [table.delegationId, table.spaceId],
 			foreignColumns: [runDelegations.id, runDelegations.spaceId],
 			name: "fk_runs_delegation_same_space"
 		}).onDelete("set null"),
 	foreignKey({
-			columns: [table.spaceId, table.instructedByAgentId],
+			columns: [table.instructedByAgentId, table.spaceId],
 			foreignColumns: [agents.id, agents.spaceId],
 			name: "fk_runs_instructed_by_agent_same_space"
 		}).onDelete("set null"),
 	foreignKey({
-			columns: [table.spaceId, table.parentRunId],
+			columns: [table.parentRunId, table.spaceId],
 			foreignColumns: [table.id, table.spaceId],
 			name: "fk_runs_parent_run_same_space"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.rootRunId],
+			columns: [table.rootRunId, table.spaceId],
 			foreignColumns: [table.id, table.spaceId],
 			name: "fk_runs_root_run_same_space"
 		}).onDelete("set null"),
 	foreignKey({
-			columns: [table.spaceId, table.runGroupId],
+			columns: [table.runGroupId, table.spaceId],
 			foreignColumns: [agentRunGroups.id, agentRunGroups.spaceId],
 			name: "fk_runs_run_group_same_space"
 		}).onDelete("set null"),
@@ -344,7 +344,7 @@ export const runSteps = pgTable("run_steps", {
 			name: "run_steps_space_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.workspaceId],
+			columns: [table.workspaceId, table.spaceId],
 			foreignColumns: [workspaces.id, workspaces.spaceId],
 			name: "run_steps_workspace_id_fkey"
 		}),
@@ -450,7 +450,7 @@ export const runEvents = pgTable("run_events", {
 			name: "run_events_step_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.workspaceId],
+			columns: [table.workspaceId, table.spaceId],
 			foreignColumns: [workspaces.id, workspaces.spaceId],
 			name: "run_events_workspace_id_fkey"
 		}),

@@ -113,8 +113,9 @@ serializers).
 
 - Current server-owned contexts are listed in
   [`SERVER_OWNERSHIP.md`](SERVER_OWNERSHIP.md).
-- Server migrations under `server/migrations/` are the schema owner, but are
-  invoked explicitly through ops commands, not startup.
+- Drizzle schema under `server/src/db/schema/` is the schema authoring source.
+  Generated SQL under `server/migrations/` is invoked explicitly through ops
+  commands, not by the long-running server process.
 - The server adds no gateway caching or rate limiting.
 - Routing rule: when a module claims a parametric route (`/:id`) under a prefix,
   it must claim every static sibling path under that prefix too. Parametric

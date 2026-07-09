@@ -4,16 +4,19 @@ import { useSpaceNavigate as useNavigate, SpaceLink as Link } from '../../core/s
 import {
   FolderKanban, Target, Edit2, Archive, Plus, Trash2, ChevronLeft,
   Activity, Package, CheckCircle, Folder, Cpu, Database, Rss, Link2, FileText, RefreshCw,
+  BookOpen,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { projectsApi, workspacesApi, activityApi, artifactsApi, proposalsApi, runsApi, memoryApi, sourcesApi, sourceReaderApi, automationsApi } from '../../api/client'
+import { projectsApi, workspacesApi, activityApi, artifactsApi, proposalsApi, runsApi, memoryApi, sourcesApi, sourceReaderApi, automationsApi, projectPresetsApi, projectResearchApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
 import { errMsg, isNotFoundError } from '../../lib/utils'
 import type {
   Project, ProjectSummary, ProjectWorkspaceLinkOut, Workspace,
   ActivityInboxRecord, Artifact, Proposal, Run, Memory,
-  SourceConnection, WorkspaceSourceBinding, SourceItem, ExtractedEvidence,
+  SourceConnection, ProjectSourceBinding, SourceItem, ExtractedEvidence,
   ReaderAnnotation, AutomationOut, SourcePostProcessingItemDecision,
+  ProjectResearchArtifactLink, ProjectResearchCheckpoint, ProjectResearchLiteratureMatrixItem,
+  ProjectResearchProfile, ProjectResearchScreeningCriteria, ProjectResearchWorkflow,
 } from '../../types/api'
 import { Card } from '../../components/ui/card'
 import { Button } from '../../components/ui/button'
@@ -25,6 +28,7 @@ import { Select } from '../../components/ui/select'
 import { Skeleton } from '../../components/ui/skeleton'
 import { EmptyState } from '../../components/ui/empty-state'
 import { ResearchWorkflowPanel } from '../capabilities/ResearchWorkflowPanel'
+import { AcademicResearchWorkbench, activeResearchWorkflowFrom } from './AcademicResearchWorkbench'
 import {
   Dialog,
   DialogContent,
@@ -46,6 +50,13 @@ const WORKSPACE_ROLES = [
   { value: 'data', label: 'Data' },
   { value: 'deployment', label: 'Deployment' },
 ]
+
+const ACADEMIC_PRESET_KEY = 'academic_research'
+
+function presetKeyFromProject(project: Project): string | null {
+  const value = project.settings_json?.preset
+  return typeof value === 'string' ? value : null
+}
 
 /* ── Summary card ─────────────────────────────────────────────────────────── */
 interface SummaryCardProps {
@@ -237,10 +248,8 @@ interface LinkSourceConnectionDialogProps {
   projectId: string
   open: boolean
   onOpenChange: (v: boolean) => void
-  workspaceLinks: ProjectWorkspaceLinkOut[]
-  workspaceMap: Record<string, Workspace>
   connections: SourceConnection[]
-  bindings: WorkspaceSourceBinding[]
+  bindings: ProjectSourceBinding[]
   onLinked: () => void
 }
 
@@ -248,29 +257,17 @@ function LinkSourceConnectionDialog({
   projectId,
   open,
   onOpenChange,
-  workspaceLinks,
-  workspaceMap,
   connections,
   bindings,
   onLinked,
 }: LinkSourceConnectionDialogProps) {
-  const [workspaceId, setWorkspaceId] = useState('')
   const [connectionId, setConnectionId] = useState('')
   const [backfillHistory, setBackfillHistory] = useState(true)
   const [linking, setLinking] = useState(false)
 
-  const workspaceOptions = workspaceLinks.map(link => {
-    const workspace = workspaceMap[link.workspace_id]
-    return {
-      value: link.workspace_id,
-      label: workspace ? `${workspace.name} · ${link.role}` : `${link.workspace_id} · ${link.role}`,
-    }
-  })
-
-  function sourceOptionsForWorkspace(targetWorkspaceId: string) {
+  function sourceOptionsForProject() {
     return connections
       .filter(connection => !bindings.some(binding =>
-        binding.workspace_id === targetWorkspaceId &&
         binding.source_connection_id === connection.id &&
         binding.binding_key === 'default'
       ))
@@ -282,38 +279,26 @@ function LinkSourceConnectionDialog({
 
   useEffect(() => {
     if (!open) return
-    const nextWorkspaceId = workspaceOptions[0]?.value ?? ''
-    setWorkspaceId(nextWorkspaceId)
-    setConnectionId(sourceOptionsForWorkspace(nextWorkspaceId)[0]?.value ?? '')
+    setConnectionId(sourceOptionsForProject()[0]?.value ?? '')
     setBackfillHistory(true)
-  }, [open, workspaceLinks, workspaceMap, connections, bindings])
+  }, [open, connections, bindings])
 
-  const sourceOptions = sourceOptionsForWorkspace(workspaceId)
-
-  function changeWorkspace(nextWorkspaceId: string) {
-    setWorkspaceId(nextWorkspaceId)
-    setConnectionId(sourceOptionsForWorkspace(nextWorkspaceId)[0]?.value ?? '')
-  }
+  const sourceOptions = sourceOptionsForProject()
 
   async function submit() {
-    if (!workspaceId) {
-      toast.error('Link a workspace before linking a source')
-      return
-    }
     if (!connectionId) {
       toast.error('Select a source')
       return
     }
     setLinking(true)
     try {
-      const binding = await sourcesApi.createWorkspaceBinding({
+      const binding = await sourcesApi.createProjectSourceBinding({
         project_id: projectId,
-        workspace_id: workspaceId,
         source_connection_id: connectionId,
         backfill_history: backfillHistory,
       })
       if (binding.backfill_result) {
-        toast.success(`Source linked; ${binding.backfill_result.created_links} historical evidence links added`)
+        toast.success(`Source linked; ${binding.backfill_result.created_links} project items added`)
       } else {
         toast.success('Source linked')
       }
@@ -332,28 +317,16 @@ function LinkSourceConnectionDialog({
         <DialogHeader>
           <DialogTitle>Link source</DialogTitle>
           <DialogDescription>
-            Bind an existing source to this project through one of its linked workspaces.
+            Bind an existing source directly to this project.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-2">
-          <div className="space-y-1.5">
-            <Label>Workspace</Label>
-            {workspaceOptions.length === 0 ? (
-              <p className="text-xs text-muted-foreground">No linked workspaces are available.</p>
-            ) : (
-              <Select
-                value={workspaceId}
-                options={workspaceOptions}
-                onChange={changeWorkspace}
-              />
-            )}
-          </div>
           <div className="space-y-1.5">
             <Label>Source</Label>
             {connections.length === 0 ? (
               <p className="text-xs text-muted-foreground">No sources are configured yet.</p>
             ) : sourceOptions.length === 0 ? (
-              <p className="text-xs text-muted-foreground">All available sources are already linked for this workspace.</p>
+              <p className="text-xs text-muted-foreground">All available sources are already linked to this project.</p>
             ) : (
               <Select
                 value={connectionId}
@@ -377,7 +350,7 @@ function LinkSourceConnectionDialog({
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={submit} disabled={linking || !workspaceId || !connectionId}>
+          <Button onClick={submit} disabled={linking || !connectionId}>
             {linking ? 'Linking…' : 'Link source'}
           </Button>
         </DialogFooter>
@@ -523,13 +496,22 @@ export default function ProjectDetailPage() {
   const [recentRuns, setRecentRuns] = useState<Run[]>([])
   const [projectMemory, setProjectMemory] = useState<Memory[]>([])
   const [sourceConnections, setSourceConnections] = useState<SourceConnection[]>([])
-  const [sourceBindings, setSourceBindings] = useState<WorkspaceSourceBinding[]>([])
+  const [sourceBindings, setSourceBindings] = useState<ProjectSourceBinding[]>([])
   const [recentSourceItems, setRecentSourceItems] = useState<SourceItem[]>([])
   const [recentEvidence, setRecentEvidence] = useState<ExtractedEvidence[]>([])
   const [sourceRecommendations, setSourceRecommendations] = useState<SourcePostProcessingItemDecision[]>([])
   const [readerAnnotations, setReaderAnnotations] = useState<ReaderAnnotation[]>([])
   const [automations, setAutomations] = useState<AutomationOut[]>([])
+  const [projectPresetKey, setProjectPresetKey] = useState<string | null>(null)
+  const [researchProfile, setResearchProfile] = useState<ProjectResearchProfile | null>(null)
+  const [researchWorkflows, setResearchWorkflows] = useState<ProjectResearchWorkflow[]>([])
+  const [researchCheckpoints, setResearchCheckpoints] = useState<ProjectResearchCheckpoint[]>([])
+  const [literatureMatrix, setLiteratureMatrix] = useState<ProjectResearchLiteratureMatrixItem[]>([])
+  const [synthesisArtifacts, setSynthesisArtifacts] = useState<ProjectResearchArtifactLink[]>([])
+  const [screeningCriteria, setScreeningCriteria] = useState<ProjectResearchScreeningCriteria | null>(null)
+  const [researchActionBusy, setResearchActionBusy] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [detailsLoading, setDetailsLoading] = useState(false)
   const [notFound, setNotFound] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
   const [linkOpen, setLinkOpen] = useState(false)
@@ -546,34 +528,51 @@ export default function ProjectDetailPage() {
     }
     setLoading(true)
     setNotFound(false)
+    let resolvedPresetKey: string | null = null
     try {
-      const [proj, summ, linkedWs, allWs] = await Promise.all([
+      const [proj, summ, linkedWs, projectPresetSelection] = await Promise.all([
         projectsApi.get(projectId),
         projectsApi.getSummary(projectId),
         projectsApi.listWorkspaces(projectId),
-        workspacesApi.list({ limit: '200' }),
+        projectPresetsApi.getProjectPreset(projectId).catch(() => ({ preset_key: null })),
       ])
       setProject(proj)
       setSummary(summ)
       setLinks(linkedWs)
-      const map: Record<string, Workspace> = {}
-      allWs.items.forEach(w => { map[w.id] = w })
-      setWorkspaceMap(map)
+      resolvedPresetKey = projectPresetSelection.preset_key ?? presetKeyFromProject(proj)
+      setProjectPresetKey(resolvedPresetKey)
+      setLoading(false)
+    } catch (e) {
+      setDetailsLoading(false)
+      if (isNotFoundError(e)) {
+        setNotFound(true)
+      } else {
+        toast.error(errMsg(e))
+      }
+      setLoading(false)
+      return
+    }
 
-      const [acts, arts, props, runs, mems, sourceConnections, sourceBindings, sourceItems, evidenceItems, recommendations, readerAnns, allAutomations] = await Promise.all([
+    setDetailsLoading(true)
+    try {
+      const [allWs, acts, arts, props, runs, mems, sourceConnections, sourceBindings, sourceItems, evidenceItems, recommendations, readerAnns, allAutomations] = await Promise.all([
+        workspacesApi.list({ limit: '200' }),
         activityApi.list({ project_id: projectId, limit: 5 }),
         artifactsApi.list({ project_id: projectId, limit: 5 }),
         proposalsApi.list({ project_id: projectId, status: 'pending', limit: 5 }),
         runsApi.list({ project_id: projectId, limit: 5 }),
         memoryApi.list({ project_id: projectId, limit: 5 }),
         sourcesApi.connections({ limit: 100 }),
-        sourcesApi.workspaceBindings({ project_id: projectId }),
-        sourcesApi.items({ project_id: projectId, limit: 5 }),
+        sourcesApi.projectSourceBindings({ project_id: projectId }),
+        sourcesApi.projectItems({ project_id: projectId, limit: 5 }),
         sourcesApi.evidence({ project_id: projectId, status: 'active', limit: 5 }),
         sourcesApi.postProcessingDecisions({ project_id: projectId, limit: 20 }).catch(() => ({ items: [] as SourcePostProcessingItemDecision[], total: 0, limit: 20, offset: 0 })),
         sourceReaderApi.listByProject(projectId, 5).catch(() => ({ items: [] as ReaderAnnotation[] })),
-        automationsApi.list().catch(() => [] as AutomationOut[]),
+        automationsApi.list({ project_id: projectId }).catch(() => [] as AutomationOut[]),
       ])
+      const map: Record<string, Workspace> = {}
+      allWs.items.forEach(w => { map[w.id] = w })
+      setWorkspaceMap(map)
       setRecentActivities(acts)
       setRecentArtifacts(arts.items)
       setPendingProposals(props.items)
@@ -581,19 +580,55 @@ export default function ProjectDetailPage() {
       setProjectMemory(mems.items)
       setSourceConnections(sourceConnections.items)
       setSourceBindings(sourceBindings)
-      setRecentSourceItems(sourceItems.items)
+      setRecentSourceItems(sourceItems.items.map(projectItem => projectItem.item))
       setRecentEvidence(evidenceItems.items)
       setSourceRecommendations(recommendations.items.filter(item => item.relevance !== 'not_relevant').slice(0, 5))
       setReaderAnnotations(readerAnns.items)
-      setAutomations(allAutomations.filter(a => a.project_id === projectId && a.status !== 'archived'))
-    } catch (e) {
-      if (isNotFoundError(e)) {
-        setNotFound(true)
+      setAutomations(allAutomations.filter(a => a.status !== 'archived'))
+
+      if (resolvedPresetKey === ACADEMIC_PRESET_KEY) {
+        try {
+          const [profile, workflows, criteria, matrix, synthesis] = await Promise.all([
+            projectResearchApi.profile(projectId).catch(error => {
+              if (isNotFoundError(error)) return null
+              throw error
+            }),
+            projectResearchApi.workflows(projectId),
+            projectResearchApi.screeningCriteria(projectId),
+            projectResearchApi.literatureMatrix(projectId),
+            projectResearchApi.synthesis(projectId),
+          ])
+          const activeWorkflow = activeResearchWorkflowFrom(workflows)
+          const checkpoints = activeWorkflow
+            ? await projectResearchApi.checkpoints(projectId, activeWorkflow.id)
+            : []
+          setResearchProfile(profile)
+          setResearchWorkflows(workflows)
+          setResearchCheckpoints(checkpoints)
+          setScreeningCriteria(criteria)
+          setLiteratureMatrix(matrix)
+          setSynthesisArtifacts(synthesis)
+        } catch (researchError) {
+          setResearchProfile(null)
+          setResearchWorkflows([])
+          setResearchCheckpoints([])
+          setScreeningCriteria(null)
+          setLiteratureMatrix([])
+          setSynthesisArtifacts([])
+          throw researchError
+        }
       } else {
-        toast.error(errMsg(e))
+        setResearchProfile(null)
+        setResearchWorkflows([])
+        setResearchCheckpoints([])
+        setScreeningCriteria(null)
+        setLiteratureMatrix([])
+        setSynthesisArtifacts([])
       }
+    } catch (e) {
+      toast.error(errMsg(e))
     } finally {
-      setLoading(false)
+      setDetailsLoading(false)
     }
   }, [projectId, activeSpaceId])
 
@@ -638,16 +673,122 @@ export default function ProjectDetailPage() {
     }
   }
 
-  async function backfillSourceBinding(binding: WorkspaceSourceBinding) {
+  async function backfillSourceBinding(binding: ProjectSourceBinding) {
     setBackfillingBindingId(binding.id)
     try {
-      const result = await sourcesApi.backfillWorkspaceBinding(binding.id)
-      toast.success(`Backfilled ${result.created_links} historical evidence links`)
+      const result = await sourcesApi.backfillProjectSourceBinding(binding.id)
+      toast.success(`Backfilled ${result.created_links} project items`)
       await loadAll()
     } catch (e) {
       toast.error(errMsg(e))
     } finally {
       setBackfillingBindingId(null)
+    }
+  }
+
+  async function ensureApprovedResearchProfile(): Promise<ProjectResearchProfile | null> {
+    if (!project) return null
+    const researchQuestion = project.current_focus?.trim()
+    if (!researchQuestion) {
+      toast.error('Set a research question before starting auto research')
+      setEditOpen(true)
+      return null
+    }
+
+    let nextProfile = researchProfile
+    if (!nextProfile || nextProfile.research_question?.trim() !== researchQuestion) {
+      nextProfile = await projectResearchApi.upsertProfile(project.id, {
+        research_question: researchQuestion,
+        working_title: project.name,
+        output_type: 'paper',
+        paper_type: 'survey',
+        language: 'en',
+        experiment_intake_declaration: 'undecided',
+      })
+    }
+    if (nextProfile.status !== 'approved') {
+      nextProfile = await projectResearchApi.approveProfile(project.id)
+    }
+    return nextProfile
+  }
+
+  async function prepareResearchProfile() {
+    setResearchActionBusy('prepare-profile')
+    try {
+      const profile = await ensureApprovedResearchProfile()
+      if (!profile) return
+      setResearchProfile(profile)
+      toast.success('Research profile approved')
+      await loadAll()
+    } catch (e) {
+      toast.error(errMsg(e))
+    } finally {
+      setResearchActionBusy(null)
+    }
+  }
+
+  async function startAutoResearchWorkflow() {
+    if (!project) return
+    setResearchActionBusy('start-workflow')
+    try {
+      const profile = await ensureApprovedResearchProfile()
+      if (!profile) return
+      const existingWorkflow = activeResearchWorkflowFrom(researchWorkflows)
+      const workflow = existingWorkflow ?? await projectResearchApi.startWorkflow(project.id, {
+        workflow_type: 'literature_review',
+        mode: 'agent_assisted',
+      })
+      await projectResearchApi.runStage(project.id, workflow.id, 'research_profile')
+      if (sourceBindings.length > 0) {
+        await projectResearchApi.runStage(project.id, workflow.id, 'literature_monitoring')
+      }
+      toast.success(existingWorkflow ? 'Research workflow refreshed' : 'Auto research workflow started')
+      await loadAll()
+    } catch (e) {
+      toast.error(errMsg(e))
+    } finally {
+      setResearchActionBusy(null)
+    }
+  }
+
+  async function rebuildLiteratureMatrix() {
+    if (!project) return
+    setResearchActionBusy('rebuild-matrix')
+    try {
+      const rows = await projectResearchApi.rebuildLiteratureMatrix(project.id)
+      setLiteratureMatrix(rows)
+      const workflow = activeResearchWorkflowFrom(researchWorkflows)
+      if (workflow?.status === 'active') {
+        await projectResearchApi.runStage(project.id, workflow.id, 'screening_matrix')
+      }
+      toast.success(`Literature matrix rebuilt with ${rows.length} papers`)
+      await loadAll()
+    } catch (e) {
+      toast.error(errMsg(e))
+    } finally {
+      setResearchActionBusy(null)
+    }
+  }
+
+  async function runIntegrityGate() {
+    if (!project) return
+    const workflow = activeResearchWorkflowFrom(researchWorkflows)
+    if (!workflow || workflow.status !== 'active') {
+      toast.error('Start an active research workflow before running integrity')
+      return
+    }
+    setResearchActionBusy('run-integrity')
+    try {
+      await projectResearchApi.runIntegrity(project.id, {
+        workflow_id: workflow.id,
+        stage_key: 'integrity_gate',
+      })
+      toast.success('Integrity checkpoint created')
+      await loadAll()
+    } catch (e) {
+      toast.error(errMsg(e))
+    } finally {
+      setResearchActionBusy(null)
     }
   }
 
@@ -695,6 +836,7 @@ export default function ProjectDetailPage() {
       ]),
     ).values(),
   )
+  const isAcademicProject = projectPresetKey === ACADEMIC_PRESET_KEY
 
   return (
     <div className="p-6 space-y-6">
@@ -714,12 +856,15 @@ export default function ProjectDetailPage() {
               border: '1px solid color-mix(in oklch, var(--primary) 35%, transparent)',
             }}
           >
-            <FolderKanban className="size-5 text-accent-foreground" />
+            {isAcademicProject
+              ? <BookOpen className="size-5 text-accent-foreground" />
+              : <FolderKanban className="size-5 text-accent-foreground" />}
           </div>
           <div className="space-y-1">
             <div className="flex items-center gap-2 flex-wrap">
               <h1 className="text-xl font-semibold tracking-tight">{project.name}</h1>
               <StatusBadge status={project.status} />
+              {isAcademicProject && <Badge variant="secondary">Academic Research</Badge>}
             </div>
             {project.description && (
               <p className="text-sm text-muted-foreground max-w-2xl">{project.description}</p>
@@ -758,7 +903,9 @@ export default function ProjectDetailPage() {
 
       {/* Current focus */}
       <section className="space-y-2">
-        <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Current focus</h2>
+        <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+          {isAcademicProject ? 'Research question' : 'Current focus'}
+        </h2>
         {project.current_focus ? (
           <Card className="p-4">
             <div className="flex items-start gap-2">
@@ -769,31 +916,62 @@ export default function ProjectDetailPage() {
         ) : (
           <Card className="p-4">
             <p className="text-sm text-muted-foreground">
-              No current focus set. Add one to help agents and future project views understand what matters right now.
+              {isAcademicProject
+                ? 'No research question set. Add one to focus source monitoring, screening, and analysis.'
+                : 'No current focus set. Add one to help agents and future project views understand what matters right now.'}
             </p>
             <Button variant="ghost" size="sm" className="mt-2 -ml-1" onClick={() => setEditOpen(true)}>
               <Edit2 className="size-3.5 mr-1.5" />
-              Set focus
+              {isAcademicProject ? 'Set research question' : 'Set focus'}
             </Button>
           </Card>
         )}
       </section>
 
-      {/* Research workflows */}
-      <section className="space-y-2">
-        <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Research workflows</h2>
-        <ResearchWorkflowPanel
-          projectId={project.id}
-          projectName={project.name}
-          workspaceOptions={workflowWorkspaceOptions}
-          onRunCreated={loadAll}
+      {isAcademicProject && (
+        <AcademicResearchWorkbench
+          project={project}
+          sourceBindings={sourceBindings}
+          recentSourceItems={recentSourceItems}
+          recentEvidence={recentEvidence}
+          sourceRecommendations={sourceRecommendations}
+          readerAnnotations={readerAnnotations}
+          researchProfile={researchProfile}
+          researchWorkflows={researchWorkflows}
+          researchCheckpoints={researchCheckpoints}
+          literatureMatrix={literatureMatrix}
+          synthesisArtifacts={synthesisArtifacts}
+          screeningCriteria={screeningCriteria}
+          researchActionBusy={researchActionBusy}
+          onPrepareProfile={prepareResearchProfile}
+          onStartWorkflow={startAutoResearchWorkflow}
+          onRebuildMatrix={rebuildLiteratureMatrix}
+          onRunIntegrity={runIntegrityGate}
+          onEditQuestion={() => setEditOpen(true)}
         />
-      </section>
+      )}
+
+      {!isAcademicProject && (
+        <section className="space-y-2">
+          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Research workflows</h2>
+          <ResearchWorkflowPanel
+            projectId={project.id}
+            projectName={project.name}
+            workspaceOptions={workflowWorkspaceOptions}
+            onRunCreated={loadAll}
+          />
+        </section>
+      )}
 
       {/* Sources consumption */}
       <section className="space-y-2">
         <div className="flex items-center justify-between gap-3">
-          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Sources</h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+              {isAcademicProject ? 'Research corpus' : 'Sources'}
+            </h2>
+            {detailsLoading && <Badge variant="muted">Loading</Badge>}
+          </div>
           <div className="flex gap-2">
             {project.status === 'active' && (
               <>
@@ -808,9 +986,9 @@ export default function ProjectDetailPage() {
               </>
             )}
             <Button variant="outline" size="sm" asChild>
-              <Link to={`/sources?project_id=${project.id}`}>
+              <Link to={`/projects/${project.id}/sources`}>
                 <Rss className="size-3.5" />
-                Manage in Sources
+                Manage sources
               </Link>
             </Button>
           </div>
@@ -819,10 +997,16 @@ export default function ProjectDetailPage() {
           <Card className="p-4">
             <div className="flex items-center gap-2 text-muted-foreground mb-3">
               <Link2 className="size-3.5" />
-              <span className="text-xs font-medium uppercase tracking-wide">Linked sources</span>
+              <span className="text-xs font-medium uppercase tracking-wide">
+                {isAcademicProject ? 'Literature sources' : 'Linked sources'}
+              </span>
             </div>
             {sourceBindings.length === 0 ? (
-              <p className="text-xs text-muted-foreground">No source bindings are scoped to this project.</p>
+              <p className="text-xs text-muted-foreground">
+                {isAcademicProject
+                  ? 'No literature sources are scoped to this research project.'
+                  : 'No source bindings are scoped to this project.'}
+              </p>
             ) : (
               <div className="space-y-2">
                 {sourceBindings.slice(0, 4).map(binding => {
@@ -858,10 +1042,14 @@ export default function ProjectDetailPage() {
           <Card className="p-4">
             <div className="flex items-center gap-2 text-muted-foreground mb-3">
               <FileText className="size-3.5" />
-              <span className="text-xs font-medium uppercase tracking-wide">Recent items</span>
+              <span className="text-xs font-medium uppercase tracking-wide">
+                {isAcademicProject ? 'Recent papers' : 'Recent items'}
+              </span>
             </div>
             {recentSourceItems.length === 0 ? (
-              <p className="text-xs text-muted-foreground">No project-linked source items yet.</p>
+              <p className="text-xs text-muted-foreground">
+                {isAcademicProject ? 'No project-linked papers or source items yet.' : 'No project-linked source items yet.'}
+              </p>
             ) : (
               <div className="space-y-2">
                 {recentSourceItems.map(item => (
@@ -906,10 +1094,16 @@ export default function ProjectDetailPage() {
           <Card className="p-4">
             <div className="flex items-center gap-2 text-muted-foreground mb-3">
               <Target className="size-3.5" />
-              <span className="text-xs font-medium uppercase tracking-wide">Source recommendations</span>
+              <span className="text-xs font-medium uppercase tracking-wide">
+                {isAcademicProject ? 'Screening recommendations' : 'Source recommendations'}
+              </span>
             </div>
             {sourceRecommendations.length === 0 ? (
-              <p className="text-xs text-muted-foreground">No post-processing recommendations for this project yet.</p>
+              <p className="text-xs text-muted-foreground">
+                {isAcademicProject
+                  ? 'No screening recommendations for this research corpus yet.'
+                  : 'No post-processing recommendations for this project yet.'}
+              </p>
             ) : (
               <div className="space-y-2">
                 {sourceRecommendations.map(decision => {
@@ -1020,7 +1214,10 @@ export default function ProjectDetailPage() {
 
       {/* Project activity — scoped to this project */}
       <section className="space-y-4">
-        <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Project activity</h2>
+        <div className="flex items-center gap-2">
+          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Project activity</h2>
+          {detailsLoading && <Badge variant="muted">Loading</Badge>}
+        </div>
 
         {/* Recent activities */}
         <div className="space-y-1.5">
@@ -1178,8 +1375,6 @@ export default function ProjectDetailPage() {
         projectId={project.id}
         open={sourceLinkOpen}
         onOpenChange={setSourceLinkOpen}
-        workspaceLinks={links}
-        workspaceMap={workspaceMap}
         connections={sourceConnections}
         bindings={sourceBindings}
         onLinked={loadAll}

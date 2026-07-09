@@ -32,12 +32,15 @@ const STATUS_VARIANT: Record<string, BadgeProps['variant']> = {
   accepted:   'success',
   completed:  'success',
   succeeded:  'success',
+  healthy:    'success',
   pass:       'success',
   pending:    'warning',
   queued:     'muted',
   running:    'warning',
+  attention:  'warning',
   rejected:   'destructive',
   failed:     'destructive',
+  failing:    'destructive',
   fail:       'destructive',
   no_data:    'muted',
   observed:   'muted',
@@ -48,6 +51,7 @@ const STATUS_VARIANT: Record<string, BadgeProps['variant']> = {
   archived:   'muted',
   superseded: 'muted',
   inactive:   'muted',
+  paused:     'muted',
   disabled:   'destructive',
 }
 

@@ -8,7 +8,7 @@ import type {
 import type { ServerConfig } from "../../../config";
 import type { Queryable } from "../../routeUtils/common";
 import { sha256, sourceDomain } from "../sourceRepositoryMappers";
-import { linkEvidenceToBoundProjects } from "../evidenceProjectLinker";
+import { linkEvidenceToBoundProjects, materializeProjectSourceItemLinks } from "../evidenceProjectLinker";
 import { reindexSourceItemAndEvidenceForRetrieval } from "../retrievalIndexing";
 import {
   validateCustomSourceHandlerOutput,
@@ -159,6 +159,10 @@ export class CustomSourceMaterializationService {
         const { itemId, created } = await this.upsertItem(run, item, retentionPolicy, descriptor);
         if (created) itemsCreated++;
         else itemsUpdated++;
+        await materializeProjectSourceItemLinks(this.db, {
+          spaceId: run.spaceId,
+          sourceItemId: itemId,
+        });
 
         for (const snapshot of item.snapshots) {
           await this.materializeSnapshot(run, itemId, snapshot, sandboxFilesRoot, descriptor);

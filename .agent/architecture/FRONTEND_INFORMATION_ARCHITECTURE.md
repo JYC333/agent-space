@@ -187,10 +187,12 @@ not be navigable.
 | **Today** (Space) | Enabled | Space-scoped dashboard at `/spaces/:spaceId/today` for the active Space |
 | **Inbox** (Activity) | Enabled | Capture inputs (rail label "Inbox"; route `/activity`) |
 | **Library** | Enabled | Space-scoped, per-user reading surface at `/library` for Sources-derived items and digests. `/library` is a shell that defaults to `/library/items`; scene-sidebar routes keep `All Items` and `Digests` as siblings, with soft type filters under `All Items` (`/library/items/articles`, `/library/items/emails`, `/library/items/videos`, `/library/items/podcasts`, `/library/items/pdfs`). It only shows items/digests from sources the current user follows, plus that user's manual unconnected URLs. Source digest detail routes live under `/library/digests/:connectionId/:date`; single-item readers live under `/library/items/:itemId` or the day-scoped `/library/digests/:connectionId/:date/items/:itemId`. |
-| **Sources** | Enabled | Space-scoped information stream control plane at `/sources`; owns RSS/Atom/web page connections, owner/visibility metadata, opt-in delivery subscriptions, scan state, and source governance. Pending source recommendations show source metadata and Follow/Dismiss/Mute actions without exposing the item stream until the user follows. Project pages consume Sources summaries and link back here for management. |
+| **Sources** | Enabled | Space-scoped information stream control plane at `/sources`; owns RSS/Atom/web page connections, owner/visibility metadata, opt-in delivery subscriptions, source-level health, scan state, and source governance. Pending source recommendations show source metadata and Follow/Dismiss/Mute actions without exposing the item stream until the user follows. Project item feeds do not live here. |
+| **Project Sources** | Enabled | Project workflow surface at `/projects/:projectId/sources`; binds existing Sources directly to a Project, shows project source health, runs scans/backfills, pauses/removes bindings, renders the materialized project source item collection from `/sources/project-items`, syncs the Project corpus from source links/evidence/decisions, and links to the project graph lens. Academic projects open Graph with `lens_id=academic_citation_v1`. |
+| **Project Presets** | Enabled | Creation-time Project shape selector for code-owned workflow packs. The optional `academic_research` preset is selected when creating a Project and then drives the Project-specific shell, visual treatment, and primary operations; it is not a post-create enable toggle. It reuses Project Sources, Project Corpus, and Project Graph for literature monitoring, paper screening, corpus triage, and citation/relation visualization. |
 | **Review** (Proposals + Memory) | Enabled | Governance area (rail label "Review"; routes `/proposals` and `/memory`). The scene sidebar links real surfaces; proposal-type filters live inside `/proposals`. |
 | **Knowledge** | Enabled | First-level unified module (rail label "Knowledge"; route `/knowledge`). `/knowledge` redirects to the last-used workspace (default `/knowledge/notes`); `/knowledge/home` is an optional overview hub, never the forced landing. Sub-areas switch via an in-header breadcrumb (no scene sidebar): **Notes** (working-knowledge workspace — configurable collection tree + open-note tabs), **Wiki** (canonical, KnowledgeItem-backed, `/knowledge/wiki`), **Sources** (backend source CRUD exists; current frontend is list-only evidence browsing), **Cards** |
-| **Graph** | Enabled | Space-scoped relationship projection at `/graph`; renders the shared `GraphProjection` contract through `apps/web/src/components/graph/`, reads core `/api/v1/graph/*`, persists per-user view state under `scope_key='core:graph'`, and remains read-only over visible `space_objects` / `object_relations`. |
+| **Graph** | Enabled | Space-scoped relationship projection at `/graph`; renders the shared `GraphProjection` contract through `apps/web/src/components/graph/`, reads core `/api/v1/graph/*`, persists per-user view state under `scope_key='core:graph'`, `core:graph:<lens_id>`, `project:graph:<project_id>`, or `project:graph:<project_id>:<lens_id>`, and remains read-only over visible `space_objects` / `object_relations`. `?project_id=` narrows the graph to active object-backed Project corpus rows; `?lens_id=academic_citation_v1` applies the academic citation/authorship lens. |
 | **Cards** | `enabled: false, visible: false` | Standalone module hidden; surfaced as the Knowledge › Cards placeholder until the spaced-repetition model exists |
 | Time | `planned: true` | Shows "soon" badge |
 
@@ -242,20 +244,27 @@ The frontend is ready for personal dogfooding. The core product loop is usable:
 - Capture → Activity Inbox → Consolidate → Proposals → Accept/Reject → Memory/Task
 - Sessions, Runs, Artifacts, Memory, Workspaces, Settings are functional.
 - Auth, space context, and RequireAuth wrapper are correctly wired.
-- Project detail pages include a Research workflow panel that creates
+- Project creation includes a Project type selector. Selecting Academic Research
+  stores `settings_json.preset = "academic_research"` and routes the resulting
+  Project into an Academic Research shell with literature monitoring, paper
+  screening/corpus, arXiv source setup, and citation graph actions. The preset
+  is not exposed as a post-create enable/use/clear toggle. Project detail pages
+  include a Research workflow panel that creates
   optional project-scoped saved workflow presets, builds run drafts directly
   from templates or saved presets, and queues normal agent runs. Runtime profile
-  selection is hidden when an Agent has only one enabled default runtime. Project
-  pages show read-only Sources consumption summaries and recent Sources
-  recommendations, then hand off source management to `/sources?project_id=...`;
-  they do not create RSS/source connections. The
+  selection is hidden when an Agent has only one enabled default runtime.
+  Project pages show compact Sources summaries and recent Sources
+  recommendations, then hand off project collection work to
+  `/projects/:projectId/sources`; global source-level management remains
+  `/sources`. The
   Capabilities page is the imported skill/package review surface. Library (`/library`)
   is the shell for per-user Sources-derived reading, with scene-sidebar routes
   for All Items and Digests; item type filters live under All Items rather than
   becoming top-level Library categories. Activity Inbox daily source rows point
-  into `/library/digests/:connectionId/:date` and source recommendation rows
-  point into `/sources?view=pending`; Inbox does not render source item or
-  digest bodies.
+  into `/library/digests/:connectionId/:date`, source recommendation rows point
+  into `/sources?view=pending`, and project source collection rows point into
+  `/projects/:projectId/sources`; Inbox does not render source item or digest
+  bodies.
   Artifacts render structured Research outputs when possible.
 
 **Non-blocking follow-ups (discovered during use):**

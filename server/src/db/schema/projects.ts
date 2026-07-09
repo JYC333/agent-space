@@ -60,7 +60,7 @@ export const projectPublicSummaries = pgTable("project_public_summaries", {
 			name: "project_public_summaries_generated_by_run_id_fkey"
 		}).onDelete("set null"),
 	foreignKey({
-			columns: [table.spaceId, table.projectId],
+			columns: [table.projectId, table.spaceId],
 			foreignColumns: [projects.id, projects.spaceId],
 			name: "project_public_summaries_space_project_fkey"
 		}).onDelete("cascade"),
@@ -99,7 +99,7 @@ export const projectMembers = pgTable("project_members", {
 			name: "project_members_space_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.projectId],
+			columns: [table.projectId, table.spaceId],
 			foreignColumns: [projects.id, projects.spaceId],
 			name: "project_members_space_project_fkey"
 		}).onDelete("cascade"),

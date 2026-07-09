@@ -28,6 +28,7 @@ export interface AutomationRow {
 
 export interface AutomationRepositoryPort {
   get(spaceId: string, automationId: string): Promise<AutomationRow | null>;
+  list(spaceId: string, filters?: { projectId?: string | null }): Promise<AutomationRow[]>;
   getMembershipRole(spaceId: string, userId: string): Promise<string | null>;
   getAgentPreflight(spaceId: string, agentId: string): Promise<{
     status: string;
@@ -87,13 +88,19 @@ export class PgAutomationRepository implements AutomationRepositoryPort {
     this.schedulerTaskStore = new PgSchedulerTaskStore(db);
   }
 
-  async list(spaceId: string): Promise<AutomationRow[]> {
+  async list(spaceId: string, filters: { projectId?: string | null } = {}): Promise<AutomationRow[]> {
+    const params: unknown[] = [spaceId];
+    const where = ["space_id = $1"];
+    if (filters.projectId !== undefined) {
+      params.push(filters.projectId);
+      where.push(`project_id IS NOT DISTINCT FROM $${params.length}`);
+    }
     const result = await this.db.query<AutomationRow>(
       `SELECT ${AUTOMATION_COLUMNS}
          FROM automations
-        WHERE space_id = $1
+        WHERE ${where.join(" AND ")}
         ORDER BY created_at DESC`,
-      [spaceId],
+      params,
     );
     return Promise.all(result.rows.map((row) => this.withScheduleState(row)));
   }

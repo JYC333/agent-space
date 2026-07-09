@@ -1,0 +1,171 @@
+import { randomUUID } from "node:crypto";
+import type { ProposalApplierRegistry, ProposalApplyContext, ProposalApplyResult } from "../proposals/applierRegistry";
+import { assertProjectWriter } from "../projects/access";
+import { isSpaceOwnerOrAdmin } from "../access/roles";
+
+interface PromotePayload {
+  asset_id: string;
+  candidate_version_id: string;
+  target_scope_type: "project" | "space" | "system";
+  target_scope_id?: string | null;
+  pin_after_approval?: boolean;
+  deprecate_previous?: boolean;
+  evaluation_run_ids?: string[];
+  reason?: string;
+}
+
+/**
+ * Applies an `evolvable_asset_version_promote` proposal: the only path a
+ * candidate/testing asset version can reach `approved` status (see
+ * assetRepository.transitionVersionStatus, which rejects direct
+ * draft/candidate/testing -> approved transitions). Approval always goes
+ * through the standard proposal review trail, never a direct write.
+ */
+export function registerEvolvableAssetPromotionProposalApplier(registry: ProposalApplierRegistry): void {
+  registry.register("evolvable_asset_version_promote", applyEvolvableAssetVersionPromote);
+}
+
+async function applyEvolvableAssetVersionPromote(context: ProposalApplyContext): Promise<ProposalApplyResult> {
+  const payload = context.proposal.payload_json as unknown as PromotePayload;
+  const spaceId = context.proposal.space_id;
+  const db = context.db;
+
+  const assetResult = await db.query<{ id: string }>(
+    `SELECT id FROM evolvable_assets WHERE id = $1 AND (space_id = $2 OR space_id IS NULL) LIMIT 1`,
+    [payload.asset_id, spaceId],
+  );
+  if (!assetResult.rows[0]) throw new Error(`evolvable asset ${payload.asset_id} not found in this space`);
+
+  const versionResult = await db.query<{ id: string; status: string; scope_type: string; scope_id: string | null }>(
+    `SELECT id, status, scope_type, scope_id FROM evolvable_asset_versions WHERE asset_id = $1 AND id = $2 LIMIT 1`,
+    [payload.asset_id, payload.candidate_version_id],
+  );
+  const candidate = versionResult.rows[0];
+  if (!candidate) throw new Error(`candidate_version_id ${payload.candidate_version_id} does not belong to asset ${payload.asset_id}`);
+  if (candidate.status !== "candidate" && candidate.status !== "testing") {
+    throw new Error(`candidate version must be in status 'candidate' or 'testing', found '${candidate.status}'`);
+  }
+
+  // Evaluation requirement: at least one recorded evaluation run for this
+  // candidate must have passed. Callers may narrow which runs count via
+  // evaluation_run_ids; otherwise any passed run for the candidate qualifies.
+  const evalParams: unknown[] = [payload.asset_id, payload.candidate_version_id];
+  let evalClause = "asset_id = $1 AND candidate_version_id = $2 AND status = 'passed'";
+  if (payload.evaluation_run_ids && payload.evaluation_run_ids.length > 0) {
+    evalParams.push(payload.evaluation_run_ids);
+    evalClause += ` AND id = ANY($${evalParams.length})`;
+  }
+  const passedEval = await db.query<{ id: string }>(
+    `SELECT id FROM evolvable_asset_evaluation_runs WHERE ${evalClause} LIMIT 1`,
+    evalParams,
+  );
+  if (!passedEval.rows[0]) {
+    throw new Error("No passed evaluation run found for this candidate version — promotion requires at least one 'passed' evaluation_run");
+  }
+
+  const targetScopeType = payload.target_scope_type;
+  const targetScopeId = payload.target_scope_id ?? null;
+  if ((targetScopeType === "project" || targetScopeType === "space") && !targetScopeId) {
+    throw new Error(`target_scope_id is required for target_scope_type '${targetScopeType}'`);
+  }
+  if (targetScopeType === "space" && targetScopeId !== spaceId) {
+    throw new Error("space-scoped asset promotion target_scope_id must match the proposal space_id");
+  }
+  if (targetScopeType === "system" && targetScopeId) {
+    throw new Error("system-scoped asset promotion must not include target_scope_id");
+  }
+  await assertCanApproveScope(db, spaceId, context.userId, targetScopeType, targetScopeId);
+
+  const now = new Date().toISOString();
+  await db.query(
+    `UPDATE evolvable_asset_versions
+        SET status = 'approved', scope_type = $3, scope_id = $4, promotion_proposal_id = $5,
+            approved_by_user_id = $6, updated_at = $7
+      WHERE asset_id = $1 AND id = $2`,
+    [payload.asset_id, payload.candidate_version_id, targetScopeType, targetScopeId, context.proposal.id, context.userId, now],
+  );
+
+  if (payload.deprecate_previous) {
+    await db.query(
+      `UPDATE evolvable_asset_versions
+          SET status = 'deprecated', updated_at = $5
+        WHERE asset_id = $1 AND scope_type = $2 AND scope_id IS NOT DISTINCT FROM $3
+          AND status = 'approved' AND id <> $4`,
+      [payload.asset_id, targetScopeType, targetScopeId, payload.candidate_version_id, now],
+    );
+  }
+
+  if (targetScopeType === "system") {
+    await db.query(`UPDATE evolvable_assets SET current_system_version_id = $2, updated_at = $3 WHERE id = $1`, [
+      payload.asset_id,
+      payload.candidate_version_id,
+      now,
+    ]);
+  }
+
+  if (payload.pin_after_approval && targetScopeType !== "system" && targetScopeId) {
+    await db.query(
+      `UPDATE evolvable_asset_pins
+          SET status = 'archived', updated_at = $5
+        WHERE space_id = $1 AND asset_id = $2 AND scope_type = $3 AND scope_id = $4 AND status = 'active'`,
+      [spaceId, payload.asset_id, targetScopeType, targetScopeId, now],
+    );
+    await db.query(
+      `INSERT INTO evolvable_asset_pins (
+         id, space_id, asset_id, scope_type, scope_id, version_id, status, pinned_by_user_id, reason, created_at, updated_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $8, $9, $9)`,
+      [randomUUID(), spaceId, payload.asset_id, targetScopeType, targetScopeId, payload.candidate_version_id, context.userId, payload.reason ?? null, now],
+    );
+  }
+
+  await db.query(
+    `INSERT INTO evolution_experiences (
+       id, space_id, source_proposal_id, experience_key, summary, trigger_signals_json,
+       outcome_status, confidence_score, blast_radius_json, validation_trace_json,
+       execution_trace_json, lessons_json, anti_patterns_json, environment_fingerprint_json,
+       provenance_type, created_at
+     ) VALUES ($1, $2, $3, $4, $5, '[]'::jsonb, 'success', 0.7, '{}'::jsonb, '{}'::jsonb,
+       '{}'::jsonb, '[]'::jsonb, '[]'::jsonb, '{}'::jsonb, 'proposal_accepted', $6)
+     ON CONFLICT (space_id, experience_key) DO NOTHING`,
+    [
+      randomUUID(),
+      spaceId,
+      context.proposal.id,
+      `evolvable_asset_promotion:${payload.candidate_version_id}`,
+      `Promoted asset ${payload.asset_id} version ${payload.candidate_version_id} to ${targetScopeType}${targetScopeId ? `:${targetScopeId}` : ""}`,
+      now,
+    ],
+  );
+
+  return {
+    result_type: "evolvable_asset_version",
+    result: {
+      asset_id: payload.asset_id,
+      version_id: payload.candidate_version_id,
+      target_scope_type: targetScopeType,
+      target_scope_id: targetScopeId,
+      pinned: Boolean(payload.pin_after_approval && targetScopeType !== "system" && targetScopeId),
+    },
+  };
+}
+
+async function assertCanApproveScope(
+  db: ProposalApplyContext["db"],
+  spaceId: string,
+  userId: string,
+  scopeType: "project" | "space" | "system",
+  scopeId: string | null,
+): Promise<void> {
+  if (scopeType === "project") {
+    await assertProjectWriter(db, spaceId, scopeId as string, userId);
+    return;
+  }
+  // 'space' and 'system' scope promotions both require space owner/admin.
+  const membership = await db.query<{ role: string }>(
+    `SELECT role FROM space_memberships WHERE space_id = $1 AND user_id = $2 AND status = 'active' LIMIT 1`,
+    [spaceId, userId],
+  );
+  if (!isSpaceOwnerOrAdmin(membership.rows[0]?.role)) {
+    throw new Error(`Requires space owner/admin role to promote a ${scopeType}-scoped asset version`);
+  }
+}

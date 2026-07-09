@@ -19,6 +19,9 @@ type ServerGraphMode = Exclude<GraphProjectionViewMode, 'debug'>
 const GRAPH_SCOPE_KEY = 'core:graph'
 const CLIENT_NODE_BUDGET = 5000
 const SYNTHETIC_NODE_MAX = 10000
+const GRAPH_LENS_LABELS: Record<string, string> = {
+  academic_citation_v1: 'Academic citation lens',
+}
 const MODE_OPTIONS = [
   { value: 'global', label: 'Global' },
   { value: 'local', label: 'Local' },
@@ -36,6 +39,15 @@ export default function GraphPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const queryKey = searchParams.toString()
   const query = useMemo(() => parseGraphQuery(searchParams), [queryKey])
+  const graphScopeKey = useMemo(
+    () => {
+      if (query.project_id) {
+        return query.lens_id ? `project:graph:${query.project_id}:${query.lens_id}` : `project:graph:${query.project_id}`
+      }
+      return query.lens_id ? `${GRAPH_SCOPE_KEY}:${query.lens_id}` : GRAPH_SCOPE_KEY
+    },
+    [query.project_id, query.lens_id],
+  )
   const debugSyntheticCount = useMemo(() => parseSyntheticDebug(searchParams.get('debug')), [queryKey])
 
   const [mode, setMode] = useState<ServerGraphMode>(query.mode)
@@ -87,7 +99,7 @@ export default function GraphPage() {
     lastSavedViewStateRef.current = null
     if (!activeSpaceId) return undefined
     let disposed = false
-    graphApi.getViewState(GRAPH_SCOPE_KEY)
+    graphApi.getViewState(graphScopeKey)
       .then(record => {
         if (disposed) return
         const next = normalizeGraphViewState(record.state_json as Partial<GraphViewState>)
@@ -99,7 +111,7 @@ export default function GraphPage() {
         if (!disposed) toast.error(errMsg(error))
       })
     return () => { disposed = true }
-  }, [activeSpaceId])
+  }, [activeSpaceId, graphScopeKey])
 
   useEffect(() => {
     if (!stateLoaded || !activeSpaceId) return undefined
@@ -111,7 +123,7 @@ export default function GraphPage() {
         viewStateDirtyRef.current = false
         return
       }
-      void graphApi.saveViewState(GRAPH_SCOPE_KEY, persistentGraphViewState(viewStateRef.current) as Record<string, unknown>)
+      void graphApi.saveViewState(graphScopeKey, persistentGraphViewState(viewStateRef.current) as Record<string, unknown>)
         .then(() => {
           if (activeSpaceIdRef.current !== requestSpaceId) return
           lastSavedViewStateRef.current = key
@@ -122,7 +134,7 @@ export default function GraphPage() {
         })
     }, 600)
     return () => window.clearTimeout(handle)
-  }, [activeSpaceId, stateLoaded, viewState])
+  }, [activeSpaceId, graphScopeKey, stateLoaded, viewState])
 
   const loadProjection = useCallback(async (params: GraphProjectionQuery, options: { merge?: boolean } = {}) => {
     const requestSpaceId = activeSpaceIdRef.current
@@ -194,6 +206,8 @@ export default function GraphPage() {
       root_id: (mode === 'local' || mode === 'cluster') ? rootId.trim() : undefined,
       depth: mode === 'local' ? Number(depth) : undefined,
       q: mode === 'search' ? search.trim() : undefined,
+      project_id: query.project_id,
+      lens_id: query.lens_id,
       limit: Number.isInteger(numericLimit) && numericLimit > 0 ? numericLimit : 300,
       include_clusters: mode === 'global',
     }
@@ -208,6 +222,8 @@ export default function GraphPage() {
     if (nextQuery.root_id) params.set('root_id', nextQuery.root_id)
     if (mode === 'local') params.set('depth', depth)
     if (nextQuery.q) params.set('q', nextQuery.q)
+    if (nextQuery.project_id) params.set('project_id', nextQuery.project_id)
+    if (nextQuery.lens_id) params.set('lens_id', nextQuery.lens_id)
     setSearchParams(params)
   }
 
@@ -248,6 +264,8 @@ export default function GraphPage() {
         root_id: node.id,
         depth: 1,
         limit: 300,
+        project_id: query.project_id,
+        lens_id: query.lens_id,
         include_clusters: false,
       }, { merge: true })
     } finally {
@@ -255,7 +273,7 @@ export default function GraphPage() {
         setExpandingNodeId(null)
       }
     }
-  }, [debugSyntheticCount, loadProjection])
+  }, [debugSyntheticCount, loadProjection, query.lens_id, query.project_id])
 
   return (
     <div className="flex h-full min-h-[calc(100vh-8rem)] flex-col bg-background">
@@ -265,6 +283,8 @@ export default function GraphPage() {
             <div className="flex items-center gap-2">
               <Network className="size-5 text-muted-foreground" />
               <h1 className="text-lg font-semibold">Graph</h1>
+              {query.project_id && <Badge variant="outline">Project graph</Badge>}
+              {query.lens_id && <Badge variant="secondary">{GRAPH_LENS_LABELS[query.lens_id] ?? query.lens_id}</Badge>}
               {projection?.view.truncated && <Badge variant="warning">aggregated</Badge>}
               {debugSyntheticCount !== null && import.meta.env.DEV && <Badge variant="outline">synthetic {debugSyntheticCount}</Badge>}
             </div>
@@ -372,6 +392,8 @@ function parseGraphQuery(params: URLSearchParams): GraphProjectionQuery & { mode
     root_id: params.get('root_id') ?? undefined,
     depth: Number.isInteger(depth) ? depth : 1,
     q: params.get('q') ?? undefined,
+    project_id: params.get('project_id') ?? undefined,
+    lens_id: params.get('lens_id') ?? undefined,
     limit: Number.isInteger(limit) && limit > 0 ? limit : 300,
     include_clusters: mode === 'global',
   }

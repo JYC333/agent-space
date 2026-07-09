@@ -134,35 +134,66 @@ CREATE TABLE public.extracted_evidence (
 ALTER TABLE public.source_items ADD COLUMN deleted_at timestamp with time zone;
 ALTER TABLE public.extracted_evidence ADD COLUMN deleted_at timestamp with time zone;
 
-CREATE TABLE public.workspace_source_bindings (
+CREATE TABLE public.project_source_bindings (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
-    workspace_id character varying(36) NOT NULL,
     project_id character varying(36) NOT NULL,
     source_connection_id character varying(36) NOT NULL,
     binding_key character varying(128) DEFAULT 'default'::character varying NOT NULL,
     status character varying(32) NOT NULL,
     priority integer NOT NULL,
+    delivery_scope character varying(32) DEFAULT 'project_members'::character varying NOT NULL,
+    collection_notifications_enabled boolean DEFAULT true NOT NULL,
     filters_json jsonb NOT NULL,
     routing_policy_json jsonb NOT NULL,
     extraction_policy_json jsonb NOT NULL,
     created_by_user_id character varying(36),
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
-    CONSTRAINT workspace_source_bindings_pkey PRIMARY KEY (id)
+    CONSTRAINT project_source_bindings_pkey PRIMARY KEY (id)
 );
 
-CREATE TABLE public.project_workspaces (
+CREATE TABLE public.project_source_item_links (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
     project_id character varying(36) NOT NULL,
-    workspace_id character varying(36) NOT NULL,
-    role character varying(64) NOT NULL,
+    project_source_binding_id character varying(36) NOT NULL,
+    source_connection_id character varying(36),
+    source_item_id character varying(36) NOT NULL,
+    status character varying(32) DEFAULT 'active'::character varying NOT NULL,
+    matched_at timestamp with time zone NOT NULL,
+    match_reason text,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
-    CONSTRAINT project_workspaces_pkey PRIMARY KEY (id),
-    CONSTRAINT ck_project_workspaces_role CHECK (((role)::text = ANY ((ARRAY['primary_codebase'::character varying, 'capability_library'::character varying, 'docs'::character varying, 'data'::character varying, 'deployment'::character varying, 'reference'::character varying])::text[])))
+    CONSTRAINT project_source_item_links_pkey PRIMARY KEY (id)
 );
+
+CREATE UNIQUE INDEX uq_project_source_item_links_binding_item
+    ON public.project_source_item_links USING btree (space_id, project_id, project_source_binding_id, source_item_id);
+
+CREATE TABLE public.activity_records (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    project_id character varying(36),
+    activity_type character varying(64) NOT NULL,
+    title character varying(512),
+    content text,
+    payload_json jsonb NOT NULL,
+    occurred_at timestamp with time zone NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    status character varying(32) NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    source_kind character varying(64),
+    source_trust character varying(32),
+    visibility character varying(32),
+    aggregate_key character varying(128),
+    processed_at timestamp with time zone,
+    discarded_at timestamp with time zone,
+    CONSTRAINT activity_records_pkey PRIMARY KEY (id)
+);
+
+CREATE UNIQUE INDEX uq_activity_records_space_aggregate_key
+    ON public.activity_records USING btree (space_id, aggregate_key) WHERE (aggregate_key IS NOT NULL);
 
 CREATE TABLE public.evidence_links (
     id character varying(36) NOT NULL,

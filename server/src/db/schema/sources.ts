@@ -413,7 +413,7 @@ export const sourcePostProcessingRules = pgTable("source_post_processing_rules",
 			name: "source_post_processing_rules_created_by_user_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.projectId],
+			columns: [table.projectId, table.spaceId],
 			foreignColumns: [projects.id, projects.spaceId],
 			name: "source_post_processing_rules_project_id_fkey"
 		}),
@@ -472,7 +472,7 @@ export const sourcePostProcessingRuns = pgTable("source_post_processing_runs", {
 			name: "source_post_processing_runs_agent_run_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.projectId],
+			columns: [table.projectId, table.spaceId],
 			foreignColumns: [projects.id, projects.spaceId],
 			name: "source_post_processing_runs_project_id_fkey"
 		}),
@@ -528,7 +528,7 @@ export const sourcePostProcessingItemDecisions = pgTable("source_post_processing
 			name: "source_post_processing_item_decisions_source_item_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.projectId],
+			columns: [table.projectId, table.spaceId],
 			foreignColumns: [projects.id, projects.spaceId],
 			name: "source_post_processing_item_decisions_project_id_fkey"
 		}),

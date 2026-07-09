@@ -4,7 +4,7 @@ import { users } from "./auth";
 import { sessions } from "./sessions";
 import { spaces } from "./spaces";
 import { projects } from "./projects";
-import { sourceConnections } from "./sources";
+import { sourceConnections, sourceItems } from "./sources";
 import { validationRecipes } from "./tasks";
 
 export const workspaces = pgTable("workspaces", {
@@ -71,7 +71,7 @@ export const workingDirs = pgTable("working_dirs", {
 	index("ix_working_dirs_space_id").using("btree", table.spaceId.asc().nullsLast()),
 	index("ix_working_dirs_status").using("btree", table.status.asc().nullsLast()),
 	foreignKey({
-			columns: [table.spaceId, table.projectId],
+			columns: [table.projectId, table.spaceId],
 			foreignColumns: [projects.id, projects.spaceId],
 			name: "working_dirs_project_id_fkey"
 		}),
@@ -107,12 +107,12 @@ export const projectWorkspaces = pgTable("project_workspaces", {
 			name: "project_workspaces_space_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.projectId],
+			columns: [table.projectId, table.spaceId],
 			foreignColumns: [projects.id, projects.spaceId],
 			name: "project_workspaces_project_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.workspaceId],
+			columns: [table.workspaceId, table.spaceId],
 			foreignColumns: [workspaces.id, workspaces.spaceId],
 			name: "project_workspaces_workspace_id_fkey"
 		}),
@@ -153,7 +153,7 @@ export const workspaceProfiles = pgTable("workspace_profiles", {
 			name: "workspace_profiles_validation_recipe_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.workspaceId],
+			columns: [table.workspaceId, table.spaceId],
 			foreignColumns: [workspaces.id, workspaces.spaceId],
 			name: "workspace_profiles_workspace_id_fkey"
 		}),
@@ -162,15 +162,16 @@ export const workspaceProfiles = pgTable("workspace_profiles", {
 	check("ck_workspace_profiles_min_observability_level", sql`(min_observability_level IS NULL) OR ((min_observability_level)::text = ANY (ARRAY[('full_trace'::character varying)::text, ('structured_events'::character varying)::text, ('artifacts_only'::character varying)::text, ('final_output_only'::character varying)::text, ('black_box'::character varying)::text]))`),
 ]);
 
-export const workspaceSourceBindings = pgTable("workspace_source_bindings", {
+export const projectSourceBindings = pgTable("project_source_bindings", {
 	id: varchar({ length: 36 }).primaryKey().notNull(),
 	spaceId: varchar("space_id", { length: 36 }).notNull(),
-	workspaceId: varchar("workspace_id", { length: 36 }).notNull(),
 	projectId: varchar("project_id", { length: 36 }).notNull(),
 	sourceConnectionId: varchar("source_connection_id", { length: 36 }).notNull(),
 	bindingKey: varchar("binding_key", { length: 128 }).default('default').notNull(),
 	status: varchar({ length: 32 }).notNull(),
 	priority: integer().notNull(),
+	deliveryScope: varchar("delivery_scope", { length: 32 }).default('project_members').notNull(),
+	collectionNotificationsEnabled: boolean("collection_notifications_enabled").default(true).notNull(),
 	filtersJson: jsonb("filters_json").notNull(),
 	routingPolicyJson: jsonb("routing_policy_json").notNull(),
 	extractionPolicyJson: jsonb("extraction_policy_json").notNull(),
@@ -178,38 +179,80 @@ export const workspaceSourceBindings = pgTable("workspace_source_bindings", {
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).notNull(),
 }, (table): PgTableExtraConfigValue[] => [
-	index("ix_workspace_source_bindings_created_by_user_id").using("btree", table.createdByUserId.asc().nullsLast()),
-	index("ix_workspace_source_bindings_project_id").using("btree", table.projectId.asc().nullsLast()),
-	index("ix_workspace_source_bindings_source_connection_id").using("btree", table.sourceConnectionId.asc().nullsLast()),
-	index("ix_workspace_source_bindings_space_id").using("btree", table.spaceId.asc().nullsLast()),
-	index("ix_workspace_source_bindings_status").using("btree", table.status.asc().nullsLast()),
-	index("ix_workspace_source_bindings_workspace_id").using("btree", table.workspaceId.asc().nullsLast()),
-	index("ix_workspace_source_bindings_workspace_status").using("btree", table.workspaceId.asc().nullsLast(), table.status.asc().nullsLast()),
+	index("ix_project_source_bindings_created_by_user_id").using("btree", table.createdByUserId.asc().nullsLast()),
+	index("ix_project_source_bindings_project_id").using("btree", table.projectId.asc().nullsLast()),
+	index("ix_project_source_bindings_source_connection_id").using("btree", table.sourceConnectionId.asc().nullsLast()),
+	index("ix_project_source_bindings_space_id").using("btree", table.spaceId.asc().nullsLast()),
+	index("ix_project_source_bindings_status").using("btree", table.status.asc().nullsLast()),
 	foreignKey({
 			columns: [table.createdByUserId],
 			foreignColumns: [users.id],
-			name: "workspace_source_bindings_created_by_user_id_fkey"
+			name: "project_source_bindings_created_by_user_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.projectId],
+			columns: [table.projectId, table.spaceId],
 			foreignColumns: [projects.id, projects.spaceId],
-			name: "workspace_source_bindings_project_id_fkey"
+			name: "project_source_bindings_project_id_fkey"
 		}),
 	foreignKey({
 			columns: [table.sourceConnectionId],
 			foreignColumns: [sourceConnections.id],
-			name: "workspace_source_bindings_source_connection_id_fkey"
+			name: "project_source_bindings_source_connection_id_fkey"
 		}),
 	foreignKey({
 			columns: [table.spaceId],
 			foreignColumns: [spaces.id],
-			name: "workspace_source_bindings_space_id_fkey"
+			name: "project_source_bindings_space_id_fkey"
+		}),
+	unique("uq_project_source_bindings_project_connection").on(table.bindingKey, table.projectId, table.sourceConnectionId, table.spaceId),
+	check("ck_project_source_bindings_delivery_scope", sql`(delivery_scope)::text = ANY (ARRAY[('project_members'::character varying)::text, ('source_subscribers'::character varying)::text])`),
+	check("ck_project_source_bindings_status", sql`(status)::text = ANY (ARRAY[('active'::character varying)::text, ('paused'::character varying)::text, ('archived'::character varying)::text])`),
+]);
+
+export const projectSourceItemLinks = pgTable("project_source_item_links", {
+	id: varchar({ length: 36 }).primaryKey().notNull(),
+	spaceId: varchar("space_id", { length: 36 }).notNull(),
+	projectId: varchar("project_id", { length: 36 }).notNull(),
+	projectSourceBindingId: varchar("project_source_binding_id", { length: 36 }).notNull(),
+	sourceConnectionId: varchar("source_connection_id", { length: 36 }),
+	sourceItemId: varchar("source_item_id", { length: 36 }).notNull(),
+	status: varchar({ length: 32 }).default('active').notNull(),
+	matchedAt: timestamp("matched_at", { withTimezone: true, mode: 'string' }).notNull(),
+	matchReason: text("match_reason"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).notNull(),
+}, (table): PgTableExtraConfigValue[] => [
+	index("ix_project_source_item_links_binding_id").using("btree", table.projectSourceBindingId.asc().nullsLast()),
+	index("ix_project_source_item_links_matched_at").using("btree", table.matchedAt.asc().nullsLast()),
+	index("ix_project_source_item_links_project_id").using("btree", table.projectId.asc().nullsLast()),
+	index("ix_project_source_item_links_source_connection_id").using("btree", table.sourceConnectionId.asc().nullsLast()),
+	index("ix_project_source_item_links_source_item_id").using("btree", table.sourceItemId.asc().nullsLast()),
+	index("ix_project_source_item_links_status").using("btree", table.status.asc().nullsLast()),
+	foreignKey({
+			columns: [table.projectSourceBindingId],
+			foreignColumns: [projectSourceBindings.id],
+			name: "project_source_item_links_binding_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.workspaceId],
-			foreignColumns: [workspaces.id, workspaces.spaceId],
-			name: "workspace_source_bindings_workspace_id_fkey"
+			columns: [table.projectId, table.spaceId],
+			foreignColumns: [projects.id, projects.spaceId],
+			name: "project_source_item_links_project_id_fkey"
 		}),
-	unique("uq_workspace_source_bindings_project_connection").on(table.bindingKey, table.projectId, table.sourceConnectionId, table.spaceId, table.workspaceId),
-	check("ck_workspace_source_bindings_status", sql`(status)::text = ANY (ARRAY[('active'::character varying)::text, ('paused'::character varying)::text, ('archived'::character varying)::text])`),
+	foreignKey({
+			columns: [table.sourceConnectionId],
+			foreignColumns: [sourceConnections.id],
+			name: "project_source_item_links_source_connection_id_fkey"
+		}),
+	foreignKey({
+			columns: [table.sourceItemId],
+			foreignColumns: [sourceItems.id],
+			name: "project_source_item_links_source_item_id_fkey"
+		}),
+	foreignKey({
+			columns: [table.spaceId],
+			foreignColumns: [spaces.id],
+			name: "project_source_item_links_space_id_fkey"
+		}),
+	unique("uq_project_source_item_links_binding_item").on(table.projectSourceBindingId, table.projectId, table.sourceItemId, table.spaceId),
+	check("ck_project_source_item_links_status", sql`(status)::text = ANY (ARRAY[('active'::character varying)::text, ('archived'::character varying)::text])`),
 ]);

@@ -2,12 +2,12 @@
 
 ## Status
 **IMPLEMENTED** - shared graph projection contract, backend projection routes,
-frontend rendering core, built-in Graph page, and Research Atlas consumption are
+frontend rendering core, built-in Graph page, and Project graph lens support are
 in place.
 
 ## Purpose
 Graph View is the shared read-only relationship visualization surface for Agent
-Space. It gives core modules and official plugins one durable graph contract and
+Space. It gives core modules and domain surfaces one durable graph contract and
 one renderer-backed interaction layer without making the renderer or a specific
 domain model part of the public API.
 
@@ -41,7 +41,7 @@ Core graph reads live in `server/src/modules/graph/`.
 
 | Route | Role |
 |---|---|
-| `GET /api/v1/graph/projection` | Space-scoped projection over visible `space_objects` and active `object_relations`. Modes: `global`, `local`, `cluster`, `search`. |
+| `GET /api/v1/graph/projection` | Space-scoped projection over visible `space_objects` and active `object_relations`. Modes: `global`, `local`, `cluster`, `search`. Optional `project_id` restricts object visibility to active object-backed `project_corpus_items` for that Project. Optional `lens_id` applies a server-known graph lens such as `academic_citation_v1`. |
 | `GET /api/v1/graph/view-state?scope_key=` | Per-user, per-space persisted view state lookup. |
 | `PUT /api/v1/graph/view-state` | Per-user, per-space persisted view state upsert. |
 
@@ -50,6 +50,15 @@ returns only nodes and edges the caller can see. A missing or inaccessible
 `root_id` is reported as not found, not as a cross-space leak. The server's
 `global` mode is intentionally aggregated: it returns cluster nodes plus capped
 hub/recent objects rather than an unbounded raw graph.
+
+When `project_id` is supplied, the route first validates the project in the
+current Space, then every visible-object query adds an active
+`project_corpus_items` object filter. Edges are still read from
+`object_relations`, but only between nodes already present in the Project
+corpus. `lens_id=academic_citation_v1` narrows the same projection to the
+academic citation/authorship relation set over source/person/organization
+objects. This is the generic Project graph lens used by presets such as
+`academic_research`; it does not create preset-specific graph storage.
 
 `debug` graph mode is frontend-only and is rejected by the backend.
 
@@ -82,13 +91,13 @@ G6 imports are confined to `apps/web/src/components/graph/core/createGraphRender
 and tests that mock or assert that boundary. `@antv/g-webgl` is loaded lazily
 only when the selected renderer is `webgl`.
 
-No core module, plugin package, API client, or server file may import G6 or pass
-G6-specific option objects as part of its public contract. Renderer replacement
-is therefore scoped to `apps/web/src/components/graph/` internals:
+No domain module, API client, or server file may import G6 or pass G6-specific
+option objects as part of its public contract. Renderer replacement is therefore
+scoped to `apps/web/src/components/graph/` internals:
 
 - keep `GraphProjection` unchanged unless product-level graph semantics change;
 - keep producers emitting domain-neutral projection DTOs;
-- keep plugin host surfaces accepting `GraphProjection` and generic callbacks;
+- keep domain surfaces accepting `GraphProjection` and generic callbacks;
 - replace only the renderer handle, mapper, interaction binding, and layout
   adapter behind `GraphView`.
 
@@ -122,7 +131,10 @@ around the shared view:
 - validates user-entered query requirements before requesting a projection;
 - merges one-hop expansion results into the current projection with a client
   node budget;
-- persists view state under `scope_key='core:graph'`;
+- persists view state under `scope_key='core:graph'` for the space graph,
+  `scope_key='core:graph:<lens_id>'` for lens-scoped space graphs,
+  `scope_key='project:graph:<project_id>'` for Project corpus graphs, and
+  `scope_key='project:graph:<project_id>:<lens_id>'` for Project lens graphs;
 - guards async responses against active-space changes;
 - exposes dev-only `?debug=synthetic:n` projection generation.
 
@@ -130,21 +142,16 @@ The Graph page is read-only. Any future relation creation from a graph surface
 must route through the existing proposal-gated object-relation flow, not through
 direct graph interaction writes.
 
-## Plugin Consumption
+## Domain Consumption
 
-Plugins consume Graph View through host injection, not by importing app internals
-or renderer packages. Research Atlas is the first consumer:
+Domain surfaces consume Graph View by requesting a `GraphProjection` from the
+core graph API or by linking into the built-in `/graph` page with the relevant
+query parameters. Project presets use this path for focused graph lenses such as
+`/graph?project_id=...&lens_id=academic_citation_v1`.
 
-- `plugins/official/research_atlas/server/src/graph.ts` emits
-  `GraphProjection` from `/api/v1/atlas/graph?paper_id=...`;
-- `plugins/official/research_atlas/web/src/host.ts` defines a host-injected
-  `GraphView` prop that accepts `GraphProjection` and generic node callbacks;
-- `apps/web/src/plugins/research_atlas/ResearchAtlasPageAdapter.tsx` injects
-  the app's shared `GraphView`.
-
-The plugin may choose node/edge kinds and theme overrides. It must not import
-`apps/web/src/components/graph/` directly and must not contain renderer-specific
-graph logic.
+Domain modules may choose node/edge kinds and theme hints through the projection
+contract. They must not import renderer packages directly and must not create
+domain-specific graph renderer forks.
 
 ## Scale Policy
 
@@ -190,8 +197,8 @@ Use the smallest layer that proves the change:
   G6 packages;
 - backend projection and view state: real-DB server tests, because visibility,
   CTE traversal, aggregation, truncation, and upsert behavior depend on SQL;
-- plugin consumers: host-injection tests plus route tests that parse the plugin
-  response with `GraphProjectionSchema`.
+- domain graph producers: route tests that parse responses with
+  `GraphProjectionSchema`.
 
 ## Related Files
 
@@ -200,6 +207,3 @@ Use the smallest layer that proves the change:
 - `apps/web/src/components/graph/`
 - `apps/web/src/modules/graph/GraphPage.tsx`
 - `apps/web/src/api/client.ts` (`graphApi`)
-- `plugins/official/research_atlas/server/src/graph.ts`
-- `plugins/official/research_atlas/web/src/host.ts`
-- `apps/web/src/plugins/research_atlas/ResearchAtlasPageAdapter.tsx`

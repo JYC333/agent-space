@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSpaceNavigate as useNavigate } from '../../core/spaceNav'
-import { FolderKanban, Plus, Target } from 'lucide-react'
+import { BookOpen, FolderKanban, Plus, Target } from 'lucide-react'
 import { toast } from 'sonner'
-import { projectsApi } from '../../api/client'
+import { projectPresetsApi, projectsApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
 import { errMsg } from '../../lib/utils'
-import type { Project } from '../../types/api'
+import type { Project, ProjectPresetDescriptor } from '../../types/api'
 import { Card } from '../../components/ui/card'
 import { Button } from '../../components/ui/button'
 import { Badge, StatusBadge } from '../../components/ui/badge'
@@ -33,17 +33,26 @@ const FILTER_OPTIONS = [
   { value: 'archived', label: 'Archived' },
 ]
 
+const ACADEMIC_PRESET_KEY = 'academic_research'
+
+function projectPresetKey(project: Project): string | null {
+  const value = project.settings_json?.preset
+  return typeof value === 'string' ? value : null
+}
+
 export default function ProjectsPage() {
   const navigate = useNavigate()
   const { activeSpaceId, activeSpaceName } = useSpace()
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
+  const [projectPresets, setProjectPresets] = useState<ProjectPresetDescriptor[]>([])
   const [statusFilter, setStatusFilter] = useState('active')
   const [createOpen, setCreateOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
   const [newDescription, setNewDescription] = useState('')
   const [newFocus, setNewFocus] = useState('')
+  const [newPresetKey, setNewPresetKey] = useState<string | null>(null)
 
   const loadProjects = useCallback(async () => {
     if (!activeSpaceId) {
@@ -65,6 +74,16 @@ export default function ProjectsPage() {
 
   useEffect(() => { loadProjects() }, [loadProjects])
 
+  useEffect(() => {
+    if (!activeSpaceId) {
+      setProjectPresets([])
+      return
+    }
+    projectPresetsApi.list()
+      .then(setProjectPresets)
+      .catch(() => setProjectPresets([]))
+  }, [activeSpaceId])
+
   async function createProject() {
     if (!newName.trim()) {
       toast.error('Name is required')
@@ -76,12 +95,14 @@ export default function ProjectsPage() {
         name: newName.trim(),
         description: newDescription.trim() || null,
         current_focus: newFocus.trim() || null,
+        settings_json: newPresetKey ? { preset: newPresetKey } : null,
       })
       toast.success('Project created')
       setCreateOpen(false)
       setNewName('')
       setNewDescription('')
       setNewFocus('')
+      setNewPresetKey(null)
       navigate(`/projects/${project.id}`)
     } catch (e) {
       toast.error(errMsg(e))
@@ -94,6 +115,7 @@ export default function ProjectsPage() {
     setNewName('')
     setNewDescription('')
     setNewFocus('')
+    setNewPresetKey(null)
   }
 
   return (
@@ -181,6 +203,7 @@ export default function ProjectsPage() {
               )}
               <div className="flex items-center gap-2 mt-2 text-xs text-muted-foreground">
                 <Badge variant="outline">{project.status}</Badge>
+                {projectPresetKey(project) === ACADEMIC_PRESET_KEY && <Badge variant="secondary">Academic Research</Badge>}
                 <span>Updated {fmt(project.updated_at)}</span>
               </div>
             </Card>
@@ -223,6 +246,50 @@ export default function ProjectsPage() {
                 onChange={e => setNewFocus(e.target.value)}
                 placeholder="What are you actively working on right now?"
               />
+            </div>
+            <div className="space-y-2">
+              <Label>Project type</Label>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <button
+                  type="button"
+                  className={[
+                    'rounded-md border p-3 text-left transition-colors',
+                    newPresetKey === null
+                      ? 'border-primary bg-primary/5'
+                      : 'border-border bg-background hover:bg-muted/40',
+                  ].join(' ')}
+                  onClick={() => setNewPresetKey(null)}
+                >
+                  <div className="flex items-center gap-2">
+                    <FolderKanban className="size-4 text-muted-foreground" />
+                    <span className="text-sm font-medium">General project</span>
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Standard project workspace for goals, runs, memory, tasks, and sources.
+                  </p>
+                </button>
+                {projectPresets
+                  .filter(preset => preset.key === ACADEMIC_PRESET_KEY)
+                  .map(preset => (
+                    <button
+                      key={preset.key}
+                      type="button"
+                      className={[
+                        'rounded-md border p-3 text-left transition-colors',
+                        newPresetKey === preset.key
+                          ? 'border-primary bg-primary/5'
+                          : 'border-border bg-background hover:bg-muted/40',
+                      ].join(' ')}
+                      onClick={() => setNewPresetKey(preset.key)}
+                    >
+                      <div className="flex items-center gap-2">
+                        <BookOpen className="size-4 text-accent-foreground" />
+                        <span className="text-sm font-medium">{preset.name}</span>
+                      </div>
+                      <p className="mt-1 text-xs text-muted-foreground">{preset.description}</p>
+                    </button>
+                  ))}
+              </div>
             </div>
           </div>
           <DialogFooter>

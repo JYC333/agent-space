@@ -90,8 +90,21 @@ async function baselineTableNames(p: Pool): Promise<string[]> {
   return res.rows.map((r) => r.table_name);
 }
 
+function normalizeBaselineSql(sql: string): string {
+  return sql
+    .replace(/"([^"]+)"/g, "$1")
+    .replace(/\bvarchar\(/g, "character varying(")
+    .replace(/\bCREATE TABLE (?!public\.)([a-z_][a-z0-9_]*)/g, "CREATE TABLE public.$1")
+    .replace(/,\s*/g, ", ")
+    .replace(/[ \t]+/g, " ");
+}
+
+function baselineSql(): string {
+  return normalizeBaselineSql(readFileSync(join(MIGRATIONS_DIR, "0001_baseline.sql"), "utf8"));
+}
+
 function tableDefinition(sql: string, table: string): string {
-  const match = new RegExp(`CREATE TABLE public\\.${table} \\(([\\s\\S]*?)\\n\\);`).exec(sql);
+  const match = new RegExp(`CREATE TABLE public\\.${table} \\(([\\s\\S]*?)\\n\\);`).exec(normalizeBaselineSql(sql));
   return match?.[1] ?? "";
 }
 
@@ -104,7 +117,7 @@ describe("server runner applies the baseline schema", () => {
   });
 
   it("keeps space object statuses constrained by concrete object type", () => {
-    const baseline = readFileSync(join(MIGRATIONS_DIR, "0001_baseline.sql"), "utf8");
+    const baseline = baselineSql();
     expect(baseline).toContain("ck_space_objects_status_by_type");
     expect(baseline).toContain("WHEN 'note'::text THEN");
     expect(baseline).toContain("WHEN 'source'::text THEN");
@@ -113,7 +126,7 @@ describe("server runner applies the baseline schema", () => {
   });
 
   it("keeps Activity Inbox pointer aggregation schema in the baseline", () => {
-    const baseline = readFileSync(join(MIGRATIONS_DIR, "0001_baseline.sql"), "utf8");
+    const baseline = baselineSql();
     const activityRecords = tableDefinition(baseline, "activity_records");
     expect(activityRecords).toContain("aggregate_key character varying(128)");
     expect(baseline).toContain("CREATE UNIQUE INDEX uq_activity_records_space_aggregate_key");
@@ -121,7 +134,7 @@ describe("server runner applies the baseline schema", () => {
   });
 
   it("keeps ClaimFact and object relation tables FK-backed and retrievable", () => {
-    const baseline = readFileSync(join(MIGRATIONS_DIR, "0001_baseline.sql"), "utf8");
+    const baseline = baselineSql();
     expect(baseline).toContain("CREATE TABLE public.claims");
     expect(baseline).toContain("CREATE TABLE public.claim_sources");
     expect(baseline).toContain("CREATE TABLE public.object_relations");
@@ -129,11 +142,11 @@ describe("server runner applies the baseline schema", () => {
     expect(baseline).toContain("FOREIGN KEY (object_id, space_id) REFERENCES public.space_objects(id, space_id)");
     expect(baseline).toContain("FOREIGN KEY (claim_id, space_id) REFERENCES public.claims(object_id, space_id)");
     expect(baseline).toContain("FOREIGN KEY (from_object_id, space_id) REFERENCES public.space_objects(id, space_id)");
-    expect(baseline).toContain("'claim'::character varying, 'memory_entry'::character varying");
+    expect(baseline).toContain("('claim'::character varying)::text, ('memory_entry'::character varying)::text");
   });
 
   it("keeps object_relations as the canonical relation graph", () => {
-    const baseline = readFileSync(join(MIGRATIONS_DIR, "0001_baseline.sql"), "utf8");
+    const baseline = baselineSql();
     const objectRelations = tableDefinition(baseline, "object_relations");
     expect(objectRelations).toContain("from_object_id character varying(36) NOT NULL");
     expect(objectRelations).toContain("to_object_id character varying(36) NOT NULL");
@@ -144,7 +157,7 @@ describe("server runner applies the baseline schema", () => {
   });
 
   it("keeps KnowledgeItem and MemoryEntry on canonical source and proposal fields", () => {
-    const baseline = readFileSync(join(MIGRATIONS_DIR, "0001_baseline.sql"), "utf8");
+    const baseline = baselineSql();
     const knowledgeItemSources = tableDefinition(baseline, "knowledge_item_sources");
     const knowledgeItems = tableDefinition(baseline, "knowledge_items");
     expect(knowledgeItemSources).toContain("knowledge_item_id character varying(36) NOT NULL");
@@ -165,16 +178,16 @@ describe("server runner applies the baseline schema", () => {
   });
 
   it("keeps retrieval base object types centralized in a database domain", () => {
-    const baseline = readFileSync(join(MIGRATIONS_DIR, "0001_baseline.sql"), "utf8");
+    const baseline = baselineSql();
     expect(baseline).toContain("CREATE DOMAIN public.retrieval_object_type AS character varying(64)");
     expect(baseline).toContain("CONSTRAINT retrieval_object_type_allowed CHECK");
     expect(baseline).toContain("CREATE TABLE public.space_object_kinds");
     expect(baseline).toContain("CREATE TABLE public.space_object_kind_relation_hints");
-    expect(baseline).toContain("base_object_type public.retrieval_object_type NOT NULL");
-    expect(baseline).toContain("endpoint_object_type public.retrieval_object_type NOT NULL");
-    expect(baseline).toContain("object_type public.retrieval_object_type NOT NULL");
-    expect(baseline).toContain("from_object_type public.retrieval_object_type NOT NULL");
-    expect(baseline).toContain("to_object_type public.retrieval_object_type NOT NULL");
+    expect(baseline).toContain("base_object_type retrieval_object_type NOT NULL");
+    expect(baseline).toContain("endpoint_object_type retrieval_object_type NOT NULL");
+    expect(baseline).toContain("object_type retrieval_object_type NOT NULL");
+    expect(baseline).toContain("from_object_type retrieval_object_type NOT NULL");
+    expect(baseline).toContain("to_object_type retrieval_object_type NOT NULL");
     expect(baseline).not.toContain("ck_space_object_kinds_base_object_type");
     expect(baseline).not.toContain("ck_space_object_kind_relation_hints_endpoint_type");
     expect(baseline).not.toContain("ck_note_links_endpoint_type");
@@ -186,20 +199,23 @@ describe("server runner applies the baseline schema", () => {
     expect(baseline).not.toContain("ck_retrieval_feedback_events_object_type");
     expect(baseline).toContain("ck_space_object_kind_relation_hints_relation_type");
     expect(baseline).toContain("'project_public_summary'::character varying");
-    expect(baseline).toContain("'knowledge_item'::character varying, 'note'::character varying, 'source'::character varying, 'claim'::character varying, 'memory_entry'::character varying, 'project_public_summary'::character varying, 'source_item'::character varying, 'extracted_evidence'::character varying");
+    expect(baseline).toContain(
+      "('knowledge_item'::character varying)::text, ('note'::character varying)::text, ('source'::character varying)::text, ('claim'::character varying)::text, ('memory_entry'::character varying)::text, ('project_public_summary'::character varying)::text, ('source_item'::character varying)::text, ('extracted_evidence'::character varying)::text",
+    );
   });
 
   it("keeps note collection trees and memberships space-scoped in the baseline", () => {
-    const baseline = readFileSync(join(MIGRATIONS_DIR, "0001_baseline.sql"), "utf8");
+    const baseline = baselineSql();
     expect(baseline).toContain("CREATE TABLE public.note_collection_items");
-    expect(baseline).toContain("space_id character varying(36) NOT NULL,\n    collection_id character varying(36) NOT NULL");
+    expect(baseline).toContain("space_id character varying(36) NOT NULL");
+    expect(baseline).toContain("collection_id character varying(36) NOT NULL");
     expect(baseline).toContain("FOREIGN KEY (collection_id, space_id) REFERENCES public.note_collections(id, space_id)");
     expect(baseline).toContain("FOREIGN KEY (note_id, space_id) REFERENCES public.notes(object_id, space_id)");
     expect(baseline).toContain("FOREIGN KEY (parent_id, space_id) REFERENCES public.note_collections(id, space_id)");
   });
 
   it("keeps evolution core schema and built-in strategies in the baseline", () => {
-    const baseline = readFileSync(join(MIGRATIONS_DIR, "0001_baseline.sql"), "utf8");
+    const baseline = baselineSql();
     expect(baseline).toContain("CREATE TABLE public.evolution_strategy_assets");
     expect(baseline).toContain("CREATE TABLE public.evolution_experiences");
     expect(baseline).toContain("CREATE TABLE public.evolution_selector_decisions");
@@ -232,7 +248,7 @@ describe("server runner applies the baseline schema", () => {
   });
 
   it("keeps Source Recipe schema in the consolidated baseline", () => {
-    const baseline = readFileSync(join(MIGRATIONS_DIR, "0001_baseline.sql"), "utf8");
+    const baseline = baselineSql();
     const sourceConnections = tableDefinition(baseline, "source_connections");
     const sourceHandlerVersions = tableDefinition(baseline, "source_handler_versions");
     expect(baseline).toContain("CREATE TABLE public.source_recipe_versions");
@@ -244,7 +260,7 @@ describe("server runner applies the baseline schema", () => {
   });
 
   it("keeps Agent Room delegation schema in the consolidated baseline", () => {
-    const baseline = readFileSync(join(MIGRATIONS_DIR, "0001_baseline.sql"), "utf8");
+    const baseline = baselineSql();
     const runs = tableDefinition(baseline, "runs");
     const groups = tableDefinition(baseline, "agent_run_groups");
     const members = tableDefinition(baseline, "agent_run_group_members");

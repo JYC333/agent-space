@@ -95,26 +95,37 @@ Required pattern:
   compose project/file, and `docker compose --env-file "$ENV_FILE"` are one path.
 - Local PostgreSQL containers have stable mode-specific names:
   `agent-space-dev-postgres`, `agent-space-test-postgres`, and `agent-space-prod-postgres`.
-- Schema is owned by explicit server migrations under `server/migrations/`.
-  Application startup does not auto-migrate and never creates schema implicitly.
+- Schema authoring is owned by Drizzle definitions under `server/src/db/schema/`.
+  `server/drizzle/` stores Drizzle's generated snapshot/migration metadata, and
+  `server/migrations/` stores the generated SQL artifacts that the server
+  migration runner applies. Do not hand-edit `server/migrations/*.sql` for
+  schema changes; edit the Drizzle schema and run `npm run schema:generate`.
+  `ops/scripts/start.sh` also runs `npm run schema:generate` from `server/`
+  before building the server image or applying migrations, so startup keeps the
+  generated artifacts in sync with TypeScript schema files.
 - In bundled compose modes, server uses the Postgres owner/app role from
   `POSTGRES_USER`/`POSTGRES_PASSWORD`; ops scripts generate
   `SERVER_DATABASE_URL` from those values and do not maintain a separate
   per-table app role.
 - Boolean defaults are PostgreSQL-native (`true`/`false`).
-- **Migration command path** (`ops/scripts/db/migrate.sh`): defaults to Docker-native — it runs
-  `node dist/db/migrateCli.js up` inside a one-shot server container, so it uses the
-  in-network `postgres` host (Postgres is not published to the host). Before running migrations,
-  Docker-native mode creates `POSTGRES_DB` if the target database is missing, so deleting the
-  database and then running migrate is a valid empty-instance initialization path. `--host` runs
-  the same server migration runner from `server/` only against an explicitly configured,
-  reachable external Postgres. `ops/scripts/db/reset-postgres.sh` reuses this path after dropping
-  the target DB so it is recreated by migrate and never left empty/unmigrated.
-  `ops/scripts/start.sh` invokes this migration helper before starting app services; the
-  server service process itself still does not run migrations on startup.
-  Dev/test compose bind-mounts `server/migrations/` so local SQL edits are visible to the
-  one-shot migration container. Prod uses migrations bundled into the server image; build
-  the image for a new release before starting prod.
+- **Migration command path** (`ops/scripts/db/migrate.sh`): defaults to Docker-native. The normal
+  `ops/scripts/start.sh` path first runs `npm run schema:generate` from `server/`, then this helper
+  runs a no-write Drizzle schema check, verifying the committed Drizzle snapshot matches
+  `server/src/db/schema/` before any database bootstrap. Docker-native mode then creates
+  `POSTGRES_DB` if the target database is missing, and finally runs `node dist/db/migrateCli.js up`
+  inside a one-shot server container using the in-network `postgres` host (Postgres is not
+  published to the host). Production server image builds also run `npm run schema:check` so prod
+  artifacts are validated before release. Deleting the database and then running migrate is a
+  valid empty-instance initialization path. `--host` runs the same schema check and migration
+  runner from `server/` only against an explicitly configured, reachable external Postgres; run
+  `npm run schema:generate` yourself before host-mode migrate when schema files changed.
+  `ops/scripts/db/reset-postgres.sh` reuses this path after dropping the target DB so it is
+  recreated by migrate and never left empty/unmigrated.
+  `ops/scripts/start.sh` invokes schema generation and then this migration helper before starting
+  app services; the server service process itself still does not run migrations on startup.
+  Dev/test compose bind-mounts `server/migrations/` so generated local migration artifacts are
+  visible to the one-shot migration container. Prod uses migrations bundled into the server
+  image; build the image for a new release before starting prod.
   If Docker-native migration starts the compose `postgres` service, it stops that service on
   exit; DB-only dump/restore/reset and offline system backup/restore/verify use the same
   start/stop ownership rule. They leave a pre-existing running database untouched.
@@ -259,7 +270,9 @@ hand-written SQL through `pg`; nothing about how queries are written
 changes.
 
 **Generator vs. applier — a strict split:**
-- `server/migrations/` remains the canonical applied schema history.
+- `server/src/db/schema/` is the schema authoring source for tables,
+  constraints, indexes, and foreign keys that Drizzle can represent.
+- `server/migrations/` remains the canonical generated/applied schema history.
 - `server/src/db/migrator.ts` is the only schema applier for real databases.
   It reads ordered `NNNN_*.sql` files, rejects duplicate version prefixes,
   records checksums, and holds the migration advisory lock.
@@ -283,22 +296,27 @@ changes.
    `server/migrations/` under the next sequential 4-digit prefix (drizzle's
    own internal numbering starts at 0000 and would collide with
    `0001_baseline`'s tracked version, so it's never used directly).
-3. Review the generated SQL like any other migration; it's an ordinary
-   immutable file from here on.
+   `ops/scripts/start.sh` runs this automatically before image build and
+   migration; run it manually when you want to review generated files before
+   starting the stack.
+3. Review the generated SQL artifact like any other migration. Do not hand-edit
+   it for ordinary schema changes; fix the Drizzle schema and regenerate.
 4. `npm run schema:check` (CI-safe, no database needed) fails if schema TS
    was edited without regenerating, or if a drizzle-generated migration
    wasn't copied into `server/migrations/`. It also fails on duplicate
    migration version prefixes.
 
-**Exceptions — hand-written SQL migrations remain the right tool for:**
+**Narrow custom-SQL boundary:**
+Some PostgreSQL primitives are not expressible in the Drizzle DSL here:
 data backfills, changes to the `retrieval_object_type` DOMAIN's `CHECK`
-values, Postgres extensions (`CREATE EXTENSION`), and anything the Drizzle
-DSL can't express. These must not otherwise change table structure that
+values, and Postgres extensions (`CREATE EXTENSION`). Those must be isolated
+custom SQL migrations/fragments and must not be ad hoc edits to generated
+table-structure SQL. They must not change table structure that
 `src/db/schema/` describes unless the schema files are updated in the same
-change. `schema:check` is file-based: it diffs `src/db/schema/**` against
+change. `schema:check` is file-based: it compares `src/db/schema/**` against
 committed `server/drizzle/meta/` snapshots and checks generated migrations
 were copied into `server/migrations/`. It does not inspect a live database
-or re-read hand-written migrations for structural drift.
+or re-read custom SQL migrations for structural drift.
 
 **Schema representation notes:**
 - The `retrieval_object_type` Postgres DOMAIN (a closed enum used by ~10

@@ -33,11 +33,13 @@ import { ProviderSynthesizer } from "../retrieval/synthesisProvider/providerSynt
 import { resolveProviderCommandStore } from "../providers/commands/store";
 import { loadProtocol } from "../providers/protocolRuntime";
 import { projectRetrievalRegistry } from "./retrievalAdapter";
+import { ProjectCorpusRepository } from "./corpusRepository";
 import { ProjectPublicSummaryGenerator } from "./publicSummaryGenerator";
 import { PgProjectRepository } from "./repository";
 
 export function registerRoutes(app: FastifyInstance, context: ModuleContext): void {
   const repository = () => PgProjectRepository.fromConfig(context.config);
+  const corpusRepository = () => new ProjectCorpusRepository(dbPool(context.config));
   const summaryGenerator = () => ProjectPublicSummaryGenerator.fromConfig(context.config);
 
   app.get("/api/v1/projects", async (request, reply) => {
@@ -384,6 +386,65 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     if (!identity) return reply;
     try {
       return reply.send(await repository().summary(identity, params(request).projectId ?? ""));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.get("/api/v1/projects/:projectId/corpus", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const q = query(request);
+      const { limit, offset } = parsePage(q, 50);
+      return reply.send(await corpusRepository().list(identity, params(request).projectId ?? "", {
+        status: optionalString(q.status),
+        triageStatus: optionalString(q.triage_status),
+        readStatus: optionalString(q.read_status),
+        role: optionalString(q.role),
+        q: optionalString(q.q),
+        limit,
+        offset,
+      }));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.post("/api/v1/projects/:projectId/corpus", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      return reply.code(201).send(
+        await corpusRepository().upsert(identity, params(request).projectId ?? "", jsonBody(request)),
+      );
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.post("/api/v1/projects/:projectId/corpus/backfill-source-items", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      return reply.send(await corpusRepository().backfillFromSources(identity, params(request).projectId ?? ""));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.patch("/api/v1/projects/:projectId/corpus/:corpusItemId", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      return reply.send(
+        await corpusRepository().update(
+          identity,
+          params(request).projectId ?? "",
+          params(request).corpusItemId ?? "",
+          jsonBody(request),
+        ),
+      );
     } catch (error) {
       return sendRouteError(reply, error);
     }

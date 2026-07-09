@@ -1503,30 +1503,133 @@ export interface EvidenceLink {
   updated_at: string
 }
 
-export interface WorkspaceSourceBinding {
+export interface ProjectSourceBinding {
   id: string
   space_id: string
-  workspace_id: string
   project_id: string
   source_connection_id: string
   binding_key: string
   status: string
   priority: number
+  delivery_scope: 'project_members' | 'source_subscribers'
+  collection_notifications_enabled: boolean
   filters_json: Record<string, unknown>
   routing_policy_json: Record<string, unknown>
   extraction_policy_json: Record<string, unknown>
   created_by_user_id: string | null
   created_at: string
   updated_at: string
-  backfill_result?: WorkspaceSourceBindingBackfillResult
+  backfill_result?: ProjectSourceBindingBackfillResult
 }
 
-export interface WorkspaceSourceBindingBackfillResult {
+export interface ProjectSourceBindingBackfillResult {
   binding_id: string
-  workspace_id: string
   project_id: string
   source_connection_id: string
   created_links: number
+  reactivated_links: number
+  archived_links: number
+  evidence_links: number
+}
+
+export interface ProjectSourceItem {
+  id: string
+  space_id: string
+  project_id: string
+  project_source_binding_id: string
+  source_connection_id: string | null
+  source_item_id: string
+  status: 'active' | 'archived'
+  matched_at: string
+  match_reason: string | null
+  created_at: string
+  updated_at: string
+  item: SourceItem
+}
+
+export interface SourceHealth {
+  binding_id?: string
+  project_id?: string
+  source_connection_id: string
+  source_name: string
+  status: 'healthy' | 'running' | 'attention' | 'failing' | 'paused'
+  last_success_at: string | null
+  last_failure_at: string | null
+  last_error: string | null
+  next_run_at: string | null
+  queued_jobs: number
+  running_jobs: number
+  recent_new_items: number
+  consecutive_failures: number
+}
+
+export interface ProjectSourceSummary {
+  project_id: string
+  bound_source_count: number
+  today_new_items: number
+  health_counts: Record<string, number>
+  recent_items: ProjectSourceItem[]
+}
+
+export interface ProjectCorpusObjectSummary {
+  id: string
+  object_type: string | null
+  title: string | null
+  summary: string | null
+  status: string | null
+}
+
+export interface ProjectCorpusSourceItemSummary {
+  id: string
+  item_type: string | null
+  title: string | null
+  source_uri: string | null
+  source_domain: string | null
+  excerpt: string | null
+}
+
+export interface ProjectCorpusEvidenceSummary {
+  id: string
+  evidence_type: string | null
+  title: string | null
+  content_excerpt: string | null
+}
+
+export interface ProjectCorpusItem {
+  id: string
+  space_id: string
+  project_id: string
+  object_id: string | null
+  source_item_id: string | null
+  evidence_id: string | null
+  source_connection_id: string | null
+  source_decision_id: string | null
+  role: 'candidate' | 'reference' | 'primary' | 'related' | 'background'
+  status: 'active' | 'archived'
+  triage_status: 'new' | 'relevant' | 'maybe' | 'excluded' | 'included'
+  read_status: 'unread' | 'skimmed' | 'read' | 'discussed'
+  relevance: 'relevant' | 'maybe' | 'not_relevant' | null
+  confidence: number | null
+  reason: string | null
+  added_by_user_id: string | null
+  metadata_json: Record<string, unknown>
+  created_at: string
+  updated_at: string
+  last_reviewed_at: string | null
+  last_read_at: string | null
+  object: ProjectCorpusObjectSummary | null
+  source_item: ProjectCorpusSourceItemSummary | null
+  evidence: ProjectCorpusEvidenceSummary | null
+}
+
+export interface ProjectCorpusBackfillResult {
+  project_id: string
+  source_items: number
+  source_objects: number
+  evidence_items: number
+  evidence_objects: number
+  source_decisions: number
+  archived_source_items: number
 }
 
 export type JobStatus    = 'pending' | 'claimed' | 'running' | 'completed' | 'failed' | 'cancelled'
@@ -2824,6 +2927,87 @@ export interface EvolutionValidationResult {
   metadata_json: Record<string, unknown>
 }
 
+export interface EvolvableAsset {
+  id: string
+  space_id: string | null
+  asset_type: string
+  asset_key: string
+  display_name: string
+  description: string | null
+  owner_scope_type: string
+  owner_scope_id: string | null
+  status: string
+  current_system_version_id: string | null
+  default_eval_suite_ref: Record<string, unknown> | null
+  metadata_json: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export interface EvolvableAssetVersion {
+  id: string
+  asset_id: string
+  scope_type: string
+  scope_id: string | null
+  parent_version_id: string | null
+  version: number
+  status: string
+  source: string
+  content_ref: string | null
+  content_hash: string | null
+  content_json: unknown | null
+  eval_summary_json: unknown | null
+  promotion_proposal_id: string | null
+  created_by_user_id: string | null
+  approved_by_user_id: string | null
+  created_at: string
+  updated_at: string
+  stale_parent: boolean
+}
+
+export interface EvolvableAssetPin {
+  id: string
+  asset_id: string
+  scope_type: string
+  scope_id: string
+  version_id: string
+  status: string
+  pinned_by_user_id: string | null
+  reason: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface EvolvableAssetEvaluationRun {
+  id: string
+  asset_id: string
+  candidate_version_id: string
+  baseline_version_id: string | null
+  evolution_target_id: string | null
+  run_id: string | null
+  eval_suite_ref: Record<string, unknown>
+  evaluator_version: string
+  model_provider_ref: Record<string, unknown> | null
+  status: string
+  metrics: Record<string, unknown>
+  blockers: unknown[]
+  output_artifact_id: string | null
+  report_artifact_id: string | null
+  created_by_user_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ResolvedEvolvableAssetVersion {
+  assetId: string
+  versionId: string
+  contentRef: string | null
+  contentHash: string | null
+  contentJson: unknown | null
+  resolutionTrace: string[]
+  fallbackReason: string | null
+}
+
 export interface AgentModelSummary {
   provider_id: string | null
   provider_name: string | null
@@ -3168,6 +3352,189 @@ export interface ProjectWorkflowProfile {
   created_by_user_id: string | null
   created_at: string
   updated_at: string
+}
+
+export interface ProjectPresetDescriptor {
+  key: string
+  name: string
+  description: string
+  sections: string[]
+  source_preset_ids: string[]
+  extraction_profile_key: string | null
+  graph_lens_id: string | null
+}
+
+export interface ProjectPresetSelection {
+  preset_key: string | null
+}
+
+export interface ProjectResearchProfile {
+  id: string
+  project_id: string
+  preset_key: string
+  research_question: string | null
+  working_title: string | null
+  domain: string | null
+  output_type: string | null
+  paper_type: string | null
+  citation_style: string | null
+  target_venue: string | null
+  language: string
+  experiment_intake_declaration: string
+  status: string
+  approved_by_user_id: string | null
+  approved_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ProjectResearchWorkflow {
+  id: string
+  project_id: string
+  workflow_type: string
+  current_stage: string | null
+  status: string
+  mode: string
+  state_json: Record<string, unknown>
+  started_by_user_id: string | null
+  started_run_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ProjectResearchCheckpoint {
+  id: string
+  project_id: string
+  workflow_id: string
+  stage_key: string
+  checkpoint_type: string
+  status: string
+  machine_result_json: Record<string, unknown> | null
+  user_decision: string | null
+  decision_reason: string | null
+  decided_by_user_id: string | null
+  decided_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ProjectResearchArtifactLink {
+  id: string
+  project_id: string
+  workflow_id: string | null
+  stage_key: string | null
+  artifact_id: string
+  artifact_type: string
+  created_by_user_id: string | null
+  created_by_run_id: string | null
+  created_at: string
+  artifact: {
+    id: string
+    title: string | null
+    content: string | null
+    created_at: string | null
+  }
+}
+
+export interface ProjectResearchScreeningCriteria {
+  id: string | null
+  project_id: string
+  include_keywords: string[]
+  exclude_keywords: string[]
+  methods: string[]
+  date_range_start: string | null
+  date_range_end: string | null
+  venues: string[]
+  required_evidence_fields: string[]
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface ProjectResearchLiteratureMatrixItem {
+  corpus_item_id: string
+  object_id: string | null
+  title: string | null
+  summary: string | null
+  triage_status: string
+  relevance: string | null
+  confidence: number | null
+  reason: string | null
+  evidence_count: number
+  annotation_count: number
+  academic: {
+    arxiv_id: string | null
+    doi: string | null
+    publication_date: string | null
+    venue: string | null
+    paper_type: string | null
+    cited_by_count: number | null
+    reference_count: number | null
+    source_uri: string | null
+    authors: unknown[]
+    categories: unknown[]
+  } | null
+}
+
+export type AcademicPaperType =
+  | 'article'
+  | 'preprint'
+  | 'conference_paper'
+  | 'book_chapter'
+  | 'thesis'
+  | 'report'
+  | 'other'
+
+export interface AcademicPaper {
+  object_id: string
+  title: string
+  summary: string | null
+  status: string
+  doi: string | null
+  arxiv_id: string | null
+  pmid: string | null
+  openalex_id: string | null
+  publication_date: string | null
+  venue: string | null
+  paper_type: AcademicPaperType
+  cited_by_count: number | null
+  reference_count: number | null
+  created_at: string
+  updated_at: string
+}
+
+export interface AcademicPaperCreate {
+  title: string
+  summary?: string | null
+  doi?: string | null
+  arxiv_id?: string | null
+  pmid?: string | null
+  openalex_id?: string | null
+  publication_date?: string | null
+  venue?: string | null
+  paper_type?: AcademicPaperType
+  source_uri?: string | null
+}
+
+export interface AcademicPaperUpdate {
+  title?: string
+  summary?: string | null
+  venue?: string | null
+  cited_by_count?: number | null
+  reference_count?: number | null
+}
+
+export interface AcademicPaperAuthor {
+  person_object_id: string
+  title: string
+  author_position: number | null
+  is_corresponding: boolean
+}
+
+export interface AcademicPaperCitation {
+  paper_object_id: string
+  title: string
+  doi: string | null
+  arxiv_id: string | null
 }
 
 export interface WorkflowRunDraftRequest {

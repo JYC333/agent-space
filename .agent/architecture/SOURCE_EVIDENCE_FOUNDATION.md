@@ -40,12 +40,13 @@ There is no Area concept in this foundation.
   or task. Service-layer validation requires each non-space target to exist in
   the same space. `target_type="space"` may omit `target_id`; it is normalized
   to the current `space_id`.
-- `WorkspaceSourceBinding` binds a project-scoped workspace source stream to a
-  space-level source connection without duplicating raw source data or
-  credentials. `project_id` is required, creation requires project writer
-  authority, and the workspace must already be linked to the project through
-  `ProjectWorkspace`. `binding_key` distinguishes multiple filtered bindings
-  over the same project/workspace/connection.
+- `ProjectSourceBinding` binds a space-level source connection directly to a
+  project without duplicating raw source data or credentials. `project_id` is
+  required, creation requires project writer authority, and `binding_key`
+  distinguishes multiple filtered bindings over the same project/source
+  connection.
+- `ProjectSourceItemLink` materializes which source items entered a project
+  collection through a project source binding.
 - `SourcePostProcessingRule` is Sources-owned source-level AI post-processing.
   Rules choose a reusable agent, trigger/window strategy, optional project, and
   actions such as digest, relevance screening, evidence extraction, proposals,

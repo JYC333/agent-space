@@ -1,0 +1,324 @@
+import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { Pool } from "pg";
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import { migrate } from "../src/db/migrator";
+import { ProjectResearchRepository } from "../src/modules/projectResearch/repository";
+import { ProjectExperimentRepository } from "../src/modules/projectResearch/experimentRepository";
+import type { SpaceUserIdentity } from "../src/modules/routeUtils/common";
+
+// Real-Postgres coverage for Academic Research integrity checks:
+// project-level claim intent records (project_research_claim_links) linking
+// to already-canonical `claims` rows, and the integrity gate's V1 checks
+// (citation existence, claim evidence/gap, evidence visible in project
+// corpus, experiment-provenance placeholder).
+
+const MIGRATIONS_DIR = join(process.cwd(), "migrations");
+const SPACE = "11111111-1111-4111-8111-111111111111";
+const OWNER = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const SAME_SPACE_MEMBER = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const PROJECT = "55555555-5555-4555-8555-555555555555";
+
+let container: StartedPostgreSqlContainer | undefined;
+let pool: Pool | undefined;
+let available = false;
+
+beforeAll(async () => {
+  try {
+    container = await new PostgreSqlContainer("pgvector/pgvector:pg18").start();
+    pool = new Pool({ connectionString: container.getConnectionUri(), max: 3 });
+    await migrate(pool, MIGRATIONS_DIR);
+    available = true;
+  } catch (err) {
+    console.warn(`[project-research-integrity-db] skipped — Docker/Postgres unavailable: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}, 180_000);
+
+afterAll(async () => {
+  await pool?.end();
+  await container?.stop();
+});
+
+beforeEach(async () => {
+  if (!available || !pool) return;
+  await pool.query(
+    `TRUNCATE project_research_claim_links, project_research_artifact_links, project_research_checkpoints,
+       project_research_workflows, project_research_profiles, project_experiment_provenance,
+       project_experiment_runs, project_experiment_campaigns, claim_sources, claims, academic_papers, sources,
+       space_objects, project_corpus_items, artifacts, projects, space_memberships, users, spaces CASCADE`,
+  );
+  const now = new Date().toISOString();
+  await pool.query(`INSERT INTO spaces (id, name, type, created_at, updated_at) VALUES ($1,'Main','personal',$2,$2)`, [SPACE, now]);
+  await pool.query(`INSERT INTO users (id, display_name, status, created_at, updated_at) VALUES ($1,$1,'active',$2,$2)`, [OWNER, now]);
+  await pool.query(
+    `INSERT INTO space_memberships (id, space_id, user_id, role, status, created_at, updated_at)
+     VALUES ($1,$2,$3,'owner','active',$4,$4)`,
+    [randomUUID(), SPACE, OWNER, now],
+  );
+  await pool.query(
+    `INSERT INTO projects (id, space_id, owner_user_id, name, status, created_at, updated_at)
+     VALUES ($1,$2,$3,'Research','active',$4,$4)`,
+    [PROJECT, SPACE, OWNER, now],
+  );
+});
+
+function repo(): ProjectResearchRepository {
+  return new ProjectResearchRepository(pool!);
+}
+
+function experimentRepo(): ProjectExperimentRepository {
+  return new ProjectExperimentRepository(pool!);
+}
+
+const identity: SpaceUserIdentity = { spaceId: SPACE, userId: OWNER };
+
+async function makeSharedSpace(): Promise<void> {
+  await pool!.query(`UPDATE spaces SET type = 'team' WHERE id = $1`, [SPACE]);
+}
+
+async function addSpaceMember(userId: string): Promise<void> {
+  const now = new Date().toISOString();
+  await pool!.query(`INSERT INTO users (id, display_name, status, created_at, updated_at) VALUES ($1,$1,'active',$2,$2)`, [
+    userId,
+    now,
+  ]);
+  await pool!.query(
+    `INSERT INTO space_memberships (id, space_id, user_id, role, status, created_at, updated_at)
+     VALUES ($1,$2,$3,'member','active',$4,$4)`,
+    [randomUUID(), SPACE, userId, now],
+  );
+}
+
+async function seedWorkflow(): Promise<string> {
+  await repo().upsertProfile(identity, PROJECT, {});
+  await repo().approveProfile(identity, PROJECT);
+  const workflow = await repo().startWorkflow(identity, PROJECT, { workflow_type: "literature_review" });
+  return workflow.id as string;
+}
+
+async function seedClaim(
+  claimText = "Model X improves accuracy",
+  options: { visibility?: string; ownerUserId?: string | null; createdByUserId?: string | null } = {},
+): Promise<string> {
+  const now = new Date().toISOString();
+  const objectId = randomUUID();
+  await pool!.query(
+    `INSERT INTO space_objects (
+       id, space_id, object_type, title, status, visibility, owner_user_id, created_by_user_id, created_at, updated_at
+     ) VALUES ($1,$2,'claim',$3,'active',$4,$5,$6,$7,$7)`,
+    [
+      objectId,
+      SPACE,
+      claimText.slice(0, 100),
+      options.visibility ?? "space_shared",
+      options.ownerUserId ?? null,
+      options.createdByUserId ?? null,
+      now,
+    ],
+  );
+  await pool!.query(
+    `INSERT INTO claims (
+       object_id, space_id, subject_text, claim_kind, claim_text, normalized_claim_hash,
+       confidence_method, resolution_state, metadata_json
+     ) VALUES ($1,$2,'Model X','fact',$3,$4,'human_confirmed','unreviewed','{}'::jsonb)`,
+    [objectId, SPACE, claimText, `hash-${objectId}`],
+  );
+  return objectId;
+}
+
+async function seedPaperObject(arxivId: string): Promise<string> {
+  const now = new Date().toISOString();
+  const objectId = randomUUID();
+  await pool!.query(
+    `INSERT INTO space_objects (id, space_id, object_type, title, status, created_at, updated_at)
+     VALUES ($1,$2,'source','Paper','processed',$3,$3)`,
+    [objectId, SPACE, now],
+  );
+  await pool!.query(
+    `INSERT INTO sources (object_id, space_id, source_type, uri, metadata_json)
+     VALUES ($1,$2,'paper',$3,'{}'::jsonb)`,
+    [objectId, SPACE, `https://arxiv.org/abs/${arxivId}`],
+  );
+  await pool!.query(
+    `INSERT INTO academic_papers (object_id, space_id, arxiv_id, paper_type, created_at, updated_at)
+     VALUES ($1,$2,$3,'preprint',$4,$4)`,
+    [objectId, SPACE, arxivId, now],
+  );
+  return objectId;
+}
+
+async function addEvidence(claimId: string, sourceObjectId: string): Promise<void> {
+  const now = new Date().toISOString();
+  await pool!.query(
+    `INSERT INTO claim_sources (
+       id, space_id, claim_id, source_object_id, evidence_role, created_at
+     ) VALUES ($1,$2,$3,$4,'supports',$5)`,
+    [randomUUID(), SPACE, claimId, sourceObjectId, now],
+  );
+}
+
+async function addToCorpus(objectId: string): Promise<void> {
+  const now = new Date().toISOString();
+  await pool!.query(
+    `INSERT INTO project_corpus_items (
+       id, space_id, project_id, object_id, role, status, triage_status, read_status, metadata_json, created_at, updated_at
+     ) VALUES ($1,$2,$3,$4,'candidate','active','included','unread','{}'::jsonb,$5,$5)`,
+    [randomUUID(), SPACE, PROJECT, objectId, now],
+  );
+}
+
+describe("Project Research claim links + integrity gate (real Postgres)", () => {
+  it("creates a claim link only against an existing claim, and rejects an unknown claim_id", async () => {
+    if (!available) return;
+    const claimId = await seedClaim();
+    const link = await repo().createClaimLink(identity, PROJECT, { claim_id: claimId, support_status: "supported" });
+    expect(link).toMatchObject({ claim_id: claimId, support_status: "supported" });
+
+    await expect(repo().createClaimLink(identity, PROJECT, { claim_id: randomUUID() })).rejects.toMatchObject({ statusCode: 422 });
+  });
+
+  it("rejects linking a claim that is not readable by the project writer", async () => {
+    if (!available) return;
+    await makeSharedSpace();
+    await addSpaceMember(SAME_SPACE_MEMBER);
+    const hiddenClaimId = await seedClaim("Private claim", {
+      visibility: "private",
+      ownerUserId: SAME_SPACE_MEMBER,
+      createdByUserId: SAME_SPACE_MEMBER,
+    });
+
+    await expect(repo().createClaimLink(identity, PROJECT, { claim_id: hiddenClaimId })).rejects.toMatchObject({ statusCode: 422 });
+  });
+
+  it("rejects linking the same claim to the project twice", async () => {
+    if (!available) return;
+    const claimId = await seedClaim();
+    await repo().createClaimLink(identity, PROJECT, { claim_id: claimId });
+    await expect(repo().createClaimLink(identity, PROJECT, { claim_id: claimId })).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it("flags a claim with no evidence and no declared gap as a high-severity finding", async () => {
+    if (!available) return;
+    const workflowId = await seedWorkflow();
+    const claimId = await seedClaim();
+    await repo().createClaimLink(identity, PROJECT, { claim_id: claimId, workflow_id: workflowId });
+
+    const checkpoint = await repo().runIntegrityCheck(identity, PROJECT, { workflow_id: workflowId });
+    const report = checkpoint.machine_result_json as { blocking: boolean; findings: Array<{ code: string; severity: string }> };
+    expect(report.blocking).toBe(true);
+    expect(report.findings).toContainEqual(expect.objectContaining({ code: "no_evidence_no_gap", severity: "high" }));
+  });
+
+  it("does not let an unrelated workflow claim link block the current workflow integrity gate", async () => {
+    if (!available) return;
+    const currentWorkflowId = await seedWorkflow();
+    const otherWorkflow = await repo().startWorkflow(identity, PROJECT, { workflow_type: "revision" });
+    const claimId = await seedClaim();
+    await repo().createClaimLink(identity, PROJECT, { claim_id: claimId, workflow_id: otherWorkflow.id });
+
+    const checkpoint = await repo().runIntegrityCheck(identity, PROJECT, { workflow_id: currentWorkflowId });
+    const report = checkpoint.machine_result_json as { blocking: boolean; findings: Array<{ code: string }> };
+    expect(report.blocking).toBe(false);
+    expect(report.findings.some((f) => f.code === "no_evidence_no_gap")).toBe(false);
+  });
+
+  it("does not flag a claim with an explicit gap even without evidence", async () => {
+    if (!available) return;
+    const workflowId = await seedWorkflow();
+    const claimId = await seedClaim();
+    await repo().createClaimLink(identity, PROJECT, {
+      claim_id: claimId,
+      workflow_id: workflowId,
+      unresolved_gap: true,
+      gap_reason: "no dataset available yet",
+    });
+
+    const checkpoint = await repo().runIntegrityCheck(identity, PROJECT, { workflow_id: workflowId });
+    const report = checkpoint.machine_result_json as { blocking: boolean; findings: unknown[] };
+    expect(report.blocking).toBe(false);
+    expect(report.findings).toHaveLength(0);
+  });
+
+  it("flags a citation anchor that does not exist as a paper in this space", async () => {
+    if (!available) return;
+    const workflowId = await seedWorkflow();
+    const claimId = await seedClaim();
+    const paperObjectId = await seedPaperObject("2401.00001");
+    await addEvidence(claimId, paperObjectId);
+    await repo().createClaimLink(identity, PROJECT, {
+      claim_id: claimId,
+      workflow_id: workflowId,
+      citation_anchors: [paperObjectId, randomUUID()],
+    });
+
+    const checkpoint = await repo().runIntegrityCheck(identity, PROJECT, { workflow_id: workflowId });
+    const report = checkpoint.machine_result_json as { blocking: boolean; findings: Array<{ code: string }> };
+    expect(report.blocking).toBe(true);
+    expect(report.findings.filter((f) => f.code === "citation_not_found")).toHaveLength(1);
+  });
+
+  it("flags evidence whose source object is not in the project corpus, and passes once it is added", async () => {
+    if (!available) return;
+    const workflowId = await seedWorkflow();
+    const claimId = await seedClaim();
+    const paperObjectId = await seedPaperObject("2401.00002");
+    await addEvidence(claimId, paperObjectId);
+    await repo().createClaimLink(identity, PROJECT, { claim_id: claimId, workflow_id: workflowId });
+
+    const before = await repo().runIntegrityCheck(identity, PROJECT, { workflow_id: workflowId });
+    const beforeReport = before.machine_result_json as { findings: Array<{ code: string }> };
+    expect(beforeReport.findings.some((f) => f.code === "evidence_not_in_project_corpus")).toBe(true);
+
+    await addToCorpus(paperObjectId);
+    const after = await repo().runIntegrityCheck(identity, PROJECT, { workflow_id: workflowId });
+    const afterReport = after.machine_result_json as { blocking: boolean; findings: Array<{ code: string }> };
+    expect(afterReport.findings.some((f) => f.code === "evidence_not_in_project_corpus")).toBe(false);
+    expect(afterReport.blocking).toBe(false);
+  });
+
+  it("flags an experiment-backed claim with no provenance record, and passes once one is declared", async () => {
+    if (!available) return;
+    const workflowId = await seedWorkflow();
+    const claimId = await seedClaim();
+    const paperObjectId = await seedPaperObject("2401.00003");
+    await addEvidence(claimId, paperObjectId);
+    await addToCorpus(paperObjectId);
+    await repo().createClaimLink(identity, PROJECT, {
+      claim_id: claimId,
+      workflow_id: workflowId,
+      planned_experiment_ids: ["exp-1"],
+    });
+
+    const before = await repo().runIntegrityCheck(identity, PROJECT, { workflow_id: workflowId });
+    const beforeReport = before.machine_result_json as { blocking: boolean; findings: Array<{ code: string; severity: string }> };
+    expect(beforeReport.blocking).toBe(true);
+    expect(beforeReport.findings).toContainEqual(expect.objectContaining({ code: "experiment_provenance_not_found", severity: "high" }));
+
+    await experimentRepo().createProvenance(identity, PROJECT, { experiment_key: "exp-1", planned_summary: "Ablate module X" });
+    const after = await repo().runIntegrityCheck(identity, PROJECT, { workflow_id: workflowId });
+    const afterReport = after.machine_result_json as { blocking: boolean; findings: Array<{ code: string }> };
+    expect(afterReport.findings.some((f) => f.code === "experiment_provenance_not_found")).toBe(false);
+    expect(afterReport.blocking).toBe(false);
+  });
+
+  it("writes an integrity_report artifact linked to the workflow", async () => {
+    if (!available) return;
+    const workflowId = await seedWorkflow();
+    await repo().runIntegrityCheck(identity, PROJECT, { workflow_id: workflowId });
+
+    const links = await repo().listArtifactLinks(identity, PROJECT, { workflowId, artifactType: "integrity_report" });
+    expect(links).toHaveLength(1);
+  });
+
+  it("updates a claim link's support status and gap fields", async () => {
+    if (!available) return;
+    const claimId = await seedClaim();
+    const link = await repo().createClaimLink(identity, PROJECT, { claim_id: claimId });
+    const updated = await repo().updateClaimLink(identity, PROJECT, link.id as string, {
+      support_status: "supported",
+      unresolved_gap: false,
+    });
+    expect(updated).toMatchObject({ support_status: "supported", unresolved_gap: false });
+  });
+});

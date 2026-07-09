@@ -60,7 +60,8 @@ for jobs, rules, and troubleshooting.
 - `SourceSnapshot` records backed by artifacts.
 - `ExtractedEvidence` candidate citable evidence.
 - `EvidenceLink` relevance and context-selection links.
-- Project-scoped `WorkspaceSourceBinding` routing.
+- Project-scoped `ProjectSourceBinding` routing and materialized
+  `ProjectSourceItemLink` collection rows.
 - Sources reader annotations and comments.
 - Per-user source item read state (`source_item_user_states`), used by Library
   and the reader.
@@ -148,8 +149,17 @@ list API returns it as `category_options`, and the backend validates requested
 categories against that same value set.
 Preview and create are wired to the preset API.
 The main `/sources` Create Source card remains for Web/Feed source recipes.
-Project binding still goes through the existing project-scoped workspace source
-binding flow.
+Project binding happens through the Project Sources surface and direct
+`project_source_bindings`.
+The Academic Research Project preset (`academic_research`) reuses this same
+arXiv source preset. The Project preset does not create another source model or
+another academic plugin route; its Project Sources section feeds the Project
+Corpus and the core Graph `academic_citation_v1` project lens when source
+items/evidence/object links are materialized.
+Source health is exposed as read models instead of raw run tables:
+`/sources/source-health` reports source-level health for visible connections,
+and `/sources/project-source-health` reports project-binding health for the
+Project Sources surface.
 
 Scheduled source connections use frequency-specific rules rather than a raw
 "next run" picker. Hourly schedules choose a minute, daily schedules choose
@@ -232,14 +242,14 @@ Reader header. Re-extraction uses the existing `queue_content` item action and
 `extract_text` job path; it creates a new extracted source snapshot/artifact and
 updates `source_items.extracted_artifact_id`.
 
-Projects consume Sources through project-scoped workspace source bindings,
-project filters, and evidence links. `WorkspaceSourceBinding.project_id` is
-required, and the referenced workspace must already be linked to the project
-through `project_workspaces`. Project pages can create these project-scoped
-source bindings directly, save URLs into the project by attaching them to a
-project-bound source, change the source for manually saved URL items, and link
-back to Sources for source creation, scan state, and advanced management.
-Projects do not own raw source connections.
+Projects consume Sources through direct `project_source_bindings`,
+`project_source_item_links`, project filters, evidence links, and the
+Project-owned `project_corpus_items` read model.
+`ProjectSourceBinding.project_id` is required and does not depend on
+`project_workspaces`. Project Sources pages can bind existing sources, create or
+save URLs into a project collection through an already-bound source, run scans,
+backfill existing source items/evidence, and inspect source health. Projects do
+not own raw source connections.
 
 An `SourceItem` keeps one primary `connection_id`, but deduped items may have
 `SourceSnapshot` rows from multiple source connections. Project filters and
@@ -250,25 +260,35 @@ the raw item.
 
 ### Project linking and source post-processing
 
-When a source connection has an active `workspace_source_bindings` row for a
-project, and that binding's workspace is still linked to the project, all three
-materialization paths (built-in scan, `extract_text`, custom/recipe materializer)
-auto-create active `context_candidate` `evidence_links` targeting that project
-(`evidenceProjectLinker.ts`). These links are idempotent via the partial unique index
-`uq_evidence_links_active_dedupe` and are what run-context evidence selection
-reads for project-bound agent runs.
+When a source item matches an active `project_source_bindings` row for a
+project, materialization writes an active `project_source_item_links` row. The
+same linker then auto-creates active `context_candidate` `evidence_links`
+targeting that project (`evidenceProjectLinker.ts`). Item links are idempotent
+through `uq_project_source_item_links_binding_item`; evidence links remain
+idempotent through `uq_evidence_links_active_dedupe` and are what run-context
+evidence selection reads for project-bound agent runs.
+
+The same materialization pass syncs Project corpus rows in
+`project_corpus_items`: source-item rows, source-object rows when
+`source_items.source_object_id` is available, evidence rows, and evidence
+source-object rows. Corpus sync does not move source item decisions into a new
+decision table. `source_post_processing_item_decisions` remains the
+source-item-level post-processing record; Project corpus rows may point to the
+latest decision and map its relevance into project `triage_status` while keeping
+project `read_status` separate from the personal Library state.
 
 For deduped items, auto-linking also considers `SourceSnapshot.connection_id`
 rows for the same item, not only `SourceItem.connection_id`.
 
 Binding a source to a project can also backfill historical extracted evidence.
-`POST /api/v1/sources/workspace-source-bindings` accepts
+`POST /api/v1/sources/project-source-bindings` accepts
 `backfill_history=true`, and
-`POST /api/v1/sources/workspace-source-bindings/:bindingId/backfill` reruns the
-same idempotent materialization later. Backfill does not duplicate source items
-or evidence; it only inserts missing active project `context_candidate`
-`evidence_links` for existing `ExtractedEvidence` rows whose parent item or
-same-item source snapshot belongs to the bound source.
+`POST /api/v1/sources/project-source-bindings/:bindingId/backfill` reruns the
+same idempotent materialization later. Backfill does not duplicate source items,
+evidence, or corpus entries; it inserts/reactivates missing active project item
+links, creates missing project `context_candidate` evidence links, and refreshes
+the Project corpus read model for existing `ExtractedEvidence` rows whose parent
+item or same-item source snapshot belongs to the bound source.
 
 After a scan materializes new items, the scan paths emit a best-effort
 `source_post_processing_event` job (`postProcessing/eventEmitter.ts`). Sources
@@ -464,9 +484,10 @@ Policy envelope behavior:
 - Raw external source material enters through Sources before becoming durable
   Knowledge or Memory.
 - Sources `SourceConnection` is not Knowledge `Source`.
-- Sources `WorkspaceSourceBinding` is project-scoped: `project_id` is required,
-  creation requires project writer authority, and the workspace must be linked
-  to that project.
+- Sources `ProjectSourceBinding` is project-scoped: `project_id` is required,
+  creation requires project writer authority, and project collection visibility
+  is controlled by `delivery_scope` (`project_members` or
+  `source_subscribers`).
 - Custom Source handlers never directly write durable product objects.
 - Projects do not create a second source model.
 - Source-derived Memory and Knowledge writes remain proposal-gated.

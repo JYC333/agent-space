@@ -1,121 +1,325 @@
+import { randomUUID } from "node:crypto";
 import type { Queryable } from "../routeUtils/common";
+import {
+  syncProjectCorpusEvidenceForSourceItem,
+  syncProjectCorpusForSourceItem,
+} from "../projects/corpusRepository";
+import { materializeAcademicPaperFromSourceItem } from "../academic/paperMaterializer";
 
-/**
- * Auto-link an source item's extracted evidence to every project bound to the
- * item's source connection through an active `workspace_source_bindings` row
- * whose workspace is still linked to that project.
- *
- * Run-context evidence selection reads only `evidence_links`, so without these
- * links scheduled collection never reaches project agent runs. Links are
- * `context_candidate` and idempotent via the partial unique index
- * `uq_evidence_links_active_dedupe`; re-scans and re-extractions are no-ops.
- *
- * Returns the number of links created.
- */
+type ProjectSourceBindingFilterRow = {
+  id: string;
+  space_id: string;
+  project_id: string;
+  source_connection_id: string;
+  priority: number;
+  filters_json: unknown;
+  collection_notifications_enabled: boolean;
+  extraction_policy_json: unknown;
+};
+
+function extractionProfileKey(value: unknown): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const profileKey = (value as Record<string, unknown>).profile_key;
+  return typeof profileKey === "string" && profileKey.trim() ? profileKey.trim() : null;
+}
+
+type SourceItemFilterRow = {
+  id: string;
+  space_id: string;
+  connection_id: string | null;
+  item_type: string;
+  title: string | null;
+  excerpt: string | null;
+  source_uri: string | null;
+  source_domain: string | null;
+};
+
+export type ProjectSourceBackfillResult = {
+  created_links: number;
+  reactivated_links: number;
+  archived_links: number;
+  evidence_links: number;
+};
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    : [];
+}
+
+function filterText(item: SourceItemFilterRow): string {
+  return [
+    item.title,
+    item.excerpt,
+    item.source_uri,
+    item.source_domain,
+    item.item_type,
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+
+export function sourceItemMatchesProjectFilters(item: SourceItemFilterRow, filters: unknown): boolean {
+  if (!filters || typeof filters !== "object" || Array.isArray(filters)) return true;
+  const values = filters as Record<string, unknown>;
+  const text = filterText(item);
+  const keywordsAny = stringList(values.keywords_any).map((value) => value.toLowerCase());
+  const keywordsAll = stringList(values.keywords_all).map((value) => value.toLowerCase());
+  const excludeKeywords = stringList(values.exclude_keywords).map((value) => value.toLowerCase());
+  const itemTypes = stringList(values.item_types);
+  const sourceDomains = stringList(values.source_domains).map((value) => value.toLowerCase());
+
+  if (itemTypes.length && !itemTypes.includes(item.item_type)) return false;
+  if (sourceDomains.length && (!item.source_domain || !sourceDomains.includes(item.source_domain.toLowerCase()))) return false;
+  if (keywordsAny.length && !keywordsAny.some((keyword) => text.includes(keyword))) return false;
+  if (keywordsAll.length && !keywordsAll.every((keyword) => text.includes(keyword))) return false;
+  if (excludeKeywords.some((keyword) => text.includes(keyword))) return false;
+  return true;
+}
+
+async function itemRow(db: Queryable, spaceId: string, sourceItemId: string): Promise<SourceItemFilterRow | null> {
+  const result = await db.query<SourceItemFilterRow>(
+    `SELECT id, space_id, connection_id, item_type, title, excerpt, source_uri, source_domain
+       FROM source_items
+      WHERE space_id = $1
+        AND id = $2
+        AND deleted_at IS NULL
+      LIMIT 1`,
+    [spaceId, sourceItemId],
+  );
+  return result.rows[0] ?? null;
+}
+
+async function matchingBindingRows(
+  db: Queryable,
+  item: SourceItemFilterRow,
+  bindingId: string | null,
+): Promise<ProjectSourceBindingFilterRow[]> {
+  const result = await db.query<ProjectSourceBindingFilterRow>(
+    `SELECT psb.id, psb.space_id, psb.project_id, psb.source_connection_id,
+            psb.priority, psb.filters_json, psb.collection_notifications_enabled,
+            psb.extraction_policy_json
+       FROM project_source_bindings psb
+      WHERE psb.space_id = $1
+        AND psb.status = 'active'
+        AND ($3::varchar IS NULL OR psb.id = $3)
+        AND (
+          psb.source_connection_id = $2
+          OR EXISTS (
+            SELECT 1
+              FROM source_snapshots ss
+             WHERE ss.space_id = psb.space_id
+               AND ss.source_item_id = $4
+               AND ss.connection_id = psb.source_connection_id
+          )
+        )
+      ORDER BY psb.priority DESC, psb.id ASC`,
+    [item.space_id, item.connection_id, bindingId, item.id],
+  );
+  return result.rows;
+}
+
+async function upsertProjectSourceCollectionActivity(
+  db: Queryable,
+  input: { spaceId: string; projectId: string; sourceConnectionId: string; localDate: string; now: string },
+): Promise<void> {
+  const aggregateKey = `project_source_collection:${input.projectId}:${input.localDate}`;
+  const payload = {
+    pointer_type: "project_source_collection",
+    project_id: input.projectId,
+    source_connection_id: input.sourceConnectionId,
+    local_date: input.localDate,
+  };
+  await db.query(
+    `INSERT INTO activity_records (
+       id, space_id, project_id, activity_type, title, content, payload_json,
+       occurred_at, created_at, status, updated_at, source_kind, source_trust,
+       visibility, aggregate_key
+     ) VALUES (
+       $1, $2, $3, 'project_source_collection', 'New project source items',
+       'New source items were collected for this project.', $4::jsonb,
+       $5::timestamptz, $5::timestamptz, 'raw', $5::timestamptz, 'source', 'internal_system',
+       'space_shared', $6
+     )
+     ON CONFLICT (space_id, aggregate_key) WHERE aggregate_key IS NOT NULL
+     DO UPDATE SET payload_json = activity_records.payload_json || EXCLUDED.payload_json,
+                   occurred_at = GREATEST(activity_records.occurred_at, EXCLUDED.occurred_at),
+                   updated_at = EXCLUDED.updated_at,
+                   status = 'raw',
+                   processed_at = NULL,
+                   discarded_at = NULL`,
+    [randomUUID(), input.spaceId, input.projectId, JSON.stringify(payload), input.now, aggregateKey],
+  );
+}
+
+export async function materializeProjectSourceItemLinks(
+  db: Queryable,
+  input: { spaceId: string; sourceItemId: string; bindingId?: string | null; archiveNonMatching?: boolean },
+): Promise<{ created: number; reactivated: number; archived: number }> {
+  const item = await itemRow(db, input.spaceId, input.sourceItemId);
+  if (!item) return { created: 0, reactivated: 0, archived: 0 };
+  const bindings = await matchingBindingRows(db, item, input.bindingId ?? null);
+  if (bindings.some((binding) => extractionProfileKey(binding.extraction_policy_json) === "academic_paper_v1")) {
+    // Best-effort: a materialization failure (e.g. a dedupe race between
+    // concurrent connection scans hitting the same arxiv_id) must not fail
+    // the whole scan/extraction job over one item, mirroring the retrieval
+    // reindex helpers in extractionWorker.ts.
+    await materializeAcademicPaperFromSourceItem(db, { spaceId: input.spaceId, sourceItemId: input.sourceItemId }).catch((error) => {
+      process.stderr.write(
+        `[academic.paper_materializer] materialization failed (${input.sourceItemId}): ${String((error as Error)?.message ?? error)}\n`,
+      );
+    });
+  }
+  const now = new Date().toISOString();
+  const localDate = now.slice(0, 10);
+  let created = 0;
+  let reactivated = 0;
+  let archived = 0;
+
+  for (const binding of bindings) {
+    if (!sourceItemMatchesProjectFilters(item, binding.filters_json)) {
+      if (input.archiveNonMatching) {
+        const result = await db.query(
+          `UPDATE project_source_item_links
+              SET status = 'archived',
+                  updated_at = $4
+            WHERE space_id = $1
+              AND project_source_binding_id = $2
+              AND source_item_id = $3
+              AND status = 'active'`,
+          [input.spaceId, binding.id, input.sourceItemId, now],
+        );
+        archived += result.rowCount ?? 0;
+      }
+      continue;
+    }
+    const result = await db.query<{ was_created: boolean; was_reactivated: boolean }>(
+      `INSERT INTO project_source_item_links (
+         id, space_id, project_id, project_source_binding_id, source_connection_id,
+         source_item_id, status, matched_at, match_reason, created_at, updated_at
+       ) VALUES (
+         $1, $2, $3, $4, $5,
+         $6, 'active', $7, 'project_source_binding:' || $4, $7, $7
+       )
+       ON CONFLICT (space_id, project_id, project_source_binding_id, source_item_id)
+       DO UPDATE SET status = 'active',
+                     source_connection_id = EXCLUDED.source_connection_id,
+                     match_reason = EXCLUDED.match_reason,
+                     updated_at = EXCLUDED.updated_at
+       RETURNING (xmax = 0) AS was_created,
+                 (xmax <> 0 AND project_source_item_links.status = 'active') AS was_reactivated`,
+      [
+        randomUUID(),
+        input.spaceId,
+        binding.project_id,
+        binding.id,
+        binding.source_connection_id,
+        input.sourceItemId,
+        now,
+      ],
+    );
+    if (result.rows[0]?.was_created) created++;
+    else reactivated++;
+    if (binding.collection_notifications_enabled) {
+      await upsertProjectSourceCollectionActivity(db, {
+        spaceId: input.spaceId,
+        projectId: binding.project_id,
+        sourceConnectionId: binding.source_connection_id,
+        localDate,
+        now,
+      });
+    }
+  }
+
+  await syncProjectCorpusForSourceItem(db, {
+    spaceId: input.spaceId,
+    sourceItemId: input.sourceItemId,
+  });
+
+  return { created, reactivated, archived };
+}
+
 export async function linkEvidenceToBoundProjects(
   db: Queryable,
   input: { spaceId: string; sourceItemId: string },
 ): Promise<number> {
+  await materializeProjectSourceItemLinks(db, input);
   const now = new Date().toISOString();
   const result = await db.query(
     `INSERT INTO evidence_links (
        id, space_id, evidence_id, target_type, target_id, link_type,
        status, reason, created_at, updated_at
      )
-     SELECT DISTINCT ON (ev.id, wsb.project_id)
-            gen_random_uuid()::varchar, ev.space_id, ev.id, 'project', wsb.project_id, 'context_candidate',
-            'active', 'workspace_source_binding:' || wsb.id, $3, $3
+     SELECT DISTINCT ON (ev.id, psil.project_id)
+            gen_random_uuid()::varchar, ev.space_id, ev.id, 'project', psil.project_id, 'context_candidate',
+            'active', 'project_source_binding:' || psil.project_source_binding_id, $3, $3
        FROM extracted_evidence ev
-       JOIN source_items ii
-         ON ii.space_id = ev.space_id
-        AND ii.id = ev.source_item_id
-        AND ii.deleted_at IS NULL
-       JOIN workspace_source_bindings wsb
-         ON wsb.space_id = ii.space_id
-        AND (
-          wsb.source_connection_id = ii.connection_id
-          OR EXISTS (
-            SELECT 1
-              FROM source_snapshots ss
-             WHERE ss.space_id = ii.space_id
-               AND ss.source_item_id = ii.id
-               AND ss.connection_id = wsb.source_connection_id
-          )
-        )
-        AND wsb.status = 'active'
-        AND EXISTS (
-         SELECT 1
-           FROM project_workspaces pw
-          WHERE pw.space_id = wsb.space_id
-            AND pw.project_id = wsb.project_id
-            AND pw.workspace_id = wsb.workspace_id
-       )
+       JOIN project_source_item_links psil
+         ON psil.space_id = ev.space_id
+        AND psil.source_item_id = ev.source_item_id
+        AND psil.status = 'active'
+       JOIN project_source_bindings psb
+         ON psb.id = psil.project_source_binding_id
+        AND psb.space_id = psil.space_id
+        AND psb.status = 'active'
       WHERE ev.space_id = $1
         AND ev.source_item_id = $2
         AND ev.deleted_at IS NULL
-      ORDER BY ev.id, wsb.project_id, wsb.priority DESC, wsb.id
+      ORDER BY ev.id, psil.project_id, psb.priority DESC, psil.project_source_binding_id
      ON CONFLICT (space_id, evidence_id, target_type, target_id, link_type)
        WHERE status = 'active'
      DO NOTHING`,
     [input.spaceId, input.sourceItemId, now],
   );
+  await syncProjectCorpusEvidenceForSourceItem(db, {
+    spaceId: input.spaceId,
+    sourceItemId: input.sourceItemId,
+  });
   return result.rowCount ?? 0;
 }
 
-/**
- * Backfill project-context evidence links for one existing source binding.
- *
- * This is the historical counterpart to `linkEvidenceToBoundProjects`: creating
- * a binding starts routing future evidence, while this scans already-extracted
- * source evidence for the bound source and materializes the same project
- * `context_candidate` links.
- */
-export async function backfillEvidenceForWorkspaceSourceBinding(
+export async function recomputeProjectSourceBindingLinks(
   db: Queryable,
   input: { spaceId: string; bindingId: string },
-): Promise<number> {
-  const now = new Date().toISOString();
-  const result = await db.query(
-    `INSERT INTO evidence_links (
-       id, space_id, evidence_id, target_type, target_id, link_type,
-       status, reason, created_at, updated_at
-     )
-     SELECT DISTINCT ON (ev.id, wsb.project_id)
-            gen_random_uuid()::varchar, ev.space_id, ev.id, 'project', wsb.project_id, 'context_candidate',
-            'active', 'workspace_source_binding:' || wsb.id, $3, $3
-       FROM workspace_source_bindings wsb
-       JOIN source_items ii
-         ON ii.space_id = wsb.space_id
-        AND ii.deleted_at IS NULL
+): Promise<ProjectSourceBackfillResult> {
+  const items = await db.query<{ id: string }>(
+    `SELECT DISTINCT si.id
+       FROM project_source_bindings psb
+       JOIN source_items si
+         ON si.space_id = psb.space_id
+        AND si.deleted_at IS NULL
         AND (
-          ii.connection_id = wsb.source_connection_id
+          si.connection_id = psb.source_connection_id
           OR EXISTS (
             SELECT 1
               FROM source_snapshots ss
-             WHERE ss.space_id = ii.space_id
-               AND ss.source_item_id = ii.id
-               AND ss.connection_id = wsb.source_connection_id
+             WHERE ss.space_id = si.space_id
+               AND ss.source_item_id = si.id
+               AND ss.connection_id = psb.source_connection_id
           )
         )
-       JOIN extracted_evidence ev
-         ON ev.space_id = ii.space_id
-        AND ev.source_item_id = ii.id
-        AND ev.deleted_at IS NULL
-      WHERE wsb.space_id = $1
-        AND wsb.id = $2
-        AND wsb.status = 'active'
-        AND EXISTS (
-         SELECT 1
-           FROM project_workspaces pw
-          WHERE pw.space_id = wsb.space_id
-            AND pw.project_id = wsb.project_id
-            AND pw.workspace_id = wsb.workspace_id
-       )
-      ORDER BY ev.id, wsb.project_id, wsb.priority DESC, wsb.id
-     ON CONFLICT (space_id, evidence_id, target_type, target_id, link_type)
-       WHERE status = 'active'
-     DO NOTHING`,
-    [input.spaceId, input.bindingId, now],
+      WHERE psb.space_id = $1
+        AND psb.id = $2`,
+    [input.spaceId, input.bindingId],
   );
-  return result.rowCount ?? 0;
+  const totals: ProjectSourceBackfillResult = {
+    created_links: 0,
+    reactivated_links: 0,
+    archived_links: 0,
+    evidence_links: 0,
+  };
+  for (const item of items.rows) {
+    const linkCounts = await materializeProjectSourceItemLinks(db, {
+      spaceId: input.spaceId,
+      sourceItemId: item.id,
+      bindingId: input.bindingId,
+      archiveNonMatching: true,
+    });
+    totals.created_links += linkCounts.created;
+    totals.reactivated_links += linkCounts.reactivated;
+    totals.archived_links += linkCounts.archived;
+    totals.evidence_links += await linkEvidenceToBoundProjects(db, {
+      spaceId: input.spaceId,
+      sourceItemId: item.id,
+    });
+  }
+  return totals;
 }

@@ -44,6 +44,7 @@ export interface PagedRows<T> {
 interface FilterOptions {
   nodeKinds?: readonly string[];
   edgeKinds?: readonly string[];
+  projectId?: string;
 }
 
 export class GraphProjectionRepository {
@@ -52,7 +53,10 @@ export class GraphProjectionRepository {
   async getVisibleObject(
     identity: SpaceUserIdentity,
     objectId: string,
+    options: Pick<FilterOptions, "projectId"> = {},
   ): Promise<GraphObjectRow | null> {
+    const params: unknown[] = [identity.spaceId, identity.userId, objectId];
+    const projectCorpusClause = pushProjectCorpusClause(params, "so", options.projectId);
     const rows = await this.db.query<GraphObjectRow>(
       `SELECT so.id, so.object_type, so.title, so.summary, so.status, so.updated_at,
               0::int AS degree
@@ -60,25 +64,28 @@ export class GraphProjectionRepository {
         WHERE so.space_id = $1
           AND so.id = $3
           AND ${activeObjectClause("so")}
-          AND ${spaceObjectVisibleSql("so", "$2")}`,
-      [identity.spaceId, identity.userId, objectId],
+          AND ${spaceObjectVisibleSql("so", "$2")}
+          ${projectCorpusClause}`,
+      params,
     );
     return rows.rows[0] ?? null;
   }
 
   async countVisibleObjects(
     identity: SpaceUserIdentity,
-    options: Pick<FilterOptions, "nodeKinds"> = {},
+    options: Pick<FilterOptions, "nodeKinds" | "projectId"> = {},
   ): Promise<number> {
     const params: unknown[] = [identity.spaceId, identity.userId];
     const kindClause = pushArrayClause(params, "so.object_type", options.nodeKinds);
+    const projectCorpusClause = pushProjectCorpusClause(params, "so", options.projectId);
     const row = await this.db.query<{ total: string }>(
       `SELECT count(*)::text AS total
          FROM space_objects so
         WHERE so.space_id = $1
           AND ${activeObjectClause("so")}
           AND ${spaceObjectVisibleSql("so", "$2")}
-          ${kindClause}`,
+          ${kindClause}
+          ${projectCorpusClause}`,
       params,
     );
     return numberFromPg(row.rows[0]?.total);
@@ -86,10 +93,11 @@ export class GraphProjectionRepository {
 
   async listKindCounts(
     identity: SpaceUserIdentity,
-    options: Pick<FilterOptions, "nodeKinds"> = {},
+    options: Pick<FilterOptions, "nodeKinds" | "projectId"> = {},
   ): Promise<KindCountRow[]> {
     const params: unknown[] = [identity.spaceId, identity.userId];
     const kindClause = pushArrayClause(params, "so.object_type", options.nodeKinds);
+    const projectCorpusClause = pushProjectCorpusClause(params, "so", options.projectId);
     const rows = await this.db.query<{ kind: string; total: string }>(
       `SELECT so.object_type AS kind, count(*)::text AS total
          FROM space_objects so
@@ -97,6 +105,7 @@ export class GraphProjectionRepository {
           AND ${activeObjectClause("so")}
           AND ${spaceObjectVisibleSql("so", "$2")}
           ${kindClause}
+          ${projectCorpusClause}
         GROUP BY so.object_type
         ORDER BY total DESC, so.object_type ASC`,
       params,
@@ -111,6 +120,7 @@ export class GraphProjectionRepository {
     const params: unknown[] = [identity.spaceId, identity.userId, options.limit];
     const nodeKindClause = pushArrayClause(params, "so.object_type", options.nodeKinds);
     const edgeKindClause = pushArrayClause(params, "r.relation_type", options.edgeKinds);
+    const projectCorpusClause = pushProjectCorpusClause(params, "so", options.projectId);
     const rows = await this.db.query<GraphObjectRow>(
       `WITH visible_objects AS (
          SELECT so.id, so.object_type, so.title, so.summary, so.status, so.updated_at
@@ -119,6 +129,7 @@ export class GraphProjectionRepository {
             AND ${activeObjectClause("so")}
             AND ${spaceObjectVisibleSql("so", "$2")}
             ${nodeKindClause}
+            ${projectCorpusClause}
        ),
        visible_edges AS (
          SELECT r.from_object_id, r.to_object_id
@@ -151,10 +162,11 @@ export class GraphProjectionRepository {
 
   async listRecentObjects(
     identity: SpaceUserIdentity,
-    options: Pick<FilterOptions, "nodeKinds"> & { limit: number },
+    options: Pick<FilterOptions, "nodeKinds" | "projectId"> & { limit: number },
   ): Promise<GraphObjectRow[]> {
     const params: unknown[] = [identity.spaceId, identity.userId, options.limit];
     const nodeKindClause = pushArrayClause(params, "so.object_type", options.nodeKinds);
+    const projectCorpusClause = pushProjectCorpusClause(params, "so", options.projectId);
     const rows = await this.db.query<GraphObjectRow>(
       `SELECT so.id, so.object_type, so.title, so.summary, so.status, so.updated_at,
               0::int AS degree
@@ -163,6 +175,7 @@ export class GraphProjectionRepository {
           AND ${activeObjectClause("so")}
           AND ${spaceObjectVisibleSql("so", "$2")}
           ${nodeKindClause}
+          ${projectCorpusClause}
         ORDER BY so.updated_at DESC, so.id ASC
         LIMIT $3`,
       params,
@@ -178,6 +191,8 @@ export class GraphProjectionRepository {
     const nodeKindClause = pushArrayClause(params, "from_so.object_type", options.nodeKinds);
     const targetNodeKindClause = pushArrayClause(params, "to_so.object_type", options.nodeKinds);
     const edgeKindClause = pushArrayClause(params, "r.relation_type", options.edgeKinds);
+    const fromProjectCorpusClause = pushProjectCorpusClause(params, "from_so", options.projectId);
+    const toProjectCorpusClause = pushProjectCorpusClause(params, "to_so", options.projectId);
     const rows = await this.db.query<{
       source_kind: string;
       target_kind: string;
@@ -205,6 +220,8 @@ export class GraphProjectionRepository {
           ${nodeKindClause}
           ${targetNodeKindClause}
           ${edgeKindClause}
+          ${fromProjectCorpusClause}
+          ${toProjectCorpusClause}
         GROUP BY from_so.object_type, to_so.object_type, r.relation_type
         ORDER BY count(*) DESC, from_so.object_type ASC, to_so.object_type ASC
         LIMIT 500`,
@@ -268,6 +285,7 @@ export class GraphProjectionRepository {
     ];
     const edgeKindClause = pushArrayClause(params, "r.relation_type", options.edgeKinds);
     const nodeKindClause = pushArrayClause(params, "so.object_type", options.nodeKinds);
+    const projectCorpusClause = pushProjectCorpusClause(params, "so", options.projectId);
     const rows = await this.db.query<GraphObjectRow & { total_count: string; cap_hit: boolean }>(
       `WITH visible_objects AS (
          SELECT so.id, so.object_type, so.title, so.summary, so.status, so.updated_at
@@ -276,6 +294,7 @@ export class GraphProjectionRepository {
             AND ${activeObjectClause("so")}
             AND ${spaceObjectVisibleSql("so", "$2")}
             ${nodeKindClause ? `AND (so.id = $3 OR ${nodeKindClause.replace(/^ AND /, "")})` : ""}
+            ${projectCorpusClause}
        ),
        visible_edges AS (
          SELECT r.from_object_id, r.to_object_id, r.updated_at
@@ -372,9 +391,11 @@ export class GraphProjectionRepository {
   async listClusterObjects(
     identity: SpaceUserIdentity,
     kind: string,
-    options: { limit: number },
+    options: { limit: number; projectId?: string; edgeKinds?: readonly string[] },
   ): Promise<PagedRows<GraphObjectRow>> {
     const params: unknown[] = [identity.spaceId, identity.userId, kind, options.limit];
+    const projectCorpusClause = pushProjectCorpusClause(params, "so", options.projectId);
+    const edgeKindClause = pushArrayClause(params, "r.relation_type", options.edgeKinds);
     const rows = await this.db.query<GraphObjectRow & { total_count: string }>(
       `WITH visible_objects AS (
          SELECT so.id, so.object_type, so.title, so.summary, so.status, so.updated_at
@@ -383,14 +404,16 @@ export class GraphProjectionRepository {
             AND so.object_type = $3
             AND ${activeObjectClause("so")}
             AND ${spaceObjectVisibleSql("so", "$2")}
+            ${projectCorpusClause}
        ),
        visible_edges AS (
          SELECT r.from_object_id, r.to_object_id
            FROM object_relations r
            JOIN visible_objects from_so ON from_so.id = r.from_object_id
            JOIN visible_objects to_so ON to_so.id = r.to_object_id
-          WHERE r.space_id = $1
-            AND r.status = 'active'
+         WHERE r.space_id = $1
+           AND r.status = 'active'
+           ${edgeKindClause}
        ),
        degree_counts AS (
          SELECT object_id, count(*)::int AS degree
@@ -432,6 +455,7 @@ export class GraphProjectionRepository {
     ];
     const edgeKindClause = pushArrayClause(params, "r.relation_type", options.edgeKinds);
     const nodeKindClause = pushArrayClause(params, "so.object_type", options.nodeKinds);
+    const projectCorpusClause = pushProjectCorpusClause(params, "so", options.projectId);
     const rows = await this.db.query<GraphObjectRow & { total_count: string; cap_hit: boolean }>(
       `WITH visible_objects AS (
          SELECT so.id, so.object_type, so.title, so.summary, so.status, so.updated_at
@@ -440,6 +464,7 @@ export class GraphProjectionRepository {
             AND ${activeObjectClause("so")}
             AND ${spaceObjectVisibleSql("so", "$2")}
             ${nodeKindClause}
+            ${projectCorpusClause}
        ),
        matched_ranked AS (
          SELECT id,
@@ -528,6 +553,24 @@ function pushArrayClause(
   if (!normalized.length) return "";
   params.push(normalized);
   return ` AND ${expression} = ANY($${params.length}::varchar[])`;
+}
+
+function pushProjectCorpusClause(
+  params: unknown[],
+  objectAlias: string,
+  projectId: string | undefined,
+): string {
+  const normalized = projectId?.trim();
+  if (!normalized) return "";
+  params.push(normalized);
+  return ` AND EXISTS (
+    SELECT 1
+      FROM project_corpus_items pci
+     WHERE pci.space_id = ${objectAlias}.space_id
+       AND pci.project_id = $${params.length}
+       AND pci.object_id = ${objectAlias}.id
+       AND pci.status = 'active'
+  )`;
 }
 
 function activeObjectClause(alias: string): string {

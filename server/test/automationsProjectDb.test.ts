@@ -90,7 +90,7 @@ beforeEach(async () => {
   await pool.query(
     `TRUNCATE automation_runs, automation_credential_grants, automations, scheduler_tasks,
        jobs, context_snapshots, runs, agent_runtime_profiles, agent_versions, agents,
-       source_items, workspace_source_bindings, source_connections, source_connectors,
+       source_items, project_source_item_links, project_source_bindings, source_connections, source_connectors,
        workspaces, project_members, projects, space_memberships, users, spaces CASCADE`,
   );
   const now = new Date().toISOString();
@@ -186,6 +186,39 @@ describe("Automation × Project binding (real Postgres)", () => {
       body: { project_id: PROJECT },
     });
     expect(rebound.project_id).toBe(PROJECT);
+  });
+
+  it("lists automations filtered by project_id", async () => {
+    if (!available) return;
+    const bound = await service().create({
+      spaceId: SPACE,
+      ownerUserId: OWNER,
+      body: {
+        name: "Project digest",
+        agent_id: AGENT,
+        project_id: PROJECT,
+        trigger_type: "manual",
+        config_json: { target_type: "agent_run" },
+      },
+    });
+    const unbound = await service().create({
+      spaceId: SPACE,
+      ownerUserId: OWNER,
+      body: {
+        name: "General digest",
+        agent_id: AGENT,
+        trigger_type: "manual",
+        config_json: { target_type: "agent_run" },
+      },
+    });
+
+    const repo = new PgAutomationRepository(pool!);
+    await expect(repo.list(SPACE, { projectId: PROJECT })).resolves.toMatchObject([
+      { id: bound.id, project_id: PROJECT },
+    ]);
+    await expect(repo.list(SPACE, { projectId: null })).resolves.toMatchObject([
+      { id: unbound.id, project_id: null },
+    ]);
   });
 
   it("rejects project binding for non-agent_run targets with 422", async () => {

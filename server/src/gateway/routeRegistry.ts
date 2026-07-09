@@ -33,6 +33,8 @@ import { runtimeHostModule } from "../modules/runtimeHost";
 import { runsModule } from "../modules/runs";
 import { artifactsModule } from "../modules/artifacts";
 import { projectsModule } from "../modules/projects";
+import { projectPresetsModule } from "../modules/projectPresets";
+import { projectResearchModule } from "../modules/projectResearch";
 import { policyModule } from "../modules/policy";
 import { proposalsModule } from "../modules/proposals";
 import { sessionsModule } from "../modules/sessions";
@@ -48,6 +50,8 @@ import { activityModule } from "../modules/activity";
 import { sourcePointersModule } from "../modules/sourcePointers";
 import { sourcesModule } from "../modules/sources";
 import { knowledgeModule } from "../modules/knowledge";
+import { relationsModule } from "../modules/relations";
+import { academicModule } from "../modules/academic";
 import { graphModule } from "../modules/graph";
 import { evolutionModule } from "../modules/evolution";
 import { tasksModule } from "../modules/tasks";
@@ -103,6 +107,8 @@ export const SERVER_MODULES: readonly ServerModule[] = [
   runsModule,
   artifactsModule,
   projectsModule,
+  projectPresetsModule,
+  projectResearchModule,
   policyModule,
   proposalsModule,
   sessionsModule,
@@ -118,6 +124,8 @@ export const SERVER_MODULES: readonly ServerModule[] = [
   sourcePointersModule,
   sourcesModule,
   knowledgeModule,
+  relationsModule,
+  academicModule,
   graphModule,
   evolutionModule,
   tasksModule,

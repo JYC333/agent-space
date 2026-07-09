@@ -16,6 +16,7 @@ import { registerClaimCandidatePacketProposalAppliers } from "../knowledge/claim
 import { registerRelationDiscoveryProposalAppliers } from "../knowledge/relationDiscoveryArtifacts";
 import { registerCustomSourceProposalAppliers } from "../sources/customSources/customSourceProposalApplier";
 import { registerSourceRecipeProposalAppliers } from "../sources/sourceRecipes/recipeProposalApplier";
+import { registerEvolvableAssetPromotionProposalApplier } from "../evolution/assetPromotionProposalApplier";
 import {
   PgMemoryApplyRepository,
   type ApplyProposal,
@@ -111,6 +112,7 @@ export function createDefaultProposalApplierRegistry(
   registerWorkspaceProposalAppliers(registry);
   registerCustomSourceProposalAppliers(registry);
   registerSourceRecipeProposalAppliers(registry);
+  registerEvolvableAssetPromotionProposalApplier(registry);
   contributor?.applyProposalAppliers(registry);
   return registry;
 }

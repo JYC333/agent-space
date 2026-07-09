@@ -8,8 +8,9 @@
 
 | Path | Role |
 |---|---|
-| `server/` | TypeScript API backend and explicit schema migration owner. The gateway module is permanent; unknown API paths return the local 404 catch-all. |
-| `server/migrations/` | Current server schema baseline plus forward-only SQL migrations. In this pre-history phase, `0001_baseline.sql` is the consolidated baseline. |
+| `server/` | TypeScript API backend. The gateway module is permanent; unknown API paths return the local 404 catch-all. |
+| `server/src/db/schema/` | Drizzle schema authoring source for database table/constraint/index shape. |
+| `server/migrations/` | Generated SQL artifacts applied by the server migration runner. In this pre-history phase, `0001_baseline.sql` is the consolidated baseline. |
 | `apps/web/` | Web client. It consumes APIs and shared protocol types; it is not a business-rule authority. |
 | `catalog/` | Built-in definitions, including agent templates and capabilities. |
 | `packages/protocol/` | Shared TypeScript protocol package only. No handlers, persistence, routing, or authority. |
@@ -61,6 +62,8 @@ Core modules are `always_on=True`. Optional product routes are still mounted by 
 | `runs` | kernel | `/runs*`, `/internal/runs/execute` | yes, lazy | Run lifecycle, execution, events, finalization, runtime bridge, outputs/artifacts. |
 | `artifacts` | product | `/artifacts*` | empty | Client-facing artifact list/get/export and run materialization artifacts. |
 | `projects` | product | `/projects*` | yes | Projects and project-workspace links. |
+| `project_presets` | product | `/project-presets`, `/projects/{projectId}/preset` | yes | Code-owned Project workflow preset descriptors and creation-time Project shape selection. |
+| `project_research` | product | `/projects/{projectId}/research*` | yes | Academic Research preset workflow: research profile approval, workflow/stage/checkpoint state, artifact links, screening criteria, and the literature-matrix/synthesis/integrity read surfaces. Dispatches through existing Runs/Artifacts rather than a parallel execution system. |
 | `policy` | kernel | `/internal/policy/*` | yes | Service-authenticated policy enforcement and proposal-apply policy gate. |
 | `proposals` | kernel | `/proposals*` | yes | Proposal approval/apply orchestration and applier registry; unsupported proposal types fail closed. |
 | `sessions` | product | `/sessions*`, `/internal/sessions/session-summary/get-latest` | empty | Conversation sessions, messages, and latest summary read. |
@@ -73,6 +76,9 @@ Core modules are `always_on=True`. Optional product routes are still mounted by 
 | `source_pointers` | product | `/source-pointers*` | empty | Metadata-only cross-space provenance pointers; no read grant. |
 | `sources` | product | `/sources*` | empty | Source connections, source items, extraction evidence, trust helpers, summary runs. |
 | `knowledge` | product | `/knowledge*`, `/notes/collections*` | empty | Knowledge items, notes, sources, entity links, source links, read model, and proposal appliers. |
+| `relations` | product | `/relations*` | yes | People, organizations, identities, affiliations, relation notes, and relation provenance links over shared `space_objects` / `object_relations`. |
+| `academic` | product | `/academic*` | yes | Academic paper object extension, paper authorship links, and citation links for Project presets and graph lenses. |
+| `graph` | frontend-support | `/graph*` | empty | Read-only `GraphProjection` routes and per-user graph view-state persistence over visible `space_objects` / `object_relations`. |
 | `evolution` | capability | `/evolution*` | empty | Evolution targets/signals, strategy assets, selector decisions, experiences, review prompts, validation reads, and review artifacts. |
 | `tasks` | product | `/tasks*`, `/boards*`, `/me/tasks` | empty | Boards, tasks, task-run links, task evaluation, run-finalized hook. |
 | `workspace_profiles` | product | `/workspace-profiles*` | empty | Workspace profile list/create/read/update. |

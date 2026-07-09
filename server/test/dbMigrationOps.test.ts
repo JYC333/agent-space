@@ -18,11 +18,20 @@ describe("database migration ops scripts", () => {
     expect(migrate).toContain("SELECT 1 FROM pg_database WHERE datname = '$pgdb';");
     expect(migrate).toContain('CREATE DATABASE \\"$pgdb\\";');
     expect(migrate).toContain('if [[ "$RUN_MODE" == "docker" ]]; then');
+    expect(migrate.lastIndexOf("run_drizzle_schema_check_docker")).toBeLessThan(
+      migrate.lastIndexOf("ensure_docker_database_exists"),
+    );
     expect(migrate).toContain("ensure_docker_database_exists");
+    expect(migrate).toContain("run_drizzle_schema_check_host");
 
     expect(reset).not.toContain('CREATE DATABASE "$PGDB";');
     expect(reset).toContain('"$REPO_ROOT/ops/scripts/db/migrate.sh" --mode "$MODE"');
 
+    expect(start).toContain("generate_schema_migrations()");
+    expect(start).toContain("npm run schema:generate");
+    expect(start.lastIndexOf("generate_schema_migrations")).toBeLessThan(
+      start.lastIndexOf("ensure_server_image_for_migrations"),
+    );
     expect(start).toContain("run_database_migrations()");
     expect(start).toContain('"$REPO_ROOT/ops/scripts/db/migrate.sh" --mode "$MODE"');
     expect(start).toContain("ensure_server_image_for_migrations");

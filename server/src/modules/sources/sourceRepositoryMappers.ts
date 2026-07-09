@@ -7,10 +7,10 @@ import type {
   EvidenceLinkRow,
   EvidenceRow,
   ExtractionJobRow,
+  ProjectSourceBindingRow,
   SourceItemRow,
   SourceConnectionRow,
   SourceConnectorRow,
-  WorkspaceBindingRow,
 } from "./sourceRepositoryRows";
 import { normalizeSourceConnectionReadGovernance } from "./sourceConsent";
 
@@ -180,22 +180,54 @@ export function evidenceLinkOut(row: EvidenceLinkRow) {
   };
 }
 
-export function bindingOut(row: WorkspaceBindingRow) {
+export function projectSourceBindingOut(row: ProjectSourceBindingRow) {
   return {
     id: row.id,
     space_id: row.space_id,
-    workspace_id: row.workspace_id,
     project_id: row.project_id,
     source_connection_id: row.source_connection_id,
     binding_key: row.binding_key,
     status: row.status,
     priority: row.priority,
+    delivery_scope: row.delivery_scope,
+    collection_notifications_enabled: row.collection_notifications_enabled,
     filters_json: row.filters_json ?? {},
     routing_policy_json: row.routing_policy_json ?? {},
     extraction_policy_json: row.extraction_policy_json ?? {},
     created_by_user_id: row.created_by_user_id,
     created_at: dateIso(row.created_at),
     updated_at: dateIso(row.updated_at),
+  };
+}
+
+export type ProjectSourceItemOutRow = SourceItemRow & {
+  project_link_id: string;
+  project_link_space_id: string;
+  project_link_project_id: string;
+  project_link_project_source_binding_id: string;
+  project_link_source_connection_id: string | null;
+  project_link_source_item_id: string;
+  project_link_status: string;
+  project_link_matched_at: unknown;
+  project_link_match_reason: string | null;
+  project_link_created_at: unknown;
+  project_link_updated_at: unknown;
+};
+
+export function projectSourceItemOut(row: ProjectSourceItemOutRow) {
+  return {
+    id: row.project_link_id,
+    space_id: row.project_link_space_id,
+    project_id: row.project_link_project_id,
+    project_source_binding_id: row.project_link_project_source_binding_id,
+    source_connection_id: row.project_link_source_connection_id,
+    source_item_id: row.project_link_source_item_id,
+    status: row.project_link_status,
+    matched_at: dateIso(row.project_link_matched_at),
+    match_reason: row.project_link_match_reason,
+    created_at: dateIso(row.project_link_created_at),
+    updated_at: dateIso(row.project_link_updated_at),
+    item: itemOut(row),
   };
 }
 

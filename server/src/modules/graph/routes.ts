@@ -12,7 +12,8 @@ import {
   query,
   resolveIdentity,
 } from "../routeUtils/common";
-import { GraphProjectionBuilder, type ServerGraphProjectionMode } from "./projectionBuilder";
+import { assertProjectInSpace } from "../projects/access";
+import { GraphProjectionBuilder, parseGraphLensId, type ServerGraphProjectionMode } from "./projectionBuilder";
 import { GraphProjectionRepository } from "./projectionRepository";
 import { GraphViewStateRepository, normalizeStateObject } from "./viewStateRepository";
 
@@ -33,6 +34,11 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       const mode = parseMode(optionalString(q.mode) ?? "global");
       const depth = parseOptionalInt(q.depth, "depth");
       const limit = parseLimit(q.limit);
+      const projectId = optionalString(q.project_id);
+      const lensId = parseGraphLensId(optionalString(q.lens_id) ?? undefined);
+      if (projectId) {
+        await assertProjectInSpace(pool(), identity.spaceId, projectId, { statusCode: 404 });
+      }
       const projection = await projectionBuilder().build(identity, {
         mode,
         rootId: optionalString(q.root_id) ?? undefined,
@@ -40,6 +46,8 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
         nodeKinds: csv(q.node_kinds),
         edgeKinds: csv(q.edge_kinds),
         q: optionalString(q.q) ?? undefined,
+        projectId: projectId ?? undefined,
+        lensId,
         limit,
         includeClusters: boolQuery(q.include_clusters, true),
       });

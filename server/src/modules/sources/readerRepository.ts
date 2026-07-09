@@ -1415,16 +1415,15 @@ export class PgReaderActionRepository {
          JOIN source_items ii ON ii.id = ra.source_item_id
               AND ii.space_id = $1 AND ii.deleted_at IS NULL
          JOIN source_connections sc ON sc.id = ii.connection_id
-         JOIN workspace_source_bindings wsb
-              ON wsb.source_connection_id = sc.id
-              AND wsb.space_id = $1 AND wsb.project_id = $2 AND wsb.status = 'active'
-              AND EXISTS (
-                SELECT 1
-                  FROM project_workspaces pw
-                 WHERE pw.space_id = wsb.space_id
-                   AND pw.project_id = wsb.project_id
-                   AND pw.workspace_id = wsb.workspace_id
-              )
+         JOIN project_source_item_links psil
+              ON psil.space_id = ii.space_id
+             AND psil.source_item_id = ii.id
+             AND psil.project_id = $2
+             AND psil.status = 'active'
+         JOIN project_source_bindings psb
+              ON psb.space_id = psil.space_id
+             AND psb.id = psil.project_source_binding_id
+             AND psb.status = 'active'
         WHERE ra.space_id = $1
           AND ra.status = 'active'
           AND ra.visibility = 'space_shared'

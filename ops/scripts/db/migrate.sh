@@ -20,8 +20,11 @@
 #   Non-prod modes skip it for convenience; opt in with PRE_MIGRATION_BACKUP=1
 #   or the --pre-migration-backup flag to get the identical safety net.
 #
-# PostgreSQL is the server database; server migrations own the schema
-# creation and migration. Server startup does not auto-migrate.
+# PostgreSQL is the server database. Drizzle owns schema authoring through
+# server/src/db/schema/; generated server migrations own schema creation and
+# migration. This helper runs the no-write Drizzle schema check before database
+# bootstrap. Server startup does not mutate schema files or auto-migrate from
+# the long-running server process.
 #
 # Credentials are never printed — the target is shown with credentials redacted.
 #
@@ -118,6 +121,28 @@ ensure_docker_database_exists() {
     -c "CREATE DATABASE \"$pgdb\";"
 }
 
+run_drizzle_schema_check_docker() {
+  if [[ "$MODE" == "prod" ]]; then
+    echo "[migrate] Drizzle schema check is enforced during production server image build."
+    return 0
+  fi
+
+  echo "[migrate] checking Drizzle schema artifacts before database bootstrap..."
+  "${COMPOSE[@]}" run --rm -T --no-deps \
+    -v "$REPO_ROOT/server/src:/app/server/src:ro" \
+    -v "$REPO_ROOT/server/drizzle:/app/server/drizzle:ro" \
+    -v "$REPO_ROOT/server/migrations:/app/server/migrations:ro" \
+    -v "$REPO_ROOT/server/drizzle.config.ts:/app/server/drizzle.config.ts:ro" \
+    -v "$REPO_ROOT/server/scripts:/app/server/scripts:ro" \
+    server npm run schema:check
+}
+
+run_drizzle_schema_check_host() {
+  echo "[migrate] checking Drizzle schema artifacts before database bootstrap..."
+  cd "$REPO_ROOT/server"
+  COREPACK_ENABLE_AUTO_PIN=0 npm run schema:check
+}
+
 # Resolve a host-mode DATABASE_URL (env, mode .env, or POSTGRES_* parts). Sets the
 # global MIGRATION_DATABASE_URL or exits with a clear error. Never prints credentials.
 resolve_host_database_url() {
@@ -203,7 +228,7 @@ ensure_pre_migration_backup() {
 
 # ── Docker-native path (default) ──────────────────────────────────────────────
 run_docker() {
-  echo "Checking/applying server migrations in a one-shot migration container (mode: $MODE)..."
+  echo "Checking/applying generated server migrations in a one-shot migration container (mode: $MODE)..."
   echo "  target: in-network postgres service (generated from POSTGRES_*)"
 
   local pguser pgdb database_url
@@ -225,7 +250,7 @@ run_docker() {
 run_host() {
   resolve_host_database_url
 
-  echo "Checking/applying server migrations on host (mode: $MODE)..."
+  echo "Checking/applying generated server migrations on host (mode: $MODE)..."
   echo "  target: $(redacted_target "$MIGRATION_DATABASE_URL")"
 
   cd "$REPO_ROOT/server"
@@ -238,7 +263,10 @@ run_host() {
 
 # ── Target database bootstrap + pre-migration backup gate ─────────────────────
 if [[ "$RUN_MODE" == "docker" ]]; then
+  run_drizzle_schema_check_docker
   ensure_docker_database_exists
+else
+  run_drizzle_schema_check_host
 fi
 
 # prod always requires it; other modes only when explicitly opted in.

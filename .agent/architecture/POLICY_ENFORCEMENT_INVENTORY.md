@@ -167,7 +167,7 @@ permission manifest that routes risk and enables unknown-action fail-closed beha
   `automation.create`, `automation.update`, `automation.fire`,
   `source.connection_manage`, `source.item_create`, `source.item_update`,
   `evidence.create`, `evidence.update`, `evidence.link`,
-  `workspace_source.configure`, `context.select_evidence`,
+  `project_source.configure`, `context.select_evidence`,
   `retrieval.search`, `retrieval.brief`, `memory.retrieval.search`,
   `memory.retrieval.brief`, `project_public_summary.search`,
   `project_public_summary.brief`.

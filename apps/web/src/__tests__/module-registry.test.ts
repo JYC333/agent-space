@@ -65,4 +65,9 @@ describe('module registry official plugin overlay', () => {
       planned: false,
     })
   })
+
+  it('does not register the retired research atlas top-level route', () => {
+    expect(MODULE_REGISTRY.some(module => module.id === 'research_atlas')).toBe(false)
+    expect(MODULE_REGISTRY.some(module => module.path === '/atlas')).toBe(false)
+  })
 })

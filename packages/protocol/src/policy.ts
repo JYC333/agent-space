@@ -1071,8 +1071,8 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     record_failure_mode: "best_effort",
   },
   {
-    action: "workspace_source.configure",
-    resource_type: "workspace_source",
+    action: "project_source.configure",
+    resource_type: "project_source",
     default_risk_level: "medium",
     default_decision: "allow",
     audit_required: true,
@@ -1080,7 +1080,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     default_required_approver_role: null,
     current_enforcement_point: "server/src/modules/sources/routes.ts",
     description:
-      "Configure workspace source bindings for Source.",
+      "Configure project source bindings for Source.",
     lifecycle_status: "wired_direct",
     record_failure_mode: "best_effort",
   },

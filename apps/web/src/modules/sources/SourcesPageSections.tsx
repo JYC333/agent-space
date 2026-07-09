@@ -24,8 +24,7 @@ import type {
   SourceRecipePlanResponse,
   SourceCapturePolicy,
   SourceConnection,
-  Workspace,
-  WorkspaceSourceBinding,
+  SourceHealth,
 } from '../../types/api'
 import { SpaceLink as Link } from '../../core/spaceNav'
 import {
@@ -664,78 +663,13 @@ function sourceTypeFromConfig(config: Record<string, unknown> | null | undefined
   return typeof value === 'string' ? value : null
 }
 
-export function WorkspaceRoutingCard(props: {
-  workspaceId: string
-  bindingConnectionId: string
-  workspaceOptions: SelectOption[]
-  connectionOptions: SelectOption[]
-  workspaces: Workspace[]
-  connections: SourceConnection[]
-  bindings: WorkspaceSourceBinding[]
-  busy: string | null
-  projectScoped: boolean
-  backfillHistory: boolean
-  onWorkspaceIdChange: (value: string) => void
-  onBindingConnectionIdChange: (value: string) => void
-  onBackfillHistoryChange: (value: boolean) => void
-  onCreateWorkspaceBinding: () => void
-}) {
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Workspace Routing</CardTitle>
-      </CardHeader>
-      <div className="space-y-3">
-        <div className="space-y-1.5">
-          <Label>Workspace</Label>
-          <Select options={props.workspaceOptions} value={props.workspaceId} onChange={props.onWorkspaceIdChange} />
-        </div>
-        <div className="space-y-1.5">
-          <Label>Source</Label>
-          <Select
-            options={props.connectionOptions}
-            value={props.bindingConnectionId}
-            onChange={props.onBindingConnectionIdChange}
-          />
-        </div>
-        <label className="flex items-start gap-2 rounded-md border border-border px-3 py-2 text-xs">
-          <input
-            type="checkbox"
-            className="mt-0.5 accent-primary"
-            checked={props.backfillHistory}
-            onChange={event => props.onBackfillHistoryChange(event.target.checked)}
-          />
-          <span>
-            <span className="block font-medium text-foreground">Include historical evidence</span>
-            <span className="text-muted-foreground">Link already extracted source evidence into this project.</span>
-          </span>
-        </label>
-        <div className="flex gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            className="flex-1"
-            disabled={!props.projectScoped || !props.workspaces.length || !props.connections.length || props.busy === 'workspace:binding'}
-            onClick={props.onCreateWorkspaceBinding}
-          >
-            <Link2 className="size-4" />
-            Bind source
-          </Button>
-        </div>
-        <div className="flex gap-1.5 flex-wrap">
-          <Badge variant="outline">{props.bindings.length} bindings</Badge>
-        </div>
-      </div>
-    </Card>
-  )
-}
-
 export function SourcesSection(props: {
   connections: SourceConnection[]
   view: 'following' | 'pending' | 'owned'
   counts: { following: number; pending: number; owned: number }
   loading: boolean
   busy: string | null
+  healthByConnectionId: Record<string, SourceHealth | undefined>
   sourceBackendKey: (connection: SourceConnection) => string
   onViewChange: (view: 'following' | 'pending' | 'owned') => void
   onScanConnection: (connection: SourceConnection) => void
@@ -792,6 +726,7 @@ export function SourcesSection(props: {
             const isCustomSource = connection.handler_kind === 'generated_custom' || (!connection.handler_kind && key === 'custom_source')
             const isRecipeSource = connection.handler_kind === 'recipe'
             const canScan = key === 'rss' || key === 'atom' || key === 'web_page' || key === 'arxiv' || (isCustomSource && Boolean(connection.active_handler_version_id)) || (isRecipeSource && Boolean(connection.active_recipe_version_id))
+            const health = props.healthByConnectionId[connection.id]
             return (
               <Card key={connection.id} className="mb-0">
                 <div className="flex items-start justify-between gap-3">
@@ -799,7 +734,7 @@ export function SourcesSection(props: {
                     <p className="font-medium text-sm truncate">{connection.name}</p>
                     <p className="text-xs text-muted-foreground truncate">{connection.endpoint_url ?? key}</p>
                   </div>
-                  <StatusBadge status={connection.status} />
+                  <StatusBadge status={health?.status ?? connection.status} />
                 </div>
                 <div className="flex gap-1.5 flex-wrap mt-3">
                   <Badge variant="outline">{sourceListKindLabel(connection, key)}</Badge>
@@ -810,11 +745,14 @@ export function SourcesSection(props: {
                   <Badge variant="muted">{connection.capture_policy}</Badge>
                   <Badge variant="muted">{connection.trust_level}</Badge>
                   {connection.repair_status && <Badge variant="muted">{connection.repair_status}</Badge>}
+                  {health && health.recent_new_items > 0 && <Badge variant="success">{health.recent_new_items} new</Badge>}
+                  {health && health.running_jobs + health.queued_jobs > 0 && <Badge variant="warning">{health.running_jobs + health.queued_jobs} queued</Badge>}
                 </div>
                 <div className="flex items-end justify-between gap-2 mt-4">
                   <div className="space-y-0.5">
-                    <p className="text-xs text-muted-foreground">Checked: {fmt(connection.last_checked_at)}</p>
-                    <p className="text-xs text-muted-foreground">Next: {fmt(connection.next_check_at)}</p>
+                    <p className="text-xs text-muted-foreground">Last success: {fmt(health?.last_success_at ?? connection.last_checked_at)}</p>
+                    {health?.last_failure_at && <p className="text-xs text-muted-foreground">Last issue: {fmt(health.last_failure_at)}</p>}
+                    <p className="text-xs text-muted-foreground">Next scan: {fmt(health?.next_run_at ?? connection.next_check_at)}</p>
                   </div>
                   <div className="flex gap-1.5">
                     {props.view === 'pending' ? (

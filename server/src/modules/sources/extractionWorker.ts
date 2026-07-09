@@ -22,7 +22,7 @@ import { arxivHtmlUrl, arxivPdfUrl, parseArxivFeed, parseArxivReference } from "
 import { acquireArxivRequestSlot } from "./connectors/arxivThrottle";
 import { fetchSource, type SourceFetchResult } from "./sourceFetch";
 import { normalizeUrl, sourceDomain } from "./sourceRepositoryMappers";
-import { linkEvidenceToBoundProjects } from "./evidenceProjectLinker";
+import { linkEvidenceToBoundProjects, materializeProjectSourceItemLinks } from "./evidenceProjectLinker";
 import {
   emitSourcePostProcessingDeepAnalysisEvent,
   emitSourcePostProcessingEvent,
@@ -617,12 +617,10 @@ export class SourceExtractionWorker {
       metadata,
       capturedAt: now,
     });
-    if (!created) {
-      await linkEvidenceToBoundProjects(this.db, {
-        spaceId: input.job.space_id,
-        sourceItemId: itemId,
-      });
-    }
+    await materializeProjectSourceItemLinks(this.db, {
+      spaceId: input.job.space_id,
+      sourceItemId: itemId,
+    });
     const needsFollowUp =
       Boolean(policy.followUpJobType) &&
       (

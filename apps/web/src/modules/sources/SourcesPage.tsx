@@ -1,7 +1,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
-import { sourcesApi, projectsApi, workspacesApi } from '../../api/client'
+import { sourcesApi } from '../../api/client'
 import { EmptyState } from '../../components/ui/empty-state'
 import { useSpace } from '../../contexts/SpaceContext'
 import { errMsg } from '../../lib/utils'
@@ -13,8 +13,7 @@ import type {
   SourceCapturePolicy,
   SourceConnection,
   SourceConnector,
-  Workspace,
-  WorkspaceSourceBinding,
+  SourceHealth,
 } from '../../types/api'
 import {
   emptyScheduleFormValue,
@@ -30,7 +29,6 @@ import {
   ManualUrlCard,
   PresetSourcesEntryCard,
   SourcesSection,
-  WorkspaceRoutingCard,
 } from './SourcesPageSections'
 import { runPendingItemJob } from './sourceActions'
 import {
@@ -41,7 +39,6 @@ import {
 export default function SourcesPage() {
   const { activeSpaceId, activeSpaceName } = useSpace()
   const [searchParams] = useSearchParams()
-  const scopedProjectId = searchParams.get('project_id')?.trim() ?? ''
   const scopedConnectionId = searchParams.get('connection_id')?.trim() ?? ''
   const requestedView = searchParams.get('view')
 
@@ -49,12 +46,10 @@ export default function SourcesPage() {
   const [connections, setConnections] = useState<SourceConnection[]>([])
   const [pendingConnections, setPendingConnections] = useState<SourceConnection[]>([])
   const [ownedConnections, setOwnedConnections] = useState<SourceConnection[]>([])
+  const [sourceHealth, setSourceHealth] = useState<SourceHealth[]>([])
   const [connectionView, setConnectionView] = useState<'following' | 'pending' | 'owned'>(
     requestedView === 'pending' || requestedView === 'owned' ? requestedView : 'following',
   )
-  const [workspaces, setWorkspaces] = useState<Workspace[]>([])
-  const [projectWorkspaceIds, setProjectWorkspaceIds] = useState<Set<string> | null>(null)
-  const [bindings, setBindings] = useState<WorkspaceSourceBinding[]>([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState<string | null>(null)
 
@@ -82,10 +77,6 @@ export default function SourcesPage() {
   const [manualConnectionId, setManualConnectionId] = useState('')
   const [queueContent, setQueueContent] = useState(false)
 
-  const [workspaceId, setWorkspaceId] = useState('')
-  const [bindingConnectionId, setBindingConnectionId] = useState('')
-  const [backfillHistoryOnBind, setBackfillHistoryOnBind] = useState(true)
-
   const connectorById = useMemo(() => new Map(connectors.map(c => [c.id, c])), [connectors])
   const connectionOptions = useMemo(
     () => [
@@ -94,28 +85,7 @@ export default function SourcesPage() {
     ],
     [connections],
   )
-  const projectBoundConnectionOptions = useMemo(
-    () => {
-      if (!scopedProjectId) return connectionOptions
-      const boundIds = new Set(bindings.map(binding => binding.source_connection_id))
-      return connections
-        .filter(connection => boundIds.has(connection.id))
-        .map(connection => ({ value: connection.id, label: connection.name }))
-    },
-    [bindings, connectionOptions, connections, scopedProjectId],
-  )
-  const urlConnectionOptions = scopedProjectId ? projectBoundConnectionOptions : connectionOptions
-  const routableWorkspaces = useMemo(
-    () => projectWorkspaceIds ? workspaces.filter(w => projectWorkspaceIds.has(w.id)) : workspaces,
-    [projectWorkspaceIds, workspaces],
-  )
-  const workspaceOptions = useMemo(
-    () => [
-      { value: '', label: 'Select workspace' },
-      ...routableWorkspaces.map(w => ({ value: w.id, label: w.name })),
-    ],
-    [routableWorkspaces],
-  )
+  const urlConnectionOptions = connectionOptions
   const visibleConnections = useMemo(
     () => {
       const rows = connectionView === 'pending'
@@ -139,47 +109,37 @@ export default function SourcesPage() {
       setConnections([])
       setPendingConnections([])
       setOwnedConnections([])
-      setWorkspaces([])
-      setProjectWorkspaceIds(null)
-      setBindings([])
+      setSourceHealth([])
       setLoading(false)
       return
     }
 
     setLoading(true)
     try {
-      const connectionFilter = scopedConnectionId || undefined
-      const projectFilter = scopedProjectId || undefined
       const [
         connectorRows,
         followingPage,
         pendingPage,
         ownedPage,
-        workspacePage,
-        projectWorkspaceLinks,
-        bindingRows,
+        healthRows,
       ] = await Promise.all([
         sourcesApi.connectors(),
         sourcesApi.connections({ view: 'subscribed', limit: 100 }),
         sourcesApi.connections({ view: 'pending', limit: 100 }),
         sourcesApi.connections({ view: 'owned', limit: 100 }),
-        workspacesApi.list({ limit: '100' }),
-        scopedProjectId ? projectsApi.listWorkspaces(scopedProjectId) : Promise.resolve(null),
-        sourcesApi.workspaceBindings({ source_connection_id: connectionFilter, project_id: projectFilter }),
+        sourcesApi.sourceHealth(),
       ])
       setConnectors(connectorRows)
       setConnections(followingPage.items)
       setPendingConnections(pendingPage.items)
       setOwnedConnections(ownedPage.items)
-      setWorkspaces(workspacePage.items)
-      setProjectWorkspaceIds(projectWorkspaceLinks ? new Set(projectWorkspaceLinks.map(link => link.workspace_id)) : null)
-      setBindings(bindingRows)
+      setSourceHealth(healthRows)
     } catch (e) {
       toast.error(errMsg(e))
     } finally {
       setLoading(false)
     }
-  }, [activeSpaceId, scopedConnectionId, scopedProjectId])
+  }, [activeSpaceId, scopedConnectionId])
 
   useEffect(() => { load() }, [load])
 
@@ -191,10 +151,6 @@ export default function SourcesPage() {
 
   async function createManualUrl(event: FormEvent) {
     event.preventDefault()
-    if (scopedProjectId && !manualConnectionId) {
-      toast.error('Link a source to this project before saving URLs')
-      return
-    }
     setBusy('manual:create')
     try {
       const row = await sourcesApi.createManualUrl({
@@ -445,35 +401,6 @@ export default function SourcesPage() {
     toast.success(`${label} ${result.status}`)
   }
 
-  async function createWorkspaceBinding() {
-    const targetWorkspaceId = workspaceId || routableWorkspaces[0]?.id || ''
-    const targetConnectionId = bindingConnectionId || connections[0]?.id || ''
-    if (!scopedProjectId) {
-      toast.error('Open Sources from a project before binding a source.')
-      return
-    }
-    if (!targetWorkspaceId || !targetConnectionId) return
-    setBusy('workspace:binding')
-    try {
-      const binding = await sourcesApi.createWorkspaceBinding({
-        workspace_id: targetWorkspaceId,
-        source_connection_id: targetConnectionId,
-        project_id: scopedProjectId,
-        backfill_history: backfillHistoryOnBind,
-      })
-      if (binding.backfill_result) {
-        toast.success(`Source bound; ${binding.backfill_result.created_links} historical evidence links added`)
-      } else {
-        toast.success('Source bound')
-      }
-      await load()
-    } catch (e) {
-      toast.error(errMsg(e))
-    } finally {
-      setBusy(null)
-    }
-  }
-
   function sourceBackendKey(connection: SourceConnection) {
     return connectorById.get(connection.connector_id)?.connector_key ?? 'connector'
   }
@@ -550,22 +477,6 @@ export default function SourcesPage() {
             onQueueContentChange={setQueueContent}
             onSubmit={createManualUrl}
           />
-          <WorkspaceRoutingCard
-            workspaceId={workspaceId}
-            bindingConnectionId={bindingConnectionId}
-            workspaceOptions={workspaceOptions}
-            connectionOptions={connectionOptions}
-            workspaces={routableWorkspaces}
-            connections={connections}
-            bindings={bindings}
-            busy={busy}
-            projectScoped={Boolean(scopedProjectId)}
-            backfillHistory={backfillHistoryOnBind}
-            onWorkspaceIdChange={setWorkspaceId}
-            onBindingConnectionIdChange={setBindingConnectionId}
-            onBackfillHistoryChange={setBackfillHistoryOnBind}
-            onCreateWorkspaceBinding={createWorkspaceBinding}
-          />
           <AdvancedSourceTools>
             <AdvancedSourceHandlerCard
               name={customSourceName}
@@ -595,6 +506,7 @@ export default function SourcesPage() {
             }}
             loading={loading}
             busy={busy}
+            healthByConnectionId={Object.fromEntries(sourceHealth.map(row => [row.source_connection_id, row]))}
             sourceBackendKey={sourceBackendKey}
             onViewChange={setConnectionView}
             onScanConnection={scanConnection}

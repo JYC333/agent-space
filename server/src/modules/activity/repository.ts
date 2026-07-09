@@ -17,7 +17,7 @@ import {
 } from "../routeUtils/common";
 import { proposalToOut } from "../proposals/repository";
 import { insertProposalRow } from "../proposals/reviewPackets";
-import { assertProjectInSpace } from "../projects/access";
+import { assertProjectReadable } from "../projects/access";
 import type { ProposalOut } from "@agent-space/protocol" with { "resolution-mode": "import" };
 import { assessActivityMemoryDuplicate } from "./memoryDedup";
 
@@ -150,7 +150,9 @@ export class PgActivityRepository {
     const sourceType = normalizeSourceType(requiredString(body.source_type, "source_type"));
     const content = requiredString(body.content, "content");
     const projectId = optionalString(body.project_id);
-    await assertProjectInSpace(this.db, identity.spaceId, projectId);
+    if (projectId) {
+      await assertProjectReadable(this.db, identity.spaceId, projectId, identity.userId);
+    }
     const now = new Date().toISOString();
     const result = await this.db.query<ActivityRow>(
       `INSERT INTO activity_records (
@@ -194,7 +196,9 @@ export class PgActivityRepository {
     identity: SpaceUserIdentity,
     filters: ActivityListFilters,
   ): Promise<Record<string, unknown>[]> {
-    await assertProjectInSpace(this.db, identity.spaceId, filters.projectId);
+    if (filters.projectId) {
+      await assertProjectReadable(this.db, identity.spaceId, filters.projectId, identity.userId);
+    }
     const built = buildActivityWhere(identity, filters);
     const result = await this.db.query<ActivityRow>(
       `SELECT ${ACTIVITY_COLUMNS}

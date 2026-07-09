@@ -21,12 +21,17 @@ interface OfficialPluginPackageManifest {
   };
 }
 
+export interface LoadOfficialPluginPackagesOptions {
+  allowedPluginIds?: readonly string[];
+}
+
 export function defaultOfficialPluginArtifactRoot(): string {
   return resolve(process.env.SERVER_OFFICIAL_PLUGINS_DIR ?? resolve(process.cwd(), "dist", "official-plugins"));
 }
 
 export function loadOfficialPluginPackages(
   root = defaultOfficialPluginArtifactRoot(),
+  options: LoadOfficialPluginPackagesOptions = {},
 ): readonly AgentSpacePlugin[] {
   if (!existsSync(root)) {
     throw new Error(
@@ -40,11 +45,21 @@ export function loadOfficialPluginPackages(
     .filter((packageRoot) => existsSync(join(packageRoot, "plugin.json")))
     .sort();
 
-  return packages.map((packageRoot) => loadOfficialPluginPackage(packageRoot));
+  const allowedPluginIds = options.allowedPluginIds
+    ? new Set(options.allowedPluginIds)
+    : null;
+
+  return packages.flatMap((packageRoot) => {
+    const manifest = parseManifest(packageRoot);
+    if (allowedPluginIds && !allowedPluginIds.has(manifest.id)) return [];
+    return [loadOfficialPluginPackage(packageRoot, manifest)];
+  });
 }
 
-function loadOfficialPluginPackage(packageRoot: string): AgentSpacePlugin {
-  const manifest = parseManifest(packageRoot);
+function loadOfficialPluginPackage(
+  packageRoot: string,
+  manifest = parseManifest(packageRoot),
+): AgentSpacePlugin {
   const modulePath = resolve(packageRoot, manifest.server.main);
   if (!existsSync(modulePath)) {
     throw new Error(

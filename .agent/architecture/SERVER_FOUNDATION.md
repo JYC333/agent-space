@@ -53,15 +53,16 @@ Server database access is centralized under `server/src/db/`:
 - `pool.ts` owns `pg` pool construction from `SERVER_DATABASE_URL`;
 - `tx.ts` provides the shared transaction helper for server-owned write flows;
 - `migrator.ts` and `migrateCli.ts` provide a manual migration runner over
-  `server/migrations/*.sql`.
+  Drizzle-authored schema under `server/src/db/schema/` and generated SQL
+  artifacts under `server/migrations/*.sql`.
 
-The migration runner is the schema authority but remains an explicit ops command,
-not a startup hook.
+The migration runner is the generated-SQL applier and remains an explicit ops
+command, not a startup hook.
 
-`server/migrations/0001_baseline.sql` is the current consolidated TypeScript
-server schema baseline for this pre-history phase. Once real deployments have
-applied a migration version, later schema changes must be added as new ordered
-SQL migration files instead of editing that applied file.
+`server/migrations/0001_baseline.sql` is the current consolidated generated
+schema baseline for this pre-history phase. Ordinary schema changes start in
+`server/src/db/schema/`, run through `npm run schema:generate`, and are then
+applied by the server migration runner.
 
 ## Configuration
 

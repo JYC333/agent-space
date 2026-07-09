@@ -24,6 +24,112 @@ export async function assertProjectInSpace(
   }
 }
 
+/**
+ * Concrete project read gate used by project-scoped private data.
+ *
+ * Public project metadata and approved public summaries have their own broader
+ * space-scoped read surfaces. This gate is for content that should follow the
+ * project_members ACL: personal-space projects are readable by the sole member;
+ * shared-space projects are readable by the project owner or an active project
+ * member, including viewer.
+ */
+export async function canReadProject(
+  db: Queryable,
+  spaceId: string,
+  projectId: string,
+  userId: string,
+): Promise<boolean> {
+  const project = await db.query<{ owner_user_id: string | null }>(
+    `SELECT owner_user_id
+       FROM projects
+      WHERE id = $1
+        AND space_id = $2
+        AND deleted_at IS NULL`,
+    [projectId, spaceId],
+  );
+  const row = project.rows[0];
+  if (!row) return false;
+
+  const space = await db.query<{ type: string }>(
+    `SELECT type FROM spaces WHERE id = $1`,
+    [spaceId],
+  );
+  if (space.rows[0]?.type === "personal") return true;
+
+  if (row.owner_user_id && row.owner_user_id === userId) return true;
+
+  const member = await db.query<{ one: number }>(
+    `SELECT 1 AS one
+       FROM project_members
+      WHERE space_id = $1
+        AND project_id = $2
+        AND user_id = $3
+        AND status = 'active'
+      LIMIT 1`,
+    [spaceId, projectId, userId],
+  );
+  return member.rows.length > 0;
+}
+
+export async function assertProjectReadable(
+  db: Queryable,
+  spaceId: string,
+  projectId: string,
+  userId: string,
+): Promise<void> {
+  if (!(await canReadProject(db, spaceId, projectId, userId))) {
+    throw new HttpError(404, "Project not found");
+  }
+}
+
+/**
+ * Batched form of {@link canReadProject} for filtering rows that carry
+ * `project_id`. Returns the accessible subset in a fixed number of queries.
+ */
+export async function accessibleProjectIds(
+  db: Queryable,
+  spaceId: string,
+  userId: string,
+  projectIds: readonly (string | null | undefined)[],
+): Promise<Set<string>> {
+  const ids = [...new Set(projectIds.filter((id): id is string => typeof id === "string" && id.length > 0))];
+  if (ids.length === 0) return new Set();
+
+  const liveProjects = await db.query<{ id: string; owner_user_id: string | null }>(
+    `SELECT id, owner_user_id
+       FROM projects
+      WHERE space_id = $1
+        AND id = ANY($2::varchar[])
+        AND deleted_at IS NULL`,
+    [spaceId, ids],
+  );
+  const liveIds = liveProjects.rows.map((row) => row.id);
+  if (liveIds.length === 0) return new Set();
+
+  const space = await db.query<{ type: string }>(`SELECT type FROM spaces WHERE id = $1`, [spaceId]);
+  if (space.rows[0]?.type === "personal") return new Set(liveIds);
+
+  const member = await db.query<{ project_id: string }>(
+    `SELECT pm.project_id
+       FROM project_members pm
+       JOIN projects p
+         ON p.id = pm.project_id
+        AND p.space_id = pm.space_id
+        AND p.deleted_at IS NULL
+      WHERE pm.space_id = $1
+        AND pm.project_id = ANY($2::varchar[])
+        AND pm.user_id = $3
+        AND pm.status = 'active'`,
+    [spaceId, liveIds, userId],
+  );
+  const accessible = new Set<string>();
+  for (const row of liveProjects.rows) {
+    if (row.owner_user_id === userId) accessible.add(row.id);
+  }
+  for (const row of member.rows) accessible.add(row.project_id);
+  return accessible;
+}
+
 export async function canWriteProject(
   db: Queryable,
   spaceId: string,

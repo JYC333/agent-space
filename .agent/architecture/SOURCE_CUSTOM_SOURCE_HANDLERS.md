@@ -62,7 +62,8 @@ The feature uses the Sources/Evidence stack:
 - `SourceSnapshot` for immutable captures backed by artifacts.
 - `ExtractedEvidence` for candidate citable evidence.
 - `EvidenceLink` for relevance/context eligibility.
-- `WorkspaceSourceBinding` for workspace/project routing.
+- `ProjectSourceBinding` and `ProjectSourceItemLink` for project routing and
+  collection materialization.
 
 Knowledge `Source` remains curated wiki evidence. A Custom Source handler must
 not create Knowledge `Source` rows directly. Promotion from Sources evidence to

@@ -183,11 +183,13 @@ bindings; Product Plugins are optional product feature packages.
 **B50** — `server/` is the TypeScript backend source root. The Compose/API
 entrypoint service name remains `server` for web, dev, test, and prod.
 The permanent gateway module owns routing and request context; unknown
-`/api/v1/*` routes fail closed with the local 404 catch-all. Schema changes are
-applied only through the explicit server migration runner under
-`server/migrations/`; the server service process does not auto-migrate
-on startup. DB-persisted API-key storage remains disabled/deferred until the
-canonical schema adds that table.
+`/api/v1/*` routes fail closed with the local 404 catch-all. Schema authoring
+goes through Drizzle definitions under `server/src/db/schema/`; generated SQL
+artifacts live under `server/migrations/` and are applied only through the
+explicit server migration runner. Do not hand-edit migration SQL for schema
+changes. The server service process does not auto-migrate on startup.
+DB-persisted API-key storage remains disabled/deferred until the canonical
+schema adds that table.
 
 ---
 

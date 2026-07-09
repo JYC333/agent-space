@@ -272,10 +272,17 @@ const customSourceRepairActivation = z
   })
   .passthrough();
 
-const researchAtlasCuration = z
+const evolvableAssetVersionPromote = z
   .object({
-    proposal_type: z.literal("research_atlas_curation"),
-    action: z.enum(["create_group", "add_group_membership"]),
+    proposal_type: z.literal("evolvable_asset_version_promote"),
+    asset_id: z.string().min(1),
+    candidate_version_id: z.string().min(1),
+    target_scope_type: z.enum(["project", "space", "system"]),
+    target_scope_id: z.string().min(1).nullable().optional(),
+    pin_after_approval: z.boolean().optional(),
+    deprecate_previous: z.boolean().optional(),
+    evaluation_run_ids: z.array(z.string().min(1)).optional(),
+    reason: z.string().nullable().optional(),
   })
   .passthrough();
 
@@ -313,7 +320,7 @@ export const ProposalPayloadSchema = z.discriminatedUnion("proposal_type", [
   customSourceCredentialedSource,
   customSourceRepairActivation,
   sourceRecipeActivation,
-  researchAtlasCuration,
+  evolvableAssetVersionPromote,
 ]);
 
 export type ProposalPayload = z.infer<typeof ProposalPayloadSchema>;

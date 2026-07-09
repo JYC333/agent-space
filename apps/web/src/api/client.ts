@@ -33,13 +33,19 @@ import type {
   EvolutionSummaryOut, EvolutionTarget, EvolutionTargetCreateBody, EvolutionTargetUpdateBody, EvolutionSignal, EvolutionSignalCreateBody,
   EvolutionRunListItem, EvolutionRunResult, EvolutionProposal, EvolutionValidationResult,
   EvolutionStrategy, EvolutionSelectorDecision, EvolutionExperience,
+  EvolvableAsset, EvolvableAssetVersion, EvolvableAssetPin, EvolvableAssetEvaluationRun, ResolvedEvolvableAssetVersion,
   Project, ProjectCreate, ProjectUpdate, ProjectWorkspaceLinkCreate, ProjectWorkspaceLinkOut, ProjectSummary,
   CapabilityDefinition, CapabilityPackDescriptor, WorkflowTemplate, ProjectWorkflowProfile, WorkflowRunDraftRequest, WorkflowRunDraftResponse,
+  ProjectPresetDescriptor, ProjectPresetSelection,
+  ProjectResearchArtifactLink, ProjectResearchCheckpoint, ProjectResearchLiteratureMatrixItem, ProjectResearchProfile,
+  ProjectResearchScreeningCriteria, ProjectResearchWorkflow,
+  AcademicPaper, AcademicPaperAuthor, AcademicPaperCitation, AcademicPaperCreate, AcademicPaperUpdate,
   SkillImportPreviewResponse, SkillPackage, SkillImportApprovalProposalResponse, SkillConvertToCapabilityResponse,
   SkillLibraryIndexResponse, SkillLocalOverlay, SkillLocalOverlayUpsertRequest,
   SourceConnector, SourceConnection, SourceConnectionCreate, SourceCapturePolicy, SourceScheduleRule, SourceItem, ExtractionJob,
   SourcePresetListResponse, ArxivPresetPreviewRequest, ArxivPresetPreviewResponse, ArxivPresetCreateRequest,
-  ExtractedEvidence, EvidenceLink, WorkspaceSourceBinding, WorkspaceSourceBindingBackfillResult,
+  ExtractedEvidence, EvidenceLink, ProjectCorpusBackfillResult, ProjectCorpusItem,
+  ProjectSourceBinding, ProjectSourceBindingBackfillResult, ProjectSourceItem, ProjectSourceSummary, SourceHealth,
   CustomSourceActivationResult, CustomSourceCreateDraftRequest, CustomSourceHandlerRun,
   CustomSourceHandlerSummary, CustomSourceHandlerVersion, CustomSourceInstanceRunnerSettings,
   CustomSourceInstanceRunnerSettingsUpdate,
@@ -152,38 +158,11 @@ async function request<T = unknown>(method: string, path: string, body?: unknown
   return r.json() as Promise<T>
 }
 
-async function requestText(method: string, path: string, options: RequestOptions = {}): Promise<string> {
-  const headers: Record<string, string> = {}
-  if (_apiKey) headers['Authorization'] = `Bearer ${_apiKey}`
-  if (options.includeSpaceContext ?? true) headers['X-Agent-Space-Id'] = options.spaceId ?? _spaceId
-
-  const r = await fetch(BASE + path, { method, headers })
-
-  if (r.status === 401) {
-    window.dispatchEvent(new CustomEvent('auth:required'))
-  }
-
-  if (!r.ok) {
-    let msg = `${r.status} ${r.statusText}`
-    try {
-      const err = await r.json() as ApiError
-      msg = formatApiErrorMessage(err, msg)
-    } catch {
-      const text = await r.text().catch(() => '')
-      if (text) msg = text
-    }
-    throw new Error(msg)
-  }
-
-  return r.text()
-}
-
 const get   = <T>(path: string, options?: RequestOptions)                => request<T>('GET',    path, undefined, options)
 const post  = <T>(path: string, body?: unknown, options?: RequestOptions) => request<T>('POST',   path, body, options)
 const put   = <T>(path: string, body?: unknown, options?: RequestOptions) => request<T>('PUT',    path, body, options)
 const patch = <T>(path: string, body?: unknown, options?: RequestOptions) => request<T>('PATCH',  path, body, options)
 const del   = <T>(path: string, options?: RequestOptions)                => request<T>('DELETE', path, undefined, options)
-const getText = (path: string, options?: RequestOptions) => requestText('GET', path, options)
 
 // ── Memory ────────────────────────────────────────────────────────────────
 export const memoryApi = {
@@ -320,6 +299,8 @@ export interface GraphProjectionQuery {
   node_kinds?: string[]
   edge_kinds?: string[]
   q?: string
+  project_id?: string
+  lens_id?: string
   limit?: number
   include_clusters?: boolean
 }
@@ -339,6 +320,8 @@ export const graphApi = {
     if (params.node_kinds?.length) q.set('node_kinds', params.node_kinds.join(','))
     if (params.edge_kinds?.length) q.set('edge_kinds', params.edge_kinds.join(','))
     if (params.q) q.set('q', params.q)
+    if (params.project_id) q.set('project_id', params.project_id)
+    if (params.lens_id) q.set('lens_id', params.lens_id)
     if (params.limit !== undefined) q.set('limit', String(params.limit))
     if (params.include_clusters !== undefined) q.set('include_clusters', String(params.include_clusters))
     return get<GraphProjection>(`/graph/projection${q.size ? '?' + q : ''}`)
@@ -743,6 +726,84 @@ export const evolutionApi = {
     return get<EvolutionProposal[]>('/evolution/proposals?' + new URLSearchParams(q))
   },
   validation: () => get<EvolutionValidationResult[]>('/evolution/validation'),
+  assets: (params: { asset_type?: string } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.asset_type !== undefined) q.asset_type = params.asset_type
+    const query = new URLSearchParams(q).toString()
+    return get<EvolvableAsset[]>(query ? `/evolution/assets?${query}` : '/evolution/assets')
+  },
+  createAsset: (body: {
+    asset_type: string
+    asset_key: string
+    display_name: string
+    description?: string | null
+    owner_scope_type?: string
+    owner_scope_id?: string | null
+    default_eval_suite_ref?: Record<string, unknown> | null
+    metadata_json?: Record<string, unknown>
+  }) => post<EvolvableAsset>('/evolution/assets', body),
+  asset: (assetId: string) =>
+    get<EvolvableAsset>(`/evolution/assets/${encodeURIComponent(assetId)}`),
+  assetVersions: (assetId: string) =>
+    get<EvolvableAssetVersion[]>(`/evolution/assets/${encodeURIComponent(assetId)}/versions`),
+  createAssetVersion: (assetId: string, body: {
+    scope_type?: string
+    scope_id?: string | null
+    parent_version_id?: string | null
+    source?: string
+    content_ref?: string | null
+    content_hash?: string | null
+    content_json?: Record<string, unknown>
+  }) => post<EvolvableAssetVersion>(`/evolution/assets/${encodeURIComponent(assetId)}/versions`, body),
+  transitionAssetVersion: (assetId: string, versionId: string, body: { status: string }) =>
+    post<EvolvableAssetVersion>(
+      `/evolution/assets/${encodeURIComponent(assetId)}/versions/${encodeURIComponent(versionId)}/transition`,
+      body,
+    ),
+  assetPins: (assetId: string) =>
+    get<EvolvableAssetPin[]>(`/evolution/assets/${encodeURIComponent(assetId)}/pins`),
+  setAssetPin: (assetId: string, scopeType: string, scopeId: string, body: { version_id: string; reason?: string | null }) =>
+    put<EvolvableAssetPin>(
+      `/evolution/assets/${encodeURIComponent(assetId)}/pins/${encodeURIComponent(scopeType)}/${encodeURIComponent(scopeId)}`,
+      body,
+    ),
+  deleteAssetPin: (assetId: string, scopeType: string, scopeId: string) =>
+    del<null>(`/evolution/assets/${encodeURIComponent(assetId)}/pins/${encodeURIComponent(scopeType)}/${encodeURIComponent(scopeId)}`),
+  resolveAsset: (assetId: string, body: {
+    project_id?: string | null
+    agent_id?: string | null
+    explicit_version_id?: string | null
+    allow_user_pin?: boolean
+  } = {}) =>
+    post<ResolvedEvolvableAssetVersion>(`/evolution/assets/${encodeURIComponent(assetId)}/resolve`, body),
+  assetEvaluationRuns: (assetId: string) =>
+    get<EvolvableAssetEvaluationRun[]>(`/evolution/assets/${encodeURIComponent(assetId)}/evaluation-runs`),
+  recordAssetEvaluation: (assetId: string, versionId: string, body: {
+    eval_suite_ref: Record<string, unknown>
+    evaluator_version: string
+    status?: string
+    baseline_version_id?: string | null
+    run_id?: string | null
+    model_provider_ref?: Record<string, unknown> | null
+    metrics?: Record<string, unknown>
+    blockers?: unknown[]
+    output_artifact_id?: string | null
+    report_artifact_id?: string | null
+  }) => post<EvolvableAssetEvaluationRun>(
+    `/evolution/assets/${encodeURIComponent(assetId)}/versions/${encodeURIComponent(versionId)}/evaluate`,
+    body,
+  ),
+  createAssetPromotionProposal: (assetId: string, versionId: string, body: {
+    target_scope_type: 'project' | 'space' | 'system'
+    target_scope_id?: string | null
+    pin_after_approval?: boolean
+    deprecate_previous?: boolean
+    evaluation_run_ids?: string[]
+    reason?: string | null
+  }) => post<{ proposal_id: string; status: string; proposal_type: string }>(
+    `/evolution/assets/${encodeURIComponent(assetId)}/versions/${encodeURIComponent(versionId)}/promote-proposal`,
+    body,
+  ),
 }
 
 // ── Agents ────────────────────────────────────────────────────────────────
@@ -803,7 +864,12 @@ export const agentTemplatesApi = {
 // ── Automations ───────────────────────────────────────────────────────────
 // Space-scoped paths (/spaces/{space_id}/automations); identity via session/bearer.
 export const automationsApi = {
-  list:   ()                                  => get<AutomationOut[]>(`/spaces/${_spaceId}/automations`),
+  list:   (params: { project_id?: string } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.project_id !== undefined) q.project_id = params.project_id
+    const suffix = new URLSearchParams(q).toString()
+    return get<AutomationOut[]>(`/spaces/${_spaceId}/automations${suffix ? `?${suffix}` : ''}`)
+  },
   get:    (id: string)                        => get<AutomationOut>(`/spaces/${_spaceId}/automations/${id}`),
   create: (data: AutomationCreateBody)        => post<AutomationOut>(`/spaces/${_spaceId}/automations`, data),
   update: (id: string, data: AutomationUpdateBody) => patch<AutomationOut>(`/spaces/${_spaceId}/automations/${id}`, data),
@@ -1208,7 +1274,6 @@ export const sourcesApi = {
     library_status?: string
     read_status?: string
     connection_id?: string
-    project_id?: string
     content_state?: string
     q?: string
     library_type?: string
@@ -1220,7 +1285,6 @@ export const sourcesApi = {
     if (params.library_status !== undefined) q.library_status = params.library_status
     if (params.read_status !== undefined) q.read_status = params.read_status
     if (params.connection_id !== undefined) q.connection_id = params.connection_id
-    if (params.project_id !== undefined) q.project_id = params.project_id
     if (params.content_state !== undefined) q.content_state = params.content_state
     if (params.q !== undefined) q.q = params.q
     if (params.library_type !== undefined) q.library_type = params.library_type
@@ -1288,26 +1352,72 @@ export const sourcesApi = {
     return get<Page<EvidenceLink>>('/sources/evidence-links?' + new URLSearchParams(q))
   },
 
-  workspaceBindings: (params: { workspace_id?: string; source_connection_id?: string; project_id?: string } = {}) => {
+  projectSourceBindings: (params: { project_id: string; source_connection_id?: string }) => {
     const q: Record<string, string> = {}
-    if (params.workspace_id !== undefined) q.workspace_id = params.workspace_id
     if (params.source_connection_id !== undefined) q.source_connection_id = params.source_connection_id
-    if (params.project_id !== undefined) q.project_id = params.project_id
-    return get<WorkspaceSourceBinding[]>('/sources/workspace-source-bindings?' + new URLSearchParams(q))
+    q.project_id = params.project_id
+    return get<ProjectSourceBinding[]>('/sources/project-source-bindings?' + new URLSearchParams(q))
   },
-  createWorkspaceBinding: (body: {
-    workspace_id: string
+  createProjectSourceBinding: (body: {
     source_connection_id: string
     project_id: string
     backfill_history?: boolean
     binding_key?: string
     priority?: number
+    delivery_scope?: 'project_members' | 'source_subscribers'
+    collection_notifications_enabled?: boolean
     filters?: Record<string, unknown>
     routing_policy?: Record<string, unknown>
     extraction_policy?: Record<string, unknown>
-  }) => post<WorkspaceSourceBinding>('/sources/workspace-source-bindings', body),
-  backfillWorkspaceBinding: (bindingId: string) =>
-    post<WorkspaceSourceBindingBackfillResult>(`/sources/workspace-source-bindings/${bindingId}/backfill`),
+  }) => post<ProjectSourceBinding>('/sources/project-source-bindings', body),
+  updateProjectSourceBinding: (bindingId: string, body: Partial<{
+    status: string
+    binding_key: string
+    priority: number
+    delivery_scope: 'project_members' | 'source_subscribers'
+    collection_notifications_enabled: boolean
+    filters: Record<string, unknown>
+    routing_policy: Record<string, unknown>
+    extraction_policy: Record<string, unknown>
+  }>) => patch<ProjectSourceBinding>(`/sources/project-source-bindings/${bindingId}`, body),
+  deleteProjectSourceBinding: (bindingId: string) =>
+    del<{ id: string; status: string }>(`/sources/project-source-bindings/${bindingId}`),
+  backfillProjectSourceBinding: (bindingId: string) =>
+    post<ProjectSourceBindingBackfillResult>(`/sources/project-source-bindings/${bindingId}/backfill`),
+  projectItems: (params: {
+    project_id: string
+    source_connection_id?: string
+    item_type?: string
+    source_domain?: string
+    matched_date?: string
+    created_after?: string
+    occurred_after?: string
+    q?: string
+    limit?: number
+    offset?: number
+  }) => {
+    const q: Record<string, string> = { project_id: params.project_id }
+    if (params.source_connection_id !== undefined) q.source_connection_id = params.source_connection_id
+    if (params.item_type !== undefined) q.item_type = params.item_type
+    if (params.source_domain !== undefined) q.source_domain = params.source_domain
+    if (params.matched_date !== undefined) q.matched_date = params.matched_date
+    if (params.created_after !== undefined) q.created_after = params.created_after
+    if (params.occurred_after !== undefined) q.occurred_after = params.occurred_after
+    if (params.q !== undefined) q.q = params.q
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    return get<Page<ProjectSourceItem>>('/sources/project-items?' + new URLSearchParams(q))
+  },
+  projectSourceSummary: (projectId: string) =>
+    get<ProjectSourceSummary>(`/sources/project-source-summary?project_id=${encodeURIComponent(projectId)}`),
+  projectSourceHealth: (projectId: string) =>
+    get<SourceHealth[]>(`/sources/project-source-health?project_id=${encodeURIComponent(projectId)}`),
+  sourceHealth: (params: { connection_id?: string } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.connection_id !== undefined) q.connection_id = params.connection_id
+    const suffix = new URLSearchParams(q).toString()
+    return get<SourceHealth[]>(`/sources/source-health${suffix ? `?${suffix}` : ''}`)
+  },
   summarize: (body: SummaryRunRequest) =>
     post<SummaryRunOut>('/sources/post-processing/run-once', body),
   postProcessingRules: (connectionId: string) =>
@@ -1476,6 +1586,37 @@ export const projectsApi = {
   update: (id: string, data: ProjectUpdate) => patch<Project>(`/projects/${id}`, data),
   archive: (id: string) => post<Project>(`/projects/${id}/archive`),
   getSummary: (id: string) => get<ProjectSummary>(`/projects/${id}/summary`),
+  corpus: (id: string, params: {
+    status?: string
+    triage_status?: string
+    read_status?: string
+    role?: string
+    q?: string
+    limit?: number
+    offset?: number
+  } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.status !== undefined) q.status = params.status
+    if (params.triage_status !== undefined) q.triage_status = params.triage_status
+    if (params.read_status !== undefined) q.read_status = params.read_status
+    if (params.role !== undefined) q.role = params.role
+    if (params.q !== undefined) q.q = params.q
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    return get<Page<ProjectCorpusItem>>(`/projects/${id}/corpus?` + new URLSearchParams(q))
+  },
+  updateCorpusItem: (projectId: string, corpusItemId: string, data: Partial<{
+    role: ProjectCorpusItem['role']
+    status: ProjectCorpusItem['status']
+    triage_status: ProjectCorpusItem['triage_status']
+    read_status: ProjectCorpusItem['read_status']
+    relevance: ProjectCorpusItem['relevance']
+    confidence: number | null
+    reason: string | null
+    metadata_json: Record<string, unknown>
+  }>) => patch<ProjectCorpusItem>(`/projects/${projectId}/corpus/${corpusItemId}`, data),
+  backfillCorpusFromSources: (id: string) =>
+    post<ProjectCorpusBackfillResult>(`/projects/${id}/corpus/backfill-source-items`),
   listWorkspaces: (id: string) => get<ProjectWorkspaceLinkOut[]>(`/projects/${id}/workspaces`),
   linkWorkspace: (id: string, data: ProjectWorkspaceLinkCreate) =>
     post<ProjectWorkspaceLinkOut>(`/projects/${id}/workspaces`, data),
@@ -1487,6 +1628,99 @@ export const projectsApi = {
     post<RetrievalFeedbackResponse>('/projects/public-summaries/feedback', data),
   publicSummaryBrief: (data: RetrievalBriefRequest) =>
     post<RetrievalBriefResponse>('/projects/retrieval/brief', data),
+}
+
+export const projectPresetsApi = {
+  list: () =>
+    get<ProjectPresetDescriptor[]>('/project-presets'),
+  getProjectPreset: (projectId: string) =>
+    get<ProjectPresetSelection>(`/projects/${encodeURIComponent(projectId)}/preset`),
+}
+
+export const projectResearchApi = {
+  profile: (projectId: string) =>
+    get<ProjectResearchProfile>(`/projects/${encodeURIComponent(projectId)}/research/profile`),
+  upsertProfile: (projectId: string, body: Partial<Pick<
+    ProjectResearchProfile,
+    | 'research_question'
+    | 'working_title'
+    | 'domain'
+    | 'output_type'
+    | 'paper_type'
+    | 'citation_style'
+    | 'target_venue'
+    | 'language'
+    | 'experiment_intake_declaration'
+  >>) =>
+    put<ProjectResearchProfile>(`/projects/${encodeURIComponent(projectId)}/research/profile`, body),
+  approveProfile: (projectId: string) =>
+    post<ProjectResearchProfile>(`/projects/${encodeURIComponent(projectId)}/research/profile/approve`, {}),
+  workflows: (projectId: string) =>
+    get<ProjectResearchWorkflow[]>(`/projects/${encodeURIComponent(projectId)}/research/workflow`),
+  startWorkflow: (projectId: string, body: { workflow_type: string; mode?: string }) =>
+    post<ProjectResearchWorkflow>(`/projects/${encodeURIComponent(projectId)}/research/workflow/start`, body),
+  runStage: (projectId: string, workflowId: string, stageKey: string, body: { run_id?: string } = {}) =>
+    post<ProjectResearchWorkflow>(
+      `/projects/${encodeURIComponent(projectId)}/research/workflow/${encodeURIComponent(workflowId)}/stages/${encodeURIComponent(stageKey)}/run`,
+      body,
+    ),
+  checkpoints: (projectId: string, workflowId: string) =>
+    get<ProjectResearchCheckpoint[]>(
+      `/projects/${encodeURIComponent(projectId)}/research/workflow/${encodeURIComponent(workflowId)}/checkpoints`,
+    ),
+  decideCheckpoint: (projectId: string, workflowId: string, checkpointId: string, body: { decision: string; reason?: string | null }) =>
+    post<ProjectResearchCheckpoint>(
+      `/projects/${encodeURIComponent(projectId)}/research/workflow/${encodeURIComponent(workflowId)}/checkpoints/${encodeURIComponent(checkpointId)}/decide`,
+      body,
+    ),
+  screeningCriteria: (projectId: string) =>
+    get<ProjectResearchScreeningCriteria>(`/projects/${encodeURIComponent(projectId)}/research/screening-criteria`),
+  upsertScreeningCriteria: (projectId: string, body: Partial<Pick<
+    ProjectResearchScreeningCriteria,
+    'include_keywords' | 'exclude_keywords' | 'methods' | 'date_range_start' | 'date_range_end' | 'venues' | 'required_evidence_fields'
+  >>) =>
+    put<ProjectResearchScreeningCriteria>(`/projects/${encodeURIComponent(projectId)}/research/screening-criteria`, body),
+  literatureMatrix: (projectId: string) =>
+    get<ProjectResearchLiteratureMatrixItem[]>(`/projects/${encodeURIComponent(projectId)}/research/literature-matrix`),
+  rebuildLiteratureMatrix: (projectId: string) =>
+    post<ProjectResearchLiteratureMatrixItem[]>(`/projects/${encodeURIComponent(projectId)}/research/literature-matrix/rebuild`, {}),
+  synthesis: (projectId: string) =>
+    get<ProjectResearchArtifactLink[]>(`/projects/${encodeURIComponent(projectId)}/research/synthesis`),
+  artifacts: (projectId: string, params: { workflow_id?: string; artifact_type?: string } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.workflow_id !== undefined) q.workflow_id = params.workflow_id
+    if (params.artifact_type !== undefined) q.artifact_type = params.artifact_type
+    const suffix = Object.keys(q).length ? '?' + new URLSearchParams(q) : ''
+    return get<ProjectResearchArtifactLink[]>(`/projects/${encodeURIComponent(projectId)}/research/artifacts${suffix}`)
+  },
+  runIntegrity: (projectId: string, body: { workflow_id: string; stage_key?: string }) =>
+    post<ProjectResearchCheckpoint>(`/projects/${encodeURIComponent(projectId)}/research/integrity/run`, body),
+}
+
+export const academicApi = {
+  listPapers: (params: { q?: string; limit?: number; offset?: number } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.q !== undefined) q.q = params.q
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    return get<Page<AcademicPaper>>('/academic/papers?' + new URLSearchParams(q))
+  },
+  createPaper: (body: AcademicPaperCreate) =>
+    post<AcademicPaper>('/academic/papers', body),
+  getPaper: (objectId: string) =>
+    get<AcademicPaper>(`/academic/papers/${encodeURIComponent(objectId)}`),
+  updatePaper: (objectId: string, body: AcademicPaperUpdate) =>
+    patch<AcademicPaper>(`/academic/papers/${encodeURIComponent(objectId)}`, body),
+  linkAuthor: (objectId: string, body: { person_object_id: string; author_position?: number | null; is_corresponding?: boolean }) =>
+    post<{ object_relation_id: string }>(`/academic/papers/${encodeURIComponent(objectId)}/authors`, body),
+  listAuthors: (objectId: string) =>
+    get<AcademicPaperAuthor[]>(`/academic/papers/${encodeURIComponent(objectId)}/authors`),
+  linkCitation: (objectId: string, body: { cited_paper_object_id: string }) =>
+    post<{ object_relation_id: string }>(`/academic/papers/${encodeURIComponent(objectId)}/citations`, body),
+  listCitations: (objectId: string) =>
+    get<AcademicPaperCitation[]>(`/academic/papers/${encodeURIComponent(objectId)}/citations`),
+  listCitedBy: (objectId: string) =>
+    get<AcademicPaperCitation[]>(`/academic/papers/${encodeURIComponent(objectId)}/cited-by`),
 }
 
 // ── Features ──────────────────────────────────────────────────────────────
@@ -1947,208 +2181,4 @@ export const diaryApi = {
     get<{ date: string; entries: DiaryEntry[] }>(`/diary/on-this-day?date=${encodeURIComponent(date)}`),
   reflections: (date: string) =>
     get<{ entry_date: string; reflections: DiaryReflection[] }>(`/diary/entries/${encodeURIComponent(date)}/reflections`),
-}
-
-export interface ResearchAtlasStatus {
-  ok: boolean
-  plugin_id: string
-  version: string
-  scope: 'space'
-  space_id: string
-}
-
-export interface ResearchAtlasPaper {
-  id: string
-  space_id: string
-  title: string
-  abstract: string | null
-  publication_date: string | null
-  publication_year: number | null
-  paper_type: string
-  venue_id: string | null
-  doi: string | null
-  arxiv_id: string | null
-  oa_status: string
-  best_oa_url: string | null
-  raw_author_names: string[]
-  merged_into_id: string | null
-  created_at: string
-  updated_at: string
-}
-
-export interface ResearchAtlasAuthorship {
-  id: string
-  paper_id: string
-  scholar_id: string | null
-  author_position: number
-  raw_author_name: string
-  raw_affiliation_text: string | null
-  confidence: number | null
-}
-
-export interface ResearchAtlasExternalId {
-  id_type: string
-  id_value: string
-  is_primary: boolean
-}
-
-export interface ResearchAtlasPaperDetail {
-  paper: ResearchAtlasPaper
-  authorships: ResearchAtlasAuthorship[]
-  external_ids: ResearchAtlasExternalId[]
-  provenance: Array<{ connector: string; fetched_at: string; fetch_status: string }>
-}
-
-export interface ResearchAtlasScholar {
-  id: string
-  display_name: string
-  orcid: string | null
-  h_index: number | null
-  works_count: number | null
-}
-
-export interface ResearchAtlasScholarDetail {
-  scholar: ResearchAtlasScholar
-  papers: ResearchAtlasPaper[]
-  external_ids: ResearchAtlasExternalId[]
-  coauthors: Array<{ id: string; display_name: string; shared_paper_count: number }>
-  affiliations: Array<{
-    id: string
-    role: string | null
-    institution: { id: string; name: string } | null
-    department: { id: string; name: string } | null
-  }>
-}
-
-export interface ResearchAtlasSearchResult {
-  entity_type: string
-  id: string
-  label: string
-  detail: string | null
-}
-
-export interface ResearchAtlasSyncStatus {
-  cursors: Array<{
-    cursor_key: string
-    watermark_json: Record<string, unknown>
-    last_run_at: string | null
-    last_error: string | null
-    updated_at: string
-  }>
-  due_refresh_count: number
-}
-
-export interface ResearchAtlasProjectPaper {
-  id: string
-  project_id: string
-  paper_id: string
-  status: 'candidate' | 'shortlist' | 'reading' | 'done' | 'rejected'
-  read_status: 'unread' | 'skimmed' | 'read'
-  rating: number | null
-  tags: string[]
-  note: string | null
-  pinned: boolean
-  source: string
-  source_item_id: string | null
-  paper: ResearchAtlasPaper
-}
-
-export interface ResearchAtlasTopic {
-  id: string
-  label: string
-  kind: string
-  taxonomy: string
-}
-
-export interface ResearchAtlasGroup {
-  id: string
-  name: string
-  aliases: string[]
-  pi_scholar_id: string | null
-  confidence: number | null
-  member_count?: number
-}
-
-export interface ResearchAtlasGroupMembership {
-  id: string
-  group_id: string
-  scholar_id: string
-  role: string
-  source: string
-  confidence: number | null
-  scholar?: ResearchAtlasScholar
-}
-
-export interface ResearchAtlasPaperRelated {
-  references: ResearchAtlasPaper[]
-  citations: ResearchAtlasPaper[]
-  coauthors: Array<{ id: string; display_name: string }>
-}
-
-export const researchAtlasApi = {
-  status: () => get<ResearchAtlasStatus>('/atlas/status'),
-  listPapers: (params: { q?: string; year?: number; cursor?: string; limit?: number } = {}) => {
-    const q = new URLSearchParams()
-    if (params.q) q.set('q', params.q)
-    if (params.year) q.set('year', String(params.year))
-    if (params.cursor) q.set('cursor', params.cursor)
-    if (params.limit) q.set('limit', String(params.limit))
-    return get<{ papers: ResearchAtlasPaper[]; next_cursor: string | null }>(`/atlas/papers${q.size ? '?' + q : ''}`)
-  },
-  importPaper: (input: { doi?: string; arxiv_id?: string }) =>
-    post<{ paper: ResearchAtlasPaper; status: 'created' | 'matched'; job_id: string | null }>('/atlas/papers/import', input),
-  importFile: (input: { format: 'bibtex' | 'ris' | 'csl_json'; content: string | unknown }) =>
-    post<{ imported: Array<{ paper: ResearchAtlasPaper; status: 'created' | 'matched'; job_id: string | null }>; count: number }>('/atlas/papers/import-file', input),
-  getPaper: (paperId: string) =>
-    get<ResearchAtlasPaperDetail>(`/atlas/papers/${encodeURIComponent(paperId)}`),
-  patchPaper: (paperId: string, input: Partial<Pick<ResearchAtlasPaper, 'title' | 'abstract' | 'publication_year' | 'paper_type' | 'doi' | 'arxiv_id'>>) =>
-    patch<{ paper: ResearchAtlasPaper }>(`/atlas/papers/${encodeURIComponent(paperId)}`, input),
-  search: (query: string) =>
-    get<{ results: ResearchAtlasSearchResult[] }>(`/atlas/search?q=${encodeURIComponent(query)}`),
-  getScholar: (scholarId: string) =>
-    get<ResearchAtlasScholarDetail>(`/atlas/scholars/${encodeURIComponent(scholarId)}`),
-  getPaperReferences: (paperId: string) =>
-    get<{ papers: ResearchAtlasPaper[] }>(`/atlas/papers/${encodeURIComponent(paperId)}/references`),
-  getPaperCitations: (paperId: string) =>
-    get<{ papers: ResearchAtlasPaper[] }>(`/atlas/papers/${encodeURIComponent(paperId)}/citations`),
-  getPaperRelated: (paperId: string) =>
-    get<ResearchAtlasPaperRelated>(`/atlas/papers/${encodeURIComponent(paperId)}/related`),
-  getGraph: (params: { mode?: 'global' | 'library'; paper_id?: string }) => {
-    const q = new URLSearchParams()
-    if (params.mode) q.set('mode', params.mode)
-    if (params.paper_id) q.set('paper_id', params.paper_id)
-    return get<GraphProjection>(`/atlas/graph?${q}`)
-  },
-  listTopics: () => get<{ topics: ResearchAtlasTopic[] }>('/atlas/topics'),
-  listGroups: () => get<{ groups: ResearchAtlasGroup[] }>('/atlas/groups'),
-  createGroup: (input: { name: string; aliases?: string[]; pi_scholar_id?: string | null; confidence?: number | null }) =>
-    post<{ group: ResearchAtlasGroup }>('/atlas/groups', input),
-  addGroupMembership: (groupId: string, input: { scholar_id: string; role?: string; confidence?: number | null }) =>
-    post<{ membership: ResearchAtlasGroupMembership }>(`/atlas/groups/${encodeURIComponent(groupId)}/members`, input),
-  exportEntities: (params: { type: string; since?: string; cursor?: string; limit?: number; include_merged?: boolean; active_only?: boolean }) => {
-    const q = new URLSearchParams()
-    q.set('type', params.type)
-    if (params.since) q.set('since', params.since)
-    if (params.cursor) q.set('cursor', params.cursor)
-    if (params.limit) q.set('limit', String(params.limit))
-    if (params.include_merged !== undefined) q.set('include_merged', String(params.include_merged))
-    if (params.active_only) q.set('active_only', 'true')
-    return getText(`/atlas/export/entities?${q}`)
-  },
-  settings: () => get<ResearchAtlasSyncStatus>('/atlas/settings'),
-  syncSource: () => post<{ imported: number; scanned: number; last_error: string | null }>('/atlas/sync/sources'),
-  listProjectPapers: (projectId: string) =>
-    get<{ project_id: string; papers: ResearchAtlasProjectPaper[] }>(`/atlas/projects/${encodeURIComponent(projectId)}/papers`),
-  addProjectPaper: (projectId: string, input: { paper_id: string; status?: ResearchAtlasProjectPaper['status'] }) =>
-    post<{ project_paper: ResearchAtlasProjectPaper }>(`/atlas/projects/${encodeURIComponent(projectId)}/papers`, input),
-  updateProjectPaper: (projectId: string, paperId: string, input: Partial<Pick<ResearchAtlasProjectPaper, 'status' | 'read_status' | 'rating' | 'tags' | 'note' | 'pinned'>>) =>
-    patch<{ project_paper: ResearchAtlasProjectPaper }>(`/atlas/projects/${encodeURIComponent(projectId)}/papers/${encodeURIComponent(paperId)}`, input),
-  removeProjectPaper: (projectId: string, paperId: string) =>
-    del<{ deleted: boolean }>(`/atlas/projects/${encodeURIComponent(projectId)}/papers/${encodeURIComponent(paperId)}`),
-  getPluginSettings: async () => {
-    const item = await pluginsApi.get('research_atlas') as { effective?: { settings?: Record<string, unknown> } }
-    return item.effective?.settings ?? {}
-  },
-  patchPluginSettings: (settings: Record<string, unknown>) =>
-    pluginsApi.patchSettings('research_atlas', settings),
 }

@@ -43,7 +43,7 @@ export const runtimeToolBindings = pgTable("runtime_tool_bindings", {
 			name: "runtime_tool_bindings_space_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.workspaceId],
+			columns: [table.workspaceId, table.spaceId],
 			foreignColumns: [workspaces.id, workspaces.spaceId],
 			name: "runtime_tool_bindings_workspace_id_fkey"
 		}),

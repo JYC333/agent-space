@@ -15,13 +15,14 @@ durable position on this boundary.
 **Source of truth hierarchy:**
 
 1. **Code** — implementation truth; always wins over docs
-2. `server/migrations/` — canonical database schema migrations
-3. `packages/protocol/src/` — shared public DTOs and wire contracts
-4. `server/src/gateway/routeRegistry.ts` — active backend route registry
-5. `server/src/modules/` — active backend module implementations
-6. `apps/web/src/modules/registry.ts` — active frontend modules and nav items
-7. `.agent/BOUNDARIES.md` — architectural invariants; load for any structural change
-8. `.agent/decisions/` — accepted architectural decisions
+2. `server/src/db/schema/` — database schema authoring source
+3. `server/migrations/` — generated/applied database SQL artifacts
+4. `packages/protocol/src/` — shared public DTOs and wire contracts
+5. `server/src/gateway/routeRegistry.ts` — active backend route registry
+6. `server/src/modules/` — active backend module implementations
+7. `apps/web/src/modules/registry.ts` — active frontend modules and nav items
+8. `.agent/BOUNDARIES.md` — architectural invariants; load for any structural change
+9. `.agent/decisions/` — accepted architectural decisions
 
 Docs in `.agent/architecture/` describe **current state**, not target-state speculation. Temporary
 reports in `.agent/reports/` are not source of truth and should be deleted after consolidation.
@@ -125,7 +126,7 @@ are source of truth for active nav and routes. For UI decisions, see the module 
 | [modules/frontend-layout.md](modules/frontend-layout.md) | Responsive layout, mobile variants |
 | [modules/client-server-protocol.md](modules/client-server-protocol.md) | REST, WebSocket, SSE, offline queue protocol |
 | [modules/activity-inbox.md](modules/activity-inbox.md) | Activity inbox UI and quick capture |
-| [modules/graph-view.md](modules/graph-view.md) | Shared GraphProjection contract, graph renderer boundary, core Graph page, plugin GraphView consumption |
+| [modules/graph-view.md](modules/graph-view.md) | Shared GraphProjection contract, graph renderer boundary, core Graph page, Project graph lens consumption |
 
 ### Testing Strategy
 
@@ -160,6 +161,7 @@ Load only the module docs relevant to your task.
 | Credentials | [modules/credentials.md](modules/credentials.md) |
 | Deployment | [modules/deployment.md](modules/deployment.md) |
 | Knowledge Base / knowledge items | [modules/knowledge-base.md](modules/knowledge-base.md) |
+| Relationships / people and organizations | [modules/relations.md](modules/relations.md) |
 | Spaced repetition / cards | [modules/spaced-repetition.md](modules/spaced-repetition.md) |
 | Media cards | [modules/media-cards.md](modules/media-cards.md) |
 | Graph view / relationship visualization | [modules/graph-view.md](modules/graph-view.md) |

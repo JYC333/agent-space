@@ -45,6 +45,8 @@ source pipeline, subscription model, data model, and API.
 
 - Source connection configuration, scan schedules, or post-processing rules
   (`modules/sources.md`).
+- Project source bindings, project source item links, source health, and the
+  `/sources/project-items` read model (`modules/sources.md`).
 - Source recommendation/subscription decisions (`modules/sources.md`).
 - Activity Inbox notification lifecycle (`modules/activity-inbox.md`).
 - Sources reader annotation storage/APIs; Library composes the shared reader UI
@@ -68,6 +70,10 @@ source_connection_user_subscriptions (subscribed + library_enabled)
   -> /library/items/:itemId reader
 ```
 
+`GET /api/v1/sources/items` is Library-only. Project collection views use
+`project_source_item_links` through `GET /api/v1/sources/project-items` and do
+not imply that the current user follows the underlying source.
+
 Activity Inbox points into Library through daily aggregate rows with
 `activity_records.aggregate_key = source:briefing:<source_connection_id>:<date>`.
 Those rows contain only counts and a short preview; full digest and item
@@ -77,6 +83,10 @@ Source recommendation inbox rows point back to Sources Pending. Reviewing or
 archiving the Activity row only clears the notification pointer; Follow,
 Dismiss, Mute, and Unsubscribe are stored in
 `source_connection_user_subscriptions`.
+
+Project source collection inbox rows point to `/projects/:projectId/sources`.
+Reviewing or archiving those Activity rows clears only the notification pointer;
+it does not mutate project source bindings or source subscriptions.
 
 ## Related Files
 

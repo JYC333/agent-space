@@ -109,6 +109,47 @@ They must be sanitized before write; source refs may identify public pointers
 but must not embed raw private memory, memo excerpts, document bodies, or other
 concrete project content.
 
+### Project Presets
+
+Project presets are code-owned workflow packs selected when a Project is
+created. They are project shape presets, not post-create feature toggles. A
+Project's selected preset key is stored in `projects.settings_json.preset` and
+the frontend uses it to choose the Project-specific shell, visual treatment, and
+primary operations. Changing a Project's preset after creation is not a normal
+user workflow.
+
+The current built-in preset is `academic_research`. It reuses normal Project
+Sources plus the `arxiv` source preset, `academic_paper_v1` extraction profile
+key, and `academic_citation_v1` graph lens id. Its advertised sections are
+`source_monitoring`, `corpus`, and `project_graph`; paper/citation objects are
+represented through the core relation/object model and surfaced through the
+project corpus and graph lens, not through a second project hierarchy. Academic
+projects render an Academic Research workbench with direct literature
+monitoring, paper screening/corpus, arXiv source setup, and citation graph
+actions.
+
+A project source binding whose `extraction_policy_json.profile_key` is
+`academic_paper_v1` materializes matching arXiv-scanned source items into a
+paper object (`space_objects` + `sources` + `academic_papers`, deduped per
+space by `arxiv_id`/`doi`) before the normal Project Corpus sync runs — see
+`materializeAcademicPaperFromSourceItem`
+(`server/src/modules/academic/paperMaterializer.ts`). Once
+`source_items.source_object_id` is set, the object is picked up by the
+existing corpus/graph sync with no preset-specific wiring.
+
+The `project_research` module (`/api/v1/projects/{id}/research/*`, see below)
+adds a project-owned research workflow foundation on top of Project Corpus:
+a research profile requiring human approval before a workflow can start,
+workflow/stage/checkpoint state, Artifact-per-stage links, project screening
+criteria, and a literature-matrix read model. Editing an approved research
+profile returns it to `draft` and clears approval metadata so downstream
+workflows require a fresh human confirmation. The module dispatches through
+existing Runs/Artifacts rather than a parallel execution system. Its integrity
+gate writes an `integrity_report` Artifact and a pending checkpoint after
+checking workflow-scoped claim links for missing citations, missing evidence
+or explicit gaps, evidence outside the project corpus, and missing experiment
+provenance.
+
 ### project_id on durable objects
 
 The following tables carry `project_id` columns with database foreign keys to
@@ -123,13 +164,41 @@ with `project_id = NULL` are unaffected.
 | `proposals` | `project_id` |
 | `memory_entries` | `project_id` |
 | `automations` | `project_id` (composite FK `(space_id, project_id)`; optional, `agent_run` target only, requires project writer authority to bind — see [modules/automations.md](../modules/automations.md)) |
-| `workspace_source_bindings` | `project_id` (required; composite FK `(space_id, project_id)`; source consumption requires project writer authority and a current `project_workspaces` link) |
+| `project_source_bindings` | `project_id` (required; composite FK `(space_id, project_id)`; source consumption requires project writer authority) |
+| `project_source_item_links` | `project_id` (required; materialized Source item collection rows for project source bindings) |
+| `project_corpus_items` | `project_id` (required; project-owned corpus/read model over object, source item, and evidence links) |
 
-`workspace_source_bindings` remain Sources-owned routing records, not Project-owned
-source records. `source_connections` stay space-scoped under Sources. The binding
-is the project boundary: the same workspace/source pair can be bound to multiple
-projects because the uniqueness constraint includes `(space_id, project_id,
-workspace_id, source_connection_id, binding_key)`.
+`project_source_bindings` and `project_source_item_links` remain Sources-owned
+routing/read-model records, not Project-owned source records.
+`source_connections` stay space-scoped under Sources. The binding is the
+project boundary: the same source connection can be bound to multiple projects
+because the uniqueness constraint includes `(space_id, project_id,
+source_connection_id, binding_key)`.
+
+`project_corpus_items` is Project-owned. It reconciles Sources output into the
+project's working corpus:
+
+- `status` is link lifecycle (`active` / `archived`);
+- `triage_status` is the project-level judgement (`new`, `relevant`, `maybe`,
+  `excluded`, `included`);
+- `triage_confirmed_by_user` is set whenever a human explicitly sets
+  `triage_status` through the Corpus API. Automated screening-decision sync
+  (`syncProjectCorpusSourceDecisions`) must not overwrite `triage_status` or
+  `last_reviewed_at` once this is true — AI screening only suggests, the user
+  confirms;
+- `read_status` is project-level reading progress (`unread`, `skimmed`,
+  `read`, `discussed`).
+
+When the corpus item's object is a materialized academic paper (see above),
+the corpus DTO's `object.academic` field carries joined `academic_papers` +
+`sources` metadata (`arxiv_id`, `doi`, `publication_date`, `venue`,
+`paper_type`, citation counts, `authors`, `categories`, `source_uri`); it is
+`null` for non-paper objects.
+
+`source_post_processing_item_decisions` remains the source-item-level
+post-processing decision/audit record. Project corpus rows may point at the
+latest relevant decision through `source_decision_id`, but project triage/read
+state is not stored on source items and does not mutate Library state.
 
 ## API routes
 
@@ -144,6 +213,10 @@ Space scoping is enforced via the `space_id` query parameter resolved by `get_id
 | PATCH | `/projects/{id}` | Update name / description / focus / settings |
 | POST | `/projects/{id}/archive` | Archive a project |
 | GET | `/projects/{id}/summary` | Counts: activities, artifacts, pending proposals, workspaces, active runs, memory entries |
+| GET | `/projects/{id}/corpus` | List the project corpus over collected source items, evidence, and graph objects |
+| POST | `/projects/{id}/corpus` | Upsert a project corpus entry for an object, source item, or evidence target; requires project writer |
+| PATCH | `/projects/{id}/corpus/{corpus_item_id}` | Update project-level corpus lifecycle, triage, read status, role, relevance, confidence, reason, or metadata; requires project writer |
+| POST | `/projects/{id}/corpus/backfill-source-items` | Recompute project corpus rows from current project source item links, evidence links, source-object pointers, and source post-processing decisions; requires project writer |
 | GET | `/projects/public-summaries` | List approved high-level project summaries in the current space |
 | POST | `/projects/public-summaries/search` | Search only `project_public_summary` retrieval objects |
 | GET | `/projects/{id}/public-summary` | Read the approved high-level public summary for a project |
@@ -155,6 +228,21 @@ Space scoping is enforced via the `space_id` query parameter resolved by `get_id
 | GET | `/projects/{id}/workspaces` | List linked workspaces |
 | POST | `/projects/{id}/workspaces` | Link a workspace (with role) |
 | DELETE | `/projects/{id}/workspaces/{workspace_id}` | Unlink a workspace |
+| GET | `/project-presets` | List built-in Project preset descriptors |
+| GET | `/projects/{id}/preset` | Read the Project's selected preset key |
+| GET / PUT | `/projects/{id}/research/profile` | Read / upsert the project's research profile (draft until approved) |
+| POST | `/projects/{id}/research/profile/approve` | Approve the research profile; required before a workflow can start |
+| GET | `/projects/{id}/research/workflow` | List research workflows for the project |
+| POST | `/projects/{id}/research/workflow/start` | Start a research workflow (requires an approved profile) |
+| POST | `/projects/{id}/research/workflow/{workflowId}/stages/{stageKey}/run` | Record a workflow stage transition, optionally linking a `run_id` |
+| GET | `/projects/{id}/research/workflow/{workflowId}/checkpoints` | List checkpoints for a workflow |
+| POST | `/projects/{id}/research/workflow/{workflowId}/checkpoints/{checkpointId}/decide` | Record a human decision (`approved` / `rejected` / `waived`) on a checkpoint |
+| GET / POST | `/projects/{id}/research/artifacts` | List / link Artifacts to a workflow stage (`artifact_type` is a fixed vocabulary, e.g. `rq_brief`, `literature_matrix`, `synthesis_report`) |
+| GET / PUT | `/projects/{id}/research/screening-criteria` | Read / upsert project screening criteria (keywords, methods, date range, venues, required evidence fields) |
+| GET | `/projects/{id}/research/literature-matrix` | Literature matrix read model over included/maybe corpus papers, with academic metadata and evidence/annotation counts |
+| POST | `/projects/{id}/research/literature-matrix/rebuild` | Backfill the project corpus from sources, then return the refreshed matrix |
+| GET | `/projects/{id}/research/synthesis` | List `synthesis_report`-typed artifact links |
+| POST | `/projects/{id}/research/integrity/run` | Run V1 integrity checks, write an `integrity_report` artifact, and record a pending `integrity_gate` checkpoint |
 
 ## project_id query filter on durable object list APIs
 
@@ -196,16 +284,17 @@ space.
   writer authority: the project `owner_user_id`, a space `owner`/`admin`, or an
   active `project_members.role` of `owner` or `member`. `viewer` is read-only for
   concrete project memory and cannot mutate project metadata or public summary.
-- Source binding creation requires project writer authority and rejects
-  workspaces that are not currently linked to the target project. Removing the
-  final `project_workspaces` link for a project/workspace archives matching
-  `workspace_source_bindings` and their auto-created `context_candidate`
-  evidence links.
-- The Project Detail Sources section supports creating a project-scoped source
-  binding directly from existing Sources and project-linked workspaces.
-  It also supports saving a URL into the project through an already-bound
-  source and changing the source for manually saved URL items. Source creation,
-  scans, and advanced source management remain on the Sources surface.
+- Project source binding creation requires project writer authority and binds a
+  Source connection directly to a Project. Removing project-workspace links does
+  not mutate project source bindings.
+- Project Detail shows a compact Sources summary and links to the Project
+  Sources surface. Project Sources supports binding sources, backfill, scan,
+  pause/remove, health, and the materialized project item collection. Global
+  Sources remains the source-level management surface.
+- Project creation lets the user choose a Project preset. Project Detail uses
+  the chosen preset to render the corresponding project shell. Academic Research
+  projects show a research workbench and direct literature/corpus/citation graph
+  operations. The preset does not create a second Project hierarchy.
 - Project Detail also shows recent Sources recommendations from project-linked
   source post-processing decisions. These are selected/maybe candidate items for
   review and follow-up; accepting durable Knowledge still goes through proposal

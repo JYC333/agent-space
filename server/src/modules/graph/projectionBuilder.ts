@@ -15,6 +15,7 @@ import {
 } from "./projectionRepository";
 
 export type ServerGraphProjectionMode = Exclude<GraphProjectionViewMode, "debug">;
+export type GraphLensId = "academic_citation_v1";
 
 export interface BuildProjectionOptions {
   mode: ServerGraphProjectionMode;
@@ -23,11 +24,36 @@ export interface BuildProjectionOptions {
   nodeKinds?: readonly string[];
   edgeKinds?: readonly string[];
   q?: string;
+  projectId?: string;
+  lensId?: GraphLensId;
   limit: number;
   includeClusters: boolean;
 }
 
 const EDGE_CAP_MULTIPLIER = 3;
+const NO_LENS_MATCH = "__graph_lens_no_match__";
+const GRAPH_LENSES: Record<GraphLensId, { nodeKinds: readonly string[]; edgeKinds: readonly string[] }> = {
+  academic_citation_v1: {
+    nodeKinds: ["source", "person", "organization"],
+    edgeKinds: ["cites", "authored_by", "affiliated_with"],
+  },
+};
+
+export function parseGraphLensId(value: string | undefined): GraphLensId | undefined {
+  if (!value) return undefined;
+  if (value === "academic_citation_v1") return value;
+  throw new HttpError(422, "invalid graph lens_id");
+}
+
+export function resolveGraphProjectionOptions(options: BuildProjectionOptions): BuildProjectionOptions {
+  if (!options.lensId) return options;
+  const lens = GRAPH_LENSES[options.lensId];
+  return {
+    ...options,
+    nodeKinds: applyLensFilter(lens.nodeKinds, options.nodeKinds),
+    edgeKinds: applyLensFilter(lens.edgeKinds, options.edgeKinds),
+  };
+}
 
 export class GraphProjectionBuilder {
   constructor(private readonly repository: GraphProjectionRepository) {}
@@ -36,15 +62,16 @@ export class GraphProjectionBuilder {
     identity: SpaceUserIdentity,
     options: BuildProjectionOptions,
   ): Promise<GraphProjection> {
-    switch (options.mode) {
+    const resolved = resolveGraphProjectionOptions(options);
+    switch (resolved.mode) {
       case "global":
-        return this.globalProjection(identity, options);
+        return this.globalProjection(identity, resolved);
       case "local":
-        return this.localProjection(identity, options);
+        return this.localProjection(identity, resolved);
       case "cluster":
-        return this.clusterProjection(identity, options);
+        return this.clusterProjection(identity, resolved);
       case "search":
-        return this.searchProjection(identity, options);
+        return this.searchProjection(identity, resolved);
     }
   }
 
@@ -53,8 +80,8 @@ export class GraphProjectionBuilder {
     options: BuildProjectionOptions,
   ): Promise<GraphProjection> {
     const [totalNodeCount, kindCounts] = await Promise.all([
-      this.repository.countVisibleObjects(identity, { nodeKinds: options.nodeKinds }),
-      this.repository.listKindCounts(identity, { nodeKinds: options.nodeKinds }),
+      this.repository.countVisibleObjects(identity, { nodeKinds: options.nodeKinds, projectId: options.projectId }),
+      this.repository.listKindCounts(identity, { nodeKinds: options.nodeKinds, projectId: options.projectId }),
     ]);
     const allClusterNodes = options.includeClusters
       ? kindCounts.map(clusterNodeFromCount)
@@ -67,16 +94,19 @@ export class GraphProjectionBuilder {
       this.repository.listHubObjects(identity, {
         nodeKinds: options.nodeKinds,
         edgeKinds: options.edgeKinds,
+        projectId: options.projectId,
         limit: hubBudget,
       }),
       this.repository.listRecentObjects(identity, {
         nodeKinds: options.nodeKinds,
+        projectId: options.projectId,
         limit: recentBudget,
       }),
       options.includeClusters
         ? this.repository.listClusterEdgeSummaries(identity, {
             nodeKinds: options.nodeKinds,
             edgeKinds: options.edgeKinds,
+            projectId: options.projectId,
           })
         : Promise.resolve([]),
     ]);
@@ -125,6 +155,7 @@ export class GraphProjectionBuilder {
       limit: options.limit,
       nodeKinds: options.nodeKinds,
       edgeKinds: options.edgeKinds,
+      projectId: options.projectId,
     });
     if (!result.rows.length) throw new HttpError(404, "Graph root not found");
     const nodes = result.rows.map((row) => objectNode(row, { clusterId: clusterIdForKind(row.object_type) }));
@@ -159,8 +190,15 @@ export class GraphProjectionBuilder {
     options: BuildProjectionOptions,
   ): Promise<GraphProjection> {
     const rootId = requiredRootId(options.rootId, "root_id is required for cluster graph mode");
-    const kind = await this.clusterKindForRoot(identity, rootId);
-    const result = await this.repository.listClusterObjects(identity, kind, { limit: options.limit });
+    const kind = await this.clusterKindForRoot(identity, rootId, options.projectId);
+    if (options.nodeKinds?.length && !options.nodeKinds.includes(kind)) {
+      return emptyProjection("cluster", options, rootId, "clustered");
+    }
+    const result = await this.repository.listClusterObjects(identity, kind, {
+      limit: options.limit,
+      projectId: options.projectId,
+      edgeKinds: options.edgeKinds,
+    });
     const nodes = result.rows.map((row) => objectNode(row, { clusterId: clusterIdForKind(row.object_type) }));
     const nodeIds = new Set(nodes.map((node) => node.id));
     const edgeLimit = edgeCap(options.limit);
@@ -197,6 +235,7 @@ export class GraphProjectionBuilder {
       limit: options.limit,
       nodeKinds: options.nodeKinds,
       edgeKinds: options.edgeKinds,
+      projectId: options.projectId,
     });
     const nodes = result.rows.map((row) =>
       objectNode(row, {
@@ -228,9 +267,13 @@ export class GraphProjectionBuilder {
     };
   }
 
-  private async clusterKindForRoot(identity: SpaceUserIdentity, rootId: string): Promise<string> {
+  private async clusterKindForRoot(
+    identity: SpaceUserIdentity,
+    rootId: string,
+    projectId: string | undefined,
+  ): Promise<string> {
     if (rootId.startsWith("cluster:")) return kindFromClusterRoot(rootId);
-    const root = await this.repository.getVisibleObject(identity, rootId);
+    const root = await this.repository.getVisibleObject(identity, rootId, { projectId });
     if (!root) throw new HttpError(404, "Graph cluster root not found");
     return root.object_type;
   }
@@ -254,6 +297,38 @@ function objectNode(
       forceLabel: options.forceLabel || undefined,
     },
   };
+}
+
+function emptyProjection(
+  mode: ServerGraphProjectionMode,
+  options: Pick<BuildProjectionOptions, "limit">,
+  rootId: string | undefined,
+  layoutMode: "force" | "clustered",
+): GraphProjection {
+  return {
+    nodes: [],
+    edges: [],
+    view: {
+      mode,
+      rootId,
+      limit: options.limit,
+      generatedAt: new Date().toISOString(),
+      truncated: false,
+      totalNodeCount: 0,
+    },
+    layout: { mode: layoutMode },
+  };
+}
+
+function applyLensFilter(
+  allowed: readonly string[],
+  requested: readonly string[] | undefined,
+): readonly string[] {
+  const normalized = [...new Set((requested ?? []).map((value) => value.trim()).filter(Boolean))];
+  if (!normalized.length) return [...allowed];
+  const allowedSet = new Set(allowed);
+  const intersection = normalized.filter((value) => allowedSet.has(value));
+  return intersection.length ? intersection : [NO_LENS_MATCH];
 }
 
 function objectEdge(row: GraphEdgeRow): GraphProjectionEdge {

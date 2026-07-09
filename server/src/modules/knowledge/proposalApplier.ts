@@ -358,6 +358,9 @@ const VALID_OBJECT_RELATION_TYPES = new Set([
   "supersedes",
   "refines",
   "same_as",
+  "affiliated_with",
+  "cites",
+  "authored_by",
 ]);
 
 const VALID_OBJECT_KIND_BASE_TYPES = new Set<string>(RETRIEVAL_OBJECT_TYPE_VALUES);

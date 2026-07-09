@@ -39,8 +39,7 @@ agent-space/
 │   └── capabilities/
 ├── plugins/official/ # Official optional plugins (installed via PluginHost)
 │   ├── diary/
-│   ├── finance_ledger/
-│   └── research_atlas/
+│   └── finance_ledger/
 ├── apps/web/         # React/Vite web frontend (PWA)
 ├── deployer/         # Host-side deployer (holds the Docker socket; spawns sandbox containers)
 └── sandbox/          # Dockerfile for the agent execution sandbox image
@@ -181,7 +180,6 @@ module, frontend page, and migrations:
 |--------|---------|
 | `diary` | Personal journaling |
 | `finance_ledger` | Personal finance / ledger tracking |
-| `research_atlas` | Research note graph, built on the shared graph view |
 
 ## Documentation
 

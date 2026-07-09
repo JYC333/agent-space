@@ -79,6 +79,24 @@ generate_server_env() {
   chmod 600 "$server_env"
 }
 
+generate_schema_migrations() {
+  echo "Generating Drizzle migration artifacts from TypeScript schema..."
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "npm is required to run server schema generation before start" >&2
+    exit 1
+  fi
+  if [[ ! -x "$REPO_ROOT/server/node_modules/.bin/drizzle-kit" ]]; then
+    echo "Server dependencies are required to generate Drizzle migrations before start." >&2
+    echo "Run: cd server && npm ci" >&2
+    exit 1
+  fi
+
+  (
+    cd "$REPO_ROOT/server"
+    COREPACK_ENABLE_AUTO_PIN=0 npm run schema:generate
+  )
+}
+
 validate_prod_env() {
   [[ "$MODE" == "prod" ]] || return 0
 
@@ -110,7 +128,7 @@ ensure_server_image_for_migrations() {
 }
 
 run_database_migrations() {
-  echo "Preparing PostgreSQL database schema..."
+  echo "Preparing PostgreSQL database schema from generated Drizzle migrations..."
   "$REPO_ROOT/ops/scripts/db/migrate.sh" --mode "$MODE"
 }
 
@@ -119,6 +137,7 @@ ensure_env
 validate_prod_env
 local_compose_ensure_server_database_env
 generate_server_env
+generate_schema_migrations
 
 export DOCKER_GID
 DOCKER_GID=$(stat -c '%g' /var/run/docker.sock 2>/dev/null || echo 989)

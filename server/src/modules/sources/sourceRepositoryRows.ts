@@ -154,19 +154,34 @@ export interface EvidenceLinkRow {
   updated_at: unknown;
 }
 
-export interface WorkspaceBindingRow {
+export interface ProjectSourceBindingRow {
   id: string;
   space_id: string;
-  workspace_id: string;
   project_id: string;
   source_connection_id: string;
   binding_key: string;
   status: string;
   priority: number;
+  delivery_scope: string;
+  collection_notifications_enabled: boolean;
   filters_json: unknown;
   routing_policy_json: unknown;
   extraction_policy_json: unknown;
   created_by_user_id: string | null;
+  created_at: unknown;
+  updated_at: unknown;
+}
+
+export interface ProjectSourceItemLinkRow {
+  id: string;
+  space_id: string;
+  project_id: string;
+  project_source_binding_id: string;
+  source_connection_id: string | null;
+  source_item_id: string;
+  status: string;
+  matched_at: unknown;
+  match_reason: string | null;
   created_at: unknown;
   updated_at: unknown;
 }
@@ -292,4 +307,5 @@ export function evidenceColumnsForAlias(alias: string): string {
   return EVIDENCE_TABLE_COLUMNS.map((column) => `${alias}.${column}`).join(", ");
 }
 export const EVIDENCE_LINK_COLUMNS = `id, space_id, evidence_id, target_type, target_id, link_type, status, confidence, reason, created_by_user_id, created_by_agent_id, created_by_run_id, created_at, updated_at`;
-export const BINDING_COLUMNS = `id, space_id, workspace_id, project_id, source_connection_id, binding_key, status, priority, filters_json, routing_policy_json, extraction_policy_json, created_by_user_id, created_at, updated_at`;
+export const PROJECT_SOURCE_BINDING_COLUMNS = `id, space_id, project_id, source_connection_id, binding_key, status, priority, delivery_scope, collection_notifications_enabled, filters_json, routing_policy_json, extraction_policy_json, created_by_user_id, created_at, updated_at`;
+export const PROJECT_SOURCE_ITEM_LINK_COLUMNS = `id, space_id, project_id, project_source_binding_id, source_connection_id, source_item_id, status, matched_at, match_reason, created_at, updated_at`;

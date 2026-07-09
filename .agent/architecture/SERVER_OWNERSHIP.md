@@ -10,8 +10,9 @@ Rules:
 - Server-owned routes are explicitly registered in
   `server/src/gateway/routeRegistry.ts`.
 - Unknown `/api/v1/*` routes return the local 404 catch-all.
-- Schema migrations are owned by the explicit server migration runner under
-  `server/migrations/`.
+- Database schema authoring is owned by Drizzle definitions under
+  `server/src/db/schema/`; generated SQL artifacts are applied by the explicit
+  server migration runner under `server/migrations/`.
 
 ## Owned Contexts
 
@@ -37,7 +38,7 @@ Rules:
 | Memory read/write boundary | `/memory` list/get/search, read-access logging, public memory create/update/archive proposal creation, batch activity consolidation via `POST /memory/consolidation/run` | Memory quality/evolution jobs (digest refresh, memory-health solidification, source-monitoring producers) |
 | Memory apply | Accepted `memory_create` / `memory_update` / `memory_archive` apply after the proposal-apply policy gate | Personal-memory egress-context placement, active-policy private-placement overlay, workspace/agent-scope digest invalidation |
 | Activity | DB-backed `/activity*` capture/list/detail/upload/review/archive, source-pointer list/create/delete, per-activity consolidation, and summary artifact/proposal creation with activity/evidence/sources provenance | LLM summarization quality improvements beyond the current classifier pipeline |
-| Sources | DB-backed `/sources*` connector/connection config, manual URL source capture, extraction-job audit records, candidate evidence/evidence links, project-scoped workspace source bindings, summary artifact/proposal creation, and in-process extraction polling | External fetch fidelity beyond the current extraction worker |
+| Sources | DB-backed `/sources*` connector/connection config, manual URL source capture, extraction-job audit records, candidate evidence/evidence links, project source bindings, project source item links, source health read models, summary artifact/proposal creation, and in-process extraction polling | External fetch fidelity beyond the current extraction worker |
 | Knowledge | DB-backed `/knowledge*` item proposal routes, source/note/entity-link CRUD, note collection CRUD, item/source links, relation proposals, and knowledge proposal appliers | Schema migrations and any deferred background knowledge quality jobs |
 | Tasks | DB-backed `/tasks*`, `/boards*`, and `/me/tasks` boards/tasks CRUD, queued Run creation through `task_runs`, task artifacts/proposals reads, task evaluations, and the run-finalization → task-evaluation bridge | Worker execution itself remains owned by Runs/runtime |
 | Artifacts | Client-facing `GET /artifacts`, `GET /artifacts/{id}`, `GET /artifacts/{id}/export`, and run-scoped artifact routes, including scoped visibility checks and managed-storage export path guards | — |
@@ -94,9 +95,10 @@ role derived from `POSTGRES_*`; `ops/scripts/lib/local-compose.sh` generates
 separate per-table app role.
 
 Server DB connections and transactions are centralized in
-`server/src/db/`. The server migration runner and SQL files under
-`server/migrations/` are the runtime schema authority. They are explicit
-ops commands invoked by `ops/scripts/start.sh` before app services start; they
-are not wired into the server service process startup.
+`server/src/db/`. Drizzle definitions under `server/src/db/schema/` are the
+schema authoring source; generated SQL files under `server/migrations/` are the
+runtime-applied artifacts. Migration is an explicit ops command invoked by
+`ops/scripts/start.sh` before app services start; it is not wired into the
+long-running server service process startup.
 
 Focused verification commands are listed in [`../COMMANDS.md`](../COMMANDS.md).

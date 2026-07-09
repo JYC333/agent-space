@@ -553,7 +553,6 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
         createdAfter: toDbDate(q.created_after),
         occurredAfter: toDbDate(q.occurred_after),
         q: optionalString(q.q),
-        projectId: optionalString(q.project_id),
         limit,
         offset,
       }));
@@ -738,41 +737,122 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     }
   });
 
-  app.get("/api/v1/sources/workspace-source-bindings", async (request, reply) => {
+  app.get("/api/v1/sources/project-source-bindings", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
     try {
       const q = query(request);
-      return reply.send(await repository().listWorkspaceBindings(identity, {
-        workspaceId: optionalString(q.workspace_id),
+      return reply.send(await repository().listProjectSourceBindings(identity, {
+        projectId: requiredString(q.project_id, "project_id"),
         sourceConnectionId: optionalString(q.source_connection_id),
-        projectId: optionalString(q.project_id),
       }));
     } catch (error) {
       return sendRouteError(reply, error);
     }
   });
 
-  app.post("/api/v1/sources/workspace-source-bindings", async (request, reply) => {
+  app.post("/api/v1/sources/project-source-bindings", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
     try {
-      const gate = await enforceSources(context, identity, "workspace_source.configure", "workspace_source");
+      const gate = await enforceSources(context, identity, "project_source.configure", "project_source");
       if (gate.blocked) return reply.code(403).send(gate.reply403);
-      return reply.code(201).send(await repository().createWorkspaceBinding(identity, jsonBody(request)));
+      return reply.code(201).send(await repository().createProjectSourceBinding(identity, jsonBody(request)));
     } catch (error) {
       return sendRouteError(reply, error);
     }
   });
 
-  app.post("/api/v1/sources/workspace-source-bindings/:bindingId/backfill", async (request, reply) => {
+  app.patch("/api/v1/sources/project-source-bindings/:bindingId", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
     try {
-      const gate = await enforceSources(context, identity, "workspace_source.configure", "workspace_source");
+      const gate = await enforceSources(context, identity, "project_source.configure", "project_source");
       if (gate.blocked) return reply.code(403).send(gate.reply403);
       const bindingId = requiredString(params(request).bindingId, "binding_id");
-      return reply.send(await repository().backfillWorkspaceBinding(identity, bindingId));
+      return reply.send(await repository().updateProjectSourceBinding(identity, bindingId, jsonBody(request)));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.delete("/api/v1/sources/project-source-bindings/:bindingId", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const gate = await enforceSources(context, identity, "project_source.configure", "project_source");
+      if (gate.blocked) return reply.code(403).send(gate.reply403);
+      const bindingId = requiredString(params(request).bindingId, "binding_id");
+      return reply.send(await repository().deleteProjectSourceBinding(identity, bindingId));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.post("/api/v1/sources/project-source-bindings/:bindingId/backfill", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const gate = await enforceSources(context, identity, "project_source.configure", "project_source");
+      if (gate.blocked) return reply.code(403).send(gate.reply403);
+      const bindingId = requiredString(params(request).bindingId, "binding_id");
+      return reply.send(await repository().backfillProjectSourceBinding(identity, bindingId));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.get("/api/v1/sources/project-items", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const q = query(request);
+      const { limit, offset } = parsePage(q);
+      return reply.send(await repository().listProjectItems(identity, {
+        projectId: requiredString(q.project_id, "project_id"),
+        sourceConnectionId: optionalString(q.source_connection_id),
+        itemType: optionalString(q.item_type),
+        sourceDomain: optionalString(q.source_domain),
+        matchedDate: optionalString(q.matched_date),
+        createdAfter: toDbDate(q.created_after),
+        occurredAfter: toDbDate(q.occurred_after),
+        q: optionalString(q.q),
+        limit,
+        offset,
+      }));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.get("/api/v1/sources/project-source-summary", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const q = query(request);
+      return reply.send(await repository().projectSourceSummary(identity, requiredString(q.project_id, "project_id")));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.get("/api/v1/sources/project-source-health", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const q = query(request);
+      return reply.send(await repository().projectSourceHealth(identity, requiredString(q.project_id, "project_id")));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.get("/api/v1/sources/source-health", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const q = query(request);
+      return reply.send(await repository().sourceHealth(identity, { connectionId: optionalString(q.connection_id) }));
     } catch (error) {
       return sendRouteError(reply, error);
     }

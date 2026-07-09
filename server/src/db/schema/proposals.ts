@@ -43,7 +43,7 @@ export const proposals = pgTable("proposals", {
 	index("ix_proposals_urgency").using("btree", table.urgency.asc().nullsLast()),
 	index("ix_proposals_workspace_id").using("btree", table.workspaceId.asc().nullsLast()),
 	foreignKey({
-			columns: [table.spaceId, table.projectId],
+			columns: [table.projectId, table.spaceId],
 			foreignColumns: [projects.id, projects.spaceId],
 			name: "fk_proposals_project_id_projects"
 		}).onDelete("set null"),
@@ -73,7 +73,7 @@ export const proposals = pgTable("proposals", {
 			name: "proposals_space_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.spaceId, table.workspaceId],
+			columns: [table.workspaceId, table.spaceId],
 			foreignColumns: [workspaces.id, workspaces.spaceId],
 			name: "proposals_workspace_id_fkey"
 		}),
