@@ -15,7 +15,10 @@ import {
 import { getDbPool } from "../../db/pool";
 import { RetrievalProjectionService } from "../retrieval";
 import { assertProjectOwnerLevel, assertProjectWriter, canWriteProject } from "./access";
+import { assertProjectReadable } from "./access";
 import { projectRetrievalRegistry } from "./retrievalAdapter";
+import { contentReadSql } from "../access/contentAccessSql";
+import { memorySensitivityReadSql } from "../memory/memorySensitivitySql";
 
 export interface ProjectRow {
   id: string;
@@ -222,7 +225,7 @@ export class PgProjectRepository {
   }
 
   async summary(identity: SpaceUserIdentity, projectId: string): Promise<Record<string, unknown>> {
-    await this.requireProject(identity.spaceId, projectId);
+    await assertProjectReadable(this.db, identity.spaceId, projectId, identity.userId);
     const [
       activities,
       artifacts,
@@ -231,34 +234,40 @@ export class PgProjectRepository {
       activeRuns,
       memories,
     ] = await Promise.all([
-      this.count("activity_records", identity.spaceId, projectId),
-      this.count("artifacts", identity.spaceId, projectId),
+      this.countVisible("activity", "activity_records", identity, projectId),
+      this.countVisible("artifact", "artifacts", identity, projectId),
       this.db.query<{ total: string | number }>(
         `SELECT count(id)::text AS total
-           FROM proposals
-          WHERE space_id = $1 AND project_id = $2 AND status = 'pending'`,
-        [identity.spaceId, projectId],
+           FROM proposals p
+          WHERE p.space_id = $1 AND p.project_id = $2 AND p.status = 'pending'
+            AND ${contentReadSql("proposal", "p", "$3")}`,
+        [identity.spaceId, projectId, identity.userId],
       ),
       this.db.query<{ total: string | number }>(
         `SELECT count(pw.id)::text AS total
            FROM project_workspaces pw
            JOIN projects p ON p.id = pw.project_id
-          WHERE p.space_id = $1 AND pw.project_id = $2 AND p.deleted_at IS NULL`,
-        [identity.spaceId, projectId],
+           JOIN workspaces w ON w.id = pw.workspace_id AND w.space_id = p.space_id
+          WHERE p.space_id = $1 AND pw.project_id = $2 AND p.deleted_at IS NULL
+            AND ${contentReadSql("workspace", "w", "$3")}`,
+        [identity.spaceId, projectId, identity.userId],
       ),
       this.db.query<{ total: string | number }>(
         `SELECT count(id)::text AS total
-           FROM runs
-          WHERE space_id = $1
-            AND project_id = $2
-            AND status IN ('queued', 'running', 'waiting_for_review')`,
-        [identity.spaceId, projectId],
+           FROM runs r
+          WHERE r.space_id = $1
+            AND r.project_id = $2
+            AND r.status IN ('queued', 'running', 'waiting_for_review')
+            AND ${contentReadSql("run", "r", "$3")}`,
+        [identity.spaceId, projectId, identity.userId],
       ),
       this.db.query<{ total: string | number }>(
         `SELECT count(id)::text AS total
-           FROM memory_entries
-          WHERE space_id = $1 AND project_id = $2 AND deleted_at IS NULL AND status = 'active'`,
-        [identity.spaceId, projectId],
+          FROM memory_entries me
+          WHERE me.space_id = $1 AND me.project_id = $2 AND me.deleted_at IS NULL AND me.status = 'active'
+            AND ${contentReadSql("memory", "me", "$3")}
+            AND ${memorySensitivityReadSql("me", "$3")}`,
+        [identity.spaceId, projectId, identity.userId],
       ),
     ]);
     return {
@@ -349,8 +358,10 @@ export class PgProjectRepository {
     const generatedByRunId = optionalString(body.generated_by_run_id);
     if (generatedByRunId) {
       const run = await this.db.query<{ id: string }>(
-        `SELECT id FROM runs WHERE id = $1 AND space_id = $2 AND project_id = $3`,
-        [generatedByRunId, identity.spaceId, projectId],
+        `SELECT r.id FROM runs r
+          WHERE r.id = $1 AND r.space_id = $2 AND r.project_id = $3
+            AND ${contentReadSql("run", "r", "$4")}`,
+        [generatedByRunId, identity.spaceId, projectId, identity.userId],
       );
       if (!run.rows[0]) throw new HttpError(422, "generated_by_run_id must reference this project in this space");
     }
@@ -585,10 +596,19 @@ export class PgProjectRepository {
     }
   }
 
-  private async count(table: string, spaceId: string, projectId: string): Promise<{ rows: Array<{ total?: unknown }> }> {
+  private async countVisible(
+    resourceType: "activity" | "artifact",
+    table: "activity_records" | "artifacts",
+    identity: SpaceUserIdentity,
+    projectId: string,
+  ): Promise<{ rows: Array<{ total?: unknown }> }> {
     return this.db.query<{ total: string | number }>(
-      `SELECT count(id)::text AS total FROM ${table} WHERE space_id = $1 AND project_id = $2`,
-      [spaceId, projectId],
+      `SELECT count(content_resource.id)::text AS total
+         FROM ${table} content_resource
+        WHERE content_resource.space_id = $1
+          AND content_resource.project_id = $2
+          AND ${contentReadSql(resourceType, "content_resource", "$3")}`,
+      [identity.spaceId, projectId, identity.userId],
     );
   }
 }

@@ -86,7 +86,7 @@ export function computeFeatures(config: ServerConfig): string[] {
     "capabilities_server_authority",
     "personal_memory_grants_server_authority",
     "evolution_server_authority",
-    "source_pointers_server_authority",
+    "content_publications_server_authority",
     "workspace_profiles_server_authority",
     "graph_projection_server_authority",
     "server_agent_runtime_host",

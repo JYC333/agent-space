@@ -4,6 +4,7 @@ import { parseQueryRewriteVariants } from "../src/modules/retrieval/queryRewrite
 import { ProviderQueryRewriter } from "../src/modules/retrieval/queryRewriteProvider/providerQueryRewriter";
 import { __setProviderHttpClientForTests } from "../src/modules/providers/invocation/invocation";
 import type { ProviderCommandStore } from "../src/modules/providers/commands/store";
+import { resolveTestUsageAttribution } from "./support/usageAttribution";
 
 describe("mergeRewriteVariants", () => {
   it("always keeps the original query first", () => {
@@ -81,6 +82,8 @@ describe("ProviderQueryRewriter", () => {
           fallback_provider_ids: [],
         };
       },
+      resolveUsageAttribution: resolveTestUsageAttribution,
+      async recordUsageObservation() {},
     } as unknown as ProviderCommandStore;
   }
 
@@ -104,6 +107,8 @@ describe("ProviderQueryRewriter", () => {
           fallback_provider_ids: [],
         };
       },
+      resolveUsageAttribution: resolveTestUsageAttribution,
+      async recordUsageObservation() {},
     } as unknown as ProviderCommandStore;
   }
 

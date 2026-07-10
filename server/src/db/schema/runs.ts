@@ -62,7 +62,9 @@ export const runs = pgTable("runs", {
 	estimatedOutputTokens: integer("estimated_output_tokens"),
 	estimatedCost: doublePrecision("estimated_cost"),
 	exitCode: integer("exit_code"),
+	ownerUserId: varchar("owner_user_id", { length: 36 }),
 	visibility: varchar({ length: 32 }).default('space_shared').notNull(),
+	accessLevel: varchar("access_level", { length: 16 }).default('full').notNull(),
 	hasPersonalGrantContext: boolean("has_personal_grant_context").default(false).notNull(),
 	personalGrantContextJson: jsonb("personal_grant_context_json"),
 	source: varchar({ length: 32 }),
@@ -81,6 +83,7 @@ export const runs = pgTable("runs", {
 	index("ix_runs_instructed_by_user_id").using("btree", table.instructedByUserId.asc().nullsLast()),
 	index("ix_runs_mode").using("btree", table.mode.asc().nullsLast()),
 	index("ix_runs_model_provider_id").using("btree", table.modelProviderId.asc().nullsLast()),
+	index("ix_runs_owner_user_id").using("btree", table.ownerUserId.asc().nullsLast()),
 	index("ix_runs_parent_run_id").using("btree", table.parentRunId.asc().nullsLast()),
 	index("ix_runs_parent_run_space").using("btree", table.spaceId.asc().nullsLast(), table.parentRunId.asc().nullsLast()),
 	index("ix_runs_project_id").using("btree", table.projectId.asc().nullsLast()),
@@ -93,6 +96,11 @@ export const runs = pgTable("runs", {
 	index("ix_runs_trigger_origin").using("btree", table.triggerOrigin.asc().nullsLast()),
 	index("ix_runs_working_dir_id").using("btree", table.workingDirId.asc().nullsLast()),
 	index("ix_runs_workspace_id").using("btree", table.workspaceId.asc().nullsLast()),
+	foreignKey({
+			columns: [table.ownerUserId],
+			foreignColumns: [users.id],
+			name: "runs_owner_user_id_fkey"
+		}),
 	foreignKey({
 			columns: [table.projectId, table.spaceId],
 			foreignColumns: [projects.id, projects.spaceId],
@@ -209,6 +217,9 @@ export const runs = pgTable("runs", {
 	check("ck_runs_status", sql`(status)::text = ANY (ARRAY[('queued'::character varying)::text, ('running'::character varying)::text, ('succeeded'::character varying)::text, ('degraded'::character varying)::text, ('failed'::character varying)::text, ('cancelled'::character varying)::text, ('waiting_for_review'::character varying)::text, ('waiting_for_dependency'::character varying)::text])`),
 	check("ck_runs_trigger_origin", sql`(trigger_origin)::text = ANY (ARRAY[('manual'::character varying)::text, ('automation'::character varying)::text, ('job'::character varying)::text, ('system'::character varying)::text, ('delegation'::character varying)::text])`),
 	check("ck_runs_trust_level", sql`(trust_level IS NULL) OR ((trust_level)::text = ANY (ARRAY[('high'::character varying)::text, ('medium'::character varying)::text, ('low'::character varying)::text, ('unknown'::character varying)::text]))`),
+	check("ck_runs_visibility", sql`visibility IN ('private', 'space_shared', 'selected_users')`),
+	check("ck_runs_access_level", sql`access_level IN ('full', 'summary')`),
+	check("ck_runs_private_owner", sql`visibility = 'space_shared' OR owner_user_id IS NOT NULL`),
 ]);
 
 export const externalRunRecords = pgTable("external_run_records", {

@@ -393,9 +393,9 @@ describe("ProjectResearchRepository (real Postgres)", () => {
     const sourceItemId = randomUUID();
     await pool!.query(
       `INSERT INTO source_items (
-         id, space_id, item_type, title, first_seen_at, last_seen_at, content_state, retention_policy, created_at, updated_at
-       ) VALUES ($1,$2,'feed_entry','Paper A',$3,$3,'excerpt_saved','summary_only',$3,$3)`,
-      [sourceItemId, SPACE, now],
+         id, space_id, owner_user_id, visibility, item_type, title, first_seen_at, last_seen_at, content_state, retention_policy, created_at, updated_at
+       ) VALUES ($1,$2,$3,'space_shared','feed_entry','Paper A',$4,$4,'excerpt_saved','summary_only',$4,$4)`,
+      [sourceItemId, SPACE, OWNER, now],
     );
     const objectId = randomUUID();
     await pool!.query(
@@ -422,10 +422,10 @@ describe("ProjectResearchRepository (real Postgres)", () => {
     );
     await pool!.query(
       `INSERT INTO extracted_evidence (
-         id, space_id, source_item_id, source_object_type, source_object_id, evidence_type, title,
+         id, space_id, owner_user_id, visibility, source_item_id, source_object_type, source_object_id, evidence_type, title,
          extraction_method, trust_level, status, created_at, updated_at
-       ) VALUES ($1,$2,$3,'source_item',$3,'excerpt','Key finding','full_text','normal','candidate',$4,$4)`,
-      [randomUUID(), SPACE, sourceItemId, now],
+       ) VALUES ($1,$2,$3,'space_shared',$4,'source_item',$4,'excerpt','Key finding','full_text','normal','candidate',$5,$5)`,
+      [randomUUID(), SPACE, OWNER, sourceItemId, now],
     );
 
     const matrix = await repo().getLiteratureMatrix(identity, PROJECT);

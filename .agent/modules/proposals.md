@@ -27,7 +27,7 @@ Proposal:
     proposed_content, memory_type, target_scope, target_namespace, target_visibility
     provenance_entries  — required for memory_create/update; links to source ActivityRecord, Run, etc.
     source_evidence, sensitivity_level
-    owner_user_id, subject_user_id, selected_user_ids
+    owner_user_id, subject_user_id, content_access_grants
 
 ProposalApproval:
   id, proposal_id, approval_type ('egress_granting_user')

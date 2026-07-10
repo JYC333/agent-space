@@ -38,6 +38,11 @@ function jsonBody(request: FastifyRequest): Record<string, unknown> {
   } catch { return {}; }
 }
 
+/** `oversight_mode` is creation-only; patch routes must not silently ignore it. */
+function rejectsOversightModeMutation(payload: Record<string, unknown>): boolean {
+  return Object.hasOwn(payload, "oversight_mode");
+}
+
 function integerOrNull(value: unknown): number | null {
   if (value === null || value === undefined) return null;
   const n = Number(value);
@@ -75,6 +80,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     const result = await spaces.createSpace(user.id, {
       name: typeof payload.name === "string" ? payload.name : "",
       type: payload.type,
+      oversight_mode: payload.oversight_mode,
     });
     if (isSpaceFailure(result)) return reply.code(result.statusCode).send({ detail: result.detail });
     return reply.code(201).send(result);
@@ -186,6 +192,9 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     const user = await auth.getCurrentUser(sessionTokenFromRequest(request));
     if (isFailure(user)) return reply.code(user.statusCode).send({ detail: user.detail });
     const body = jsonBody(request);
+    if (rejectsOversightModeMutation(body)) {
+      return reply.code(422).send({ detail: "oversight_mode is immutable after Space creation" });
+    }
     const result = await spaces.updateSnapshotDefaults(user.id, params(request).spaceId ?? "", {
       snapshot_retention_days_default: integerOrNull(body.snapshot_retention_days_default),
       snapshot_max_count_default: integerOrNull(body.snapshot_max_count_default),
@@ -212,8 +221,12 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     const user = await auth.getCurrentUser(sessionTokenFromRequest(request));
     if (isFailure(user)) return reply.code(user.statusCode).send({ detail: user.detail });
     try {
+      const rawPayload = jsonBody(request);
+      if (rejectsOversightModeMutation(rawPayload)) {
+        return reply.code(422).send({ detail: "oversight_mode is immutable after Space creation" });
+      }
       const protocol = await loadProtocol();
-      const payload = protocol.SpaceRetrievalSettingsUpdateSchema.parse(jsonBody(request));
+      const payload = protocol.SpaceRetrievalSettingsUpdateSchema.parse(rawPayload);
       const before = await spaces.getRetrievalSettings(user.id, params(request).spaceId ?? "");
       const result = await spaces.updateRetrievalSettings(
         user.id,

@@ -34,6 +34,9 @@ SERVER_DATABASE_URL=postgresql://... npm run migrate:status
 SERVER_DATABASE_URL=postgresql://... npm run migrate
 
 # Schema changes: edit server/src/db/schema/, then generate SQL artifacts.
+# Generation starts from an empty Drizzle snapshot and replaces the single
+# Drizzle baseline. The same generated SQL becomes migrations/0001_baseline.sql;
+# do not leave incremental Drizzle artifacts or new 0002_* files.
 # start.sh also runs schema:generate automatically before migrations, but run it
 # explicitly when you want to inspect or commit the generated files before start.
 # Do not hand-edit server/migrations/*.sql for schema changes. No database is
@@ -60,7 +63,7 @@ restarts with `node --watch dist/index.js`. Prod still runs compiled JS only.
 # The normal start script first runs schema:generate, then invokes this helper
 # before app services start. The helper runs a no-write Drizzle schema check,
 # then Docker-native mode creates POSTGRES_DB when it is missing, then applies
-# the generated migration SQL. Production image builds also run the same schema
+# the committed migration SQL. Production image builds also run the same schema
 # check.
 ./ops/scripts/db/migrate.sh [--mode dev|test|prod]
 

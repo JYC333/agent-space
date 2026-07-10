@@ -1,4 +1,5 @@
 import { canReadMemory } from "../memory/memoryReadAuth";
+import type { OversightMode } from "../access/contentAccessTypes";
 import type {
   ContextEvidenceSelection,
   ContextMemoryRow,
@@ -50,6 +51,7 @@ export function hardFilterRows(
     userId: string;
     workspaceId: string | null;
     includeSystemScope: boolean;
+    oversightLevel?: OversightMode;
     // When present, project cutting is active: only project-free memory
     // (`project_id IS NULL`) and the single `allowedProjectId` survive; memory of
     // any other project is dropped. Absent means unscoped — no project filter.
@@ -64,6 +66,7 @@ export function hardFilterRows(
         workspaceId: input.workspaceId,
         includeSystemScope:
           input.includeSystemScope && row.scope_type === "system",
+        oversightLevel: input.oversightLevel,
       })
     ) {
       return false;

@@ -6,7 +6,7 @@ import type {
   CredentialLoginMethod, CredentialStatus, CliUsageEntry, CliUsageAutoRefreshSettings, LoginEvent,
   NetworkProfileOut, NetworkProfileCreateBody, NetworkProfileUpdateBody, CliCredentialProfileOut,
   CliCredentialAvailableProfileOut,
-  CurrentUser, SpaceWithMembership, SpaceMember, SpaceInvitationOut, SpaceSnapshotDefaults,
+  CurrentUser, SpaceWithMembership, SpaceOversightMode, SpaceMember, SpaceInvitationOut, SpaceSnapshotDefaults,
   SpaceRetrievalSettings, SpaceRetrievalSettingsUpdate,
   Job, JobEvent, ActivityInboxRecord,
   Board, TaskRunCreateBody, Run, RunStatusOut, TaskRunListItem,
@@ -91,8 +91,30 @@ import type {
   ReaderCommentThread, ReaderComment, ReaderCommentCreate, ReaderCommentUpdate, ReaderThreadUpdate,
   ReaderCreateEvidenceRequest, ReaderCreatedEvidence,
   ReaderCreateProposalRequest, ReaderCreatedProposal,
+  ContentAccessPolicy, ContentAccessUpdate,
 } from '../types/api'
-import type { GraphProjection, GraphProjectionViewMode } from '@agent-space/protocol'
+import type {
+  ContentPublication,
+  ContentPublicationList,
+  CreatePublicationRequest,
+  PublicationImport,
+  GraphProjection,
+  GraphProjectionViewMode,
+  UsageAccuracy,
+  UsageBudgetPreviewResponse,
+  UsageCliHistoryCommitRequest,
+  UsageCliHistoryImportResponse,
+  UsageCliHistoryPreviewRequest,
+  UsageDimensionsResponse,
+  UsageEventsResponse,
+  UsageExecutionChannel,
+  UsageView,
+  UsageOperationalTotalsResponse,
+  UsageSessionsResponse,
+  UsageSubjectsResponse,
+  UsageSummaryResponse,
+  UsageTimeseriesResponse,
+} from '@agent-space/protocol'
 
 const BASE = '/api/v1'
 
@@ -166,6 +188,27 @@ const post  = <T>(path: string, body?: unknown, options?: RequestOptions) => req
 const put   = <T>(path: string, body?: unknown, options?: RequestOptions) => request<T>('PUT',    path, body, options)
 const patch = <T>(path: string, body?: unknown, options?: RequestOptions) => request<T>('PATCH',  path, body, options)
 const del   = <T>(path: string, options?: RequestOptions)                => request<T>('DELETE', path, undefined, options)
+
+// ── Content access and targeted publication ───────────────────────────────
+export const contentAccessApi = {
+  get: (resourceType: string, resourceId: string) =>
+    get<ContentAccessPolicy>(`/content-access/${encodeURIComponent(resourceType)}/${encodeURIComponent(resourceId)}`),
+  update: (resourceType: string, resourceId: string, body: ContentAccessUpdate) =>
+    put<ContentAccessPolicy>(`/content-access/${encodeURIComponent(resourceType)}/${encodeURIComponent(resourceId)}`, body),
+}
+
+export const publicationsApi = {
+  list: (view: 'received' | 'published' = 'received') =>
+    get<ContentPublicationList>(`/publications?view=${view}`),
+  get: (publicationId: string) =>
+    get<ContentPublication>(`/publications/${encodeURIComponent(publicationId)}`),
+  create: (body: CreatePublicationRequest) =>
+    post<ContentPublication>('/publications', body),
+  import: (publicationId: string) =>
+    post<PublicationImport>(`/publications/${encodeURIComponent(publicationId)}/import`, {}),
+  revoke: (publicationId: string) =>
+    post<ContentPublication>(`/publications/${encodeURIComponent(publicationId)}/revoke`, {}),
+}
 
 // ── Memory ────────────────────────────────────────────────────────────────
 export const memoryApi = {
@@ -1035,6 +1078,63 @@ export const askSpaceApi = {
   think: (data: AskSpaceRequest) => post<AskSpaceResponse>('/ask-space/think', data),
 }
 
+export interface UsageApiQuery {
+  view?: UsageView
+  from?: string
+  to?: string
+  group_by?: string
+  granularity?: 'day' | 'week' | 'month'
+  accuracy?: UsageAccuracy
+  execution_channel?: UsageExecutionChannel
+  provider_id?: string
+  model?: string
+  task?: string
+  subject_type?: string
+  subject_id?: string
+  session_id?: string
+  external_session_id?: string
+  session_path?: string
+  dimension_key?: string
+  dimension_value?: string
+  include_imported?: boolean
+  limit?: number
+  offset?: number
+  projection_window_days?: number
+}
+
+function usageQuery(params: UsageApiQuery = {}): string {
+  const q = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null || value === '') continue
+    q.set(key, String(value))
+  }
+  const queryString = q.toString()
+  return queryString ? `?${queryString}` : ''
+}
+
+export const usageApi = {
+  summary: (params: UsageApiQuery = {}) =>
+    get<UsageSummaryResponse>(`/usage/summary${usageQuery(params)}`),
+  timeseries: (params: UsageApiQuery = {}) =>
+    get<UsageTimeseriesResponse>(`/usage/timeseries${usageQuery(params)}`),
+  events: (params: UsageApiQuery = {}) =>
+    get<UsageEventsResponse>(`/usage/events${usageQuery(params)}`),
+  dimensions: (params: UsageApiQuery = {}) =>
+    get<UsageDimensionsResponse>(`/usage/dimensions${usageQuery(params)}`),
+  subjects: (params: UsageApiQuery = {}) =>
+    get<UsageSubjectsResponse>(`/usage/subjects${usageQuery(params)}`),
+  sessions: (params: UsageApiQuery = {}) =>
+    get<UsageSessionsResponse>(`/usage/sessions${usageQuery(params)}`),
+  budgetPreview: (params: UsageApiQuery = {}) =>
+    get<UsageBudgetPreviewResponse>(`/usage/budget-preview${usageQuery(params)}`),
+  operationalTotals: (params: Pick<UsageApiQuery, 'from' | 'to'> = {}) =>
+    get<UsageOperationalTotalsResponse>(`/usage/operations/totals${usageQuery(params)}`),
+  previewCliHistory: (body: UsageCliHistoryPreviewRequest) =>
+    post<UsageCliHistoryImportResponse>('/usage/imports/cli-history/preview', body),
+  commitCliHistory: (body: UsageCliHistoryCommitRequest) =>
+    post<UsageCliHistoryImportResponse>('/usage/imports/cli-history/commit', body),
+}
+
 export const runtimeToolsApi = {
   catalog: () => get<RuntimeToolDefinition[]>('/runtime-tools/catalog'),
   list: () => get<RuntimeToolStatus[]>('/runtime-tools'),
@@ -1777,7 +1877,7 @@ export const authApi = {
 
 // ── Spaces ────────────────────────────────────────────────────────────────
 export const spacesApi = {
-  create:               (data: { name: string; type: Exclude<SpaceWithMembership['type'], 'personal'> }) => post<SpaceWithMembership>('/spaces', data),
+  create:               (data: { name: string; type: Exclude<SpaceWithMembership['type'], 'personal'>; oversight_mode?: SpaceOversightMode }) => post<SpaceWithMembership>('/spaces', data),
   get:                  (spaceId: string)                              => get<SpaceWithMembership>(`/spaces/${spaceId}`),
   members:              (spaceId: string)                              => get<SpaceMember[]>(`/spaces/${spaceId}/members`),
   invite:               (spaceId: string, data: { email: string; role: string }) =>

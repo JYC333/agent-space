@@ -7,7 +7,7 @@ import {
   type Queryable,
   type SpaceUserIdentity,
 } from "../routeUtils/common";
-import { artifactVisibleSql, spaceObjectVisibleSql } from "../access/visibility";
+import { contentReadSql } from "../access/contentAccessSql";
 import { assertProjectReadable, assertProjectWriter } from "../projects/access";
 import { ProjectCorpusRepository } from "../projects/corpusRepository";
 
@@ -510,7 +510,7 @@ export class ProjectResearchRepository {
     filters: { id?: string | null; workflowId?: string | null; artifactType?: string | null },
   ): Promise<Record<string, unknown>[]> {
     const params: unknown[] = [spaceId, projectId, viewerUserId];
-    const clauses = ["ral.space_id = $1", "ral.project_id = $2", artifactVisibleSql({ alias: "a", userExpr: "$3" })];
+    const clauses = ["ral.space_id = $1", "ral.project_id = $2", contentReadSql("artifact", "a", "$3")];
     if (filters.id) {
       params.push(filters.id);
       clauses.push(`ral.id = $${params.length}`);
@@ -552,7 +552,7 @@ export class ProjectResearchRepository {
          FROM artifacts a
         WHERE a.id = $1
           AND a.space_id = $2
-          AND ${artifactVisibleSql({ alias: "a", userExpr: "$3" })}
+          AND ${contentReadSql("artifact", "a", "$3")}
           AND (a.project_id IS NULL OR a.project_id = $4)
         LIMIT 1`,
       [artifactId, identity.spaceId, identity.userId, projectId],
@@ -634,7 +634,7 @@ export class ProjectResearchRepository {
         WHERE pcl.space_id = $1
           AND pcl.project_id = $2
           AND (pcl.workflow_id = $3 OR pcl.workflow_id IS NULL)
-          AND ${spaceObjectVisibleSql("so", "$4")}`,
+          AND ${contentReadSql("space_object", "so", "$4")}`,
       [spaceId, projectId, workflowId, viewerUserId],
     );
     const findings: Array<{ severity: "high" | "medium" | "low"; claim_link_id: string; code: string; message: string }> = [];
@@ -764,7 +764,7 @@ export class ProjectResearchRepository {
   async listClaimLinks(identity: SpaceUserIdentity, projectId: string, workflowId?: string | null): Promise<Record<string, unknown>[]> {
     await assertProjectReadable(this.db, identity.spaceId, projectId, identity.userId);
     const params: unknown[] = [identity.spaceId, projectId, identity.userId];
-    let where = `pcl.space_id = $1 AND pcl.project_id = $2 AND ${spaceObjectVisibleSql("so", "$3")}`;
+    let where = `pcl.space_id = $1 AND pcl.project_id = $2 AND ${contentReadSql("space_object", "so", "$3")}`;
     if (workflowId) {
       params.push(workflowId);
       where += ` AND pcl.workflow_id = $${params.length}`;
@@ -799,7 +799,7 @@ export class ProjectResearchRepository {
           AND so.deleted_at IS NULL
         WHERE c.object_id = $1
           AND c.space_id = $2
-          AND ${spaceObjectVisibleSql("so", "$3")}
+          AND ${contentReadSql("space_object", "so", "$3")}
         LIMIT 1`,
       [claimId, identity.spaceId, identity.userId],
     );
@@ -891,7 +891,7 @@ export class ProjectResearchRepository {
         WHERE pcl.space_id = $1
           AND pcl.project_id = $2
           AND pcl.id = $3
-          AND ${spaceObjectVisibleSql("so", "$4")}
+          AND ${contentReadSql("space_object", "so", "$4")}
         LIMIT 1`,
       [spaceId, projectId, claimLinkId, viewerUserId],
     );

@@ -16,7 +16,13 @@ class RunCreateSqlShapeDb implements Queryable {
     this.calls.push({ sql, params });
     if (sql.includes("FROM agents")) {
       return {
-        rows: [{ id: "agent-1", status: "active", current_version_id: "version-1" }] as Row[],
+        rows: [{
+          id: "agent-1",
+          status: "active",
+          current_version_id: "version-1",
+          visibility: "space_shared",
+          access_level: "full",
+        }] as Row[],
         rowCount: 1,
       };
     }
@@ -100,7 +106,7 @@ class RunCreateSqlShapeDb implements Queryable {
         root_run_id: params[9] === null ? null : String(params[9]),
         run_group_id: params[10] === null ? null : String(params[10]),
         delegation_id: params[11] === null ? null : String(params[11]),
-        project_id: params[28] === null ? null : String(params[28]),
+        project_id: params[30] === null ? null : String(params[30]),
         scheduled_at: null,
         adapter_type: "codex_cli",
         capability_id: null,
@@ -183,7 +189,7 @@ describe("PgRunRepository SQL shape", () => {
     expect(runInsert).toBeTruthy();
     const { columns, values } = insertColumnsAndValues(runInsert!.sql);
     expect(values).toHaveLength(columns.length);
-    expect(runInsert!.params).toHaveLength(29);
+    expect(runInsert!.params).toHaveLength(31);
     expect(columns.slice(14, 17)).toEqual(["run_type", "trigger_origin", "status"]);
     expect(values.slice(14, 17)).toEqual(["$15", "$16", "'queued'"]);
     expect(runInsert!.params.slice(14, 17)).toEqual(["agent", "manual", "live"]);

@@ -4,7 +4,7 @@ import {
   optionalString,
   stringArray,
 } from "../routeUtils/common";
-import { summaryOnlyRedactContent } from "../memory/memoryReadAuth";
+import { shouldRedactMemoryContent } from "../memory/memoryReadAuth";
 
 export const PROJECT_PUBLIC_SUMMARY_PROMPT_VERSION = "project_public_summary.prompt.v1";
 export const PROJECT_PUBLIC_SUMMARY_REDACTION_VERSION = "project_public_summary.v1";
@@ -234,7 +234,7 @@ function section(title: string, rows: string[]): string {
 function memoryLine(row: PublicSummaryPromptContext["memories"][number], viewerUserId: string): string {
   const tags = stringArray(row.tags).slice(0, 8).join(", ");
   const sensitive = row.sensitivity_level === "sensitive" || row.sensitivity_level === "restricted";
-  const redacted = sensitive || summaryOnlyRedactContent(row, viewerUserId);
+  const redacted = sensitive || shouldRedactMemoryContent(row, viewerUserId);
   const content = redacted ? null : compactText(row.content ?? "", 280);
   return [
     `- memory:${row.id}`,

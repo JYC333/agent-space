@@ -1,6 +1,6 @@
 import { useState, useId } from 'react'
 import { useSpaceNavigate as useNavigate, SpaceLink as Link } from '../../core/spaceNav'
-import { Settings, Sun, Moon, Plus, KeyRound, Terminal } from 'lucide-react'
+import { Settings, Sun, Moon, Plus, KeyRound, Terminal, BarChart3 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '../../contexts/AuthContext'
 import { useSpace } from '../../contexts/SpaceContext'
@@ -11,7 +11,7 @@ import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import { Label } from '../../components/ui/label'
 import { cn, errMsg } from '../../lib/utils'
-import type { SpaceType } from '../../types/api'
+import type { SpaceOversightMode, SpaceType } from '../../types/api'
 
 const THEME_OPTIONS: { value: Theme; label: string; icon: typeof Sun; description: string }[] = [
   { value: 'dark',  label: 'Dark',  icon: Moon, description: 'Deep navy — default' },
@@ -23,6 +23,13 @@ const SPACE_TYPES: { value: Exclude<SpaceType, 'personal'>; label: string; descr
   { value: 'household', label: 'Family', description: 'Shared space for household members' },
 ]
 
+const OVERSIGHT_MODE_OPTIONS: { value: SpaceOversightMode; label: string; description: string }[] = [
+  { value: 'none',    label: 'None',    description: "Owners/admins see only what any member would — no extra visibility." },
+  { value: 'summary', label: 'Summary', description: "Owners/admins can see a summary of other members' private content." },
+  { value: 'content', label: 'Content', description: "Owners/admins can see the full content of other members' private content." },
+  { value: 'full',    label: 'Full',    description: "Owners/admins can see everything, including highly restricted memory." },
+]
+
 export default function SettingsPage() {
   const { currentUser } = useAuth()
   const { reloadSpaces } = useSpace()
@@ -32,6 +39,7 @@ export default function SettingsPage() {
   // Create space
   const [newSpaceName, setNewSpaceName] = useState('')
   const [newSpaceType, setNewSpaceType] = useState<Exclude<SpaceType, 'personal'>>('team')
+  const [newSpaceOversightMode, setNewSpaceOversightMode] = useState<SpaceOversightMode>('none')
   const [creating, setCreating]         = useState(false)
 
   const headingId = useId()
@@ -41,9 +49,14 @@ export default function SettingsPage() {
     if (!newSpaceName.trim()) return
     setCreating(true)
     try {
-      const space = await spacesApi.create({ name: newSpaceName.trim(), type: newSpaceType })
+      const space = await spacesApi.create({
+        name: newSpaceName.trim(),
+        type: newSpaceType,
+        oversight_mode: newSpaceOversightMode,
+      })
       toast.success(`Space "${space.name}" created`)
       setNewSpaceName('')
+      setNewSpaceOversightMode('none')
       await reloadSpaces()
       // Enter the new Space by navigating to its URL (the active Space is now URL-derived).
       navigate(`/spaces/${space.id}/today`)
@@ -96,6 +109,19 @@ export default function SettingsPage() {
         </p>
         <Button asChild variant="outline" size="sm">
           <Link to="/cli-profiles">Open CLI Profiles</Link>
+        </Button>
+      </Card>
+
+      {/* Token usage */}
+      <Card>
+        <CardTitle className="flex items-center gap-2">
+          <BarChart3 className="size-3.5" /> Usage
+        </CardTitle>
+        <p className="text-sm text-muted-foreground mb-3">
+          Review your token usage, estimated cost, sessions, and usage shared within the active Space.
+        </p>
+        <Button asChild variant="outline" size="sm">
+          <Link to="/usage">Open Usage</Link>
         </Button>
       </Card>
 
@@ -164,6 +190,30 @@ export default function SettingsPage() {
                     <span className="text-[11px]">{t.description}</span>
                   </button>
                 ))}
+              </div>
+              <div className="space-y-1.5">
+                <Label>Oversight mode</Label>
+                <p className="text-[11px] text-muted-foreground">
+                  How much this Space's owner/admins can see of other members' otherwise-private content. Read-only, Space-internal, and cannot be changed after creation.
+                </p>
+                <div className="grid grid-cols-2 gap-2" role="group" aria-label="Oversight mode">
+                  {OVERSIGHT_MODE_OPTIONS.map(o => (
+                    <button
+                      key={o.value}
+                      type="button"
+                      onClick={() => setNewSpaceOversightMode(o.value)}
+                      className={cn(
+                        'flex flex-col gap-1 p-3 rounded-lg border text-left transition-colors',
+                        newSpaceOversightMode === o.value
+                          ? 'border-primary/50 bg-primary/8 text-foreground'
+                          : 'border-border hover:bg-accent text-muted-foreground hover:text-foreground',
+                      )}
+                    >
+                      <span className="text-[13px] font-medium">{o.label}</span>
+                      <span className="text-[11px]">{o.description}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
               <Button type="submit" size="sm" disabled={!newSpaceName.trim() || creating}>
                 {creating ? 'Creating…' : 'Create space'}

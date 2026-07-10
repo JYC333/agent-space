@@ -17,6 +17,7 @@ import { __setProviderHttpClientForTests } from "../src/modules/providers/invoca
 import type { ProviderCommandStore } from "../src/modules/providers/commands/store";
 import type { RerankCandidate } from "../src/modules/retrieval";
 import { writePolicyAudit } from "../src/modules/policy/auditWriter";
+import { resolveTestUsageAttribution } from "./support/usageAttribution";
 
 function cand(over: Partial<ScoredCandidate> & { objectId: string }): ScoredCandidate {
   return {
@@ -170,6 +171,8 @@ describe("ProviderReranker", () => {
           fallback_provider_ids: [],
         };
       },
+      resolveUsageAttribution: resolveTestUsageAttribution,
+      async recordUsageObservation() {},
     } as unknown as ProviderCommandStore;
   }
 
@@ -200,6 +203,8 @@ describe("ProviderReranker", () => {
           fallback_provider_ids: [],
         };
       },
+      resolveUsageAttribution: resolveTestUsageAttribution,
+      async recordUsageObservation() {},
     } as unknown as ProviderCommandStore;
   }
 

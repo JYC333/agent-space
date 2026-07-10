@@ -12,10 +12,13 @@ import type {
 } from "@agent-space/protocol" with { "resolution-mode": "import" };
 import { isSpaceOwnerOrAdmin } from "../access/roles";
 import { seedSpaceDefaults } from "./spaceSeeds";
+import { loadProtocol } from "../providers/protocolRuntime";
 
 export interface SpaceCreateInput {
   name: string;
   type?: "personal" | "household" | "team";
+  /** Immutable after creation; validated against SPACE_OVERSIGHT_MODE_VALUES. Defaults to 'none'. */
+  oversight_mode?: string;
 }
 
 export interface InvitationCreateInput {
@@ -28,6 +31,7 @@ export interface SpaceResult {
   name: string;
   type: string;
   created_by_user_id: string | null;
+  oversight_mode: string;
   created_at: string;
   updated_at: string;
   role?: string | null;
@@ -103,6 +107,7 @@ type SpaceRow = {
   name: string;
   type: string;
   created_by_user_id: string | null;
+  oversight_mode: string;
   created_at: Date | string;
   updated_at: Date | string;
   role?: string | null;
@@ -152,6 +157,7 @@ function spaceOut(row: SpaceRow): SpaceResult {
     name: row.name,
     type: row.type,
     created_by_user_id: row.created_by_user_id,
+    oversight_mode: row.oversight_mode,
     created_at: asIso(row.created_at),
     updated_at: asIso(row.updated_at),
     ...(row.role !== undefined ? { role: row.role } : {}),
@@ -170,12 +176,20 @@ export class PgSpaceRepository implements SpaceRepository {
     if (type === "personal") {
       return { statusCode: 400, detail: "Cannot explicitly create a personal space" };
     }
+    let oversightMode = "none";
+    if (input.oversight_mode !== undefined) {
+      const protocol = await loadProtocol();
+      if (!protocol.isSpaceOversightMode(input.oversight_mode)) {
+        return { statusCode: 422, detail: "Invalid oversight_mode" };
+      }
+      oversightMode = input.oversight_mode;
+    }
     return withTransaction(this.pool, async (client) => {
       const spaceId = randomUUID();
       await client.query(
-        `INSERT INTO spaces (id, name, type, created_by_user_id, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, now(), now())`,
-        [spaceId, input.name, type, userId],
+        `INSERT INTO spaces (id, name, type, created_by_user_id, oversight_mode, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, now(), now())`,
+        [spaceId, input.name, type, userId, oversightMode],
       );
       await client.query(
         `INSERT INTO space_memberships
@@ -396,7 +410,7 @@ export class PgSpaceRepository implements SpaceRepository {
     client: { query: Pool["query"] },
   ): Promise<SpaceRow | null> {
     const res = await client.query<SpaceRow>(
-      `SELECT s.id, s.name, s.type, s.created_by_user_id,
+      `SELECT s.id, s.name, s.type, s.created_by_user_id, s.oversight_mode,
               s.created_at, s.updated_at, m.role
          FROM spaces s
          LEFT JOIN space_memberships m

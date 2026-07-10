@@ -48,6 +48,7 @@ CREATE TABLE public.source_connections (
     owner_user_id character varying(36) NOT NULL,
     credential_id character varying(36),
     visibility character varying(32) DEFAULT 'private'::character varying NOT NULL,
+    access_level character varying(16) DEFAULT 'full'::character varying NOT NULL,
     name character varying(512) NOT NULL,
     endpoint_url text,
     status character varying(32) NOT NULL,
@@ -74,6 +75,8 @@ CREATE TABLE public.source_connections (
     CONSTRAINT ck_source_connections_trust_level CHECK (((trust_level)::text = ANY ((ARRAY['trusted'::character varying, 'normal'::character varying, 'untrusted'::character varying])::text[]))),
     CONSTRAINT ck_source_connections_handler_kind CHECK (((handler_kind)::text = ANY ((ARRAY['built_in'::character varying, 'generated_custom'::character varying, 'recipe'::character varying])::text[]))),
     CONSTRAINT ck_source_connections_repair_status CHECK (((repair_status)::text = ANY ((ARRAY['ok'::character varying, 'repair_required'::character varying, 'repair_pending'::character varying, 'disabled'::character varying])::text[]))),
+    CONSTRAINT ck_source_connections_visibility CHECK (visibility IN ('private', 'space_shared', 'selected_users')),
+    CONSTRAINT ck_source_connections_access_level CHECK (access_level IN ('full', 'summary')),
     CONSTRAINT source_connections_connector_id_fkey FOREIGN KEY (connector_id) REFERENCES public.source_connectors(id)
 );
 
@@ -238,6 +241,8 @@ CREATE TABLE public.proposals (
     created_by_user_id character varying(36),
     required_approver_role character varying(64),
     visibility character varying(32) DEFAULT 'space_shared'::character varying NOT NULL,
+    access_level character varying(16) DEFAULT 'full'::character varying NOT NULL,
+    owner_user_id character varying(36),
     project_id character varying(36),
     CONSTRAINT proposals_pkey PRIMARY KEY (id),
     CONSTRAINT ck_proposals_risk_level CHECK (((risk_level)::text = ANY ((ARRAY['low'::character varying, 'medium'::character varying, 'high'::character varying, 'critical'::character varying])::text[]))),
@@ -265,6 +270,50 @@ CREATE TABLE public.runs (
     CONSTRAINT runs_pkey PRIMARY KEY (id)
 );
 
+-- Minimal spaces table for the canonical content-access oversight branch
+-- (contentAccessSql / contentAccessLevelSql reference spaces.oversight_mode).
+-- SOURCE OF TRUTH: server/migrations/0001_baseline.sql.
+CREATE TABLE public.spaces (
+    id character varying(36) NOT NULL,
+    type character varying(32) NOT NULL DEFAULT 'household',
+    oversight_mode character varying(16) DEFAULT 'none' NOT NULL,
+    CONSTRAINT spaces_pkey PRIMARY KEY (id)
+);
+
+-- Minimal projects + project_members for the canonical content-access
+-- project-scope gate (contentScopeSql / projectReadAccessSql), needed by any
+-- proposal read through PgProposalApplyService.accept/reject.
+-- SOURCE OF TRUTH: server/migrations/0001_baseline.sql.
+CREATE TABLE public.projects (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    owner_user_id character varying(36),
+    deleted_at timestamp with time zone,
+    CONSTRAINT projects_pkey PRIMARY KEY (id)
+);
+
+CREATE TABLE public.project_members (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    project_id character varying(36) NOT NULL,
+    user_id character varying(36) NOT NULL,
+    status character varying(32) NOT NULL,
+    CONSTRAINT project_members_pkey PRIMARY KEY (id)
+);
+
+-- Minimal workspaces + project_workspaces for the canonical content-access
+-- workspace-scope gate (contentScopeSql / workspaceProjectReadAccessSql).
+CREATE TABLE public.workspaces (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    CONSTRAINT workspaces_pkey PRIMARY KEY (id)
+);
+
+CREATE TABLE public.project_workspaces (
+    project_id character varying(36) NOT NULL,
+    workspace_id character varying(36) NOT NULL
+);
+
 CREATE TABLE public.space_memberships (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
@@ -275,6 +324,22 @@ CREATE TABLE public.space_memberships (
     updated_at timestamp with time zone NOT NULL,
     CONSTRAINT space_memberships_pkey PRIMARY KEY (id),
     CONSTRAINT uq_space_memberships_space_user UNIQUE (space_id, user_id)
+);
+
+CREATE TABLE public.content_access_grants (
+    id character varying(36) NOT NULL,
+    resource_type character varying(64) NOT NULL,
+    resource_id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    grantee_user_id character varying(36) NOT NULL,
+    granted_by_user_id character varying(36) NOT NULL,
+    access_level character varying(16) DEFAULT 'full'::character varying NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    revoked_at timestamp with time zone,
+    revoked_by_user_id character varying(36),
+    CONSTRAINT content_access_grants_pkey PRIMARY KEY (id),
+    CONSTRAINT uq_content_access_grants_resource_grantee UNIQUE (space_id, resource_type, resource_id, grantee_user_id)
 );
 
 CREATE TABLE public.policy_decision_records (
@@ -316,6 +381,8 @@ CREATE TABLE public.artifacts (
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     visibility character varying(32) DEFAULT 'space_shared'::character varying NOT NULL,
+    access_level character varying(16) DEFAULT 'full'::character varying NOT NULL,
+    owner_user_id character varying(36),
     trust_level character varying(32),
     CONSTRAINT artifacts_pkey PRIMARY KEY (id),
     CONSTRAINT ck_artifacts_storage_path_relative CHECK (((storage_path IS NULL) OR ((storage_path)::text !~~ '/%'::text))),
@@ -356,6 +423,9 @@ CREATE TABLE public.extraction_jobs (
 CREATE TABLE public.source_items (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
+    owner_user_id character varying(36),
+    visibility character varying(32) DEFAULT 'space_shared' NOT NULL,
+    access_level character varying(16) DEFAULT 'full' NOT NULL,
     connection_id character varying(36),
     item_type character varying(64) NOT NULL,
     source_object_type character varying(64),
@@ -412,6 +482,9 @@ CREATE TABLE public.source_item_user_states (
 CREATE TABLE public.source_snapshots (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
+    owner_user_id character varying(36),
+    visibility character varying(32) DEFAULT 'space_shared' NOT NULL,
+    access_level character varying(16) DEFAULT 'full' NOT NULL,
     source_item_id character varying(36),
     connection_id character varying(36),
     snapshot_type character varying(32) NOT NULL,
@@ -423,12 +496,16 @@ CREATE TABLE public.source_snapshots (
     metadata_json jsonb,
     captured_at timestamp with time zone NOT NULL,
     created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
     CONSTRAINT source_snapshots_pkey PRIMARY KEY (id)
 );
 
 CREATE TABLE public.extracted_evidence (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
+    owner_user_id character varying(36),
+    visibility character varying(32) DEFAULT 'space_shared' NOT NULL,
+    access_level character varying(16) DEFAULT 'full' NOT NULL,
     source_item_id character varying(36),
     extraction_job_id character varying(36),
     source_snapshot_id character varying(36),
@@ -456,6 +533,88 @@ CREATE TABLE public.extracted_evidence (
     deleted_at timestamp with time zone,
     CONSTRAINT extracted_evidence_pkey PRIMARY KEY (id)
 );
+
+CREATE TABLE public.project_source_bindings (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    project_id character varying(36) NOT NULL,
+    source_connection_id character varying(36) NOT NULL,
+    status character varying(32) NOT NULL,
+    priority integer NOT NULL,
+    collection_notifications_enabled boolean DEFAULT true NOT NULL,
+    filters_json jsonb NOT NULL,
+    extraction_policy_json jsonb NOT NULL,
+    CONSTRAINT project_source_bindings_pkey PRIMARY KEY (id)
+);
+
+CREATE TABLE public.project_source_item_links (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    project_id character varying(36) NOT NULL,
+    project_source_binding_id character varying(36) NOT NULL,
+    source_connection_id character varying(36),
+    source_item_id character varying(36) NOT NULL,
+    status character varying(32) DEFAULT 'active' NOT NULL,
+    matched_at timestamp with time zone NOT NULL,
+    match_reason text,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT project_source_item_links_pkey PRIMARY KEY (id)
+);
+CREATE UNIQUE INDEX uq_project_source_item_links_binding_item
+    ON public.project_source_item_links (space_id, project_id, project_source_binding_id, source_item_id);
+
+CREATE TABLE public.evidence_links (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    evidence_id character varying(36) NOT NULL,
+    target_type character varying(64) NOT NULL,
+    target_id character varying(36),
+    link_type character varying(64) NOT NULL,
+    status character varying(32) NOT NULL,
+    reason character varying(1024),
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT evidence_links_pkey PRIMARY KEY (id)
+);
+CREATE UNIQUE INDEX uq_evidence_links_active_dedupe
+    ON public.evidence_links (space_id, evidence_id, target_type, target_id, link_type)
+    WHERE status = 'active';
+
+CREATE TABLE public.space_objects (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    deleted_at timestamp with time zone,
+    CONSTRAINT space_objects_pkey PRIMARY KEY (id)
+);
+
+CREATE TABLE public.project_corpus_items (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    project_id character varying(36) NOT NULL,
+    object_id character varying(36),
+    source_item_id character varying(36),
+    evidence_id character varying(36),
+    source_connection_id character varying(36),
+    role character varying(32) NOT NULL,
+    status character varying(32) NOT NULL,
+    triage_status character varying(32) NOT NULL,
+    read_status character varying(32) NOT NULL,
+    confidence double precision,
+    reason text,
+    metadata_json jsonb NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT project_corpus_items_pkey PRIMARY KEY (id)
+);
+CREATE UNIQUE INDEX uq_project_corpus_items_object
+    ON public.project_corpus_items (space_id, project_id, object_id) WHERE object_id IS NOT NULL;
+CREATE UNIQUE INDEX uq_project_corpus_items_source_item
+    ON public.project_corpus_items (space_id, project_id, source_item_id)
+    WHERE source_item_id IS NOT NULL AND object_id IS NULL AND evidence_id IS NULL;
+CREATE UNIQUE INDEX uq_project_corpus_items_evidence
+    ON public.project_corpus_items (space_id, project_id, evidence_id)
+    WHERE evidence_id IS NOT NULL AND object_id IS NULL;
 
 CREATE TABLE public.retrieval_objects (
     id character varying(36) NOT NULL,

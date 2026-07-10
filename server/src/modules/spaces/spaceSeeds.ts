@@ -15,9 +15,10 @@ const SYSTEM_MEMORY_SEEDS = [
       "5. Rejected proposals are never promoted to active memory.\n" +
       "6. Memory scopes: system > space > user > workspace > capability > agent.\n" +
       "7. Private memories are visible only to their owner.\n" +
-      "8. workspace_shared memories are visible within the same workspace.\n" +
-      "9. space_shared memories are visible to all users in the same space.\n" +
-      "10. Memory never crosses space boundaries.",
+      "8. Workspace and project scopes are checked independently from visibility.\n" +
+      "9. space_shared memories are visible to eligible members in the same space.\n" +
+      "10. selected_users memory is visible only to its owner and explicit grantees.\n" +
+      "11. Memory never crosses space boundaries.",
   },
   {
     title: "Context Policy",

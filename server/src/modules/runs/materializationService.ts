@@ -615,13 +615,13 @@ function normalizeUrgency(value: string | null): string {
 }
 
 function normalizeVisibility(value: string | null): string {
-  return value && ["space_shared", "workspace_shared", "selected_users", "restricted"].includes(value)
+  return value && ["space_shared", "selected_users"].includes(value)
     ? value
     : "space_shared";
 }
 
 function normalizeArtifactVisibility(value: string | null): string {
-  return value && ["private", "space_shared", "workspace_shared", "selected_users", "restricted"].includes(value)
+  return value && ["private", "space_shared", "selected_users"].includes(value)
     ? value
     : "space_shared";
 }

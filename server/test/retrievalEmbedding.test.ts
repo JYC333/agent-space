@@ -15,6 +15,7 @@ import { QueryEmbeddingCache } from "../src/modules/retrieval/embedding/queryEmb
 import { ProviderQueryEmbedder } from "../src/modules/retrieval/embedding/queryEmbedder";
 import { __setProviderHttpClientForTests } from "../src/modules/providers/invocation/invocation";
 import type { ProviderCommandStore } from "../src/modules/providers/commands/store";
+import { resolveTestUsageAttribution } from "./support/usageAttribution";
 
 class FakeEmbeddingDb implements Queryable {
   readonly calls: Array<{ sql: string; params: readonly unknown[] }> = [];
@@ -238,6 +239,8 @@ describe("ProviderQueryEmbedder caching", () => {
           fallback_provider_ids: [],
         };
       },
+      resolveUsageAttribution: resolveTestUsageAttribution,
+      async recordUsageObservation() {},
     } as unknown as ProviderCommandStore;
   }
 
@@ -270,8 +273,8 @@ describe("ProviderQueryEmbedder caching", () => {
     });
     const embedder = new ProviderQueryEmbedder(fakeProviderStore(), "p1", new QueryEmbeddingCache());
 
-    expect(await embedder.embedQuery("space-1", "alpha query")).toEqual(vec(1));
-    expect(await embedder.embedQuery("space-1", "alpha query")).toEqual(vec(1));
+    expect(await embedder.embedQuery("space-1", "alpha query", { subjectUserId: "user-1" })).toEqual(vec(1));
+    expect(await embedder.embedQuery("space-1", "alpha query", { subjectUserId: "user-1" })).toEqual(vec(1));
     expect(fetches).toBe(1);
   });
 
@@ -289,8 +292,8 @@ describe("ProviderQueryEmbedder caching", () => {
     });
     const embedder = new ProviderQueryEmbedder(fakeProviderStore(), "p1", new QueryEmbeddingCache());
 
-    expect(await embedder.embedQuery("space-1", "q")).toBeNull();
-    expect(await embedder.embedQuery("space-1", "q")).toBeNull();
+    expect(await embedder.embedQuery("space-1", "q", { subjectUserId: "user-1" })).toBeNull();
+    expect(await embedder.embedQuery("space-1", "q", { subjectUserId: "user-1" })).toBeNull();
     expect(fetches).toBe(2); // not cached → retried
   });
 
@@ -310,10 +313,13 @@ describe("ProviderQueryEmbedder caching", () => {
     const embedder = new ProviderQueryEmbedder(fakeProviderStore(), "p1", cache);
 
     // cache:false ignores the stale cached vec(0) and forces a fresh embed → vec(1).
-    expect(await embedder.embedQuery("space-1", "alpha query", { cache: false })).toEqual(vec(1));
+    expect(await embedder.embedQuery("space-1", "alpha query", {
+      cache: false,
+      subjectUserId: "user-1",
+    })).toEqual(vec(1));
     expect(fetches).toBe(1);
     // The fresh vector refreshed the cache, so a normal call now serves it without a fetch.
-    expect(await embedder.embedQuery("space-1", "alpha query")).toEqual(vec(1));
+    expect(await embedder.embedQuery("space-1", "alpha query", { subjectUserId: "user-1" })).toEqual(vec(1));
     expect(fetches).toBe(1);
   });
 });

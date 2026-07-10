@@ -51,6 +51,7 @@ import {
   type ScheduleFormValue,
 } from './sourcePageModel'
 import { ScheduleRuleFields } from './SourcesPageSections'
+import { ContentAccessControl } from '../../components/ContentAccessControl'
 
 const DEFAULT_FIXTURE = '<html><body><article><a href="/item">Title</a><p>Excerpt text.</p></article></body></html>'
 const BROWSER_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
@@ -611,6 +612,7 @@ export default function SourceConnectionDetailPage() {
           </div>
         </div>
         <div className="flex flex-wrap justify-end gap-2">
+          <ContentAccessControl resourceType="source_connection" resourceId={connection.id} ownerUserId={connection.owner_user_id} />
           <Button variant="secondary" onClick={runSourceNow} disabled={!canRunConnectionNow(connection) || Boolean(busy)}>
             <Play className="size-4" />
             Run now

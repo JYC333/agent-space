@@ -109,7 +109,7 @@ function memory(over: Partial<ContextMemoryRow> = {}): ContextMemoryRow {
     status: "active",
     visibility: "private",
     sensitivity_level: "normal",
-    selected_user_ids: null,
+    access_level: "full",
     last_confirmed_at: null,
     confidence: 0.9,
     importance: 0.8,
@@ -679,7 +679,7 @@ describe("ContextPrepareService", () => {
         content: "Shared direct content should be replaced by digest.",
         scope_type: "workspace",
         workspace_id: "ws-1",
-        visibility: "workspace_shared",
+        visibility: "space_shared",
       }),
       memory({
         id: "private-mem",
@@ -818,7 +818,7 @@ describe("ContextPrepareService", () => {
         content: "Current shared content from the live retriever.",
         scope_type: "workspace",
         workspace_id: "ws-1",
-        visibility: "workspace_shared",
+        visibility: "space_shared",
       }),
     ];
     repo.run = { ...repo.run!, workspace_id: "ws-1" };
@@ -1052,7 +1052,7 @@ describe("ContextPrepareService", () => {
         content: "Current shared content from live retrieval.",
         scope_type: "workspace",
         workspace_id: "ws-1",
-        visibility: "workspace_shared",
+        visibility: "space_shared",
       }),
     ];
     repo.run = { ...repo.run!, workspace_id: "ws-1" };
@@ -1120,7 +1120,7 @@ describe("ContextPrepareService", () => {
         content: "Shared direct content should not reach runtime file.",
         scope_type: "workspace",
         workspace_id: "ws-1",
-        visibility: "workspace_shared",
+        visibility: "space_shared",
       }),
       memory({
         id: "private-mem",

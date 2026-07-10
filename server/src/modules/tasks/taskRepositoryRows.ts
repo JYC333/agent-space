@@ -50,7 +50,9 @@ export interface TaskRow {
   status: string;
   priority: string;
   risk_level: string;
+  owner_user_id: string | null;
   visibility: string;
+  access_level: string;
   created_by_user_id: string | null;
   created_by_agent_id: string | null;
   assigned_user_id: string | null;
@@ -152,7 +154,7 @@ export const BOARD_COLUMN_COLUMNS = `
 
 export const TASK_COLUMNS = `
   id, space_id, workspace_id, project_id, board_id, column_id, parent_task_id,
-  title, description, task_type, status, priority, risk_level, visibility,
+  title, description, task_type, status, priority, risk_level, owner_user_id, visibility, access_level,
   created_by_user_id, created_by_agent_id, assigned_user_id, assigned_agent_id,
   claimed_by_user_id, claimed_by_agent_id, source_activity_id, source_run_id,
   source_proposal_id, source_artifact_id, due_at, start_after, completed_at,

@@ -444,10 +444,9 @@ describe("PgContextDigestService.generateWorkspaceBundle", () => {
     expect(memQuery).toBeDefined();
     expect(memQuery?.sql).toContain("workspace_id");
     expect(memQuery?.sql).toContain("project_id IS NULL");
-    expect(memQuery?.sql).toContain("visibility = ANY");
+    expect(memQuery?.sql).toContain("me.visibility = 'space_shared'");
     expect(memQuery?.sql).toContain("highly_restricted");
     expect(memQuery?.params).toContain("ws-99");
-    expect(memQuery?.params).toContainEqual(["space_shared", "workspace_shared"]);
   });
 
   it("fails closed (404) when the workspace is missing or archived", async () => {
@@ -488,9 +487,8 @@ describe("PgContextDigestService.generateAgentBundle", () => {
     const memQuery = db.queries.find((q) => q.sql.includes("FROM memory_entries"));
     expect(memQuery?.sql).toContain("agent_id");
     expect(memQuery?.sql).toContain("project_id IS NULL");
-    expect(memQuery?.sql).toContain("visibility = ANY");
+    expect(memQuery?.sql).toContain("me.visibility = 'space_shared'");
     expect(memQuery?.params).toContain("agent-42");
-    expect(memQuery?.params).toContainEqual(["space_shared"]);
   });
 
   it("fails closed (404) when the agent is missing or archived", async () => {

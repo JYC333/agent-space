@@ -40,13 +40,13 @@ export function jsonBody(request: FastifyRequest): Record<string, unknown> {
 export async function applyAgentIdentityPatch(
   repository: PgAgentRepository,
   spaceId: string,
+  userId: string,
   agentId: string,
   body: Record<string, unknown>,
 ) {
   const patch: {
     name?: string;
     description?: string | null;
-    visibility?: string;
     roleInstruction?: string | null;
     status?: string;
   } = {};
@@ -54,15 +54,15 @@ export async function applyAgentIdentityPatch(
   if (Object.hasOwn(body, "description")) {
     patch.description = nullableBodyString(body, "description");
   }
-  if (Object.hasOwn(body, "visibility")) {
-    patch.visibility = requiredBodyString(body, "visibility");
+  if (body.visibility !== undefined || body.access_level !== undefined || body.grants !== undefined) {
+    throw new HttpError(422, "Use the content-access API to update agent permissions");
   }
   if (Object.hasOwn(body, "role_instruction")) {
     patch.roleInstruction = nullableBodyString(body, "role_instruction");
   }
   if (Object.hasOwn(body, "status")) patch.status = requiredBodyString(body, "status");
   return Object.keys(patch).length > 0
-    ? repository.update(spaceId, agentId, patch)
+    ? repository.update(spaceId, userId, agentId, patch)
     : null;
 }
 

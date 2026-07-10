@@ -66,6 +66,9 @@ export const extractionJobs = pgTable("extraction_jobs", {
 export const sourceItems = pgTable("source_items", {
 	id: varchar({ length: 36 }).primaryKey().notNull(),
 	spaceId: varchar("space_id", { length: 36 }).notNull(),
+	ownerUserId: varchar("owner_user_id", { length: 36 }),
+	visibility: varchar({ length: 32 }).default('private').notNull(),
+	accessLevel: varchar("access_level", { length: 16 }).default('full').notNull(),
 	connectionId: varchar("connection_id", { length: 36 }),
 	itemType: varchar("item_type", { length: 64 }).notNull(),
 	sourceObjectType: varchar("source_object_type", { length: 64 }),
@@ -104,6 +107,7 @@ export const sourceItems = pgTable("source_items", {
 	index("ix_source_items_extracted_artifact_id").using("btree", table.extractedArtifactId.asc().nullsLast()),
 	index("ix_source_items_item_type").using("btree", table.itemType.asc().nullsLast()),
 	index("ix_source_items_occurred_at").using("btree", table.occurredAt.asc().nullsLast()),
+	index("ix_source_items_owner_user_id").using("btree", table.ownerUserId.asc().nullsLast()),
 	index("ix_source_items_raw_artifact_id").using("btree", table.rawArtifactId.asc().nullsLast()),
 	index("ix_source_items_source_domain").using("btree", table.sourceDomain.asc().nullsLast()),
 	index("ix_source_items_source_external_id").using("btree", table.sourceExternalId.asc().nullsLast()),
@@ -115,6 +119,7 @@ export const sourceItems = pgTable("source_items", {
 	index("ix_source_items_space_domain").using("btree", table.spaceId.asc().nullsLast(), table.sourceDomain.asc().nullsLast()),
 	index("ix_source_items_space_id").using("btree", table.spaceId.asc().nullsLast()),
 	index("ix_source_items_summary_artifact_id").using("btree", table.summaryArtifactId.asc().nullsLast()),
+	index("ix_source_items_visibility").using("btree", table.visibility.asc().nullsLast()),
 	uniqueIndex("uq_source_items_active_canonical_uri").using("btree", table.spaceId.asc().nullsLast(), table.canonicalUri.asc().nullsLast()).where(sql`((canonical_uri IS NOT NULL) AND (deleted_at IS NULL))`),
 	uniqueIndex("uq_source_items_active_source_uri").using("btree", table.spaceId.asc().nullsLast(), table.sourceUri.asc().nullsLast()).where(sql`((source_uri IS NOT NULL) AND (deleted_at IS NULL))`),
 	foreignKey({
@@ -143,6 +148,11 @@ export const sourceItems = pgTable("source_items", {
 			name: "source_items_created_by_user_id_fkey"
 		}).onDelete("set null"),
 	foreignKey({
+			columns: [table.ownerUserId],
+			foreignColumns: [users.id],
+			name: "source_items_owner_user_id_fkey"
+		}),
+	foreignKey({
 			columns: [table.spaceId],
 			foreignColumns: [spaces.id],
 			name: "source_items_space_id_fkey"
@@ -150,11 +160,17 @@ export const sourceItems = pgTable("source_items", {
 	check("ck_source_items_content_state", sql`(content_state)::text = ANY (ARRAY[('metadata_only'::character varying)::text, ('excerpt_saved'::character varying)::text, ('content_queued'::character varying)::text, ('content_saved'::character varying)::text, ('snapshot_queued'::character varying)::text, ('snapshot_saved'::character varying)::text, ('extraction_failed'::character varying)::text, ('content_unavailable'::character varying)::text])`),
 	check("ck_source_items_item_type", sql`(item_type)::text = ANY (ARRAY[('external_url'::character varying)::text, ('feed_entry'::character varying)::text, ('activity_record'::character varying)::text, ('artifact'::character varying)::text, ('run_event'::character varying)::text, ('file'::character varying)::text, ('document'::character varying)::text, ('log'::character varying)::text])`),
 	check("ck_source_items_retention_policy", sql`(retention_policy)::text = ANY (ARRAY[('metadata_only'::character varying)::text, ('summary_only'::character varying)::text, ('full_text'::character varying)::text, ('full_snapshot'::character varying)::text, ('archived'::character varying)::text])`),
+	check("ck_source_items_visibility", sql`visibility IN ('private', 'space_shared', 'selected_users')`),
+	check("ck_source_items_access_level", sql`access_level IN ('full', 'summary')`),
+	check("ck_source_items_private_owner", sql`visibility = 'space_shared' OR owner_user_id IS NOT NULL`),
 ]);
 
 export const sourceSnapshots = pgTable("source_snapshots", {
 	id: varchar({ length: 36 }).primaryKey().notNull(),
 	spaceId: varchar("space_id", { length: 36 }).notNull(),
+	ownerUserId: varchar("owner_user_id", { length: 36 }),
+	visibility: varchar({ length: 32 }).default('private').notNull(),
+	accessLevel: varchar("access_level", { length: 16 }).default('full').notNull(),
 	sourceItemId: varchar("source_item_id", { length: 36 }),
 	connectionId: varchar("connection_id", { length: 36 }),
 	snapshotType: varchar("snapshot_type", { length: 32 }).notNull(),
@@ -166,14 +182,17 @@ export const sourceSnapshots = pgTable("source_snapshots", {
 	metadataJson: jsonb("metadata_json"),
 	capturedAt: timestamp("captured_at", { withTimezone: true, mode: 'string' }).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).notNull(),
 }, (table): PgTableExtraConfigValue[] => [
 	index("ix_source_snapshots_artifact_id").using("btree", table.artifactId.asc().nullsLast()),
 	index("ix_source_snapshots_connection_id").using("btree", table.connectionId.asc().nullsLast()),
 	index("ix_source_snapshots_content_hash").using("btree", table.contentHash.asc().nullsLast()),
+	index("ix_source_snapshots_owner_user_id").using("btree", table.ownerUserId.asc().nullsLast()),
 	index("ix_source_snapshots_snapshot_type").using("btree", table.snapshotType.asc().nullsLast()),
 	index("ix_source_snapshots_source_item_id").using("btree", table.sourceItemId.asc().nullsLast()),
 	index("ix_source_snapshots_space_id").using("btree", table.spaceId.asc().nullsLast()),
 	index("ix_source_snapshots_space_item").using("btree", table.spaceId.asc().nullsLast(), table.sourceItemId.asc().nullsLast()),
+	index("ix_source_snapshots_visibility").using("btree", table.visibility.asc().nullsLast()),
 	foreignKey({
 			columns: [table.artifactId],
 			foreignColumns: [artifacts.id],
@@ -183,6 +202,11 @@ export const sourceSnapshots = pgTable("source_snapshots", {
 			columns: [table.connectionId],
 			foreignColumns: [sourceConnections.id],
 			name: "source_snapshots_connection_id_fkey"
+		}),
+	foreignKey({
+			columns: [table.ownerUserId],
+			foreignColumns: [users.id],
+			name: "source_snapshots_owner_user_id_fkey"
 		}),
 	foreignKey({
 			columns: [table.sourceItemId],
@@ -197,6 +221,9 @@ export const sourceSnapshots = pgTable("source_snapshots", {
 	check("ck_source_snapshots_capture_method", sql`(capture_method)::text = ANY (ARRAY[('manual'::character varying)::text, ('connection_scan'::character varying)::text, ('full_text'::character varying)::text, ('snapshot'::character varying)::text, ('internal'::character varying)::text, ('custom_source_handler'::character varying)::text, ('source_recipe'::character varying)::text])`),
 	check("ck_source_snapshots_snapshot_type", sql`(snapshot_type)::text = ANY (ARRAY[('metadata'::character varying)::text, ('raw'::character varying)::text, ('extracted'::character varying)::text, ('summary'::character varying)::text])`),
 	check("ck_source_snapshots_trust_level", sql`(trust_level)::text = ANY (ARRAY[('trusted'::character varying)::text, ('normal'::character varying)::text, ('untrusted'::character varying)::text])`),
+	check("ck_source_snapshots_visibility", sql`visibility IN ('private', 'space_shared', 'selected_users')`),
+	check("ck_source_snapshots_access_level", sql`access_level IN ('full', 'summary')`),
+	check("ck_source_snapshots_private_owner", sql`visibility = 'space_shared' OR owner_user_id IS NOT NULL`),
 ]);
 
 export const sourceConnections = pgTable("source_connections", {
@@ -206,6 +233,7 @@ export const sourceConnections = pgTable("source_connections", {
 	ownerUserId: varchar("owner_user_id", { length: 36 }).notNull(),
 	credentialId: varchar("credential_id", { length: 36 }),
 	visibility: varchar({ length: 32 }).default('private').notNull(),
+	accessLevel: varchar("access_level", { length: 16 }).default('full').notNull(),
 	name: varchar({ length: 512 }).notNull(),
 	endpointUrl: text("endpoint_url"),
 	status: varchar({ length: 32 }).notNull(),
@@ -279,7 +307,8 @@ export const sourceConnections = pgTable("source_connections", {
 	check("ck_source_connections_trust_level", sql`(trust_level)::text = ANY (ARRAY[('trusted'::character varying)::text, ('normal'::character varying)::text, ('untrusted'::character varying)::text])`),
 	check("ck_source_connections_handler_kind", sql`(handler_kind)::text = ANY (ARRAY[('built_in'::character varying)::text, ('generated_custom'::character varying)::text, ('recipe'::character varying)::text])`),
 	check("ck_source_connections_repair_status", sql`(repair_status)::text = ANY (ARRAY[('ok'::character varying)::text, ('repair_required'::character varying)::text, ('repair_pending'::character varying)::text, ('disabled'::character varying)::text])`),
-	check("ck_source_connections_visibility", sql`(visibility)::text = ANY (ARRAY[('private'::character varying)::text, ('space_discoverable'::character varying)::text])`),
+	check("ck_source_connections_visibility", sql`visibility IN ('private', 'space_shared', 'selected_users')`),
+	check("ck_source_connections_access_level", sql`access_level IN ('full', 'summary')`),
 ]);
 
 export const sourceConnectors = pgTable("source_connectors", {
@@ -571,9 +600,11 @@ export const readerAnnotations = pgTable("reader_annotations", {
 	color: varchar({ length: 32 }),
 	label: varchar({ length: 128 }),
 	visibility: varchar({ length: 32 }).default('private').notNull(),
+	accessLevel: varchar("access_level", { length: 16 }).default('full').notNull(),
 	status: varchar({ length: 32 }).default('active').notNull(),
 	anchorState: varchar("anchor_state", { length: 32 }).default('unverified').notNull(),
 	createdByUserId: varchar("created_by_user_id", { length: 36 }).notNull(),
+	ownerUserId: varchar("owner_user_id", { length: 36 }).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).notNull(),
 }, (table): PgTableExtraConfigValue[] => [
@@ -581,6 +612,7 @@ export const readerAnnotations = pgTable("reader_annotations", {
 	index("ix_reader_annotations_space_snapshot").using("btree", table.spaceId.asc().nullsLast(), table.sourceSnapshotId.asc().nullsLast(), table.status.asc().nullsLast()),
 	index("ix_reader_annotations_space_source_item").using("btree", table.spaceId.asc().nullsLast(), table.sourceItemId.asc().nullsLast(), table.status.asc().nullsLast()),
 	index("ix_reader_annotations_space_user").using("btree", table.spaceId.asc().nullsLast(), table.createdByUserId.asc().nullsLast(), table.status.asc().nullsLast()),
+	index("ix_reader_annotations_owner_user_id").using("btree", table.ownerUserId.asc().nullsLast()),
 	index("ix_reader_annotations_space_visibility").using("btree", table.spaceId.asc().nullsLast(), table.visibility.asc().nullsLast(), table.status.asc().nullsLast()),
 	foreignKey({
 			columns: [table.spaceId],
@@ -607,8 +639,14 @@ export const readerAnnotations = pgTable("reader_annotations", {
 			foreignColumns: [users.id],
 			name: "reader_annotations_created_by_user_id_fkey"
 		}),
+	foreignKey({
+			columns: [table.ownerUserId],
+			foreignColumns: [users.id],
+			name: "reader_annotations_owner_user_id_fkey"
+		}),
 	check("ck_reader_annotations_annotation_type", sql`(annotation_type)::text = ANY (ARRAY[('highlight'::character varying)::text, ('comment'::character varying)::text, ('excerpt'::character varying)::text, ('bookmark'::character varying)::text])`),
-	check("ck_reader_annotations_visibility", sql`(visibility)::text = ANY (ARRAY[('private'::character varying)::text, ('space_shared'::character varying)::text])`),
+	check("ck_reader_annotations_visibility", sql`visibility IN ('private', 'space_shared', 'selected_users')`),
+	check("ck_reader_annotations_access_level", sql`access_level IN ('full', 'summary')`),
 	check("ck_reader_annotations_status", sql`(status)::text = ANY (ARRAY[('active'::character varying)::text, ('archived'::character varying)::text])`),
 	check("ck_reader_annotations_anchor_state", sql`(anchor_state)::text = ANY (ARRAY[('verified'::character varying)::text, ('unverified'::character varying)::text])`),
 	check("ck_reader_annotations_one_target", sql`((((source_item_id IS NOT NULL))::integer + ((artifact_id IS NOT NULL))::integer) + ((source_snapshot_id IS NOT NULL))::integer) = 1`),

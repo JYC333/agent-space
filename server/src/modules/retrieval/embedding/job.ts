@@ -111,7 +111,13 @@ export function registerRetrievalEmbeddingHandler(
     const egressPolicy = { externalEgressEnabled: retrievalSettings.externalEgressEnabled };
     const service = new RetrievalEmbeddingBackfillService(
       db,
-      new ProviderEmbedder(store, null, egressPolicy),
+      new ProviderEmbedder(store, null, egressPolicy, job.user_id
+        ? { subject_user_id: job.user_id }
+        : {
+            meter_subject_type: "space_system",
+            meter_subject_id: RETRIEVAL_EMBEDDING_JOB,
+            space_system_task: true,
+          }),
       async (event) => {
         await writePolicyAudit(config.databaseUrl!, {
           space_id: spaceId,

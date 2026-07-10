@@ -11,15 +11,6 @@ import type {
   RunStepDetailRecord,
 } from "./repository";
 
-export function canReadRun(run: Pick<RunRecord, "visibility" | "instructed_by_user_id">, userId: string): boolean {
-  const visibility = (run.visibility ?? "space_shared").toLowerCase();
-  if (visibility === "space_shared") return true;
-  if (visibility === "private" || visibility === "restricted") {
-    return Boolean(run.instructed_by_user_id && run.instructed_by_user_id === userId);
-  }
-  return false;
-}
-
 export function runToOut(
   run: RunRecord,
   provider: ModelProviderSummaryRecord | null = null,
@@ -60,7 +51,9 @@ export function runToOut(
     model_provider_id: run.model_provider_id ?? null,
     resolved_model: buildResolvedModel(run, provider),
     required_sandbox_level: run.required_sandbox_level,
+    owner_user_id: run.owner_user_id ?? null,
     visibility: run.visibility ?? "space_shared",
+    access_level: run.access_level ?? "full",
     project_id: run.project_id ?? null,
   };
 }

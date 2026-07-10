@@ -438,6 +438,11 @@ async function seedIdentity(): Promise<SpaceUserIdentity> {
      VALUES ($1, 'Graph Space', 'team', $2, $3, $3)`,
     [spaceId, userId, now],
   );
+  await pool!.query(
+    `INSERT INTO space_memberships (id, space_id, user_id, role, status, created_at, updated_at)
+     VALUES (gen_random_uuid()::varchar, $1, $2, 'owner', 'active', $3, $3)`,
+    [spaceId, userId, now],
+  );
   return { spaceId, userId };
 }
 

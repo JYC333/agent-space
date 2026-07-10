@@ -27,6 +27,26 @@ export const ProviderCompletionInternalRequestSchema = z.object({
    * `provider_id`, which then acts as the safety-net provider.
    */
   task: z.string().nullish(),
+  subject_user_id: IdSchema.nullish(),
+  source_resource_type: z.string().min(1).nullish(),
+  source_resource_id: IdSchema.nullish(),
+  space_system_task: z.boolean().optional(),
+  meter_subject_type: z.string().min(1).nullish(),
+  meter_subject_id: z.string().min(1).nullish(),
+}).superRefine((value, ctx) => {
+  const hasSourceType = Boolean(value.source_resource_type);
+  const hasSourceId = Boolean(value.source_resource_id);
+  if (hasSourceType !== hasSourceId) {
+    ctx.addIssue({ code: "custom", message: "source_resource_type and source_resource_id must be provided together" });
+  }
+  const isSpaceSystemTask = value.space_system_task === true &&
+    value.meter_subject_type === "space_system" && Boolean(value.meter_subject_id);
+  if (!value.subject_user_id && !(hasSourceType && hasSourceId) && !isSpaceSystemTask) {
+    ctx.addIssue({
+      code: "custom",
+      message: "subject_user_id, a source resource, or an explicit Space system subject is required",
+    });
+  }
 });
 export type ProviderCompletionInternalRequest = z.infer<
   typeof ProviderCompletionInternalRequestSchema

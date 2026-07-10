@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   HttpError,
-  canReadByVisibility,
   countFromRow,
   dateIso,
   numberValue,
@@ -13,7 +12,7 @@ import {
   type SpaceUserIdentity,
   type Queryable,
 } from "../routeUtils/common";
-import { spaceObjectVisibleSql } from "../access/visibility";
+import { contentReadSql, contentVisibilityParamFilterSql } from "../access/contentAccessSql";
 import { proposalToOut } from "../proposals/repository";
 import { insertProposalRow } from "../proposals/reviewPackets";
 import type { ProposalOut } from "@agent-space/protocol" with { "resolution-mode": "import" };
@@ -21,8 +20,6 @@ import { RETRIEVAL_OBJECT_TYPE_VALUES } from "../retrieval/objectTypes";
 import {
   canMutateClaim,
   canMutateKnowledge,
-  canReadClaim,
-  canReadKnowledge,
   claimOut,
   claimSourceOut,
   claimSummaryOut,
@@ -799,6 +796,7 @@ export class PgKnowledgeRepository {
   }
 
   async proposeClaimUpdate(identity: SpaceUserIdentity, claimId: string, body: Record<string, unknown>): Promise<ProposalOut> {
+    assertNoContentAccessUpdate(body);
     const claim = await this.getVisibleClaimRow(identity, claimId);
     if (!claim || !canMutateClaim(claim, identity.userId)) throw new HttpError(404, "Claim not found");
     const claimKind = optionalString(body.claim_kind);
@@ -812,8 +810,6 @@ export class PgKnowledgeRepository {
     const nextStatus = status ?? claim.status;
     const transitionError = claimStatusTransitionError(claim.status, nextStatus);
     if (transitionError) throw new HttpError(422, transitionError);
-    const visibility = optionalString(body.visibility);
-    if (visibility && !KNOWLEDGE_VISIBILITIES.has(visibility)) throw new HttpError(422, "invalid visibility");
     const confidenceMethod = optionalString(body.confidence_method);
     if (confidenceMethod && !CLAIM_CONFIDENCE_METHODS.has(confidenceMethod)) throw new HttpError(422, "invalid confidence_method");
     const resolutionState = optionalString(body.resolution_state);
@@ -853,7 +849,6 @@ export class PgKnowledgeRepository {
       claim_text: optionalString(body.claim_text),
       title: optionalString(body.title),
       status,
-      visibility,
       confidence: Object.hasOwn(body, "confidence") ? confidence(body.confidence) : undefined,
       confidence_method: confidenceMethod,
       resolution_state: resolutionState,
@@ -981,6 +976,7 @@ export class PgKnowledgeRepository {
   }
 
   async proposeUpdate(identity: SpaceUserIdentity, itemId: string, body: Record<string, unknown>): Promise<ProposalOut> {
+    assertNoContentAccessUpdate(body);
     const item = await this.getVisibleItemRow(identity, itemId);
     if (!item) throw new HttpError(404, "Knowledge item not found");
     if (!canMutateKnowledge(item, identity.userId)) throw new HttpError(404, "Knowledge item not found");
@@ -1638,7 +1634,9 @@ export class PgKnowledgeRepository {
     };
     if (filters.knowledgeKind) clauses.push(`ki.knowledge_kind = ${add(filters.knowledgeKind)}`);
     if (filters.status) clauses.push(`so.status = ${add(filters.status)}`);
-    if (filters.visibility) clauses.push(`so.visibility = ${add(filters.visibility)}`);
+    if (filters.visibility) {
+      clauses.push(contentVisibilityParamFilterSql("so", add(filters.visibility)));
+    }
     if (filters.projectId) clauses.push(`so.primary_project_id = ${add(filters.projectId)}`);
     if (filters.workspaceId) clauses.push(`so.workspace_id = ${add(filters.workspaceId)}`);
     if (filters.q) clauses.push(`(so.title ILIKE ${add(`%${filters.q}%`)} OR ki.content ILIKE $${params.length})`);
@@ -1674,29 +1672,29 @@ export class PgKnowledgeRepository {
   }
 
   private readableSpaceObjectClause(alias: string, userParam = "$2"): string {
-    return spaceObjectVisibleSql(alias, userParam);
+    return contentReadSql("space_object", alias, userParam);
   }
 
   private async getVisibleItemRow(identity: SpaceUserIdentity, itemId: string): Promise<KnowledgeItemRow | null> {
     const result = await this.db.query<KnowledgeItemRow>(
       `SELECT ${KNOWLEDGE_ITEM_COLUMNS}
          FROM ${KNOWLEDGE_ITEM_FROM}
-        WHERE ki.object_id = $1 AND ki.space_id = $2`,
-      [itemId, identity.spaceId],
+        WHERE ki.object_id = $1 AND ki.space_id = $2
+          AND ${contentReadSql("space_object", "so", "$3")}`,
+      [itemId, identity.spaceId, identity.userId],
     );
-    const row = result.rows[0];
-    return row && canReadKnowledge(row, identity.userId) ? row : null;
+    return result.rows[0] ?? null;
   }
 
   private async getVisibleClaimRow(identity: SpaceUserIdentity, claimId: string): Promise<ClaimRow | null> {
     const result = await this.db.query<ClaimRow>(
       `SELECT ${CLAIM_COLUMNS}
          FROM ${CLAIM_FROM}
-        WHERE c.object_id = $1 AND c.space_id = $2`,
-      [claimId, identity.spaceId],
+        WHERE c.object_id = $1 AND c.space_id = $2
+          AND ${contentReadSql("space_object", "so", "$3")}`,
+      [claimId, identity.spaceId, identity.userId],
     );
-    const row = result.rows[0];
-    return row && canReadClaim(row, identity.userId) ? row : null;
+    return result.rows[0] ?? null;
   }
 
   private async hasActiveSupersedingClaimRelation(spaceId: string, claimId: string): Promise<boolean> {
@@ -1993,13 +1991,12 @@ export class PgKnowledgeRepository {
     const result = await this.db.query<SpaceObjectRow>(
       `SELECT id, space_id, object_type, title, status, visibility,
               owner_user_id, primary_project_id, workspace_id, created_by_user_id
-         FROM space_objects
-        WHERE id = $1 AND space_id = $2 AND deleted_at IS NULL`,
-      [objectId, identity.spaceId],
+         FROM space_objects so
+        WHERE id = $1 AND space_id = $2 AND deleted_at IS NULL
+          AND ${contentReadSql("space_object", "so", "$3")}`,
+      [objectId, identity.spaceId, identity.userId],
     );
-    const row = result.rows[0];
-    if (!row) return null;
-    return canReadByVisibility(row.visibility, identity.userId, [row.owner_user_id, row.created_by_user_id]) ? row : null;
+    return result.rows[0] ?? null;
   }
 
   private async normalizeClaimSources(identity: SpaceUserIdentity, rawSources: unknown): Promise<Record<string, unknown>[]> {
@@ -2575,6 +2572,12 @@ function unsafeObjectKindConfigKey(key: string): boolean {
     .toLowerCase();
   const tokens = normalized.split(/[^a-z0-9]+/).filter(Boolean);
   return tokens.some((token) => UNSAFE_OBJECT_KIND_CONFIG_KEY_TOKENS.has(token));
+}
+
+function assertNoContentAccessUpdate(body: Record<string, unknown>): void {
+  if (body.visibility !== undefined || body.access_level !== undefined || body.grants !== undefined) {
+    throw new HttpError(422, "Use the content-access API to update Knowledge permissions");
+  }
 }
 
 function titleFromClaimText(text: string): string {

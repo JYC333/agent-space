@@ -95,11 +95,11 @@ export async function upsertSystemCoreWorkspace(
               workspace_type = 'system_core',
               kind = 'repo',
               status = 'active',
-              visibility = 'private',
               protected = true,
               system_managed = true,
               registered_from = COALESCE(registered_from, 'auto'),
               created_by_user_id = COALESCE(created_by_user_id, $3),
+              owner_user_id = COALESCE(owner_user_id, $3),
               updated_at = now()
         WHERE id = $4 AND space_id = $5`,
       [
@@ -115,12 +115,12 @@ export async function upsertSystemCoreWorkspace(
 
   await db.query(
     `INSERT INTO workspaces (
-       id, space_id, created_by_user_id, name, description,
+       id, space_id, created_by_user_id, owner_user_id, name, description,
        workspace_type, kind, root_path, default_branch,
        status, visibility, protected, system_managed, registered_from,
        created_at, updated_at
      ) VALUES (
-       $1, $2, $3, $4, $5,
+       $1, $2, $3, $3, $4, $5,
        'system_core', 'repo', $6, $7,
        'active', 'private', true, true, 'auto',
        now(), now()

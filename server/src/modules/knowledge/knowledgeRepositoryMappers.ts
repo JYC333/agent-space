@@ -1,6 +1,5 @@
 import {
   HttpError,
-  canReadByVisibility,
   dateIso,
   numberValue,
   objectValue,
@@ -19,6 +18,7 @@ import type {
   SourceRow,
 } from "./knowledgeRepositoryRows";
 import { isKnowledgeRetrievalProjectedRelation } from "./retrievalObjectTypes";
+import { isContentOwner } from "../access/contentAccessPolicy";
 
 export function knowledgeSummaryOut(row: KnowledgeItemRow): Record<string, unknown> {
   return {
@@ -217,22 +217,12 @@ export function normalizeDates(row: Record<string, unknown>): Record<string, unk
   return row;
 }
 
-export function canReadKnowledge(row: KnowledgeItemRow, userId: string): boolean {
-  return canReadByVisibility(row.visibility, userId, [row.owner_user_id, row.created_by_user_id]);
-}
-
 export function canMutateKnowledge(row: KnowledgeItemRow, userId: string): boolean {
-  if (row.visibility === "space_shared" || row.visibility === "workspace_shared") return true;
-  return row.owner_user_id === userId || row.created_by_user_id === userId;
-}
-
-export function canReadClaim(row: ClaimRow, userId: string): boolean {
-  return canReadByVisibility(row.visibility, userId, [row.owner_user_id, row.created_by_user_id]);
+  return isContentOwner(row, userId);
 }
 
 export function canMutateClaim(row: ClaimRow, userId: string): boolean {
-  if (row.visibility === "space_shared" || row.visibility === "workspace_shared") return true;
-  return row.owner_user_id === userId || row.created_by_user_id === userId;
+  return isContentOwner(row, userId);
 }
 
 export function confidence(value: unknown): number | null {

@@ -106,7 +106,7 @@ beforeEach(async () => {
   for (const [id, name] of [[SPACE, "Bench"], [OTHER_SPACE, "Other"]] as const) {
     await pool.query(
       `INSERT INTO spaces (id, name, type, created_at, updated_at)
-       VALUES ($1, $2, 'personal', now(), now())`,
+       VALUES ($1, $2, 'team', now(), now())`,
       [id, name],
     );
   }
@@ -115,6 +115,18 @@ beforeEach(async () => {
       `INSERT INTO users (id, display_name, status, created_at, updated_at)
        VALUES ($1, 'U', 'active', now(), now())`,
       [id],
+    );
+  }
+  for (const [spaceId, userId] of [
+    [SPACE, VIEWER],
+    [SPACE, OTHER],
+    [OTHER_SPACE, VIEWER],
+    [OTHER_SPACE, OTHER],
+  ]) {
+    await pool.query(
+      `INSERT INTO space_memberships (id, space_id, user_id, role, status, created_at, updated_at)
+       VALUES ($1, $2, $3, 'member', 'active', now(), now())`,
+      [randomUUID(), spaceId, userId],
     );
   }
 });
@@ -506,14 +518,14 @@ describe("Retrieval bench: cross-space / visibility leak fuzz (real Postgres)", 
     // Same space, readable by VIEWER.
     await seed({ id: "ok-public", title: "Shared runbook", content: "Public shared runbook xenon details." });
     await seed({ id: "ok-mine", title: "My private note", content: "My own private krypton note.", visibility: "private", owner: VIEWER });
-    // Same space, NOT readable by VIEWER (owned by OTHER, private/restricted).
+    // Same space, NOT readable by VIEWER (owned by OTHER, private/selected without a grant).
     await seed({ id: "leak-private", title: "Their private", content: "Secret radon material owned by other.", visibility: "private", owner: OTHER });
-    await seed({ id: "leak-restricted", title: "Their restricted", content: "Restricted argon dossier.", visibility: "restricted", owner: OTHER });
+    await seed({ id: "leak-selected", title: "Their selected item", content: "Selected argon dossier.", visibility: "selected_users", owner: OTHER });
     // Different space entirely.
     await seed({ id: "leak-otherspace", title: "Other space doc", content: "Cross-space neon secret.", spaceId: OTHER_SPACE });
     await reindexAndEmbed();
 
-    const forbidden = new Set(["leak-private", "leak-restricted", "leak-otherspace"]);
+    const forbidden = new Set(["leak-private", "leak-selected", "leak-otherspace"]);
     // Probe with the distinctive term of EVERY doc (including forbidden ones) so we
     // actively try to surface what must never be returned.
     const probes = [

@@ -55,13 +55,18 @@ Rules:
 
 ---
 
-## 3. Object Visibility
+## 3. Content Access
 
-The visibility values `private`, `restricted`, and `space_shared` are enforced by
-server module read-authority helpers. Shared reusable predicates live in
-`server/src/modules/access/visibility.ts`: in-memory row checks
-(`canReadByVisibility`) and SQL predicates for space objects, tasks, and
-artifacts. Unknown visibility values fail closed. Enforcement must be applied at:
+All persisted content uses one read model. An active membership in the
+resource's Space is required first; workspace/project scope gates are applied
+second; owner, visibility, and explicit grants are evaluated last. Visibility
+has exactly three values: `private`, `space_shared`, and `selected_users`.
+Unknown values fail closed.
+
+The canonical in-memory decision, SQL predicate, resource registry, and grant
+query live under `server/src/modules/access/contentAccess*.ts`. Explicit grants
+are normalized in `content_access_grants`; module-local owner/visibility SQL is
+not an authorization boundary. Enforcement applies at:
 
 - list endpoints
 - detail endpoints
@@ -73,15 +78,92 @@ artifacts. Unknown visibility values fail closed. Enforcement must be applied at
 Denials return 404 ("not found"), not 403 ("forbidden"). This is the correct fail-closed,
 no-oracle behavior — the caller cannot distinguish "not found" from "not permitted."
 
-`private` objects are accessible only to their `owner_user_id` (or `instructed_by_user_id`
-for runs). `restricted` objects behave like private for same-space non-owners. `space_shared`
-objects are accessible to all authenticated members of the same space.
+`private` content is owner-readable, `space_shared` is readable to scope-eligible
+members, and `selected_users` is readable to the owner and active same-Space
+grantees. `access_level=summary` withholds full content from non-owners. Workspace
+and project scope are independent from visibility. Space owner/admin roles may
+manage access policy but do not bypass read policy **by default**; the single
+exception is the creation-time, immutable Space oversight mode (below), scoped
+to reads within that Space.
+
+On `space_shared` resources, `content_access_grants` rows are per-user
+disclosure *upgrades*, not narrowing: the effective level is the widest of the
+resource's own `access_level` and any active grant for that viewer (a
+`summary`-base resource can grant a specific member `full`; a grant never pulls
+a `full`-base resource down to `summary`). On `selected_users` resources, an
+active grant's `access_level` is authoritative for the grantee — it is not
+narrowed by the resource's own `access_level`.
 
 Space membership roles remain separate from persisted policy rows. Shared role
 helpers live in `server/src/modules/access/roles.ts`, and route-level
 owner/admin responses are centralized in `server/src/modules/routeUtils/access.ts`.
 These helpers do not replace `PolicyGateway`; sensitive action gates still go
 through the policy module.
+
+### Space oversight modes
+
+A Space chooses, at creation time only, how much read visibility its
+owner/admin members get over other members' otherwise-private content within
+that same Space. The mode is one of `none` (default), `summary`, `content`,
+`full` — strictly increasing capability — stored on `spaces.oversight_mode`
+and immutable after creation. Personal Spaces are always `none` (there is no
+request body in the OAuth-bootstrap creation path, so the column default is
+the only enforcement). The mode is visible to every member of the Space
+(transparency requirement); there is no admin toggle and no update path that
+accepts the field.
+
+Oversight is implemented inside the canonical predicate
+(`contentAccessSql` / `contentAccessLevelSql` / `decideContentAccess` in
+`server/src/modules/access/`) as a widest-wins merge with the ordinary
+visibility/grant result, so every registered content resource type inherits it
+from one place — not a per-resource special case. Concretely, for an active
+owner/admin member of a Space with oversight enabled: `summary` mode
+contributes `summary` access to that member's otherwise-invisible content;
+`content` and `full` both contribute `full` access to ordinary content.
+`highly_restricted` memory is the one gate oversight does not automatically
+pierce: only `full` mode pierces it (`memoryReadAuth.ts`); `none`, `summary`,
+and `content` all still deny it, and neither an owner's explicit grant nor a
+lower oversight mode pierces it either (sharing `highly_restricted` content
+requires an explicit, auditable sensitivity downgrade by its owner, not an
+oversight escalation).
+
+Oversight applies to **reads only**. It does not extend to publishing,
+visibility changes, grant management, proposal creation, or any other write
+path — those keep their current owner/role requirements. In particular,
+`contentAccessSql` / `contentAccessLevelSql` / `contentReadSql` take an
+`includeOversight` flag (default on) specifically so that queries whose output
+becomes a new, more-widely-visible artifact can opt out: project public
+summary generation (`projects/publicSummaryGenerator.ts`) passes
+`includeOversight: false` on every candidate query, because its output can
+become `review_status = 'approved'` and readable by the whole Space — an
+oversight admin's own extra visibility must never leak another member's
+private content into that space-wide artifact. Retrieval and per-run context
+injection do inherit oversight by design (an admin-initiated run may compile
+other members' otherwise-private content into that run's own context/output,
+scoped to that run), which is a deliberate consequence of the same
+canonical-predicate mechanism, not a separate feature.
+
+Oversight does not pierce workspace/project scope gates, source consent
+gates, or any other post-visibility deny gate besides the `highly_restricted`
+exception above. Cross-space reads always fail regardless of oversight;
+targeted publications remain the only cross-space transfer path.
+
+### Usage events
+
+`token_usage_events` is registered as `token_usage_event` in the canonical
+content resource registry. Direct user and CLI-import events are private and
+owned by that user. Run/Agent-backed calls snapshot the source resource owner,
+workspace/project scope, visibility, disclosure level, and active disclosure
+grants for both `selected_users` and `space_shared` sources at call time. Ownerless events are accepted only for an explicit
+Space-system task and must be `space_shared`.
+
+Every user dashboard query applies the canonical SQL predicate to event rows
+before aggregation. `summary` access contributes only to a de-identified
+summary group; event, session, dimension, and budget-subject details require
+effective `full` access. Detail filters also exclude summary-only rows to prevent
+filter-difference inference. Space owner/admin and instance-admin roles do not
+bypass this predicate. The instance-admin operations endpoint returns only
+aggregate totals and no user, prompt, run, session, or source-resource dimensions.
 
 ---
 
@@ -105,18 +187,16 @@ Enforcement is at the SQL query layer: `Session.space_id == space_id` and
 
 Tasks enforce visibility on all read, mutation, and sub-resource paths.
 
-- `GET /tasks` and `GET /tasks/{id}`: visibility enforced via the shared task
-  visibility predicate plus task actor ownership (`created_by`, `assigned`,
-  `claimed`).
+- `GET /tasks` and `GET /tasks/{id}` use the canonical content predicate.
 - `PATCH /tasks/{id}` and `POST /tasks/{id}/runs`: visibility enforced before mutation.
 - Sub-resource endpoints (`GET /tasks/{id}/runs`, `/artifacts`, `/proposals`): `user_id`
   is forwarded to `TaskService.get()` so task visibility runs before the
   sub-resource query.
 - `GET /boards/{board_id}/tasks`: task visibility is applied per-row to the
-  result set before returning. Private and restricted tasks are filtered from the
-  board view for non-owners.
+  result set before returning. Private tasks are filtered from the board view
+  for non-owners.
 
-Private and restricted tasks are not readable or mutable by same-space non-owners.
+Private tasks are not readable by same-space non-owners.
 
 ---
 
@@ -124,8 +204,7 @@ Private and restricted tasks are not readable or mutable by same-space non-owner
 
 Activity records enforce visibility on read, mutation, and consolidation paths.
 
-- `GET /activity` and `GET /activity/{id}`: `canReadByVisibility()` applied with
-  `viewer_user_id`.
+- `GET /activity` and `GET /activity/{id}` apply the canonical SQL predicate.
 - `PATCH /activity/{id}/review` and `PATCH /activity/{id}/archive`: `viewer_user_id`
   forwarded to the service; non-owners of a private record receive 404.
 - `POST /activity/{id}/consolidate`: `svc.get(activity_id, space_id, viewer_user_id=…)` is
@@ -287,12 +366,13 @@ They aggregate across all spaces the user is a member of (`_member_space_ids(db,
 Visibility filters are applied to tasks and proposals. No raw
 artifact payloads or full memory content is returned — pointer metadata only in timeline.
 
-### 8c. Source Pointers
+### 8c. Targeted Publications
 
-All `/source-pointers` routes discard request `_auth_space_id`. Authority is user membership
-in `owner_space_id` (and `source_space_id` for creation). Source pointers are provenance
-metadata only — no source object content is resolved or returned. They do not grant read
-access to cross-space content and do not activate `memory.cross_space_read`.
+`/publications` never resolves a live source resource for a target Space. Publishing
+requires source ownership/full access plus active membership in every explicit target.
+Discovery requires active membership in the current target Space. Import verifies the
+immutable snapshot hash and creates a new private target-Space resource. Revocation
+blocks future imports without deleting existing copies.
 
 ### 8d. PersonalMemoryGrants
 

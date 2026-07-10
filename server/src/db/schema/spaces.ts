@@ -9,6 +9,7 @@ export const spaces = pgTable("spaces", {
 	createdByUserId: varchar("created_by_user_id", { length: 36 }),
 	snapshotRetentionDaysDefault: integer("snapshot_retention_days_default"),
 	snapshotMaxCountDefault: integer("snapshot_max_count_default"),
+	oversightMode: varchar("oversight_mode", { length: 16 }).notNull().default('none'),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).notNull(),
 }, (table): PgTableExtraConfigValue[] => [
@@ -18,6 +19,7 @@ export const spaces = pgTable("spaces", {
 			name: "fk_spaces_created_by_user_id_users"
 		}).onDelete("set null"),
 	check("ck_spaces_type", sql`(type)::text = ANY (ARRAY[('personal'::character varying)::text, ('household'::character varying)::text, ('team'::character varying)::text])`),
+	check("ck_spaces_oversight_mode", sql`(oversight_mode)::text = ANY (ARRAY[('none'::character varying)::text, ('summary'::character varying)::text, ('content'::character varying)::text, ('full'::character varying)::text])`),
 ]);
 
 export const spaceInvitations = pgTable("space_invitations", {

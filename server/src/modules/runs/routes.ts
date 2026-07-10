@@ -24,7 +24,6 @@ import {
 } from "./finalizationService";
 import {
   artifactSummaryToOut,
-  canReadRun,
   contextSnapshotToOut,
   proposalSummaryToOut,
   runEvaluationToOut,
@@ -38,7 +37,7 @@ import {
 
 interface RunsCommandServices {
   orchestration: Pick<RunOrchestrationService, "executeRun" | "cancelRun">;
-  repository: Pick<PgRunRepository, "getRun">;
+  repository: Pick<PgRunRepository, "getVisibleRun">;
 }
 
 type RunsCommandServicesFactory = (context: ModuleContext) => RunsCommandServices;
@@ -167,8 +166,8 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       command_source: "http",
     });
     if (readResponseOverride) return readResponseOverride(runId, request, reply);
-    const run = await services.repository.getRun(identity.spaceId, runId);
-    if (!run || !canReadRun(run, identity.userId)) {
+    const run = await services.repository.getVisibleRun(identity.spaceId, identity.userId, runId);
+    if (!run) {
       return reply.code(404).send({ detail: "Run not found in this space" });
     }
     return reply.send(runToOut(run));
@@ -204,14 +203,17 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     const runId = params(request).runId ?? "";
     const body = jsonBody(request);
     const services = commandServices(context);
-    const before = await services.repository.getRun(identity.spaceId, runId);
+    const before = await services.repository.getVisibleRun(identity.spaceId, identity.userId, runId);
+    if (!before) {
+      return reply.code(404).send({ detail: "Run not found in this space." });
+    }
     const result = await services.orchestration.cancelRun({
       run_id: runId,
       space_id: identity.spaceId,
       requested_by_user_id: identity.userId,
       reason: stringValue(body.reason),
     });
-    const after = await services.repository.getRun(identity.spaceId, runId);
+    const after = await services.repository.getVisibleRun(identity.spaceId, identity.userId, runId);
     const run = after ?? before;
     if (!run && result.status === "unknown") {
       return reply.code(404).send({ detail: "Run not found in this space." });
@@ -423,8 +425,8 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     if (!identity) return reply;
     const repository = PgRunRepository.fromConfig(context.config);
     const runId = params(request).runId ?? "";
-    const run = await repository.getRun(identity.spaceId, runId);
-    if (!run || !canReadRun(run, identity.userId)) {
+    const run = await repository.getVisibleRun(identity.spaceId, identity.userId, runId);
+    if (!run) {
       return reply.code(404).send({ detail: "Run not found in this space" });
     }
     if (run.status !== "waiting_for_review") {
@@ -488,8 +490,8 @@ async function visibleRun(
   if (!identity) return null;
   const repository = PgRunRepository.fromConfig(context.config);
   const runId = params(request).runId ?? "";
-  const run = await repository.getRun(identity.spaceId, runId);
-  if (!run || !canReadRun(run, identity.userId)) {
+  const run = await repository.getVisibleRun(identity.spaceId, identity.userId, runId);
+  if (!run) {
     reply.code(404).send({ detail: "Run not found in this space" });
     return null;
   }

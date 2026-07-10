@@ -26,6 +26,7 @@ function authWithRole(role: string): AuthRepository {
         name: "Team",
         type: "team",
         role,
+        oversight_mode: "none",
         created_by_user_id: "user-1",
         created_at: "2026-06-18T00:00:00.000Z",
         updated_at: "2026-06-18T00:00:00.000Z",

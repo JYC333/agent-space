@@ -58,6 +58,12 @@ beforeEach(async () => {
   for (const id of [USER_A, USER_B]) {
     await pool.query(`INSERT INTO users (id, display_name, status, created_at, updated_at) VALUES ($1, 'U', 'active', now(), now())`, [id]);
   }
+  await pool.query(
+    `INSERT INTO space_memberships (id, space_id, user_id, role, status, created_at, updated_at)
+     VALUES ('tool-user-a', $1, $2, 'owner', 'active', now(), now()),
+            ('tool-user-b', $1, $3, 'member', 'active', now(), now())`,
+    [SPACE, USER_A, USER_B],
+  );
 });
 
 async function seed(doc: { id: string; title: string; content: string; visibility?: string; owner?: string | null }): Promise<void> {

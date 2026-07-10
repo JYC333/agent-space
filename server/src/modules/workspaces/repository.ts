@@ -8,6 +8,8 @@ import { loadActionRegistry } from "../policy/actionRegistry";
 import { enforce } from "../policy/service";
 import { disableScopeDigests } from "../context/digestService";
 import { HttpError, type Queryable, type SpaceUserIdentity } from "../routeUtils/common";
+import { contentReadSql } from "../access/contentAccessSql";
+import { isContentVisibility } from "../access/contentAccessTypes";
 import {
   diffTouchesSecretLikePath,
   looksSecretLikePath,
@@ -48,6 +50,7 @@ export interface WorkspaceRow {
   id: string;
   space_id: string;
   created_by_user_id: string | null;
+  owner_user_id: string | null;
   name: string;
   slug: string | null;
   description: string | null;
@@ -57,6 +60,7 @@ export interface WorkspaceRow {
   root_path: string | null;
   default_branch: string | null;
   visibility: string;
+  access_level: string;
   status: string;
   protected: boolean;
   system_managed: boolean;
@@ -73,6 +77,7 @@ export interface WorkspaceOut {
   id: string;
   owner_space_id: string;
   created_by_user_id: string;
+  owner_user_id: string | null;
   name: string;
   slug: string | null;
   description: string | null;
@@ -82,6 +87,7 @@ export interface WorkspaceOut {
   root_path: string | null;
   default_branch: string | null;
   visibility: string;
+  access_level: string;
   status: string;
   protected: boolean;
   system_managed: boolean;
@@ -143,8 +149,8 @@ export class PgWorkspaceRepository {
   }
 
   async list(identity: SpaceUserIdentity, filters: { status: string | null; limit: number; offset: number }): Promise<WorkspacePage> {
-    const params: unknown[] = [identity.spaceId];
-    const clauses = ["space_id = $1"];
+    const params: unknown[] = [identity.spaceId, identity.userId];
+    const clauses = ["space_id = $1", contentReadSql("workspace", "workspaces", "$2")];
     if (filters.status) {
       params.push(filters.status);
       clauses.push(`status = $${params.length}`);
@@ -192,11 +198,11 @@ export class PgWorkspaceRepository {
     const now = new Date().toISOString();
     const row = await this.db.query<WorkspaceRow>(
       `INSERT INTO workspaces (
-         id, space_id, created_by_user_id, name, description, workspace_type,
+         id, space_id, created_by_user_id, owner_user_id, name, description, workspace_type,
          kind, repo_url, root_path, default_branch, metadata_json, status,
          visibility, protected, system_managed, created_at, updated_at
        ) VALUES (
-         $1, $2, $3, $4, $5, $6,
+         $1, $2, $3, $3, $4, $5, $6,
          $7, $8, $9, $10, $11::jsonb, 'active',
          'private', false, false, $12, $12
        )
@@ -221,8 +227,9 @@ export class PgWorkspaceRepository {
 
   async scan(identity: SpaceUserIdentity): Promise<{ created: WorkspaceOut[]; marked_stale: string[] }> {
     const existing = await this.db.query<WorkspaceRow>(
-      `${workspaceSelect()} WHERE space_id = $1 AND status = 'active'`,
-      [identity.spaceId],
+      `${workspaceSelect()} WHERE space_id = $1 AND status = 'active'
+        AND ${contentReadSql("workspace", "workspaces", "$2")}`,
+      [identity.spaceId, identity.userId],
     );
     const knownPaths = new Set<string>();
     const staleNames: string[] = [];
@@ -261,10 +268,10 @@ export class PgWorkspaceRepository {
       const now = new Date().toISOString();
       const row = await this.db.query<WorkspaceRow>(
         `INSERT INTO workspaces (
-           id, space_id, created_by_user_id, name, kind, workspace_type, root_path,
+           id, space_id, created_by_user_id, owner_user_id, name, kind, workspace_type, root_path,
            status, visibility, protected, system_managed, created_at, updated_at
          ) VALUES (
-           $1, $2, $3, $4, 'project', 'project', $5,
+           $1, $2, $3, $3, $4, 'project', 'project', $5,
            'active', 'private', false, false, $6, $6
          )
          RETURNING ${workspaceColumns()}`,
@@ -276,7 +283,13 @@ export class PgWorkspaceRepository {
   }
 
   async get(identity: SpaceUserIdentity, workspaceId: string): Promise<WorkspaceOut | null> {
-    const row = await this.getWorkspace(identity.spaceId, workspaceId, false);
+    const result = await this.db.query<WorkspaceRow>(
+      `${workspaceSelect()} WHERE id = $1 AND space_id = $2
+        AND ${contentReadSql("workspace", "workspaces", "$3")}
+        LIMIT 1`,
+      [workspaceId, identity.spaceId, identity.userId],
+    );
+    const row = result.rows[0] ?? null;
     return row ? workspaceToOut(row) : null;
   }
 
@@ -300,6 +313,9 @@ export class PgWorkspaceRepository {
     const params: unknown[] = [workspaceId, identity.spaceId];
     for (const key of allowed) {
       if (!(key in body)) continue;
+      if (key === "visibility" && !isContentVisibility(body[key])) {
+        throw new HttpError(422, "Invalid visibility");
+      }
       params.push(key === "metadata_json" ? JSON.stringify(optionalObject(body[key])) : body[key] ?? null);
       sets.push(`${key} = $${params.length}${key === "metadata_json" ? "::jsonb" : ""}`);
     }
@@ -527,6 +543,7 @@ export function workspaceToOut(row: WorkspaceRow): WorkspaceOut {
     id: row.id,
     owner_space_id: row.space_id,
     created_by_user_id: row.created_by_user_id ?? "",
+    owner_user_id: row.owner_user_id,
     name: row.name,
     slug: row.slug,
     description: row.description,
@@ -536,6 +553,7 @@ export function workspaceToOut(row: WorkspaceRow): WorkspaceOut {
     root_path: row.root_path,
     default_branch: row.default_branch,
     visibility: row.visibility,
+    access_level: row.access_level,
     status: row.status,
     protected: Boolean(row.protected),
     system_managed: Boolean(row.system_managed),
@@ -549,8 +567,8 @@ export function workspaceToOut(row: WorkspaceRow): WorkspaceOut {
 }
 
 function workspaceColumns(): string {
-  return `id, space_id, created_by_user_id, name, slug, description, workspace_type,
-          kind, repo_url, root_path, default_branch, visibility, status,
+  return `id, space_id, created_by_user_id, owner_user_id, name, slug, description, workspace_type,
+          kind, repo_url, root_path, default_branch, visibility, access_level, status,
           protected, system_managed, registered_from, metadata_json,
           allow_external_root, snapshot_retention_days, snapshot_max_count,
           created_at, updated_at`;
@@ -616,7 +634,7 @@ function workspaceReadAuditReasons(
   const reasons: string[] = [];
   if (ws.workspace_type === "system_core" || ws.system_managed) reasons.push("system_core");
   if (ws.allow_external_root) reasons.push("external_root");
-  if (ws.protected || ws.visibility === "restricted") reasons.push("restricted_workspace");
+  if (ws.protected) reasons.push("restricted_workspace");
   if (readKind === "git_diff" && relativePath === null) reasons.push("full_diff");
   if (looksSecretLikePath(relativePath)) reasons.push("secret_like_path");
   return reasons;

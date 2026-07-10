@@ -39,10 +39,11 @@ export type ISODateTime = z.infer<typeof ISODateTimeSchema>;
 export const VISIBILITY_VALUES = [
   "private",
   "space_shared",
-  "workspace_shared",
-  "restricted",
-  "public_template",
+  "selected_users",
 ] as const;
+export const CONTENT_ACCESS_LEVEL_VALUES = ["full", "summary"] as const;
+export type ContentAccessLevelValue = (typeof CONTENT_ACCESS_LEVEL_VALUES)[number];
+export const ContentAccessLevelSchema = z.enum(CONTENT_ACCESS_LEVEL_VALUES);
 export type VisibilityValue = (typeof VISIBILITY_VALUES)[number];
 export const VisibilitySchema = z.enum(VISIBILITY_VALUES);
 export function isVisibility(value: string): value is VisibilityValue {
@@ -54,6 +55,21 @@ export const SPACE_TYPE_VALUES = ["personal", "household", "team"] as const;
 export type SpaceTypeValue = (typeof SPACE_TYPE_VALUES)[number];
 export function isSpaceType(value: string): value is SpaceTypeValue {
   return (SPACE_TYPE_VALUES as readonly string[]).includes(value);
+}
+
+/**
+ * Space oversight mode values, strictly increasing read-visibility capability
+ * for space owner/admin over other members' otherwise-private content within
+ * the same Space. Chosen at Space creation; immutable afterwards. Personal
+ * Spaces are forced to `none`. See `.agent/architecture/SECURITY_AND_ACCESS_BOUNDARIES.md`.
+ */
+export const SPACE_OVERSIGHT_MODE_VALUES = ["none", "summary", "content", "full"] as const;
+export type SpaceOversightModeValue = (typeof SPACE_OVERSIGHT_MODE_VALUES)[number];
+/** Public protocol name for the immutable Space creation-time mode. */
+export type SpaceOversightMode = SpaceOversightModeValue;
+export const SpaceOversightModeSchema = z.enum(SPACE_OVERSIGHT_MODE_VALUES);
+export function isSpaceOversightMode(value: unknown): value is SpaceOversightModeValue {
+  return typeof value === "string" && (SPACE_OVERSIGHT_MODE_VALUES as readonly string[]).includes(value);
 }
 
 /**

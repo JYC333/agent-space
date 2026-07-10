@@ -13,6 +13,7 @@ import { Badge } from '../../components/ui/badge'
 import { Skeleton } from '../../components/ui/skeleton'
 import { EmptyState } from '../../components/ui/empty-state'
 import { ScopeBadge } from '../../components/ScopeBadge'
+import { ContentAccessControl } from '../../components/ContentAccessControl'
 
 function fmt(dt: string | null | undefined) {
   return dt ? new Date(dt).toLocaleString() : '-'
@@ -116,9 +117,12 @@ export default function MemoryDetailPage() {
                 <p className="text-xs text-muted-foreground">Viewing: {activeSpaceName ?? activeSpaceId ?? 'No operational space selected'}</p>
               </div>
             </div>
-            <Button size="sm" variant="destructive" disabled={busy || memory.status !== 'active'} onClick={proposeArchive}>
-              <Archive className="size-3.5" /> Archive proposal
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <ContentAccessControl resourceType="memory" resourceId={memory.id} ownerUserId={memory.owner_user_id} />
+              <Button size="sm" variant="destructive" disabled={busy || memory.status !== 'active'} onClick={proposeArchive}>
+                <Archive className="size-3.5" /> Archive proposal
+              </Button>
+            </div>
           </div>
 
           <Card className="space-y-4">
@@ -150,7 +154,7 @@ export default function MemoryDetailPage() {
                 <Field label="Project ID" value={<code className="text-xs">{val(memory.project_id)}</code>} />
                 <Field label="Owner user" value={<code className="text-xs">{val(memory.owner_user_id)}</code>} />
                 <Field label="Subject user" value={<code className="text-xs">{val(memory.subject_user_id)}</code>} />
-                <Field label="Selected users" value={(memory.selected_user_ids ?? []).length ? memory.selected_user_ids?.join(', ') : '-'} />
+                <Field label="Access level" value={memory.access_level} />
               </div>
             </Card>
 

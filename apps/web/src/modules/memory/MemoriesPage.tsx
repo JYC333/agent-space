@@ -559,7 +559,7 @@ export default function MemoriesPage() {
               <Input
                 value={accessLogWorkspaceId}
                 onChange={event => setAccessLogWorkspaceId(event.target.value)}
-                placeholder="For workspace_shared memory"
+                placeholder="Optional workspace scope"
               />
             </div>
             <Button size="sm" variant="outline" onClick={() => void loadAccessLogs()} disabled={accessLogsLoading || !activeSpaceId} className="self-end">

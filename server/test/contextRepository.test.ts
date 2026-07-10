@@ -48,7 +48,7 @@ class CapturingDb implements Queryable {
       const rows = this.filteredPersonalMemoryRows(norm, params);
       return { rows: rows as Row[], rowCount: rows.length };
     }
-    if (norm.includes("FROM space_memberships")) {
+    if (norm.includes("FROM space_memberships") && !norm.includes("FROM artifacts")) {
       const rows = this.viewerRole ? [{ role: this.viewerRole }] : [];
       return { rows: rows as Row[], rowCount: rows.length };
     }
@@ -65,22 +65,24 @@ class CapturingDb implements Queryable {
     if (norm.includes("FROM artifacts")) {
       const userId = params[2] as string | null;
       const workspaceId = params[3] as string | null;
+      const projectId = params[4] as string | null;
+      const artifactIds = Array.isArray(params[1]) ? new Set(params[1] as string[]) : null;
       const rows = this.artifacts.filter((artifact) => {
+        if (!this.viewerRole) return false;
+        if (artifactIds && !artifactIds.has(String(artifact.id))) return false;
         const visibility = String(artifact.visibility ?? "");
         const ownerUserId = typeof artifact.owner_user_id === "string" ? artifact.owner_user_id : null;
-        if (visibility === "space_shared" || visibility === "public_template") return true;
-        if (visibility === "workspace_shared") {
-          return Boolean(
-            artifact.workspace_id
-            && workspaceId
-            && artifact.workspace_id === workspaceId
-            && this.accessibleWorkspaceIds.has(workspaceId),
-          );
+        if (artifact.workspace_id) {
+          if (artifact.workspace_id !== workspaceId || !this.accessibleWorkspaceIds.has(workspaceId ?? "")) {
+            return false;
+          }
         }
-        if (ownerUserId === null && !["workspace_shared", "restricted", "selected_users"].includes(visibility)) {
-          return true;
+        if (artifact.project_id) {
+          if (artifact.project_id !== projectId || this.projectOwnerUserId !== userId) {
+            return false;
+          }
         }
-        return ownerUserId === userId;
+        return ownerUserId === userId || visibility === "space_shared";
       });
       return { rows: rows as Row[], rowCount: rows.length };
     }
@@ -490,14 +492,16 @@ describe("PgRunContextRepository digest source revalidation", () => {
     expect(explainContent).not.toContain("secret-match-id");
     expect(explainContent).not.toContain("nested_candidate_payload");
     const artifactQuery = db.queries.find((query) => query.sql.includes("FROM artifacts"));
-    expect(artifactQuery?.sql).toContain("visibility = 'workspace_shared'");
+    expect(artifactQuery?.sql).toContain("visibility = 'space_shared'");
+    expect(artifactQuery?.sql).toContain("content_access_grants");
+    expect(artifactQuery?.sql).toContain("a.workspace_id = $4");
+    expect(artifactQuery?.sql).toContain("a.project_id = $5");
     expect(artifactQuery?.sql).toContain("project_workspaces");
     expect(artifactQuery?.sql).toContain("project_members");
-    expect(artifactQuery?.sql).not.toContain("visibility IN ('space_shared', 'workspace_shared'");
     expect(artifactQuery?.params).toContain("ws-1");
   });
 
-  it("only attaches workspace_shared artifacts with matching workspace context", async () => {
+  it("only attaches workspace-scoped shared artifacts with matching workspace context", async () => {
     const db = new CapturingDb();
     db.accessibleWorkspaceIds.add("ws-1");
     db.artifacts = [
@@ -510,7 +514,7 @@ describe("PgRunContextRepository digest source revalidation", () => {
           kind: "retrieval_brief",
           answer: "Workspace scoped answer.",
         },
-        visibility: "workspace_shared",
+        visibility: "space_shared",
         owner_user_id: "other-user",
         project_id: null,
         workspace_id: "ws-1",
@@ -651,7 +655,7 @@ describe("PgRunContextRepository digest source revalidation", () => {
     expect(String(selections[0].item.rejection_reason)).toContain("source policy");
   });
 
-  it("re-gates workspace_shared source-derived briefs after workspace visibility passes (G3)", async () => {
+  it("re-gates workspace-scoped source-derived briefs after access passes (G3)", async () => {
     const db = new CapturingDb();
     db.viewerRole = "member";
     db.accessibleWorkspaceIds.add("ws-1");
@@ -682,7 +686,7 @@ describe("PgRunContextRepository digest source revalidation", () => {
           answer: "Derived from a restricted source.",
           source_connection_ids: ["src-denied"],
         },
-        visibility: "workspace_shared",
+        visibility: "space_shared",
         owner_user_id: "other-user",
         project_id: null,
         workspace_id: "ws-1",
@@ -738,7 +742,7 @@ describe("PgRunContextRepository digest source revalidation", () => {
     });
   });
 
-  it("blocks workspace_shared artifact attachments without inherited project workspace access", async () => {
+  it("blocks workspace-scoped artifact attachments without inherited project workspace access", async () => {
     const db = new CapturingDb();
     db.artifacts = [
       {
@@ -750,7 +754,7 @@ describe("PgRunContextRepository digest source revalidation", () => {
           kind: "retrieval_brief",
           answer: "Workspace scoped answer.",
         },
-        visibility: "workspace_shared",
+        visibility: "space_shared",
         owner_user_id: "other-user",
         project_id: null,
         workspace_id: "ws-1",

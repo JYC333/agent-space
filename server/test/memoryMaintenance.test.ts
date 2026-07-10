@@ -68,8 +68,8 @@ function row(overrides: Partial<MemoryRow> = {}): MemoryRow {
     content: "Readable memory content",
     status: "active",
     visibility: "private",
+    access_level: "full",
     sensitivity_level: "normal",
-    selected_user_ids: null,
     last_confirmed_at: null,
     confidence: 1,
     importance: 0.5,
@@ -157,7 +157,7 @@ describe("Memory maintenance scan", () => {
       row({ id: "visible", title: "Same" }),
       row({ id: "restricted", title: "Same", sensitivity_level: "highly_restricted" }),
       row({ id: "system", title: "Same", scope_type: "system" }),
-      row({ id: "template", title: "Same", visibility: "public_template" }),
+      row({ id: "template", title: "Same", scope_type: "system" }),
       row({
         id: "project-hidden",
         title: "Same",
@@ -180,14 +180,16 @@ describe("Memory maintenance scan", () => {
       row({
         id: "summary-1",
         owner_user_id: "owner-1",
-        visibility: "summary_only",
+        visibility: "space_shared",
+        access_level: "summary",
         title: null,
         content: "same private content that should not be inspected",
       }),
       row({
         id: "summary-2",
         owner_user_id: "owner-2",
-        visibility: "summary_only",
+        visibility: "space_shared",
+        access_level: "summary",
         title: null,
         content: "same private content that should not be inspected",
       }),
@@ -199,7 +201,7 @@ describe("Memory maintenance scan", () => {
     expect(result.report.findings).toEqual([]);
     expect(result.contributingMemoryIds).toEqual([]);
     expect(result.report.access_safety).toMatchObject({
-      summary_only_full_content_used: false,
+      summary_access_full_content_used: false,
     });
   });
 
@@ -208,7 +210,8 @@ describe("Memory maintenance scan", () => {
       row({
         id: "summary-owner",
         owner_user_id: "user-1",
-        visibility: "summary_only",
+        visibility: "space_shared",
+        access_level: "summary",
         title: null,
         content: "tiny",
       }),
@@ -223,7 +226,7 @@ describe("Memory maintenance scan", () => {
       }),
     ]);
     expect(result.report.access_safety).toMatchObject({
-      summary_only_full_content_used: true,
+      summary_access_full_content_used: true,
       raw_content_included: false,
     });
     expect(JSON.stringify(result.report)).not.toContain("tiny");

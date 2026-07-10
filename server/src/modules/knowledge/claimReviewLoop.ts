@@ -8,7 +8,7 @@ import type {
 } from "@agent-space/protocol" with { "resolution-mode": "import" };
 import { CLAIM_COLUMNS, CLAIM_FROM, type ClaimRow } from "./knowledgeRepositoryRows";
 import type { Queryable } from "../routeUtils/common";
-import { spaceObjectVisibleSql } from "../access/visibility";
+import { contentReadSql } from "../access/contentAccessSql";
 import {
   loadSourcePolicySnapshots,
   loadViewerSpaceRole,
@@ -31,11 +31,11 @@ const CONFIDENCE_TIERS = ["high", "medium", "low"] as const;
 type ConfidenceTier = (typeof CONFIDENCE_TIERS)[number];
 
 function readableClaimClause(userParam: string): string {
-  return spaceObjectVisibleSql("so", userParam);
+  return contentReadSql("space_object", "so", userParam);
 }
 
 function readableSpaceObjectClause(alias: string, userParam: string): string {
-  return spaceObjectVisibleSql(alias, userParam);
+  return contentReadSql("space_object", alias, userParam);
 }
 
 export interface ClaimTrajectoryInput {

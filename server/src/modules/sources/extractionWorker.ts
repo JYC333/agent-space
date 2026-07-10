@@ -43,6 +43,7 @@ import {
 } from "./sourceConsent";
 import { PgCustomSourceHandlerRepository } from "./customSources/customSourceHandlerRepository";
 import { capturePolicyScanState } from "./capturePolicy";
+import { inheritContentAccessGrants } from "../access/contentAccessInheritance";
 
 interface ExtractionJobRow {
   id: string;
@@ -68,6 +69,7 @@ interface SourceItemRow {
   author: string | null;
   occurred_at: unknown;
   content_state: string;
+  visibility: string;
 }
 
 const JOB_COLUMNS = `
@@ -532,12 +534,14 @@ export class SourceExtractionWorker {
            id, space_id, connection_id, item_type, title, source_uri, canonical_uri,
            source_domain, source_external_id, author, occurred_at, first_seen_at,
            last_seen_at, content_hash, excerpt, content_state,
-           retention_policy, metadata_json, created_at, updated_at
+           retention_policy, metadata_json, created_at, updated_at,
+           owner_user_id, visibility, access_level
          ) VALUES (
            $1, $2, $3, $4, $5, $6, $7,
            $8, $9, $10, $11::timestamptz, $12,
            $12, $13, $14, $15,
-           $16, $17::jsonb, $12, $12
+           $16, $17::jsonb, $12, $12,
+           $18, $19, $20
          )`,
         [
           itemId,
@@ -557,8 +561,19 @@ export class SourceExtractionWorker {
           policy.contentState,
           policy.retention,
           JSON.stringify(metadata),
+          input.connection.owner_user_id,
+          input.connection.visibility,
+          input.connection.access_level,
         ],
       );
+      if (input.connection.visibility === "selected_users") await inheritContentAccessGrants(this.db, {
+        spaceId: input.job.space_id,
+        sourceResourceType: "source_connection",
+        sourceResourceId: input.connection.id,
+        targetResourceType: "source_item",
+        targetResourceId: itemId,
+        inheritedAt: now,
+      });
       created = true;
     } else {
       await this.db.query(
@@ -614,6 +629,7 @@ export class SourceExtractionWorker {
       sourceUri: input.sourceUri,
       captureMethod: "connection_scan",
       trustLevel: input.connection.trust_level,
+      sourceVisibility: input.connection.visibility,
       metadata,
       capturedAt: now,
     });
@@ -621,6 +637,11 @@ export class SourceExtractionWorker {
       spaceId: input.job.space_id,
       sourceItemId: itemId,
     });
+    await linkEvidenceToBoundProjects(
+      this.db,
+      { spaceId: input.job.space_id, sourceItemId: itemId },
+      { materializeSourceItemLinks: false },
+    );
     const needsFollowUp =
       Boolean(policy.followUpJobType) &&
       (
@@ -659,7 +680,7 @@ export class SourceExtractionWorker {
     let rawArtifactId: string | null = null;
     if (response.isPdf) {
       if (!response.bytes) throw new HttpError(415, "PDF response did not include binary content");
-      rawArtifactId = await this.writeRawArtifact(job.space_id, item.title ?? "snapshot", {
+      rawArtifactId = await this.writeRawArtifact(job.space_id, item.id, item.visibility, item.title ?? "snapshot", {
         content: response.bytes,
         mimeType: "application/pdf",
       });
@@ -673,6 +694,7 @@ export class SourceExtractionWorker {
         sourceUri: item.source_uri,
         captureMethod: "full_text",
         trustLevel: "normal",
+        sourceVisibility: item.visibility,
         metadata: { job_id: job.id, ...resolved.contentMeta },
         capturedAt: new Date().toISOString(),
       });
@@ -683,6 +705,8 @@ export class SourceExtractionWorker {
     const evidenceExtractionMethod = response.isPdf ? "pdf_text_v1" : "full_text";
     const artifactId = await this.writeReaderDocumentArtifact(
       job.space_id,
+      item.id,
+      item.visibility,
       item.title ?? readerContent.title ?? "extracted",
       readerContent,
       resolved.contentMeta,
@@ -699,6 +723,7 @@ export class SourceExtractionWorker {
       sourceUri: item.source_uri,
       captureMethod: "full_text",
       trustLevel: "normal",
+      sourceVisibility: item.visibility,
       metadata: {
         job_id: job.id,
         ...(rawSnapshotId ? { raw_source_snapshot_id: rawSnapshotId } : {}),
@@ -718,19 +743,22 @@ export class SourceExtractionWorker {
         WHERE space_id = $1 AND id = $2`,
       [job.space_id, item.id, artifactId, contentHash, now, rawArtifactId],
     );
-
     const evidenceId = randomUUID();
     await this.db.query(
       `INSERT INTO extracted_evidence (
          id, space_id, source_item_id, source_object_type, source_object_id,
          extraction_job_id, source_snapshot_id, evidence_type, title, content_excerpt,
          content_hash, artifact_id, source_uri, source_title,
-         extraction_method, trust_level, confidence, status, metadata_json, created_at, updated_at
+         extraction_method, trust_level, confidence, status, metadata_json, created_at, updated_at,
+         owner_user_id, visibility, access_level
        ) VALUES (
          $1, $2, $3, 'source_item', $3,
          $4, $5, 'document', $6, $7,
          $8, $9, $10, $11,
-         $13, 'normal', 0.7, 'candidate', '{}'::jsonb, $12, $12
+         $13, 'normal', 0.7, 'candidate', '{}'::jsonb, $12, $12,
+         (SELECT owner_user_id FROM source_items WHERE space_id = $2 AND id = $3),
+         (SELECT visibility FROM source_items WHERE space_id = $2 AND id = $3),
+         (SELECT access_level FROM source_items WHERE space_id = $2 AND id = $3)
       )`,
       [
         evidenceId,
@@ -748,6 +776,14 @@ export class SourceExtractionWorker {
         evidenceExtractionMethod,
       ],
     );
+    if (item.visibility === "selected_users") await inheritContentAccessGrants(this.db, {
+      spaceId: job.space_id,
+      sourceResourceType: "source_item",
+      sourceResourceId: item.id,
+      targetResourceType: "extracted_evidence",
+      targetResourceId: evidenceId,
+      inheritedAt: now,
+    });
     await linkEvidenceToBoundProjects(this.db, {
       spaceId: job.space_id,
       sourceItemId: item.id,
@@ -769,7 +805,7 @@ export class SourceExtractionWorker {
     const resolved = await this.fetchItemSourceContent(job.space_id, item.source_uri);
     const response = resolved.response;
     const rawContent = this.rawContentFromFetched(response);
-    const artifactId = await this.writeRawArtifact(job.space_id, item.title ?? "snapshot", rawContent);
+    const artifactId = await this.writeRawArtifact(job.space_id, item.id, item.visibility, item.title ?? "snapshot", rawContent);
     const contentHash = sha256(rawContent.content);
     const now = new Date().toISOString();
     const rawSnapshotId = await this.createSourceSnapshot({
@@ -782,6 +818,7 @@ export class SourceExtractionWorker {
       sourceUri: item.source_uri,
       captureMethod: "snapshot",
       trustLevel: "normal",
+      sourceVisibility: item.visibility,
       metadata: { job_id: job.id, ...resolved.contentMeta },
       capturedAt: now,
     });
@@ -803,6 +840,8 @@ export class SourceExtractionWorker {
       if (text || readerContent.content_json.content.length > 0) {
         const extractedId = await this.writeReaderDocumentArtifact(
           job.space_id,
+          item.id,
+          item.visibility,
           item.title ?? readerContent.title ?? "extracted",
           readerContent,
           resolved.contentMeta,
@@ -817,6 +856,7 @@ export class SourceExtractionWorker {
           sourceUri: item.source_uri,
           captureMethod: "snapshot",
           trustLevel: "normal",
+          sourceVisibility: item.visibility,
           metadata: { job_id: job.id, raw_source_snapshot_id: rawSnapshotId, ...resolved.contentMeta },
           capturedAt: now,
         });
@@ -854,11 +894,11 @@ export class SourceExtractionWorker {
       `INSERT INTO source_items (
          id, space_id, item_type, source_object_type, source_object_id,
          title, excerpt, content_state, retention_policy,
-         metadata_json, created_at, updated_at
+         metadata_json, created_at, updated_at, owner_user_id, visibility, access_level
        ) VALUES (
          $1, $2, $3, $3, $4,
          $5, $6, 'excerpt_saved', 'summary_only',
-         $7::jsonb, $8, $8
+         $7::jsonb, $8, $8, $9, $10, $11
        )
        ON CONFLICT DO NOTHING`,
       [
@@ -870,20 +910,34 @@ export class SourceExtractionWorker {
         payload.excerpt,
         JSON.stringify({ capture_method: "internal", job_id: job.id }),
         now,
+        payload.ownerUserId,
+        payload.visibility,
+        payload.accessLevel,
       ],
     );
+    if (payload.visibility === "selected_users") await inheritContentAccessGrants(this.db, {
+      spaceId: job.space_id,
+      sourceResourceType: payload.sourceResourceType,
+      sourceResourceId: payload.sourceResourceId,
+      targetResourceType: "source_item",
+      targetResourceId: itemId,
+      inheritedAt: now,
+    });
+    const evidenceId = randomUUID();
     await this.db.query(
       `INSERT INTO extracted_evidence (
          id, space_id, source_item_id, source_object_type, source_object_id,
          evidence_type, title, content_excerpt, extraction_method, trust_level,
-         confidence, status, metadata_json, created_at, updated_at
+         confidence, status, metadata_json, created_at, updated_at,
+         owner_user_id, visibility, access_level
        ) VALUES (
          $1, $2, $3, $4, $5,
          $6, $7, $8, 'internal_normalization', 'normal',
-         0.8, 'candidate', '{}'::jsonb, $9, $9
+         0.8, 'candidate', '{}'::jsonb, $9, $9,
+         $10, $11, $12
        )`,
       [
-        randomUUID(),
+        evidenceId,
         job.space_id,
         itemId,
         sourceType,
@@ -892,8 +946,19 @@ export class SourceExtractionWorker {
         payload.title,
         payload.excerpt,
         now,
+        payload.ownerUserId,
+        payload.visibility,
+        payload.accessLevel,
       ],
     );
+    if (payload.visibility === "selected_users") await inheritContentAccessGrants(this.db, {
+      spaceId: job.space_id,
+      sourceResourceType: "source_item",
+      sourceResourceId: itemId,
+      targetResourceType: "extracted_evidence",
+      targetResourceId: evidenceId,
+      inheritedAt: now,
+    });
     await this.db.query(
       `UPDATE extraction_jobs
           SET source_item_id = $3,
@@ -909,10 +974,19 @@ export class SourceExtractionWorker {
     spaceId: string,
     sourceType: string,
     sourceId: string,
-  ): Promise<{ title: string; excerpt: string; evidenceType: string }> {
+  ): Promise<{
+    title: string;
+    excerpt: string;
+    evidenceType: string;
+    ownerUserId: string | null;
+    visibility: string;
+    accessLevel: string;
+    sourceResourceType: "activity" | "artifact" | "run";
+    sourceResourceId: string;
+  }> {
     if (sourceType === "activity_record") {
-      const row = await this.db.query<{ title: string | null; content: string | null }>(
-        `SELECT title, content FROM activity_records
+      const row = await this.db.query<{ title: string | null; content: string | null; owner_user_id: string | null; visibility: string; access_level: string }>(
+        `SELECT title, content, owner_user_id, visibility, access_level FROM activity_records
           WHERE space_id = $1 AND id = $2 AND status NOT IN ('archived', 'failed')`,
         [spaceId, sourceId],
       );
@@ -922,11 +996,16 @@ export class SourceExtractionWorker {
         title: activity.title ?? "Activity",
         excerpt: (activity.content ?? "").slice(0, 4000),
         evidenceType: "event",
+        ownerUserId: activity.owner_user_id,
+        visibility: activity.visibility,
+        accessLevel: activity.access_level,
+        sourceResourceType: "activity",
+        sourceResourceId: sourceId,
       };
     }
     if (sourceType === "artifact") {
-      const row = await this.db.query<{ title: string | null; content: string | null }>(
-        `SELECT title, content FROM artifacts WHERE space_id = $1 AND id = $2`,
+      const row = await this.db.query<{ title: string | null; content: string | null; owner_user_id: string | null; visibility: string; access_level: string }>(
+        `SELECT title, content, owner_user_id, visibility, access_level FROM artifacts WHERE space_id = $1 AND id = $2`,
         [spaceId, sourceId],
       );
       const artifact = row.rows[0];
@@ -935,11 +1014,19 @@ export class SourceExtractionWorker {
         title: artifact.title ?? "Artifact",
         excerpt: (artifact.content ?? "").slice(0, 4000),
         evidenceType: "artifact",
+        ownerUserId: artifact.owner_user_id,
+        visibility: artifact.visibility,
+        accessLevel: artifact.access_level,
+        sourceResourceType: "artifact",
+        sourceResourceId: sourceId,
       };
     }
     if (sourceType === "run_event") {
-      const row = await this.db.query<{ event_type: string | null; payload_json: unknown }>(
-        `SELECT event_type, payload_json FROM run_events WHERE space_id = $1 AND id = $2`,
+      const row = await this.db.query<{ event_type: string | null; payload_json: unknown; run_id: string; owner_user_id: string | null; visibility: string; access_level: string }>(
+        `SELECT re.event_type, re.payload_json, re.run_id, r.owner_user_id, r.visibility, r.access_level
+           FROM run_events re
+           JOIN runs r ON r.space_id = re.space_id AND r.id = re.run_id
+          WHERE re.space_id = $1 AND re.id = $2`,
         [spaceId, sourceId],
       );
       const event = row.rows[0];
@@ -948,6 +1035,11 @@ export class SourceExtractionWorker {
         title: event.event_type ?? "Run event",
         excerpt: JSON.stringify(event.payload_json ?? {}).slice(0, 4000),
         evidenceType: "event",
+        ownerUserId: event.owner_user_id,
+        visibility: event.visibility,
+        accessLevel: event.access_level,
+        sourceResourceType: "run",
+        sourceResourceId: event.run_id,
       };
     }
     throw new HttpError(422, `Unsupported internal source_object_type: ${sourceType}`);
@@ -1040,7 +1132,7 @@ export class SourceExtractionWorker {
   private async getItem(spaceId: string, itemId: string): Promise<SourceItemRow | null> {
     const result = await this.db.query<SourceItemRow>(
       `SELECT id, space_id, connection_id, source_uri, canonical_uri, source_external_id,
-              title, excerpt, author, occurred_at, content_state
+              title, excerpt, author, occurred_at, content_state, visibility
          FROM source_items
         WHERE space_id = $1 AND id = $2 AND deleted_at IS NULL`,
       [spaceId, itemId],
@@ -1170,6 +1262,7 @@ export class SourceExtractionWorker {
     sourceUri: string | null;
     captureMethod: "manual" | "connection_scan" | "full_text" | "snapshot" | "internal";
     trustLevel: string;
+    sourceVisibility: string;
     metadata: Record<string, unknown>;
     capturedAt: string;
   }): Promise<string> {
@@ -1178,11 +1271,23 @@ export class SourceExtractionWorker {
       `INSERT INTO source_snapshots (
          id, space_id, source_item_id, connection_id, snapshot_type, artifact_id,
          content_hash, source_uri, capture_method, trust_level, metadata_json,
-         captured_at, created_at
+         captured_at, created_at, updated_at, owner_user_id, visibility, access_level
        ) VALUES (
          $1, $2, $3, $4, $5, $6,
          $7, $8, $9, $10, $11::jsonb,
-         $12, $12
+         $12, $12, $12,
+         COALESCE(
+           (SELECT owner_user_id FROM source_items WHERE space_id = $2 AND id = $3),
+           (SELECT owner_user_id FROM source_connections WHERE space_id = $2 AND id = $4)
+         ),
+         COALESCE(
+           (SELECT visibility FROM source_items WHERE space_id = $2 AND id = $3),
+           (SELECT visibility FROM source_connections WHERE space_id = $2 AND id = $4)
+         ),
+         COALESCE(
+           (SELECT access_level FROM source_items WHERE space_id = $2 AND id = $3),
+           (SELECT access_level FROM source_connections WHERE space_id = $2 AND id = $4)
+         )
        )`,
       [
         id,
@@ -1199,6 +1304,14 @@ export class SourceExtractionWorker {
         input.capturedAt,
       ],
     );
+    if (input.sourceVisibility === "selected_users") await inheritContentAccessGrants(this.db, {
+      spaceId: input.spaceId,
+      sourceResourceType: input.sourceItemId ? "source_item" : "source_connection",
+      sourceResourceId: input.sourceItemId ?? input.connectionId!,
+      targetResourceType: "source_snapshot",
+      targetResourceId: id,
+      inheritedAt: input.capturedAt,
+    });
     return id;
   }
 
@@ -1254,6 +1367,8 @@ export class SourceExtractionWorker {
 
   private async writeReaderDocumentArtifact(
     spaceId: string,
+    sourceItemId: string,
+    sourceVisibility: string,
     title: string,
     content: StructuredReaderContent,
     extraMetadata: Record<string, unknown> = {},
@@ -1269,11 +1384,15 @@ export class SourceExtractionWorker {
       `INSERT INTO artifacts (
          id, space_id, artifact_type, title, content, storage_path, mime_type,
          exportable, export_formats_json, canonical_format, preview, metadata_json,
-         created_at, updated_at, visibility, trust_level
+         created_at, updated_at, visibility, access_level, owner_user_id, trust_level
        ) VALUES (
          $1, $2, 'source_reader_document', $3, $4, $5, 'application/json',
          true, $6::jsonb, 'reader_document_json', false, $7::jsonb,
-         $8, $8, 'space_shared', 'medium'
+         $8, $8,
+         (SELECT visibility FROM source_items WHERE space_id = $2 AND id = $9),
+         (SELECT access_level FROM source_items WHERE space_id = $2 AND id = $9),
+         (SELECT owner_user_id FROM source_items WHERE space_id = $2 AND id = $9),
+         'medium'
        )`,
       [
         artifactId,
@@ -1292,13 +1411,24 @@ export class SourceExtractionWorker {
           ...extraMetadata,
         }),
         now,
+        sourceItemId,
       ],
     );
+    if (sourceVisibility === "selected_users") await inheritContentAccessGrants(this.db, {
+      spaceId,
+      sourceResourceType: "source_item",
+      sourceResourceId: sourceItemId,
+      targetResourceType: "artifact",
+      targetResourceId: artifactId,
+      inheritedAt: now,
+    });
     return artifactId;
   }
 
   private async writeRawArtifact(
     spaceId: string,
+    sourceItemId: string,
+    sourceVisibility: string,
     title: string,
     input: { content: string | Uint8Array; mimeType: string },
   ): Promise<string> {
@@ -1317,11 +1447,15 @@ export class SourceExtractionWorker {
       `INSERT INTO artifacts (
          id, space_id, artifact_type, title, content, storage_path, mime_type,
          exportable, export_formats_json, canonical_format, preview,
-         created_at, updated_at, visibility, trust_level
+         created_at, updated_at, visibility, access_level, owner_user_id, trust_level
        ) VALUES (
          $1, $2, 'source_raw_snapshot', $3, NULL, $4, $5,
          false, $6::jsonb, $7, false,
-         $8, $8, 'space_shared', 'medium'
+         $8, $8,
+         (SELECT visibility FROM source_items WHERE space_id = $2 AND id = $9),
+         (SELECT access_level FROM source_items WHERE space_id = $2 AND id = $9),
+         (SELECT owner_user_id FROM source_items WHERE space_id = $2 AND id = $9),
+         'medium'
        )`,
       [
         artifactId,
@@ -1332,8 +1466,17 @@ export class SourceExtractionWorker {
         JSON.stringify([format]),
         format,
         now,
+        sourceItemId,
       ],
     );
+    if (sourceVisibility === "selected_users") await inheritContentAccessGrants(this.db, {
+      spaceId,
+      sourceResourceType: "source_item",
+      sourceResourceId: sourceItemId,
+      targetResourceType: "artifact",
+      targetResourceId: artifactId,
+      inheritedAt: now,
+    });
     return artifactId;
   }
 

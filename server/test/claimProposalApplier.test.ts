@@ -41,6 +41,13 @@ class ClaimApplyFakeDb {
     }
     const retrievalResult = handleSourceRetrievalTestSql(sql, params);
     if (retrievalResult) return retrievalResult;
+    if (norm.includes("AS effective_access_level")) {
+      const row = this.objects.get(String(params[1]));
+      return {
+        rows: row ? [{ effective_access_level: "full" }] : [],
+        rowCount: row ? 1 : 0,
+      };
+    }
     if (norm.includes("FROM claims c JOIN space_objects so")) {
       const row = this.claims.get(String(params[0]));
       return { rows: row ? [row] : [], rowCount: row ? 1 : 0 };

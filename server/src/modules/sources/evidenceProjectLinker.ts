@@ -196,8 +196,8 @@ export async function materializeProjectSourceItemLinks(
          id, space_id, project_id, project_source_binding_id, source_connection_id,
          source_item_id, status, matched_at, match_reason, created_at, updated_at
        ) VALUES (
-         $1, $2, $3, $4, $5,
-         $6, 'active', $7, 'project_source_binding:' || $4, $7, $7
+         $1, $2, $3, $4::varchar, $5,
+         $6, 'active', $7, 'project_source_binding:' || $4::varchar, $7, $7
        )
        ON CONFLICT (space_id, project_id, project_source_binding_id, source_item_id)
        DO UPDATE SET status = 'active',
@@ -240,8 +240,11 @@ export async function materializeProjectSourceItemLinks(
 export async function linkEvidenceToBoundProjects(
   db: Queryable,
   input: { spaceId: string; sourceItemId: string },
+  options: { materializeSourceItemLinks?: boolean } = {},
 ): Promise<number> {
-  await materializeProjectSourceItemLinks(db, input);
+  if (options.materializeSourceItemLinks !== false) {
+    await materializeProjectSourceItemLinks(db, input);
+  }
   const now = new Date().toISOString();
   const result = await db.query(
     `INSERT INTO evidence_links (

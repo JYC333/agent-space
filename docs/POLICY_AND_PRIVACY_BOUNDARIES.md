@@ -183,8 +183,8 @@ These invariants are enforced unconditionally and cannot be overridden:
 1. **Space isolation** — cross-space memory reads require an explicit
    PersonalMemoryGrant. No Policy row can open cross-space access.
 
-2. **SourcePointer does not grant read access** — SourcePointers store
-   provenance metadata only. Using one as authorization evidence is denied.
+2. **Targeted publication does not grant source access** — target Spaces receive
+   immutable snapshots and imports, never a live source read.
 
 3. **personal_context_block is ephemeral** — it must never be persisted.
    Any persistence action with `personal_context_block` in metadata or
@@ -371,11 +371,12 @@ When a run includes grant-derived personal context:
 Enforcement: proposal apply egress checks in `server/src/modules/proposals/applyService.ts`
 and run artifact/materialization egress checks in `server/src/modules/runs/`.
 
-### SourcePointer
+### Targeted publication
 
-SourcePointers store provenance metadata only. They never grant read access
-to memory entries or workspace content. SourcePointers do not contain
-memory content, file content, or credentials.
+Publications are explicit target-Space immutable snapshots. Discovery requires
+active target membership; import creates an independent private resource and
+records snapshot hash/version provenance. Revocation blocks future imports and
+does not delete existing copies.
 
 ---
 

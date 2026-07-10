@@ -12,14 +12,16 @@ import {
 } from "../src/modules/providers/invocation/invocation";
 import { ProviderReranker } from "../src/modules/retrieval/rerankProvider/providerReranker";
 import { ProviderSynthesizer } from "../src/modules/retrieval/synthesisProvider/providerSynthesizer";
+import { resolveTestUsageAttribution } from "./support/usageAttribution";
 
 // W9 egress governance. The per-space switch is enforced at the shared seam:
 // when external egress is disabled, external model providers are blocked, while
 // local providers and in-process handling can still be used.
 
 // A store that fails the test if any provider interaction is attempted.
-const throwingStore = new Proxy({}, {
-  get() {
+const throwingStore = new Proxy({ resolveUsageAttribution: resolveTestUsageAttribution }, {
+  get(target, property) {
+    if (property === "resolveUsageAttribution") return target.resolveUsageAttribution;
     return async () => {
       throw new Error("no provider call may happen when egress is disabled");
     };
@@ -176,6 +178,7 @@ describe("egress-disabled provider stages", () => {
         system: "s",
         user: "u",
         egressPolicy: DENY_EXTERNAL,
+        metering: { subject_user_id: "user-1" },
       }),
     ).rejects.toMatchObject({ code: "retrieval_egress_denied" });
     expect(calls).toEqual([]);
@@ -185,6 +188,7 @@ describe("egress-disabled provider stages", () => {
       system: "s",
       user: "u",
       egressPolicy: DENY_EXTERNAL,
+      metering: { subject_user_id: "user-1" },
     });
     expect(local.text).toBe("local ok");
     expect(calls).toEqual(["http://localhost:11434/api/chat"]);
@@ -220,6 +224,8 @@ function providerStoreFor(
         candidates: [{ member_id: null, credential_id: null, api_key: provider.api_key }],
       };
     },
+    resolveUsageAttribution: resolveTestUsageAttribution,
     async recordPoolOutcome() {},
+    async recordUsageObservation() {},
   } as unknown as ProviderCommandStore;
 }

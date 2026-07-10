@@ -51,6 +51,12 @@ export * from "./providerCredentialsRuntime.js";
 // Runtime-host boundary contracts
 export * from "./runtimeHost.js";
 
+// Token usage metering contracts
+export * from "./usage.js";
+
+// Targeted cross-space publication snapshots and imports
+export * from "./publications.js";
+
 // Run orchestration contracts
 export * from "./runOrchestration.js";
 

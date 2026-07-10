@@ -77,7 +77,13 @@ capture / trigger
 - Promoting Knowledge into Memory must be a separate future proposal flow, not an implicit side effect.
 - Activity, Run, and Artifact are source inputs for Knowledge proposals.
 - Project and workspace are contextual associations for Knowledge, not Knowledge content types.
-- Knowledge reads enforce MVP visibility: shared rows are readable within the current space; private and restricted rows are owner-readable only.
+- Knowledge reads use the canonical content-access policy: active members may
+  read `space_shared` rows within scope, owners have base access to `private`
+  rows, and ordinary `selected_users` readers require an active grant. The sole
+  extra read path is eligible owner/admin oversight from the resource Space's
+  immutable creation-time mode; it never bypasses scope or grants mutation,
+  publication, proposal, or grant-management authority. Sensitivity
+  restrictions remain separate deny gates.
 - Knowledge relations are database-backed and relation reads omit any row whose endpoints are not both readable by the viewer.
 
 ### PolicyEngine evaluates built-in runtime rules; persisted policy enforcement is domain-specific

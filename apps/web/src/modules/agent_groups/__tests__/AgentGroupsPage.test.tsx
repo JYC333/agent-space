@@ -49,6 +49,7 @@ function agent(id: string, name: string): AgentOut {
     name,
     description: null,
     visibility: 'space_shared',
+    access_level: 'full',
     role_instruction: null,
     status: 'active',
     agent_kind: 'standard',

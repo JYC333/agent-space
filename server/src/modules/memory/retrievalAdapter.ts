@@ -8,11 +8,13 @@ import {
   loadSourceConnectionIdsForTargets,
 } from "../retrieval";
 import {
-  canReadMemory,
-  summaryOnlyRedactContent,
+  shouldRedactMemoryContent,
   type MemoryAuthFields,
 } from "./memoryReadAuth";
-import { accessibleProjectIds } from "./projectAccess";
+import { memorySensitivityReadSql } from "./memorySensitivitySql";
+import { contentResourceDefinition } from "../access/contentAccessRegistry";
+import { isContentAccessLevel, isContentVisibility } from "../access/contentAccessTypes";
+import { contentAccessLevelSql, contentReadSql } from "../access/contentAccessSql";
 
 const MEMORY_OBJECT_TYPES = ["memory_entry"] as const;
 
@@ -22,9 +24,9 @@ interface MemoryProjectionRow {
   owner_user_id: string | null;
   sensitivity_level: string | null;
   visibility: string | null;
+  access_level: string | null;
   status: string;
   scope_type: string | null;
-  selected_user_ids: unknown;
   memory_type: string;
   title: string | null;
   content: string | null;
@@ -40,7 +42,7 @@ interface MemoryVisibilityRow extends MemoryAuthFields {
 
 type MemoryProjectableFields = Pick<
   MemoryAuthFields,
-  "scope_type" | "visibility" | "owner_user_id" | "sensitivity_level" | "selected_user_ids"
+  "scope_type" | "visibility" | "access_level" | "owner_user_id" | "sensitivity_level"
 >;
 
 // Keep this predicate in lock-step with `isMemoryRetrievalProjectable` below.
@@ -48,25 +50,9 @@ type MemoryProjectableFields = Pick<
 // same way on the SQL (listObjectIds) and TS (loadCanonical) paths.
 const MEMORY_RETRIEVAL_PROJECTABLE_SQL = `
   lower(COALESCE(scope_type, '')) <> 'system'
-  AND lower(COALESCE(visibility, 'private')) <> 'public_template'
-  AND (
-    owner_user_id IS NOT NULL
-    OR (
-      lower(COALESCE(sensitivity_level, 'normal')) <> 'highly_restricted'
-      AND lower(COALESCE(visibility, 'private')) NOT IN ('private', 'workspace_shared')
-      AND (
-        lower(COALESCE(visibility, 'private')) NOT IN ('restricted', 'selected_users')
-        OR (
-          selected_user_ids IS NOT NULL
-          AND (
-            (jsonb_typeof(selected_user_ids) = 'array' AND jsonb_array_length(selected_user_ids) > 0)
-            OR (jsonb_typeof(selected_user_ids) = 'string' AND length(selected_user_ids #>> '{}') > 0)
-          )
-        )
-      )
-    )
-  )
 `;
+
+const MEMORY_DEFINITION = contentResourceDefinition("memory")!;
 
 /**
  * Memory domain adapter for the shared zero-LLM retrieval engine. It owns all
@@ -76,15 +62,12 @@ const MEMORY_RETRIEVAL_PROJECTABLE_SQL = `
  *
  * Boundaries this adapter must preserve:
  * - The single read-access gate is `revalidate`, which reuses the canonical
- *   `canReadMemory` rules plus summary-only content redaction. The derived
+ *   the canonical content rules plus summary-access content redaction. The derived
  *   `retrieval_*` projection is never trusted for read access.
  * - This adapter never writes `memory_entries`. Memory create/update/archive
  *   stay proposal-gated; the projection is derived index data only.
- * - `revalidate` runs without workspace or system/template context
- *   (workspaceId=null, includeSystemScope=false, includePublicTemplates=false),
- *   so workspace_shared and system/template memories owned by other users fail
- *   closed. The proposer's own private/workspace-shared memories still match
- *   through owner visibility, which is what duplicate detection needs.
+ * - `revalidate` applies the canonical Space, scope, visibility, and grant SQL
+ *   predicate. System memory stays excluded from user retrieval.
  */
 export const memoryRetrievalAdapter: RetrievalDomainAdapter = {
   objectTypes: MEMORY_OBJECT_TYPES,
@@ -92,7 +75,7 @@ export const memoryRetrievalAdapter: RetrievalDomainAdapter = {
   async loadCanonical(db, spaceId, _objectType, objectId): Promise<CanonicalObject | null> {
     const result = await db.query<MemoryProjectionRow>(
       `SELECT id, workspace_id, owner_user_id, visibility, status, memory_type,
-              title, content, sensitivity_level, scope_type, selected_user_ids, updated_at
+              title, content, sensitivity_level, scope_type, access_level, updated_at
          FROM memory_entries
         WHERE space_id = $1 AND id = $2 AND deleted_at IS NULL`,
       [spaceId, objectId],
@@ -153,29 +136,24 @@ async function revalidateMemoryMany(
   const ids = uniqueIds(objectIds);
   if (ids.length === 0) return new Map();
   const result = await db.query<MemoryVisibilityRow>(
-    `SELECT id, space_id, deleted_at, sensitivity_level, visibility, owner_user_id,
-            scope_type, workspace_id, selected_user_ids, project_id, title, content
-       FROM memory_entries
-      WHERE space_id = $1 AND id = ANY($2::varchar[]) AND status = 'active' AND deleted_at IS NULL`,
-    [spaceId, ids],
-  );
-  // The single read-access gate: no workspace/system/template context, so
-  // those classes fail closed unless explicitly readable under this surface.
-  const readable = result.rows.filter((row) => canReadMemory(row, { userId: viewerUserId, spaceId }));
-  const accessible = await accessibleProjectIds(
-    db,
-    spaceId,
-    viewerUserId,
-    readable.map((row) => row.project_id),
+    `SELECT me.id, me.space_id, me.deleted_at, me.sensitivity_level, me.visibility,
+            me.access_level, ${contentAccessLevelSql({ definition: MEMORY_DEFINITION, alias: "me", userExpr: "$3" })} AS effective_access_level,
+            me.owner_user_id, me.scope_type, me.workspace_id, me.project_id, me.title, me.content
+       FROM memory_entries me
+      WHERE me.space_id = $1
+        AND me.id = ANY($2::varchar[])
+        AND me.status = 'active'
+        AND me.deleted_at IS NULL
+        AND me.scope_type <> 'system'
+        AND ${contentReadSql("memory", "me", "$3")}
+        AND ${memorySensitivityReadSql("me", "$3")}`,
+    [spaceId, ids, viewerUserId],
   );
   const rows = new Map<string, RevalidatedObject>();
-  for (const row of readable) {
-    if (row.project_id && !accessible.has(row.project_id)) continue;
-    // Mirror the canonical read model: summary_only withholds full content from
-    // non-owners. Title is not content and stays visible.
+  for (const row of result.rows) {
     rows.set(row.id, {
       title: row.title ?? "",
-      text: summaryOnlyRedactContent(row, viewerUserId) ? null : row.content,
+      text: shouldRedactMemoryContent(row, viewerUserId) ? null : row.content,
     });
   }
   return rows;
@@ -206,24 +184,7 @@ function memoryIsoOrNull(value: Date | string | null | undefined): string | null
 export function isMemoryRetrievalProjectable(row: MemoryProjectableFields): boolean {
   const scope = (row.scope_type ?? "").toLowerCase();
   if (scope === "system") return false;
-
-  const visibility = (row.visibility ?? "private").toLowerCase();
-  if (visibility === "public_template") return false;
-  if (row.owner_user_id) return true;
-
-  const sensitivity = (row.sensitivity_level ?? "normal").toLowerCase();
-  if (sensitivity === "highly_restricted") return false;
-  if (visibility === "private" || visibility === "workspace_shared") return false;
-  if (visibility === "restricted" || visibility === "selected_users") {
-    return selectedUserIdsHasEntry(row.selected_user_ids);
-  }
-  return true;
-}
-
-function selectedUserIdsHasEntry(value: unknown): boolean {
-  if (Array.isArray(value)) return value.some((entry) => typeof entry === "string" && entry.length > 0);
-  if (typeof value === "string") return value.length > 0;
-  return false;
+  return isContentVisibility(row.visibility) && isContentAccessLevel(row.access_level);
 }
 
 function uniqueIds(ids: readonly string[]): string[] {

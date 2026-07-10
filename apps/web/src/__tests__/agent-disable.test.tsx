@@ -33,6 +33,15 @@ vi.mock('../api/client', () => ({
   },
 }))
 
+vi.mock('../contexts/SpaceContext', () => ({
+  useSpace: () => ({
+    activeSpaceId: 's1',
+    activeSpaceName: 'Space One',
+    userId: 'u1',
+    spaces: [{ id: 's1', name: 'Space One', type: 'team', role: 'member' }],
+  }),
+}))
+
 // Keep the heavy child panels out of this focused test.
 vi.mock('../core/spaceNav', () => ({
   SpaceLink: ({ to, children }: { to: string; children: React.ReactNode }) => <a href={typeof to === 'string' ? to : '#'}>{children}</a>,
@@ -51,7 +60,7 @@ import AgentDetailPage from '../modules/agents/AgentDetailPage'
 function agent(overrides: Partial<AgentOut> = {}): AgentOut {
   return {
     id: 'a1', space_id: 's1', created_by_user_id: 'u1', name: 'My Agent',
-    description: 'desc', visibility: 'private', role_instruction: null,
+    description: 'desc', visibility: 'private', access_level: 'full', role_instruction: null,
     status: 'active', agent_kind: 'standard', current_version_id: 'v1',
     source_template_id: null, source_template_version_id: null, model: null,
     adapter_type: 'model_api', requires_model_provider: true,

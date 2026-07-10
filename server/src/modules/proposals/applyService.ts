@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path";
 import type { PoolClient } from "../../db/pool";
 import type { ServerConfig } from "../../config";
 import { getDbPool } from "../../db/pool";
+import { contentDecisionFromDb } from "../access/contentAccessQuery";
 import {
   enforceProposalApply,
   type EnforceResult,
@@ -110,7 +111,8 @@ export class PgProposalApplyService {
         !proposal ||
         proposal.status !== "pending" ||
         proposal.preview ||
-        proposal.space_id !== identity.spaceId
+        proposal.space_id !== identity.spaceId ||
+        (await contentDecisionFromDb(client, identity, "proposal", proposal.id)) === "deny"
       ) {
         await client.query("ROLLBACK");
         return null;
@@ -182,6 +184,7 @@ export class PgProposalApplyService {
         !proposal ||
         proposal.space_id !== identity.spaceId ||
         proposal.status !== "pending" ||
+        (await contentDecisionFromDb(client, identity, "proposal", proposal.id)) === "deny" ||
         !(await canRejectProposal(client, proposal, identity.userId))
       ) {
         await client.query("ROLLBACK");
@@ -225,7 +228,11 @@ export class PgProposalApplyService {
     try {
       await client.query("BEGIN");
       const proposal = await this.getProposalForUpdate(client, proposalId);
-      if (!proposal || proposal.space_id !== identity.spaceId) {
+      if (
+        !proposal
+        || proposal.space_id !== identity.spaceId
+        || (await contentDecisionFromDb(client, identity, "proposal", proposal.id)) === "deny"
+      ) {
         throw new ProposalApplyHttpError(404, "Proposal not found");
       }
       const grantId = grantIdInput ?? await this.inferGrantId(client, proposal);
@@ -303,7 +310,10 @@ export class PgProposalApplyService {
         [proposalId, identity.spaceId],
       );
       const p = proposal.rows[0];
-      if (!p) {
+      if (
+        !p
+        || (await contentDecisionFromDb(client, identity, "proposal", p.id)) === "deny"
+      ) {
         await client.query("ROLLBACK");
         return null;
       }

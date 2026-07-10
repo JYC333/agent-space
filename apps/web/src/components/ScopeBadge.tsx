@@ -11,7 +11,7 @@ interface ScopeBadgeProps {
 
 const VISIBILITY_LABELS: Record<string, { label: string; variant: BadgeProps['variant'] }> = {
   private: { label: 'Private', variant: 'warning' },
-  restricted: { label: 'Restricted', variant: 'destructive' },
+  selected_users: { label: 'Selected users', variant: 'destructive' },
   space_shared: { label: 'Shared', variant: 'muted' },
 }
 
@@ -29,7 +29,7 @@ export function ScopeBadge({ visibility, spaceName, ownerLabel, omitShared = fal
     )
   }
 
-  const icon = normalized === 'private' ? '🔒' : normalized === 'restricted' ? '🔐' : '👥'
+  const icon = normalized === 'private' ? '🔒' : normalized === 'selected_users' ? '🔐' : '👥'
   const detail = ownerLabel ?? spaceName
   return (
     <Badge variant={known.variant} className={className} title={detail ? `${known.label}: ${detail}` : known.label}>

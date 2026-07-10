@@ -25,6 +25,7 @@ const SPACE = "11111111-1111-4111-8111-111111111111";
 const ITEM_A = "33333333-3333-4333-8333-333333333333";
 const ITEM_B = "44444444-4444-4444-8444-444444444444";
 const VIEWER = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const OTHER = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 
 let container: StartedPostgreSqlContainer | undefined;
 let pool: Pool | undefined;
@@ -57,6 +58,18 @@ beforeEach(async () => {
     `INSERT INTO spaces (id, name, type, created_at, updated_at)
      VALUES ($1, 'Test Space', 'personal', now(), now()) ON CONFLICT (id) DO NOTHING`,
     [SPACE],
+  );
+  await pool.query(
+    `INSERT INTO users (id, display_name, status, created_at, updated_at)
+     VALUES ($1, 'Viewer', 'active', now(), now()), ($2, 'Other', 'active', now(), now())
+     ON CONFLICT (id) DO NOTHING`,
+    [VIEWER, OTHER],
+  );
+  await pool.query(
+    `INSERT INTO space_memberships (id, space_id, user_id, role, status, created_at, updated_at)
+     VALUES (gen_random_uuid()::varchar, $1, $2, 'owner', 'active', now(), now())
+     ON CONFLICT (space_id, user_id) DO NOTHING`,
+    [SPACE, VIEWER],
   );
 });
 
@@ -125,9 +138,16 @@ describe("Knowledge zero-LLM retrieval (real Postgres)", () => {
 
   it("drops a non-visible item during canonical revalidation", async () => {
     if (!available || !pool) return;
-    // private with no owner -> unreadable by anyone; the alias still matches but
-    // revalidation must drop it.
-    await insertItem({ id: ITEM_A, title: "Alpha", content: "secret", slug: "alpha", visibility: "private" });
+    await insertKnowledgeItem(pool, {
+      id: ITEM_A,
+      spaceId: SPACE,
+      title: "Alpha",
+      content: "secret",
+      slug: "alpha",
+      visibility: "private",
+      ownerUserId: OTHER,
+      createdByUserId: OTHER,
+    });
     await new RetrievalProjectionService(pool, knowledgeRetrievalRegistry).reindex(SPACE, "knowledge_item", ITEM_A);
 
     const out = await new RetrievalSearchService(pool, knowledgeRetrievalRegistry).search({

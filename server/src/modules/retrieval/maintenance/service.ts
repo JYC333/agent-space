@@ -228,7 +228,7 @@ export class RetrievalMaintenanceService {
            SELECT DISTINCT normalized_alias, object_type, object_id
              FROM retrieval_aliases
             WHERE space_id = $1
-              AND object_type = ANY($2::varchar[])
+              AND object_type = ANY($2::retrieval_object_type[])
               AND alias_kind IN ('title', 'alias')
          ) a
         GROUP BY normalized_alias
@@ -249,7 +249,7 @@ export class RetrievalMaintenanceService {
       `SELECT ro.object_type, ro.object_id
          FROM retrieval_objects ro
         WHERE ro.space_id = $1
-          AND ro.object_type = ANY($2::varchar[])
+          AND ro.object_type = ANY($2::retrieval_object_type[])
           AND NOT EXISTS (
             SELECT 1 FROM retrieval_edges e
              WHERE e.space_id = ro.space_id
@@ -276,7 +276,7 @@ export class RetrievalMaintenanceService {
          FROM retrieval_objects ro
          LEFT JOIN retrieval_chunks rc ON rc.retrieval_object_id = ro.id
         WHERE ro.space_id = $1
-          AND ro.object_type = ANY($2::varchar[])
+          AND ro.object_type = ANY($2::retrieval_object_type[])
         GROUP BY ro.id, ro.object_type, ro.object_id
        HAVING COALESCE(SUM(length(rc.plain_text)), 0) < $3
         ORDER BY ro.object_id
@@ -297,7 +297,7 @@ export class RetrievalMaintenanceService {
       `SELECT object_type, object_id
          FROM retrieval_objects
         WHERE space_id = $1
-          AND object_type = ANY($2::varchar[])
+          AND object_type = ANY($2::retrieval_object_type[])
           AND source_updated_at IS NOT NULL
           AND source_updated_at < now() - ($3 || ' days')::interval
         ORDER BY source_updated_at ASC
@@ -317,8 +317,8 @@ export class RetrievalMaintenanceService {
          FROM retrieval_edges
         WHERE space_id = $1
           AND edge_status = 'suggested'
-          AND from_object_type = ANY($2::varchar[])
-          AND to_object_type = ANY($2::varchar[])
+          AND from_object_type = ANY($2::retrieval_object_type[])
+          AND to_object_type = ANY($2::retrieval_object_type[])
         ORDER BY from_object_id, to_object_id
         LIMIT $3`,
       [spaceId, objectTypes, limit],

@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from 'react'
-import { Settings, Users, Mail, Send, Globe2, ShieldAlert, Puzzle, History, Search, ScrollText } from 'lucide-react'
+import { Settings, Users, Mail, Send, Globe2, ShieldAlert, Puzzle, History, Search, ScrollText, Eye } from 'lucide-react'
 import { toast } from 'sonner'
 import { SpaceLink as Link } from '../../core/spaceNav'
 import { useAuth } from '../../contexts/AuthContext'
@@ -15,9 +15,16 @@ import { SpaceRuntimePolicyPanel } from '../runtime_tools/SpaceRuntimePolicyPane
 import { CustomSourceSpacePolicyPanel } from './CustomSourceSpacePolicyPanel'
 import { ObjectSchemaPanel } from './ObjectSchemaPanel'
 import { promptLibraryPath } from '../prompts/paths'
-import type { MemberRole, SpaceMember } from '../../types/api'
+import type { MemberRole, SpaceMember, SpaceOversightMode } from '../../types/api'
 
 const INVITE_ROLES: MemberRole[] = ['admin', 'member', 'viewer']
+
+const OVERSIGHT_MODE_LABELS: Record<SpaceOversightMode, { label: string; description: string }> = {
+  none: { label: 'None', description: "Owners/admins see only what any member would — no extra visibility." },
+  summary: { label: 'Summary', description: "Owners/admins can see a summary of other members' private content." },
+  content: { label: 'Content', description: "Owners/admins can see the full content of other members' private content." },
+  full: { label: 'Full', description: "Owners/admins can see everything, including highly restricted memory." },
+}
 
 function canManageSpace(role: MemberRole | undefined): boolean {
   return role === 'owner' || role === 'admin'
@@ -112,6 +119,17 @@ export default function SpaceSettingsPage() {
         </Card>
       ) : (
         <>
+          <Card>
+            <CardTitle className="flex items-center gap-2">
+              <Eye className="size-3.5" /> Oversight
+            </CardTitle>
+            <p className="text-sm text-muted-foreground mb-3">
+              {OVERSIGHT_MODE_LABELS[activeSpace?.oversight_mode ?? 'none'].description}
+              {' '}Set once at Space creation and cannot be changed afterwards.
+            </p>
+            <Badge variant="outline">{OVERSIGHT_MODE_LABELS[activeSpace?.oversight_mode ?? 'none'].label}</Badge>
+          </Card>
+
           <SpaceRuntimePolicyPanel />
 
           <CustomSourceSpacePolicyPanel />

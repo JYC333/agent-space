@@ -6,6 +6,8 @@ import { proposalToOut } from "../proposals/repository";
 import { insertProposalRow } from "../proposals/reviewPackets";
 import { canReadMemory, type MemoryAuthFields } from "./memoryReadAuth";
 import { canAccessProject } from "./projectAccess";
+import { contentResourceDefinition } from "../access/contentAccessRegistry";
+import { contentAccessLevelSql, contentReadSql } from "../access/contentAccessSql";
 
 import type {
   MemoryProposalArchiveCommand,
@@ -65,7 +67,7 @@ interface TargetMemoryRow extends MemoryAuthFields {
 
 const TARGET_MEMORY_COLUMNS = `id, space_id, owner_user_id, workspace_id,
   scope_type, namespace, memory_type, title, content, visibility,
-  sensitivity_level, selected_user_ids, deleted_at, project_id`;
+  access_level, sensitivity_level, deleted_at, project_id`;
 
 const SENSITIVITY_LEVELS = new Set([
   "normal",
@@ -77,12 +79,9 @@ const SENSITIVITY_LEVELS = new Set([
 const VISIBILITY_VALUES = new Set([
   "private",
   "space_shared",
-  "workspace_shared",
   "selected_users",
-  "summary_only",
-  "restricted",
-  "public_template",
 ]);
+const MEMORY_DEFINITION = contentResourceDefinition("memory")!;
 
 /**
  * server-owned public memory proposal creation. This repository writes pending
@@ -116,13 +115,10 @@ export class PgMemoryProposalRepository {
     }
 
     const scope = command.scope ?? "user";
-    // When the caller does not specify visibility, default by space type so the
-    // proposal is coherent with the apply-time placement invariant: a personal
-    // space gets `private`, a multi-member space gets owner-only `restricted`
-    // (never `private`, which the applier bars outside personal spaces).
     const visibility = normalizeVisibility(
-      command.visibility ?? (await this.defaultCreateVisibility(effectiveSpaceId)),
+      command.visibility ?? "private",
     );
+    const accessLevel = normalizeAccessLevel(command.access_level ?? "full");
     const sensitivity = normalizeSensitivity(command.sensitivity_level ?? "normal");
     validateCreateCommand(command, visibility, sensitivity);
 
@@ -138,6 +134,7 @@ export class PgMemoryProposalRepository {
       target_scope: scope,
       target_namespace: command.namespace ?? "user.default",
       target_visibility: visibility,
+      target_access_level: accessLevel,
       sensitivity_level: sensitivity,
       provenance_entries: mergeDistinctProvenanceEntries([
         userConfirmationEntry(userId, { method: "POST", path: "/memory" }),
@@ -145,9 +142,6 @@ export class PgMemoryProposalRepository {
     };
     if (subjectUserId !== null) payload.subject_user_id = subjectUserId;
     if (ownerUserId !== null) payload.owner_user_id = ownerUserId;
-    if (command.selected_user_ids !== null && command.selected_user_ids !== undefined) {
-      payload.selected_user_ids = command.selected_user_ids;
-    }
     if (command.source_id !== null && command.source_id !== undefined) {
       payload.source_id = command.source_id;
     }
@@ -185,6 +179,15 @@ export class PgMemoryProposalRepository {
     workspaceId: string | null,
     command: MemoryProposalUpdateCommand,
   ): Promise<ProposalOut> {
+    if (
+      command.visibility != null
+      || command.access_level != null
+      || command.owner_user_id != null
+    ) {
+      throw new MemoryProposalValidationError(
+        "Use the content-access API to update Memory permissions",
+      );
+    }
     const target = await this.getVisibleTargetMemory(
       spaceId,
       userId,
@@ -223,11 +226,6 @@ export class PgMemoryProposalRepository {
       payload.proposed_title = changeData.title;
       payload.title = changeData.title;
     }
-    if (changeData.visibility !== undefined) {
-      const visibility = normalizeVisibility(String(changeData.visibility));
-      payload.visibility = visibility;
-      payload.target_visibility = visibility;
-    }
     if (changeData.sensitivity_level !== undefined) {
       payload.sensitivity_level = normalizeSensitivity(
         String(changeData.sensitivity_level),
@@ -235,12 +233,6 @@ export class PgMemoryProposalRepository {
     }
     if (changeData.subject_user_id !== undefined) {
       payload.subject_user_id = changeData.subject_user_id;
-    }
-    if (changeData.owner_user_id !== undefined) {
-      payload.owner_user_id = changeData.owner_user_id;
-    }
-    if (changeData.selected_user_ids !== undefined) {
-      payload.selected_user_ids = changeData.selected_user_ids;
     }
     if (changeData.scope !== undefined) {
       payload.target_scope = changeData.scope;
@@ -344,15 +336,6 @@ export class PgMemoryProposalRepository {
     });
   }
 
-  /** Space-type-aware default visibility for a create with no explicit value. */
-  private async defaultCreateVisibility(spaceId: string): Promise<string> {
-    const res = await this.db.query<{ type: string }>(
-      `SELECT type FROM spaces WHERE id = $1`,
-      [spaceId],
-    );
-    return (res.rows[0]?.type ?? "unknown") === "personal" ? "private" : "restricted";
-  }
-
   private async getVisibleTargetMemory(
     spaceId: string,
     userId: string,
@@ -360,12 +343,14 @@ export class PgMemoryProposalRepository {
     workspaceId: string | null,
   ): Promise<TargetMemoryRow | null> {
     const result = await this.db.query<TargetMemoryRow>(
-      `SELECT ${TARGET_MEMORY_COLUMNS}
-         FROM memory_entries
+      `SELECT ${TARGET_MEMORY_COLUMNS},
+              ${contentAccessLevelSql({ definition: MEMORY_DEFINITION, alias: "me", userExpr: "$3", includeOversight: false })} AS effective_access_level
+         FROM memory_entries me
         WHERE id = $1
           AND space_id = $2
-          AND deleted_at IS NULL`,
-      [memoryId, spaceId],
+          AND deleted_at IS NULL
+          AND ${contentReadSql("memory", "me", "$3", { includeOversight: false })}`,
+      [memoryId, spaceId, userId],
     );
     const row = result.rows[0];
     if (!row) return null;
@@ -478,6 +463,14 @@ function normalizeVisibility(value: string): string {
   return normalized;
 }
 
+function normalizeAccessLevel(value: string): string {
+  const normalized = value.toLowerCase();
+  if (normalized !== "full" && normalized !== "summary") {
+    throw new MemoryProposalValidationError(`invalid access_level: ${JSON.stringify(value)}`);
+  }
+  return normalized;
+}
+
 function validateCreateCommand(
   command: MemoryProposalCreateCommand,
   visibility: string,
@@ -489,12 +482,11 @@ function validateCreateCommand(
       `invalid memory_layer: ${JSON.stringify(command.memory_layer)}`,
     );
   }
-  if (sensitivity === "highly_restricted" && visibility === "space_shared") {
+  if (sensitivity === "highly_restricted" && visibility !== "private") {
     throw new MemoryProposalValidationError(
-      "highly_restricted memories cannot use space_shared visibility for MVP",
+      "highly_restricted memories must use private visibility",
     );
   }
-  validateSelectedUsers(command.selected_user_ids, visibility);
   if (sensitivity === "highly_restricted" && !command.owner_user_id) {
     throw new MemoryProposalValidationError(
       "owner_user_id is required when sensitivity_level is highly_restricted",
@@ -506,31 +498,9 @@ function validateUpdatePayload(payload: Record<string, unknown>): void {
   const sensitivity = stringValue(payload.sensitivity_level);
   const visibility =
     stringValue(payload.target_visibility) ?? stringValue(payload.visibility);
-  if (sensitivity === "highly_restricted" && visibility === "space_shared") {
+  if (sensitivity === "highly_restricted" && visibility !== "private") {
     throw new MemoryProposalValidationError(
-      "highly_restricted memories cannot use space_shared visibility for MVP",
-    );
-  }
-  const selected = Array.isArray(payload.selected_user_ids)
-    ? payload.selected_user_ids
-    : null;
-  if (selected !== null && visibility !== null) {
-    validateSelectedUsers(selected, visibility);
-  }
-}
-
-function validateSelectedUsers(
-  selectedUserIds: readonly unknown[] | null | undefined,
-  visibility: string,
-): void {
-  if (
-    selectedUserIds !== null &&
-    selectedUserIds !== undefined &&
-    visibility !== "selected_users" &&
-    visibility !== "restricted"
-  ) {
-    throw new MemoryProposalValidationError(
-      "selected_user_ids is only valid when visibility is selected_users or restricted",
+      "highly_restricted memories must use private visibility",
     );
   }
 }

@@ -14,6 +14,11 @@ import { dbPool, type Queryable } from "../routeUtils/common";
 import type { RetrievalRegistry } from "../retrieval/registry";
 import type { RevalidatedObject } from "../retrieval/types";
 import {
+  contentOwnerFilterSql,
+  contentReadSql,
+  contentVisibilityFilterSql,
+} from "../access/contentAccessSql";
+import {
   loadSourcePolicySnapshots,
   loadViewerSpaceRole,
   sourceConnectionIdsFromJson,
@@ -161,7 +166,7 @@ export class ContextOpsService {
     const [indexFreshness, embeddingBacklog, sourcePolicyWarnings] = await Promise.all([
       this.loadIndexFreshness(input.spaceId),
       this.loadEmbeddingBacklog(input.spaceId),
-      this.loadSourcePolicyWarnings(input.spaceId),
+      this.loadSourcePolicyWarnings(input.spaceId, input.userId),
     ]);
     const [
       maintenanceArtifacts,
@@ -341,7 +346,7 @@ export class ContextOpsService {
          FROM retrieval_objects
         WHERE space_id = $1
           AND status <> 'archived'
-          AND object_type = ANY($2::varchar[])
+          AND object_type = ANY($2::retrieval_object_type[])
           AND source_updated_at IS NOT NULL
           AND indexed_at < source_updated_at
         ORDER BY (source_updated_at - indexed_at) DESC, object_id ASC
@@ -367,7 +372,7 @@ export class ContextOpsService {
           AND rc.embedding IS NULL
         WHERE ro.space_id = $1
           AND ro.status <> 'archived'
-          AND ro.object_type = ANY($2::varchar[])
+          AND ro.object_type = ANY($2::retrieval_object_type[])
         GROUP BY ro.id, ro.object_type, ro.object_id, ro.indexed_at, ro.source_updated_at, ro.source_connection_ids_json
         ORDER BY count(rc.id) DESC, ro.object_id ASC
         LIMIT $3`,
@@ -388,7 +393,10 @@ export class ContextOpsService {
         WHERE space_id = $1
           AND status = 'active'
           AND deleted_at IS NULL
-          AND ($3::boolean OR owner_user_id = $2)
+          AND ${contentReadSql("source_connection", "source_connections", "$2")}
+          AND ($3::boolean
+            OR ${contentOwnerFilterSql("source_connection", "source_connections", "$2")}
+            OR ${contentVisibilityFilterSql("source_connections", ["selected_users"])})
         ORDER BY updated_at DESC, id ASC
         LIMIT $4`,
       [spaceId, userId, includeAllSources, limit + 1],
@@ -483,7 +491,7 @@ export class ContextOpsService {
     };
   }
 
-  private async loadSourcePolicyWarnings(spaceId: string): Promise<ContextOpsSummary["source_policy_warnings"]> {
+  private async loadSourcePolicyWarnings(spaceId: string, userId: string): Promise<ContextOpsSummary["source_policy_warnings"]> {
     const result = await this.db.query<SourcePolicyWarningsRow>(
       `SELECT count(*)::int AS active_source_connections,
               count(*) FILTER (
@@ -524,8 +532,9 @@ export class ContextOpsService {
          FROM source_connections
         WHERE space_id = $1
           AND status = 'active'
-          AND deleted_at IS NULL`,
-      [spaceId],
+          AND deleted_at IS NULL
+          AND ${contentReadSql("source_connection", "source_connections", "$2")}`,
+      [spaceId, userId],
     );
     const row = result.rows[0];
     const warningCounts: ContextOpsCountMap = {
@@ -555,11 +564,12 @@ export class ContextOpsService {
       `SELECT id, artifact_type, title, created_at, metadata_json
          FROM artifacts
         WHERE space_id = $1
+          AND ${contentReadSql("artifact", "artifacts", "$2")}
           AND (
-            (owner_user_id = $2 AND visibility = 'private')
+            (${contentVisibilityFilterSql("artifacts", ["private", "selected_users"])})
             OR (
               $6::boolean
-              AND visibility = 'space_shared'
+              AND ${contentVisibilityFilterSql("artifacts", ["space_shared"])}
               AND metadata_json->>'review_scope' = 'space_ops'
             )
           )
@@ -583,11 +593,12 @@ export class ContextOpsService {
       `SELECT id, proposal_type, status, title, created_at, payload_json
          FROM proposals
         WHERE space_id = $1
+          AND ${contentReadSql("proposal", "proposals", "$2")}
           AND (
-            (created_by_user_id = $2 AND visibility = 'private')
+            (${contentVisibilityFilterSql("proposals", ["private", "selected_users"])})
             OR (
               $6::boolean
-              AND visibility = 'space_shared'
+              AND ${contentVisibilityFilterSql("proposals", ["space_shared"])}
               AND payload_json->>'review_scope' = 'space_ops'
             )
           )
@@ -611,11 +622,12 @@ export class ContextOpsService {
       `SELECT id, artifact_type, title, created_at, metadata_json
          FROM artifacts
         WHERE space_id = $1
+          AND ${contentReadSql("artifact", "artifacts", "$2")}
           AND (
-            (owner_user_id = $2 AND visibility = 'private')
+            (${contentVisibilityFilterSql("artifacts", ["private", "selected_users"])})
             OR (
               $6::boolean
-              AND visibility = 'space_shared'
+              AND ${contentVisibilityFilterSql("artifacts", ["space_shared"])}
               AND metadata_json->>'review_scope' = 'space_ops'
             )
           )
@@ -639,8 +651,9 @@ export class ContextOpsService {
       `SELECT id, artifact_type, title, created_at, metadata_json
          FROM artifacts
         WHERE space_id = $1
-          AND owner_user_id = $2
-          AND visibility = 'private'
+          AND ${contentReadSql("artifact", "artifacts", "$2")}
+          AND ${contentOwnerFilterSql("artifact", "artifacts", "$2")}
+          AND ${contentVisibilityFilterSql("artifacts", ["private"])}
           AND artifact_type = $3
           AND created_at >= $4
         ORDER BY created_at DESC, id DESC
@@ -660,8 +673,9 @@ export class ContextOpsService {
       `SELECT id, artifact_type, title, created_at, metadata_json
          FROM artifacts
         WHERE space_id = $1
-          AND owner_user_id = $2
-          AND visibility = 'private'
+          AND ${contentReadSql("artifact", "artifacts", "$2")}
+          AND ${contentOwnerFilterSql("artifact", "artifacts", "$2")}
+          AND ${contentVisibilityFilterSql("artifacts", ["private"])}
           AND artifact_type = $3
           AND created_at >= $4
         ORDER BY created_at DESC, id DESC

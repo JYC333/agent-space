@@ -28,6 +28,10 @@ class FakeRelationsRepository {
     return (this.refs.relationObjects ?? new Set(["person-1"])).has(objectId);
   }
 
+  async isOwnedRelationObject(_spaceId: string, objectId: string): Promise<boolean> {
+    return (this.refs.relationObjects ?? new Set(["person-1"])).has(objectId);
+  }
+
   async activityExistsInSpace(_spaceId: string, activityId: string): Promise<boolean> {
     return (this.refs.activities ?? new Set()).has(activityId);
   }

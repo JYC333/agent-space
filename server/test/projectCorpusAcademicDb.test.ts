@@ -96,6 +96,16 @@ beforeEach(async () => {
       now,
     ],
   );
+  // Source connections created through the product repository subscribe their
+  // creator. This direct SQL fixture must model that delivery state too, or
+  // Project Corpus correctly hides the linked source item.
+  await pool.query(
+    `INSERT INTO source_connection_user_subscriptions (
+       id, space_id, source_connection_id, user_id, status,
+       library_enabled, digest_enabled, created_at, updated_at
+     ) VALUES ($1, $2, $3, $4, 'subscribed', true, true, $5, $5)`,
+    [randomUUID(), SPACE, CONNECTION, OWNER, now],
+  );
 });
 
 function repo(): ProjectCorpusRepository {
@@ -126,10 +136,10 @@ async function seedPaperCorpusItem(): Promise<{ objectId: string; sourceItemId: 
   const sourceItemId = randomUUID();
   await pool!.query(
     `INSERT INTO source_items (
-       id, space_id, connection_id, item_type, title, first_seen_at, last_seen_at,
+       id, space_id, owner_user_id, visibility, connection_id, item_type, title, first_seen_at, last_seen_at,
        content_state, retention_policy, created_at, updated_at
-     ) VALUES ($1,$2,$3,'feed_entry','Paper A',$4,$4,'excerpt_saved','summary_only',$4,$4)`,
-    [sourceItemId, SPACE, CONNECTION, now],
+     ) VALUES ($1,$2,$3,'space_shared',$4,'feed_entry','Paper A',$5,$5,'excerpt_saved','summary_only',$5,$5)`,
+    [sourceItemId, SPACE, OWNER, CONNECTION, now],
   );
   const objectId = randomUUID();
   await pool!.query(
@@ -168,10 +178,10 @@ async function seedSourceItemOnlyCorpusItem(): Promise<{ sourceItemId: string; c
   const sourceItemId = randomUUID();
   await pool!.query(
     `INSERT INTO source_items (
-       id, space_id, connection_id, item_type, title, first_seen_at, last_seen_at,
+       id, space_id, owner_user_id, visibility, connection_id, item_type, title, first_seen_at, last_seen_at,
        content_state, retention_policy, created_at, updated_at
-     ) VALUES ($1,$2,$3,'feed_entry','Paper B',$4,$4,'excerpt_saved','summary_only',$4,$4)`,
-    [sourceItemId, SPACE, CONNECTION, now],
+     ) VALUES ($1,$2,$3,'space_shared',$4,'feed_entry','Paper B',$5,$5,'excerpt_saved','summary_only',$5,$5)`,
+    [sourceItemId, SPACE, OWNER, CONNECTION, now],
   );
   // backfillFromSources() archives corpus rows lacking a backing active
   // project_source_item_links row — seed a binding + link so the row this
@@ -274,9 +284,9 @@ describe("Project Corpus academic enrichment (real Postgres)", () => {
     const privateSourceItemId = randomUUID();
     await pool!.query(
       `INSERT INTO source_items (
-         id, space_id, created_by_user_id, item_type, title, first_seen_at, last_seen_at,
+         id, space_id, owner_user_id, visibility, created_by_user_id, item_type, title, first_seen_at, last_seen_at,
          content_state, retention_policy, created_at, updated_at
-       ) VALUES ($1,$2,$3,'feed_entry','Private source item',$4,$4,'excerpt_saved','summary_only',$4,$4)`,
+       ) VALUES ($1,$2,$3,'private',$3,'feed_entry','Private source item',$4,$4,'excerpt_saved','summary_only',$4,$4)`,
       [privateSourceItemId, SPACE, SAME_SPACE_MEMBER, now],
     );
     await expect(repo().upsert(identity, PROJECT, { source_item_id: privateSourceItemId })).rejects.toMatchObject({ statusCode: 422 });
@@ -284,10 +294,10 @@ describe("Project Corpus academic enrichment (real Postgres)", () => {
     const privateEvidenceId = randomUUID();
     await pool!.query(
       `INSERT INTO extracted_evidence (
-         id, space_id, source_item_id, evidence_type, title, content_excerpt,
+         id, space_id, owner_user_id, visibility, source_item_id, evidence_type, title, content_excerpt,
          extraction_method, trust_level, status, created_by_user_id, created_at, updated_at
-       ) VALUES ($1,$2,$3,'excerpt','Private evidence','secret','full_text','normal','candidate',$4,$5,$5)`,
-      [privateEvidenceId, SPACE, privateSourceItemId, SAME_SPACE_MEMBER, now],
+       ) VALUES ($1,$2,$3,'private',$4,'excerpt','Private evidence','secret','full_text','normal','candidate',$3,$5,$5)`,
+      [privateEvidenceId, SPACE, SAME_SPACE_MEMBER, privateSourceItemId, now],
     );
     await expect(repo().upsert(identity, PROJECT, { evidence_id: privateEvidenceId })).rejects.toMatchObject({ statusCode: 422 });
   });

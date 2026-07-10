@@ -247,12 +247,14 @@ class SearchFakeDb implements Queryable {
       const batch = Array.isArray(params[1]);
       const spaceId = batch ? params[0] as string : params[1] as string;
       const ids = batch ? params[1] as string[] : [params[0] as string];
+      const viewerUserId = batch ? params[2] as string : null;
       const rows = this.objects
         .filter((candidate) =>
           candidate.object_type === "knowledge_item" &&
           ids.includes(candidate.object_id) &&
           candidate.space_id === spaceId &&
-          candidate.status === "active")
+          candidate.status === "active" &&
+          (!viewerUserId || fakeContentVisible(candidate, viewerUserId)))
         .map((object) => ({
           id: object.object_id,
           title: object.title,
@@ -270,12 +272,14 @@ class SearchFakeDb implements Queryable {
       const batch = Array.isArray(params[1]);
       const spaceId = batch ? params[0] as string : params[1] as string;
       const ids = batch ? params[1] as string[] : [params[0] as string];
+      const viewerUserId = batch ? params[2] as string : null;
       const rows = this.objects
         .filter((candidate) =>
           candidate.object_type === "note" &&
           ids.includes(candidate.object_id) &&
           candidate.space_id === spaceId &&
-          candidate.status === "active")
+          candidate.status === "active" &&
+          (!viewerUserId || fakeContentVisible(candidate, viewerUserId)))
         .map((object) => ({
         id: object.object_id,
         title: object.title,
@@ -289,12 +293,14 @@ class SearchFakeDb implements Queryable {
       const batch = Array.isArray(params[1]);
       const spaceId = batch ? params[0] as string : params[1] as string;
       const ids = batch ? params[1] as string[] : [params[0] as string];
+      const viewerUserId = batch ? params[2] as string : null;
       const rows = this.objects
         .filter((candidate) =>
           candidate.object_type === "source" &&
           ids.includes(candidate.object_id) &&
           candidate.space_id === spaceId &&
-          candidate.status !== "archived")
+          candidate.status !== "archived" &&
+          (!viewerUserId || fakeContentVisible(candidate, viewerUserId)))
         .map((object) => ({
           id: object.object_id,
           title: object.title,
@@ -309,12 +315,14 @@ class SearchFakeDb implements Queryable {
       const batch = Array.isArray(params[1]);
       const spaceId = batch ? params[0] as string : params[1] as string;
       const ids = batch ? params[1] as string[] : [params[0] as string];
+      const viewerUserId = batch ? params[2] as string : null;
       const rows = this.objects
         .filter((candidate) =>
           candidate.object_type === "claim" &&
           ids.includes(candidate.object_id) &&
           candidate.space_id === spaceId &&
-          candidate.status === "active")
+          candidate.status === "active" &&
+          (!viewerUserId || fakeContentVisible(candidate, viewerUserId)))
         .map((object) => ({
           id: object.object_id,
           title: object.title,
@@ -404,7 +412,7 @@ class ProjectionFakeDb implements Queryable {
     }
     if (
       norm ===
-      "DELETE FROM retrieval_edges WHERE space_id = $1 AND from_object_type = ANY($2::varchar[])"
+      "DELETE FROM retrieval_edges WHERE space_id = $1 AND from_object_type = ANY($2::retrieval_object_type[])"
     ) {
       const [spaceId, objectTypes] = params as [string, RetrievalObjectType[]];
       removeWhere(
@@ -1542,6 +1550,10 @@ function searchDbWithKnowledge(overrides: {
 
 function result<Row>(rows: Row[]) {
   return { rows, rowCount: rows.length };
+}
+
+function fakeContentVisible(object: SearchObject, userId: string): boolean {
+  return object.owner_user_id === userId || object.visibility === "space_shared";
 }
 
 function matchesObjectKindFilter(

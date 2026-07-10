@@ -142,7 +142,7 @@ describe("server runner applies the baseline schema", () => {
     expect(baseline).toContain("FOREIGN KEY (object_id, space_id) REFERENCES public.space_objects(id, space_id)");
     expect(baseline).toContain("FOREIGN KEY (claim_id, space_id) REFERENCES public.claims(object_id, space_id)");
     expect(baseline).toContain("FOREIGN KEY (from_object_id, space_id) REFERENCES public.space_objects(id, space_id)");
-    expect(baseline).toContain("('claim'::character varying)::text, ('memory_entry'::character varying)::text");
+    expect(baseline).toContain("'claim', 'memory_entry'");
   });
 
   it("keeps object_relations as the canonical relation graph", () => {
@@ -177,10 +177,10 @@ describe("server runner applies the baseline schema", () => {
     expect(baseline).toContain("memory_entries_created_from_proposal_id_fkey");
   });
 
-  it("keeps retrieval base object types centralized in a database domain", () => {
+  it("keeps retrieval base object types centralized in a generated database enum", () => {
     const baseline = baselineSql();
-    expect(baseline).toContain("CREATE DOMAIN public.retrieval_object_type AS character varying(64)");
-    expect(baseline).toContain("CONSTRAINT retrieval_object_type_allowed CHECK");
+    expect(baseline).toContain("CREATE EXTENSION IF NOT EXISTS vector");
+    expect(baseline).toContain("CREATE TYPE public.retrieval_object_type AS ENUM");
     expect(baseline).toContain("CREATE TABLE public.space_object_kinds");
     expect(baseline).toContain("CREATE TABLE public.space_object_kind_relation_hints");
     expect(baseline).toContain("base_object_type retrieval_object_type NOT NULL");
@@ -198,9 +198,8 @@ describe("server runner applies the baseline schema", () => {
     expect(baseline).not.toContain("ck_retrieval_edges_to_object_type");
     expect(baseline).not.toContain("ck_retrieval_feedback_events_object_type");
     expect(baseline).toContain("ck_space_object_kind_relation_hints_relation_type");
-    expect(baseline).toContain("'project_public_summary'::character varying");
     expect(baseline).toContain(
-      "('knowledge_item'::character varying)::text, ('note'::character varying)::text, ('source'::character varying)::text, ('claim'::character varying)::text, ('memory_entry'::character varying)::text, ('project_public_summary'::character varying)::text, ('source_item'::character varying)::text, ('extracted_evidence'::character varying)::text",
+      "'knowledge_item', 'note', 'source', 'claim', 'memory_entry', 'project_public_summary', 'source_item', 'extracted_evidence'",
     );
   });
 

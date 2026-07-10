@@ -305,7 +305,7 @@ export const NOTE_COLLECTION_COLUMNS = `
 
 export const KNOWLEDGE_KINDS = new Set(["concept", "lesson", "procedure", "decision", "question", "answer", "summary"]);
 export const CONTENT_FORMATS = new Set(["markdown", "plain", "prosemirror_json"]);
-export const KNOWLEDGE_VISIBILITIES = new Set(["private", "space_shared", "workspace_shared", "restricted"]);
+export const KNOWLEDGE_VISIBILITIES = new Set(["private", "space_shared", "selected_users"]);
 export const NOTE_STATUSES = new Set(["active", "archived", "deleted"]);
 export const CLAIM_KINDS = new Set(["fact", "hypothesis", "belief", "preference", "commitment", "question", "interpretation", "instruction", "metric", "relationship", "event"]);
 export const CLAIM_STATUSES = new Set(["active", "disputed", "superseded", "rejected", "archived"]);

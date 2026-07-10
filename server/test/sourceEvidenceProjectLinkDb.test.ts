@@ -132,19 +132,19 @@ async function seedItemWithEvidence(connectionId: string | null = CONNECTION): P
   const now = new Date().toISOString();
   await pool!.query(
     `INSERT INTO source_items (
-       id, space_id, connection_id, item_type, title, first_seen_at, last_seen_at,
+       id, space_id, owner_user_id, visibility, connection_id, item_type, title, first_seen_at, last_seen_at,
        content_state, retention_policy, created_at, updated_at
-     ) VALUES ($1,$2,$3,'external_url','New paper',$4,$4,'excerpt_saved','summary_only',$4,$4)`,
-    [itemId, SPACE, connectionId, now],
+     ) VALUES ($1,$2,$3,'space_shared',$4,'external_url','New paper',$5,$5,'excerpt_saved','summary_only',$5,$5)`,
+    [itemId, SPACE, OWNER, connectionId, now],
   );
   await pool!.query(
     `INSERT INTO extracted_evidence (
-       id, space_id, source_item_id, source_object_type, source_object_id,
+       id, space_id, owner_user_id, visibility, source_item_id, source_object_type, source_object_id,
        evidence_type, title, content_excerpt, extraction_method, trust_level,
        confidence, status, metadata_json, created_at, updated_at
-     ) VALUES ($1,$2,$3,'source_item',$3,'excerpt','New paper','Abstract text','connection_scan','normal',
-       0.55,'candidate','{}'::jsonb,$4,$4)`,
-    [evidenceId, SPACE, itemId, now],
+     ) VALUES ($1,$2,$3,'space_shared',$4,'source_item',$4,'excerpt','New paper','Abstract text','connection_scan','normal',
+       0.55,'candidate','{}'::jsonb,$5,$5)`,
+    [evidenceId, SPACE, OWNER, itemId, now],
   );
   return { itemId, evidenceId };
 }
@@ -153,11 +153,11 @@ async function seedSourceSnapshot(itemId: string, connectionId: string): Promise
   const now = new Date().toISOString();
   await pool!.query(
     `INSERT INTO source_snapshots (
-       id, space_id, source_item_id, connection_id, snapshot_type, content_hash,
-       source_uri, capture_method, trust_level, metadata_json, captured_at, created_at
-     ) VALUES ($1,$2,$3,$4,'metadata','hash','https://example.org/paper',
-       'connection_scan','normal','{}'::jsonb,$5,$5)`,
-    [randomUUID(), SPACE, itemId, connectionId, now],
+       id, space_id, owner_user_id, visibility, source_item_id, connection_id, snapshot_type, content_hash,
+       source_uri, capture_method, trust_level, metadata_json, captured_at, created_at, updated_at
+     ) VALUES ($1,$2,$3,'space_shared',$4,$5,'metadata','hash','https://example.org/paper',
+       'connection_scan','normal','{}'::jsonb,$6,$6,$6)`,
+    [randomUUID(), SPACE, OWNER, itemId, connectionId, now],
   );
 }
 

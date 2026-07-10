@@ -9,7 +9,7 @@ class FakePool {
     params: readonly unknown[] = [],
   ): Promise<{ rows: Row[]; rowCount: number | null }> {
     this.queries.push({ sql, params });
-    if (/FROM tasks WHERE/.test(sql)) {
+    if (/FROM tasks t/.test(sql)) {
       return {
         rows: [{
           id: "task-1",
@@ -30,7 +30,7 @@ class FakePool {
 }
 
 describe("task artifact repository visibility", () => {
-  it("allows workspace_shared artifacts only through the task workspace", async () => {
+  it("applies canonical workspace scope to task artifacts", async () => {
     const db = new FakePool();
     await new PgTaskRepository(db as never).listTaskArtifacts(
       { spaceId: "space-1", userId: "user-1" },
@@ -43,8 +43,9 @@ describe("task artifact repository visibility", () => {
     expect(artifactQueries).toHaveLength(2);
     for (const query of artifactQueries) {
       expect(query.sql).toContain("JOIN tasks t ON t.id = ta.task_id AND t.space_id = ta.space_id");
-      expect(query.sql).toContain("a.visibility = 'workspace_shared'");
-      expect(query.sql).toContain("a.workspace_id = t.workspace_id");
+      expect(query.sql).toContain("space_memberships content_member");
+      expect(query.sql).toContain("a.visibility = 'space_shared'");
+      expect(query.sql).toContain("content_access_grants content_grant");
       expect(query.sql).toContain("project_workspaces");
       expect(query.sql).toContain("project_members");
     }

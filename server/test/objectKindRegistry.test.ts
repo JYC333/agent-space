@@ -146,6 +146,9 @@ class ObjectKindApplyServiceFakeClient extends ObjectKindApplyFakeDb {
     if (norm.startsWith("SELECT id, space_id, proposal_type, status")) {
       return { rows: [this.proposalRow], rowCount: 1 };
     }
+    if (norm.includes("AS effective_access_level")) {
+      return { rows: [{ effective_access_level: "full" }], rowCount: 1 };
+    }
     if (norm.startsWith("SELECT role FROM space_memberships")) {
       return { rows: [{ role: "admin" }], rowCount: 1 };
     }
@@ -777,6 +780,7 @@ function auth(role: "owner" | "admin" | "reviewer" | "member" | "guest" = "admin
         name: "Team",
         type: "team",
         role,
+        oversight_mode: "none",
         created_by_user_id: "owner-1",
         created_at: "2026-06-18T00:00:00.000Z",
         updated_at: "2026-06-18T00:00:00.000Z",

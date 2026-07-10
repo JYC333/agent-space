@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { PoolClient } from "../../db/pool";
 import { countFromRow, HttpError, type Queryable } from "../routeUtils/common";
+import { contentOwnerFilterSql, contentReadSql } from "../access/contentAccessSql";
+import { contentOwnerFromDb } from "../access/contentAccessQuery";
 
 export interface RelationPersonRow {
   object_id: string;
@@ -102,6 +104,10 @@ const AFFILIATION_COLUMNS = `
   id, space_id, person_object_id, organization_object_id, role, title, status,
   start_date, end_date, confidence, source, object_relation_id, created_at, updated_at
 `;
+const AFFILIATION_COLUMNS_ALIASED = `
+  ra.id, ra.space_id, ra.person_object_id, ra.organization_object_id, ra.role, ra.title, ra.status,
+  ra.start_date, ra.end_date, ra.confidence, ra.source, ra.object_relation_id, ra.created_at, ra.updated_at
+`;
 
 const NOTE_COLUMNS = `
   id, space_id, object_id, body, created_by_user_id, created_by_agent_id, created_at, updated_at
@@ -130,9 +136,9 @@ export class RelationsRepository {
     const now = new Date().toISOString();
     await client.query(
       `INSERT INTO space_objects (
-         id, space_id, object_type, title, summary, status, visibility,
-         created_by_user_id, created_at, updated_at
-       ) VALUES ($1, $2, 'person', $3, $4, 'active', 'space_shared', $5, $6, $6)`,
+         id, space_id, object_type, title, summary, status, visibility, access_level,
+         owner_user_id, created_by_user_id, created_at, updated_at
+       ) VALUES ($1, $2, 'person', $3, $4, 'active', 'space_shared', 'full', $5, $5, $6, $6)`,
       [objectId, input.spaceId, input.title, input.summary, input.createdByUserId, now],
     );
     await client.query(
@@ -140,29 +146,31 @@ export class RelationsRepository {
        VALUES ($1, $2, $3, $4, $5, $5)`,
       [objectId, input.spaceId, input.pronouns, input.headline, now],
     );
-    const created = await this.getPerson(client, input.spaceId, objectId);
+    const created = await this.getPerson(client, input.spaceId, objectId, input.createdByUserId ?? "");
     if (!created) throw new HttpError(500, "Failed to create relation person");
     return created;
   }
 
-  async getPerson(db: Queryable, spaceId: string, objectId: string): Promise<RelationPersonRow | null> {
+  async getPerson(db: Queryable, spaceId: string, objectId: string, userId: string): Promise<RelationPersonRow | null> {
     const result = await db.query<RelationPersonRow>(
       `SELECT ${PERSON_COLUMNS}
          FROM space_objects so
          JOIN relation_people rp ON rp.object_id = so.id AND rp.space_id = so.space_id
         WHERE so.id = $1 AND so.space_id = $2 AND so.status <> 'deleted'
+          AND ${contentReadSql("space_object", "so", "$3")}
         LIMIT 1`,
-      [objectId, spaceId],
+      [objectId, spaceId, userId],
     );
     return result.rows[0] ?? null;
   }
 
   async listPeople(
     spaceId: string,
+    userId: string,
     filters: { q: string | null; limit: number; offset: number },
   ): Promise<{ rows: RelationPersonRow[]; total: number }> {
-    const params: unknown[] = [spaceId];
-    const clauses = ["so.space_id = $1", "so.status <> 'deleted'"];
+    const params: unknown[] = [spaceId, userId];
+    const clauses = ["so.space_id = $1", "so.status <> 'deleted'", contentReadSql("space_object", "so", "$2")];
     if (filters.q) {
       params.push(`%${filters.q}%`);
       clauses.push(`so.title ILIKE $${params.length}`);
@@ -194,6 +202,7 @@ export class RelationsRepository {
   async updatePerson(
     spaceId: string,
     objectId: string,
+    userId: string,
     patch: {
       title?: string;
       summary?: string | null;
@@ -228,7 +237,7 @@ export class RelationsRepository {
         ],
       );
     }
-    return this.getPerson(this.db, spaceId, objectId);
+    return this.getPerson(this.db, spaceId, objectId, userId);
   }
 
   async archivePerson(spaceId: string, objectId: string): Promise<void> {
@@ -254,9 +263,9 @@ export class RelationsRepository {
     const now = new Date().toISOString();
     await client.query(
       `INSERT INTO space_objects (
-         id, space_id, object_type, title, summary, status, visibility,
-         created_by_user_id, created_at, updated_at
-       ) VALUES ($1, $2, 'organization', $3, $4, 'active', 'space_shared', $5, $6, $6)`,
+         id, space_id, object_type, title, summary, status, visibility, access_level,
+         owner_user_id, created_by_user_id, created_at, updated_at
+       ) VALUES ($1, $2, 'organization', $3, $4, 'active', 'space_shared', 'full', $5, $5, $6, $6)`,
       [objectId, input.spaceId, input.title, input.summary, input.createdByUserId, now],
     );
     await client.query(
@@ -265,29 +274,31 @@ export class RelationsRepository {
        ) VALUES ($1, $2, $3, $4, $5, $6, $6)`,
       [objectId, input.spaceId, input.orgType, input.homepageUrl, input.parentOrganizationObjectId, now],
     );
-    const created = await this.getOrganization(client, input.spaceId, objectId);
+    const created = await this.getOrganization(client, input.spaceId, objectId, input.createdByUserId ?? "");
     if (!created) throw new HttpError(500, "Failed to create relation organization");
     return created;
   }
 
-  async getOrganization(db: Queryable, spaceId: string, objectId: string): Promise<RelationOrganizationRow | null> {
+  async getOrganization(db: Queryable, spaceId: string, objectId: string, userId: string): Promise<RelationOrganizationRow | null> {
     const result = await db.query<RelationOrganizationRow>(
       `SELECT ${ORGANIZATION_COLUMNS}
          FROM space_objects so
          JOIN relation_organizations ro ON ro.object_id = so.id AND ro.space_id = so.space_id
         WHERE so.id = $1 AND so.space_id = $2 AND so.status <> 'deleted'
+          AND ${contentReadSql("space_object", "so", "$3")}
         LIMIT 1`,
-      [objectId, spaceId],
+      [objectId, spaceId, userId],
     );
     return result.rows[0] ?? null;
   }
 
   async listOrganizations(
     spaceId: string,
+    userId: string,
     filters: { q: string | null; limit: number; offset: number },
   ): Promise<{ rows: RelationOrganizationRow[]; total: number }> {
-    const params: unknown[] = [spaceId];
-    const clauses = ["so.space_id = $1", "so.status <> 'deleted'"];
+    const params: unknown[] = [spaceId, userId];
+    const clauses = ["so.space_id = $1", "so.status <> 'deleted'", contentReadSql("space_object", "so", "$2")];
     if (filters.q) {
       params.push(`%${filters.q}%`);
       clauses.push(`so.title ILIKE $${params.length}`);
@@ -416,23 +427,32 @@ export class RelationsRepository {
 
   async listAffiliations(
     spaceId: string,
+    userId: string,
     filters: { personObjectId: string | null; organizationObjectId: string | null },
   ): Promise<RelationAffiliationRow[]> {
-    const params: unknown[] = [spaceId];
-    const clauses = ["space_id = $1"];
+    const params: unknown[] = [spaceId, userId];
+    const clauses = [
+      "ra.space_id = $1",
+      contentReadSql("space_object", "person_so", "$2"),
+      contentReadSql("space_object", "organization_so", "$2"),
+    ];
     if (filters.personObjectId) {
       params.push(filters.personObjectId);
-      clauses.push(`person_object_id = $${params.length}`);
+      clauses.push(`ra.person_object_id = $${params.length}`);
     }
     if (filters.organizationObjectId) {
       params.push(filters.organizationObjectId);
-      clauses.push(`organization_object_id = $${params.length}`);
+      clauses.push(`ra.organization_object_id = $${params.length}`);
     }
     const result = await this.db.query<RelationAffiliationRow>(
-      `SELECT ${AFFILIATION_COLUMNS}
-         FROM relation_affiliations
+      `SELECT ${AFFILIATION_COLUMNS_ALIASED}
+         FROM relation_affiliations ra
+         JOIN space_objects person_so
+           ON person_so.id = ra.person_object_id AND person_so.space_id = ra.space_id
+         JOIN space_objects organization_so
+           ON organization_so.id = ra.organization_object_id AND organization_so.space_id = ra.space_id
         WHERE ${clauses.join(" AND ")}
-        ORDER BY start_date DESC NULLS LAST, created_at DESC`,
+        ORDER BY ra.start_date DESC NULLS LAST, ra.created_at DESC`,
       params,
     );
     return result.rows;
@@ -455,6 +475,17 @@ export class RelationsRepository {
       ]);
     }
     return affiliation;
+  }
+
+  async affiliationPersonObjectId(spaceId: string, affiliationId: string): Promise<string | null> {
+    const result = await this.db.query<{ person_object_id: string }>(
+      `SELECT person_object_id
+         FROM relation_affiliations
+        WHERE id = $1 AND space_id = $2
+        LIMIT 1`,
+      [affiliationId, spaceId],
+    );
+    return result.rows[0]?.person_object_id ?? null;
   }
 
   async createNote(input: {
@@ -525,13 +556,14 @@ export class RelationsRepository {
     return result.rows[0]!;
   }
 
-  async activityExistsInSpace(spaceId: string, activityId: string): Promise<boolean> {
+  async activityExistsInSpace(spaceId: string, activityId: string, userId: string): Promise<boolean> {
     const result = await this.db.query(
       `SELECT 1
-         FROM activity_records
-        WHERE id = $1 AND space_id = $2
+         FROM activity_records ar
+        WHERE ar.id = $1 AND ar.space_id = $2
+          AND ${contentReadSql("activity", "ar", "$3")}
         LIMIT 1`,
-      [activityId, spaceId],
+      [activityId, spaceId, userId],
     );
     return result.rows.length > 0;
   }
@@ -569,36 +601,53 @@ export class RelationsRepository {
     return result.rows;
   }
 
-  async existsRelationObject(spaceId: string, objectId: string): Promise<boolean> {
+  async existsRelationObject(spaceId: string, objectId: string, userId: string): Promise<boolean> {
     const result = await this.db.query(
       `SELECT 1
-         FROM space_objects
-        WHERE id = $1 AND space_id = $2 AND object_type IN ('person', 'organization') AND status <> 'deleted'
+         FROM space_objects so
+        WHERE so.id = $1 AND so.space_id = $2 AND so.object_type IN ('person', 'organization') AND so.status <> 'deleted'
+          AND ${contentReadSql("space_object", "so", "$3")}
         LIMIT 1`,
-      [objectId, spaceId],
+      [objectId, spaceId, userId],
     );
     return result.rows.length > 0;
   }
 
-  async deleteIdentity(spaceId: string, identityId: string): Promise<boolean> {
-    const result = await this.db.query(`DELETE FROM relation_identities WHERE id = $1 AND space_id = $2 RETURNING id`, [
-      identityId,
-      spaceId,
-    ]);
+  async isOwnedRelationObject(spaceId: string, objectId: string, userId: string): Promise<boolean> {
+    return contentOwnerFromDb(
+      this.db,
+      { spaceId, userId },
+      "space_object",
+      objectId,
+    );
+  }
+
+  async deleteIdentity(spaceId: string, identityId: string, userId: string): Promise<boolean> {
+    const result = await this.db.query(
+      `DELETE FROM relation_identities ri
+        USING space_objects so
+        WHERE ri.id = $1 AND ri.space_id = $2
+          AND so.id = ri.object_id AND so.space_id = ri.space_id
+          AND ${contentReadSql("space_object", "so", "$3")}
+          AND ${contentOwnerFilterSql("space_object", "so", "$3")}
+        RETURNING ri.id`,
+      [identityId, spaceId, userId],
+    );
     return (result.rowCount ?? 0) > 0;
   }
 
-  async search(spaceId: string, q: string, limit: number): Promise<Array<{ object_id: string; object_type: string; title: string }>> {
+  async search(spaceId: string, userId: string, q: string, limit: number): Promise<Array<{ object_id: string; object_type: string; title: string }>> {
     const result = await this.db.query<{ object_id: string; object_type: string; title: string }>(
       `SELECT so.id AS object_id, so.object_type, so.title
          FROM space_objects so
         WHERE so.space_id = $1
           AND so.object_type IN ('person', 'organization')
           AND so.status <> 'deleted'
-          AND so.title ILIKE $2
+          AND ${contentReadSql("space_object", "so", "$2")}
+          AND so.title ILIKE $3
         ORDER BY so.title ASC
-        LIMIT $3`,
-      [spaceId, `%${q}%`, limit],
+        LIMIT $4`,
+      [spaceId, userId, `%${q}%`, limit],
     );
     return result.rows;
   }

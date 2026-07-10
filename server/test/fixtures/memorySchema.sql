@@ -18,8 +18,8 @@ CREATE TABLE public.memory_entries (
     content text,
     status character varying(32) NOT NULL,
     visibility character varying(32) NOT NULL,
+    access_level character varying(16) NOT NULL DEFAULT 'full',
     sensitivity_level character varying(32) NOT NULL DEFAULT 'normal',
-    selected_user_ids jsonb,
     last_confirmed_at timestamp with time zone,
     confidence double precision NOT NULL DEFAULT 1,
     importance double precision NOT NULL DEFAULT 0.5,
@@ -55,7 +55,41 @@ CREATE TABLE public.projects (
 CREATE TABLE public.spaces (
     id character varying(36) NOT NULL,
     type character varying(32) NOT NULL DEFAULT 'household',
+    oversight_mode character varying(16) NOT NULL DEFAULT 'none',
     CONSTRAINT spaces_pkey PRIMARY KEY (id)
+);
+
+CREATE TABLE public.space_memberships (
+    id character varying(64) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    user_id character varying(64) NOT NULL,
+    role character varying(32) NOT NULL,
+    status character varying(32) NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT space_memberships_pkey PRIMARY KEY (id)
+);
+
+CREATE TABLE public.workspaces (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    CONSTRAINT workspaces_pkey PRIMARY KEY (id)
+);
+
+CREATE TABLE public.project_workspaces (
+    project_id character varying(36) NOT NULL,
+    workspace_id character varying(36) NOT NULL
+);
+
+CREATE TABLE public.content_access_grants (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    resource_type character varying(64) NOT NULL,
+    resource_id character varying(36) NOT NULL,
+    grantee_user_id character varying(64) NOT NULL,
+    access_level character varying(16) NOT NULL,
+    revoked_at timestamp with time zone,
+    CONSTRAINT content_access_grants_pkey PRIMARY KEY (id)
 );
 
 CREATE TABLE public.project_members (
@@ -109,6 +143,8 @@ CREATE TABLE public.proposals (
     created_by_user_id character varying(36),
     required_approver_role character varying(64),
     visibility character varying(32) NOT NULL DEFAULT 'space_shared',
+    access_level character varying(16) NOT NULL DEFAULT 'full',
+    owner_user_id character varying(36),
     project_id character varying(36),
     CONSTRAINT proposals_pkey PRIMARY KEY (id),
     CONSTRAINT ck_proposals_risk_level CHECK (((risk_level)::text = ANY ((ARRAY['low'::character varying, 'medium'::character varying, 'high'::character varying, 'critical'::character varying])::text[]))),

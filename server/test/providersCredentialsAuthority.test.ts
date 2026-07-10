@@ -11,6 +11,7 @@ import {
   type ProviderCommandStore,
 } from "../src/modules/providers";
 import { __setAuthIdentityForTests } from "../src/modules/auth";
+import { resolveTestUsageAttribution } from "./support/usageAttribution";
 
 let app: FastifyInstance;
 let tempHome: string | undefined;
@@ -93,6 +94,9 @@ function fakeStore(): ProviderCommandStore {
       };
     },
     async recordPoolOutcome(_memberId, _outcome) {
+    },
+    resolveUsageAttribution: resolveTestUsageAttribution,
+    async recordUsageObservation(_input) {
     },
     async resolveProviderApiKey(_spaceId, providerId) {
       return "sk-test-provider";

@@ -8,8 +8,45 @@
 CREATE TABLE public.source_connections (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
+    owner_user_id character varying(36),
+    visibility character varying(32) DEFAULT 'space_shared' NOT NULL,
+    access_level character varying(16) DEFAULT 'full' NOT NULL,
     last_handler_run_id character varying(36),
     CONSTRAINT source_connections_pkey PRIMARY KEY (id)
+);
+
+-- Minimal spaces table for the canonical content-access oversight branch
+-- (contentAccessSql / contentAccessLevelSql reference spaces.oversight_mode).
+-- SOURCE OF TRUTH: server/migrations/0001_baseline.sql.
+CREATE TABLE public.spaces (
+    id character varying(36) NOT NULL,
+    oversight_mode character varying(16) DEFAULT 'none' NOT NULL,
+    CONSTRAINT spaces_pkey PRIMARY KEY (id)
+);
+
+CREATE TABLE public.space_memberships (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    user_id character varying(36) NOT NULL,
+    role character varying(32),
+    status character varying(32) NOT NULL,
+    CONSTRAINT space_memberships_pkey PRIMARY KEY (id)
+);
+
+CREATE TABLE public.content_access_grants (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    resource_type character varying(64) NOT NULL,
+    resource_id character varying(36) NOT NULL,
+    grantee_user_id character varying(36) NOT NULL,
+    granted_by_user_id character varying(36) NOT NULL,
+    access_level character varying(16) DEFAULT 'full' NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    revoked_at timestamp with time zone,
+    revoked_by_user_id character varying(36),
+    CONSTRAINT content_access_grants_pkey PRIMARY KEY (id),
+    CONSTRAINT uq_content_access_grants_resource_grantee UNIQUE (space_id, resource_type, resource_id, grantee_user_id)
 );
 
 CREATE TABLE public.source_handler_runs (
@@ -41,6 +78,8 @@ CREATE TABLE public.artifacts (
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     visibility character varying(32) DEFAULT 'space_shared'::character varying NOT NULL,
+    access_level character varying(16) DEFAULT 'full'::character varying NOT NULL,
+    owner_user_id character varying(36),
     trust_level character varying(32),
     CONSTRAINT artifacts_pkey PRIMARY KEY (id),
     CONSTRAINT ck_artifacts_storage_path_relative CHECK (((storage_path IS NULL) OR ((storage_path)::text !~~ '/%'::text))),
@@ -50,8 +89,13 @@ CREATE TABLE public.artifacts (
 CREATE TABLE public.source_items (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
+    owner_user_id character varying(36),
+    visibility character varying(32) DEFAULT 'space_shared' NOT NULL,
+    access_level character varying(16) DEFAULT 'full' NOT NULL,
     connection_id character varying(36),
     item_type character varying(64) NOT NULL,
+    source_object_type character varying(64),
+    source_object_id character varying(36),
     title character varying(1024) NOT NULL,
     source_uri text,
     canonical_uri text,
@@ -78,6 +122,9 @@ CREATE TABLE public.source_items (
 CREATE TABLE public.source_snapshots (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
+    owner_user_id character varying(36),
+    visibility character varying(32) DEFAULT 'space_shared' NOT NULL,
+    access_level character varying(16) DEFAULT 'full' NOT NULL,
     source_item_id character varying(36),
     connection_id character varying(36),
     snapshot_type character varying(32) NOT NULL,
@@ -89,6 +136,7 @@ CREATE TABLE public.source_snapshots (
     metadata_json jsonb,
     captured_at timestamp with time zone NOT NULL,
     created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
     CONSTRAINT source_snapshots_pkey PRIMARY KEY (id),
     CONSTRAINT ck_source_snapshots_capture_method CHECK (((capture_method)::text = ANY ((ARRAY['manual'::character varying, 'connection_scan'::character varying, 'full_text'::character varying, 'snapshot'::character varying, 'internal'::character varying, 'custom_source_handler'::character varying, 'source_recipe'::character varying])::text[]))),
     CONSTRAINT ck_source_snapshots_snapshot_type CHECK (((snapshot_type)::text = ANY ((ARRAY['metadata'::character varying, 'raw'::character varying, 'extracted'::character varying, 'summary'::character varying])::text[]))),
@@ -98,6 +146,9 @@ CREATE TABLE public.source_snapshots (
 CREATE TABLE public.extracted_evidence (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
+    owner_user_id character varying(36),
+    visibility character varying(32) DEFAULT 'space_shared' NOT NULL,
+    access_level character varying(16) DEFAULT 'full' NOT NULL,
     source_item_id character varying(36),
     extraction_job_id character varying(36),
     source_snapshot_id character varying(36),
@@ -214,6 +265,49 @@ CREATE TABLE public.evidence_links (
 );
 
 CREATE UNIQUE INDEX uq_evidence_links_active_dedupe ON public.evidence_links USING btree (space_id, evidence_id, target_type, target_id, link_type) WHERE ((status)::text = 'active'::text);
+
+CREATE TABLE public.space_objects (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    deleted_at timestamp with time zone,
+    CONSTRAINT space_objects_pkey PRIMARY KEY (id)
+);
+
+CREATE TABLE public.project_corpus_items (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    project_id character varying(36) NOT NULL,
+    object_id character varying(36),
+    source_item_id character varying(36),
+    evidence_id character varying(36),
+    source_connection_id character varying(36),
+    source_decision_id character varying(36),
+    role character varying(32) NOT NULL,
+    status character varying(32) NOT NULL,
+    triage_status character varying(32) NOT NULL,
+    triage_confirmed_by_user boolean DEFAULT false NOT NULL,
+    read_status character varying(32) NOT NULL,
+    relevance character varying(32),
+    confidence double precision,
+    reason text,
+    added_by_user_id character varying(36),
+    metadata_json jsonb NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    last_reviewed_at timestamp with time zone,
+    last_read_at timestamp with time zone,
+    CONSTRAINT project_corpus_items_pkey PRIMARY KEY (id)
+);
+
+CREATE UNIQUE INDEX uq_project_corpus_items_object
+    ON public.project_corpus_items (space_id, project_id, object_id)
+    WHERE object_id IS NOT NULL;
+CREATE UNIQUE INDEX uq_project_corpus_items_source_item
+    ON public.project_corpus_items (space_id, project_id, source_item_id)
+    WHERE source_item_id IS NOT NULL AND object_id IS NULL AND evidence_id IS NULL;
+CREATE UNIQUE INDEX uq_project_corpus_items_evidence
+    ON public.project_corpus_items (space_id, project_id, evidence_id)
+    WHERE evidence_id IS NOT NULL AND object_id IS NULL;
 
 CREATE TABLE public.retrieval_objects (
     id character varying(36) NOT NULL,

@@ -5,7 +5,7 @@ import type {
 } from "@agent-space/protocol" with { "resolution-mode": "import" };
 import { insertArtifactRow } from "../artifacts/reviewArtifactWriter";
 import type { Queryable } from "../routeUtils/common";
-import { spaceObjectVisibleSql } from "../access/visibility";
+import { contentReadSql } from "../access/contentAccessSql";
 import { reviewScopeValue, visibilityForReviewScope } from "../proposals/reviewPackets";
 import { RETRIEVAL_OBJECT_TYPE_VALUES } from "../retrieval/objectTypes";
 import {
@@ -41,7 +41,7 @@ interface UsageObjectRow {
 }
 
 function readableClause(userParam: string, alias = "so"): string {
-  return spaceObjectVisibleSql(alias, userParam);
+  return contentReadSql("space_object", alias, userParam);
 }
 
 export async function scanObjectSchemaSuggestions(
@@ -193,7 +193,7 @@ async function loadRegistryKinds(
        FROM space_object_kinds
       WHERE space_id = $1
         AND status <> 'archived'
-        AND base_object_type = ANY($2::varchar[])
+        AND base_object_type = ANY($2::retrieval_object_type[])
       ORDER BY base_object_type ASC, key ASC`,
     [spaceId, baseTypes],
   );
@@ -338,12 +338,8 @@ async function loadMemoryEntryKindUsageObjects(db: Queryable, spaceId: string, u
         AND me.status = 'active'
         AND me.deleted_at IS NULL
         AND me.scope_type <> 'system'
-        AND me.visibility NOT IN ('public_template')
         AND me.sensitivity_level <> 'highly_restricted'
-        AND (
-          me.owner_user_id = $2
-          OR me.visibility IN ('space_shared', 'summary_only')
-        )
+        AND ${contentReadSql("memory", "me", "$2")}
       ORDER BY me.id ASC`,
     [spaceId, userId],
   );

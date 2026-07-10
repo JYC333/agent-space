@@ -4,6 +4,11 @@ import type {
 } from "@agent-space/protocol" with { "resolution-mode": "import" };
 import type { Queryable } from "../../routeUtils/common";
 import { insertArtifactRow } from "../../artifacts/reviewArtifactWriter";
+import {
+  contentOwnerFilterSql,
+  contentReadSql,
+  contentVisibilityFilterSql,
+} from "../../access/contentAccessSql";
 
 export const RETRIEVAL_CALIBRATION_DECISION_ARTIFACT_TYPE = "retrieval_calibration_decision";
 
@@ -113,20 +118,19 @@ async function loadVisibleEvidenceArtifacts(
 ): Promise<CalibrationEvidenceRow[]> {
   if (artifactIds.length === 0) return [];
   const allowedVisibilities = reviewScope === "space_ops"
-    ? ["space_shared"]
-    : ["private", "space_shared"];
+    ? (["space_shared"] as const)
+    : (["private", "space_shared"] as const);
   const result = await db.query<CalibrationEvidenceRow>(
-    `SELECT id, artifact_type, visibility
-       FROM artifacts
-      WHERE space_id = $1
-        AND id = ANY($2::varchar[])
-        AND artifact_type = ANY($3::varchar[])
-        AND (
-          (owner_user_id = $4 AND visibility = 'private' AND 'private' = ANY($5::varchar[]))
-          OR (visibility = 'space_shared' AND 'space_shared' = ANY($5::varchar[]))
-        )
-      ORDER BY array_position($2::varchar[], id)`,
-    [spaceId, artifactIds, [...EVIDENCE_ARTIFACT_TYPES], ownerUserId, allowedVisibilities],
+    `SELECT a.id, a.artifact_type, a.visibility
+       FROM artifacts a
+      WHERE a.space_id = $1
+        AND a.id = ANY($2::varchar[])
+        AND a.artifact_type = ANY($3::varchar[])
+        AND ${contentReadSql("artifact", "a", "$4")}
+        AND ${contentOwnerFilterSql("artifact", "a", "$4")}
+        AND ${contentVisibilityFilterSql("a", allowedVisibilities)}
+      ORDER BY array_position($2::varchar[], a.id)`,
+    [spaceId, artifactIds, [...EVIDENCE_ARTIFACT_TYPES], ownerUserId],
   );
   return result.rows;
 }

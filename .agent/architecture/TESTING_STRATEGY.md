@@ -117,14 +117,14 @@ Tests should protect these durable behaviors:
 
 - auth required
 - cross-space denied (404, not 403)
-- same-space private/restricted denied for non-owner (404)
+- same-space private denied for non-owner and ungranted selected-user content denied (404)
 - owner allowed
 - failed mutation leaves DB unchanged
 - failed consolidation creates no proposals
 - secrets not exposed in API responses
 - path traversal blocked
-- intentional cross-space exceptions preserved (personal memory egress approval, /me routes,
-  source-pointers, personal-memory-grants)
+- intentional cross-space exceptions preserved (personal memory egress approval, `/me`
+  routes, personal-memory-grants); targeted publications remain snapshot-only transfer
 
 ## Canonical Command
 

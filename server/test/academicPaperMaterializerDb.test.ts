@@ -134,12 +134,13 @@ async function seedArxivItem(arxivId: string, doi: string | null = null): Promis
   const now = new Date().toISOString();
   await pool!.query(
     `INSERT INTO source_items (
-       id, space_id, connection_id, item_type, title, source_uri, first_seen_at, last_seen_at,
+       id, space_id, owner_user_id, visibility, connection_id, item_type, title, source_uri, first_seen_at, last_seen_at,
        content_state, retention_policy, metadata_json, created_at, updated_at
-     ) VALUES ($1,$2,$3,'feed_entry',$4,$5,$6,$6,'excerpt_saved','summary_only',$7::jsonb,$6,$6)`,
+     ) VALUES ($1,$2,$3,'space_shared',$4,'feed_entry',$5,$6,$7,$7,'excerpt_saved','summary_only',$8::jsonb,$7,$7)`,
     [
       itemId,
       SPACE,
+      OWNER,
       CONNECTION,
       `Paper ${arxivId}`,
       `https://arxiv.org/abs/${arxivId}`,
@@ -237,10 +238,10 @@ describe("Academic paper materialization from arXiv source items (real Postgres)
     const now = new Date().toISOString();
     await pool!.query(
       `INSERT INTO source_items (
-         id, space_id, connection_id, item_type, title, first_seen_at, last_seen_at,
+         id, space_id, owner_user_id, visibility, connection_id, item_type, title, first_seen_at, last_seen_at,
          content_state, retention_policy, created_at, updated_at
-       ) VALUES ($1,$2,$3,'external_url','A web page',$4,$4,'excerpt_saved','summary_only',$4,$4)`,
-      [itemId, SPACE, CONNECTION, now],
+       ) VALUES ($1,$2,$3,'space_shared',$4,'external_url','A web page',$5,$5,'excerpt_saved','summary_only',$5,$5)`,
+      [itemId, SPACE, OWNER, CONNECTION, now],
     );
     const result = await materializeAcademicPaperFromSourceItem(pool!, { spaceId: SPACE, sourceItemId: itemId });
     expect(result).toBeNull();

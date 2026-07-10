@@ -553,7 +553,8 @@ describe("SourceExtractionWorker connection_scan", () => {
     await new SourceExtractionWorker(db, config()).runPendingJob("job-1", "space-1");
 
     const linkCall = db.calls.find(call => call.sql.includes("INSERT INTO evidence_links"));
-    expect(linkCall?.sql).toContain("FROM source_snapshots ss");
+    expect(linkCall?.sql).toContain("FROM extracted_evidence ev");
+    expect(linkCall?.sql).toContain("JOIN project_source_item_links psil");
     expect(linkCall?.params.slice(0, 2)).toEqual(["space-1", "item-existing"]);
   });
 

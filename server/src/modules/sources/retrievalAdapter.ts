@@ -8,12 +8,17 @@ import {
   type RevalidatedObject,
 } from "../retrieval";
 import type { Queryable } from "../routeUtils/common";
+import { contentReadSql } from "../access/contentAccessSql";
+import { sourceItemReadableClause } from "./sourceItemAccess";
 
 const SOURCE_RETRIEVAL_OBJECT_TYPES = ["source_item", "extracted_evidence"] as const;
 const INDEXABLE_EVIDENCE_STATUSES = ["candidate", "active"] as const;
 
 interface SourceItemProjectionRow {
   id: string;
+  owner_user_id: string | null;
+  visibility: string;
+  access_level: string;
   connection_id: string | null;
   item_type: string;
   title: string;
@@ -33,6 +38,9 @@ interface SourceItemProjectionRow {
 
 interface EvidenceProjectionRow {
   id: string;
+  owner_user_id: string | null;
+  visibility: string;
+  access_level: string;
   source_item_id: string | null;
   source_snapshot_connection_id: string | null;
   item_connection_id: string | null;
@@ -77,12 +85,12 @@ export const sourceRetrievalAdapter: RetrievalDomainAdapter = {
     return null;
   },
 
-  async revalidate(db, spaceId, objectType, objectId): Promise<RevalidatedObject | null> {
-    return (await revalidateSourcesMany(db, spaceId, objectType, [objectId])).get(objectId) ?? null;
+  async revalidate(db, spaceId, objectType, objectId, viewerUserId): Promise<RevalidatedObject | null> {
+    return (await revalidateSourcesMany(db, spaceId, objectType, [objectId], viewerUserId)).get(objectId) ?? null;
   },
 
-  async revalidateMany(db, spaceId, objectType, objectIds): Promise<Map<string, RevalidatedObject>> {
-    return revalidateSourcesMany(db, spaceId, objectType, objectIds);
+  async revalidateMany(db, spaceId, objectType, objectIds, viewerUserId): Promise<Map<string, RevalidatedObject>> {
+    return revalidateSourcesMany(db, spaceId, objectType, objectIds, viewerUserId);
   },
 
   async projectEdges(db, spaceId, object): Promise<RetrievalEdge[]> {
@@ -132,7 +140,8 @@ async function loadSourceItem(
   itemId: string,
 ): Promise<CanonicalObject | null> {
   const result = await db.query<SourceItemProjectionRow>(
-    `SELECT id, connection_id, item_type, title, source_uri, canonical_uri,
+    `SELECT id, owner_user_id, visibility, access_level,
+            connection_id, item_type, title, source_uri, canonical_uri,
             source_domain, source_external_id, author, occurred_at, excerpt,
             content_state, retention_policy, metadata_json,
             updated_at, last_seen_at
@@ -149,8 +158,8 @@ async function loadSourceItem(
     title: row.title,
     slug: row.canonical_uri ?? row.source_uri,
     workspaceId: null,
-    ownerUserId: null,
-    visibility: "space_shared",
+    ownerUserId: row.owner_user_id,
+    visibility: row.visibility,
     status: row.content_state,
     objectKind: row.item_type,
     aliases: stringValues([row.source_uri, row.canonical_uri, row.source_domain, row.source_external_id, row.author]),
@@ -184,8 +193,8 @@ async function loadExtractedEvidence(
     title: row.title,
     slug: null,
     workspaceId: null,
-    ownerUserId: null,
-    visibility: "space_shared",
+    ownerUserId: row.owner_user_id,
+    visibility: row.visibility,
     status: row.status,
     objectKind: row.evidence_type,
     aliases: stringValues([row.source_title, row.source_author, row.source_uri]),
@@ -200,20 +209,23 @@ async function revalidateSourcesMany(
   spaceId: string,
   objectType: RetrievalObjectType,
   objectIds: readonly string[],
+  viewerUserId: string,
 ): Promise<Map<string, RevalidatedObject>> {
   const ids = uniqueIds(objectIds);
   if (ids.length === 0) return new Map();
   if (objectType === "source_item") {
     const result = await db.query<SourceItemProjectionRow>(
-      `SELECT id, connection_id, item_type, title, source_uri, canonical_uri,
+      `SELECT id, owner_user_id, visibility, access_level,
+              connection_id, item_type, title, source_uri, canonical_uri,
               source_domain, source_external_id, author, occurred_at, excerpt,
               content_state, retention_policy, metadata_json,
               updated_at, last_seen_at
          FROM source_items
         WHERE space_id = $1
           AND id = ANY($2::varchar[])
-          AND deleted_at IS NULL`,
-      [spaceId, ids],
+          AND deleted_at IS NULL
+          AND ${sourceItemReadableClause("source_items", "$3", false)}`,
+      [spaceId, ids, viewerUserId],
     );
     return new Map(result.rows.map((row) => [row.id, { title: row.title, text: sourceItemText(row) }]));
   }
@@ -225,9 +237,11 @@ async function revalidateSourcesMany(
           AND ee.deleted_at IS NULL
           AND ee.status = ANY($3::varchar[])
           AND ii.id IS NOT NULL
-          AND ii.deleted_at IS NULL`,
+          AND ii.deleted_at IS NULL
+          AND ${contentReadSql("extracted_evidence", "ee", "$4")}
+          AND ${sourceItemReadableClause("ii", "$4", false)}`,
       ),
-      [spaceId, ids, [...INDEXABLE_EVIDENCE_STATUSES]],
+      [spaceId, ids, [...INDEXABLE_EVIDENCE_STATUSES], viewerUserId],
     );
     return new Map(result.rows.map((row) => [row.id, { title: row.title, text: evidenceText(row) }]));
   }
@@ -291,7 +305,8 @@ async function evidenceSourceItemEdge(
 }
 
 function evidenceSelectSql(whereClause: string): string {
-  return `SELECT ee.id, ee.source_item_id, ss.connection_id AS source_snapshot_connection_id,
+  return `SELECT ee.id, ee.owner_user_id, ee.visibility, ee.access_level,
+                 ee.source_item_id, ss.connection_id AS source_snapshot_connection_id,
                  ii.connection_id AS item_connection_id, ee.evidence_type, ee.title,
                  ee.content_excerpt, ee.source_uri, ee.source_title, ee.source_author,
                  ee.occurred_at, ee.trust_level, ee.extraction_method, ee.confidence,

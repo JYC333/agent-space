@@ -15,6 +15,7 @@ import { PreviewBadge } from '../../components/PreviewBadge'
 import { ScopeBadge } from '../../components/ScopeBadge'
 import { ArtifactInlineRenderer } from './ArtifactRendererRegistry'
 import { isContextAttachableArtifactType } from './contextArtifactTypes'
+import { ContentAccessControl } from '../../components/ContentAccessControl'
 
 function fmt(dt: string | null | undefined) {
   return dt ? new Date(dt).toLocaleString() : '—'
@@ -90,6 +91,7 @@ export default function ArtifactDetailPage() {
           <div className="flex flex-wrap justify-between gap-3">
             <h1 className="text-lg font-semibold tracking-tight">{a.title}</h1>
             <div className="flex flex-wrap items-center gap-2">
+              <ContentAccessControl resourceType="artifact" resourceId={a.id} ownerUserId={a.owner_user_id ?? null} />
               {isContextAttachableArtifactType(a.artifact_type) && (
                 <Button size="sm" variant="outline" asChild>
                   <Link to={contextHref(a)}><FilePlus2 className="size-3.5" />Context</Link>

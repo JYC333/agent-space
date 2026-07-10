@@ -131,11 +131,14 @@ export const tasks = pgTable("tasks", {
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).notNull(),
 	deletedAt: timestamp("deleted_at", { withTimezone: true, mode: 'string' }),
+	ownerUserId: varchar("owner_user_id", { length: 36 }),
 	visibility: varchar({ length: 32 }).default('space_shared').notNull(),
+	accessLevel: varchar("access_level", { length: 16 }).default('full').notNull(),
 }, (table): PgTableExtraConfigValue[] => [
 	index("ix_tasks_board_id").using("btree", table.boardId.asc().nullsLast()),
 	index("ix_tasks_column_id").using("btree", table.columnId.asc().nullsLast()),
 	index("ix_tasks_parent_task_id").using("btree", table.parentTaskId.asc().nullsLast()),
+	index("ix_tasks_owner_user_id").using("btree", table.ownerUserId.asc().nullsLast()),
 	index("ix_tasks_project_id").using("btree", table.projectId.asc().nullsLast()),
 	index("ix_tasks_space_id").using("btree", table.spaceId.asc().nullsLast()),
 	index("ix_tasks_workspace_id").using("btree", table.workspaceId.asc().nullsLast()),
@@ -180,6 +183,11 @@ export const tasks = pgTable("tasks", {
 			name: "tasks_created_by_user_id_fkey"
 		}),
 	foreignKey({
+			columns: [table.ownerUserId],
+			foreignColumns: [users.id],
+			name: "tasks_owner_user_id_fkey"
+		}),
+	foreignKey({
 			columns: [table.parentTaskId],
 			foreignColumns: [table.id],
 			name: "tasks_parent_task_id_fkey"
@@ -219,6 +227,9 @@ export const tasks = pgTable("tasks", {
 			foreignColumns: [projects.id, projects.spaceId],
 			name: "tasks_project_id_fkey"
 		}).onDelete("set null"),
+	check("ck_tasks_visibility", sql`visibility IN ('private', 'space_shared', 'selected_users')`),
+	check("ck_tasks_access_level", sql`access_level IN ('full', 'summary')`),
+	check("ck_tasks_private_owner", sql`visibility = 'space_shared' OR owner_user_id IS NOT NULL`),
 ]);
 
 export const taskArtifacts = pgTable("task_artifacts", {

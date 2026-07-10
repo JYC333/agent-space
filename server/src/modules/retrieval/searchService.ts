@@ -471,7 +471,7 @@ export class RetrievalSearchService {
     // gate below, so an embedded-but-unreadable object can never be returned. Run
     // it before the graph arm so a semantic match can also seed graph traversal.
     const vector = runVector
-      ? await this.vectorArm(input.spaceId, objectTypes, objectKinds, query, maxResults, useCache)
+      ? await this.vectorArm(input.spaceId, input.viewerUserId, objectTypes, objectKinds, query, maxResults, useCache)
       : [];
 
     // Graph recall seeds from every DIRECT match the viewer can actually read
@@ -672,9 +672,9 @@ export class RetrievalSearchService {
       `SELECT from_object_type, from_object_id, to_object_type, to_object_id
          FROM retrieval_edges
         WHERE space_id = $1
-          AND from_object_type = ANY($2::varchar[])
+          AND from_object_type = ANY($2::retrieval_object_type[])
           AND from_object_id = ANY($3::varchar[])
-          AND to_object_type = ANY($2::varchar[])
+          AND to_object_type = ANY($2::retrieval_object_type[])
           AND to_object_id = ANY($3::varchar[])
           AND edge_status IN ('derived', 'suggested')`,
       [spaceId, objectTypes, objectIds],
@@ -785,7 +785,7 @@ export class RetrievalSearchService {
               LIMIT 1
            ) rc ON true
           WHERE ra.space_id = $1
-            AND ro.object_type = ANY($2::varchar[])
+            AND ro.object_type = ANY($2::retrieval_object_type[])
             AND ra.normalized_alias = ANY($3::text[])
             AND ($4::varchar[] IS NULL OR (ro.object_kind = ANY($4::varchar[]) AND sok.id IS NOT NULL))
        ),
@@ -858,7 +858,7 @@ export class RetrievalSearchService {
             AND sok.key = ro.object_kind
             AND sok.status = 'active'
           WHERE rc.space_id = $1
-            AND ro.object_type = ANY($2::varchar[])
+            AND ro.object_type = ANY($2::retrieval_object_type[])
             AND ($5::varchar[] IS NULL OR (ro.object_kind = ANY($5::varchar[]) AND sok.id IS NOT NULL))
             AND (
               rc.tsv @@ plainto_tsquery('simple', $4)
@@ -1219,7 +1219,7 @@ export class RetrievalSearchService {
               LIMIT 1
            ) rc ON true
           WHERE e.space_id = $1
-            AND ro.object_type = ANY($2::varchar[])
+            AND ro.object_type = ANY($2::retrieval_object_type[])
             AND e.edge_status <> 'rejected'
             AND (
               (e.from_object_type || ':' || e.from_object_id) = ANY($3::text[])
@@ -1265,6 +1265,7 @@ export class RetrievalSearchService {
 
   private async vectorArm(
     spaceId: string,
+    viewerUserId: string,
     objectTypes: RetrievalObjectType[],
     objectKinds: string[],
     query: string,
@@ -1274,7 +1275,10 @@ export class RetrievalSearchService {
     if (!this.queryEmbedder || !query) return [];
     let queryVector: number[] | null = null;
     try {
-      queryVector = await this.queryEmbedder.embedQuery(spaceId, query, { cache: useCache });
+      queryVector = await this.queryEmbedder.embedQuery(spaceId, query, {
+        cache: useCache,
+        subjectUserId: viewerUserId,
+      });
     } catch {
       queryVector = null;
     }
@@ -1315,7 +1319,7 @@ export class RetrievalSearchService {
             AND sok_filter.key = ro_filter.object_kind
             AND sok_filter.status = 'active'
           WHERE rc.space_id = $1
-            AND rc.object_type = ANY($2::varchar[])
+            AND rc.object_type = ANY($2::retrieval_object_type[])
             AND rc.embedding IS NOT NULL
             AND ${dimPredicate}
             AND (${objectKindParamIndex}::varchar[] IS NULL OR (ro_filter.object_kind = ANY(${objectKindParamIndex}::varchar[]) AND sok_filter.id IS NOT NULL))
@@ -1464,7 +1468,15 @@ export class RetrievalSearchService {
     const vector = runVector
       ? (
           await Promise.all(
-            variantQueries.map((q) => this.vectorArm(input.spaceId, objectTypes, objectKinds, q, maxResults, useCache)),
+            variantQueries.map((q) => this.vectorArm(
+              input.spaceId,
+              input.viewerUserId,
+              objectTypes,
+              objectKinds,
+              q,
+              maxResults,
+              useCache,
+            )),
           )
         ).flat()
       : [];

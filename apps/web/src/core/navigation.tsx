@@ -1,7 +1,7 @@
 import {
   Home, Inbox, CheckCircle, BookOpen, ListTodo, Bot, Folder, FolderKanban, Settings,
   GitBranch, Building2, ServerCog,
-  Library, Rss,
+  Library, Rss, Share2,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -50,6 +50,7 @@ export const RAIL_ITEMS: RailItem[] = [
   { id: 'source',     label: 'Sources',    to: '/sources',      icon: Rss,         scope: 'space' },
   { id: 'review',     label: 'Review',     to: '/proposals',   icon: CheckCircle, scope: 'space', mobile: true },
   { id: 'knowledge',  label: 'Knowledge',  to: '/knowledge',   icon: BookOpen,    scope: 'space' },
+  { id: 'publications', label: 'Shared', to: '/publications', icon: Share2, scope: 'space' },
   { id: 'tasks',      label: 'Tasks',      to: '/tasks',       icon: ListTodo,    scope: 'space', mobile: true },
   { id: 'projects',   label: 'Projects',   to: '/projects',    icon: FolderKanban, scope: 'space' },
   { id: 'agents',     label: 'Agents',     to: '/agents',      icon: Bot,         scope: 'space' },

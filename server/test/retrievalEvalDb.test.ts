@@ -88,6 +88,11 @@ beforeEach(async () => {
      VALUES ($1, 'Owner', 'active', now(), now())`,
     [OWNER],
   );
+  await pool.query(
+    `INSERT INTO space_memberships (id, space_id, user_id, role, status, created_at, updated_at)
+     VALUES ('eval-owner', $1, $2, 'owner', 'active', now(), now())`,
+    [SPACE, OWNER],
+  );
 });
 
 async function seedKnowledge(doc: KnowledgeDoc): Promise<void> {

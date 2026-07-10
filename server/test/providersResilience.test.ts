@@ -12,6 +12,7 @@ import {
   type ProviderCommandStore,
   type ProviderTaskChainEntry,
 } from "../src/modules/providers";
+import type { UsageObservation } from "../src/modules/usage";
 
 afterEach(() => {
   __setProviderHttpClientForTests(null);
@@ -54,6 +55,8 @@ function makeStore(
   targets: Record<string, InvocationTarget>,
   outcomes: Array<{ member: string; outcome: PoolOutcome }>,
   taskChains: Record<string, ProviderTaskChainEntry[]> = {},
+  usageObservations: UsageObservation[] = [],
+  usageRecorder?: (input: UsageObservation) => Promise<void>,
 ): ProviderCommandStore {
   const unsupported = () => {
     throw new Error("not used in this test");
@@ -73,6 +76,22 @@ function makeStore(
     },
     async recordPoolOutcome(memberId, outcome) {
       outcomes.push({ member: memberId, outcome });
+    },
+    async resolveUsageAttribution(input) {
+      return {
+        owner_user_id: input.subject_user_id ?? "user-1",
+        visibility: "private",
+        access_level: "full",
+        source_resource_type: input.source_resource_type ?? (input.run_id ? "run" : null),
+        source_resource_id: input.source_resource_id ?? input.run_id ?? null,
+        workspace_id: null,
+        project_id: null,
+        grant_snapshots: [],
+      };
+    },
+    async recordUsageObservation(input) {
+      if (usageRecorder) return usageRecorder(input);
+      usageObservations.push(input);
     },
     resolveProviderApiKey: unsupported,
     resolveCredentialApiKey: unsupported,
@@ -141,9 +160,44 @@ function scriptedHttp(script: Array<{ status: number; body?: unknown }>): Attemp
 const CHAT = {
   messages: [{ role: "user", content: "hi" }],
   max_tokens: 5,
+  metering: { subject_user_id: "user-1" },
 };
 
 describe("provider invocation resilience", () => {
+  it("rejects missing usage attribution before any provider request", async () => {
+    const store = makeStore(
+      { p1: target("p1", [{ member: "m1", key: "k1" }]) },
+      [],
+    );
+    const attempts = scriptedHttp([{ status: 200 }]);
+
+    await expect(completeProviderChat(store, "space-1", {
+      ...CHAT,
+      provider_id: "p1",
+      metering: {},
+    })).rejects.toMatchObject({ code: "usage_attribution_required", statusCode: 422 });
+    expect(attempts).toHaveLength(0);
+  });
+
+  it("rejects unavailable source attribution before any provider request", async () => {
+    const store = makeStore(
+      { p1: target("p1", [{ member: "m1", key: "k1" }]) },
+      [],
+    );
+    store.resolveUsageAttribution = async () => {
+      throw Object.assign(new Error("Usage source resource is unavailable"), { statusCode: 422 });
+    };
+    const attempts = scriptedHttp([{ status: 200 }]);
+
+    await expect(completeProviderChat(store, "space-1", {
+      ...CHAT,
+      provider_id: "p1",
+      metering: { source_resource_type: "run", source_resource_id: "missing-run" },
+    })).rejects.toMatchObject({ code: "usage_attribution_required", statusCode: 422 });
+
+    expect(attempts).toHaveLength(0);
+  });
+
   it("retries the same key once on a transient 429, then succeeds", async () => {
     const outcomes: Array<{ member: string; outcome: PoolOutcome }> = [];
     const store = makeStore(
@@ -418,11 +472,104 @@ describe("provider invocation resilience", () => {
       system: "sys",
       user: "hello",
       task: "reflector",
+      metering: { subject_user_id: "user-1" },
     });
 
     expect(result.text).toBe("ok");
     expect(attempts.map((a) => a.key)).toEqual(["kc", "kc", "kn"]);
     expect(attempts[0].model).toBe("chain-model");
+  });
+
+  it("meters provider-backed generation usage with run attribution", async () => {
+    const outcomes: Array<{ member: string; outcome: PoolOutcome }> = [];
+    const usageObservations: UsageObservation[] = [];
+    const store = makeStore(
+      { p1: target("p1", [{ member: "m1", key: "k1" }]) },
+      outcomes,
+      {},
+      usageObservations,
+    );
+    scriptedHttp([
+      {
+        status: 200,
+        body: {
+          choices: [{ message: { content: "metered" } }],
+          model: "gpt-metered",
+          usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 },
+        },
+      },
+    ]);
+
+    await completeProviderText(store, "space-1", {
+      provider_id: "p1",
+      system: "sys",
+      user: "hello",
+      task: "reflector",
+      metering: {
+        meter_subject_type: "run",
+        meter_subject_id: "run-1",
+        run_id: "run-1",
+        root_run_id: "root-1",
+        parent_run_id: "parent-1",
+        run_group_id: "group-1",
+        session_id: "session-1",
+        agent_id: "agent-1",
+        project_id: "project-1",
+        workspace_id: "workspace-1",
+        adapter_type: "ts_agent_host",
+        dimensions: { mode: "live" },
+      },
+    });
+
+    expect(usageObservations).toEqual([
+      expect.objectContaining({
+        space_id: "space-1",
+        event_type: "llm.generation",
+        source_type: "local_run",
+        execution_channel: "managed_api",
+        meter_subject_type: "run",
+        meter_subject_id: "run-1",
+        run_id: "run-1",
+        root_run_id: "root-1",
+        parent_run_id: "parent-1",
+        run_group_id: "group-1",
+        session_id: "session-1",
+        agent_id: "agent-1",
+        project_id: "project-1",
+        workspace_id: "workspace-1",
+        adapter_type: "ts_agent_host",
+        provider_id: "p1",
+        provider_type: "openai",
+        provider_name_snapshot: "p1",
+        vendor: "openai",
+        model: "gpt-metered",
+        task: "reflector",
+        provider_usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 },
+        usage_accuracy: "provider_reported",
+        dimensions: { mode: "live" },
+      }),
+    ]);
+  });
+
+  it("does not call a fallback chat provider when usage metering fails", async () => {
+    const store = makeStore(
+      {
+        p1: target("p1", [{ member: "m1", key: "k1" }], { fallback_provider_ids: ["p2"] }),
+        p2: target("p2", [{ member: "m2", key: "k2" }]),
+      },
+      [],
+      {},
+      [],
+      async () => { throw new Error("metering unavailable"); },
+    );
+    const attempts = scriptedHttp([{ status: 200 }, { status: 200 }]);
+
+    await expect(completeProviderChat(store, "space-1", {
+      ...CHAT,
+      provider_id: "p1",
+    })).rejects.toMatchObject({ code: "usage_metering_failed", statusCode: 502 });
+
+    expect(attempts.map((attempt) => attempt.key)).toEqual(["k1"]);
   });
 
   it("embedding rotates keys using the same quota taxonomy as chat", async () => {
@@ -445,6 +592,7 @@ describe("provider invocation resilience", () => {
       provider_id: "p1",
       model: "embed-model",
       inputs: ["alpha"],
+      metering: { subject_user_id: "user-1" },
     });
 
     expect(result.vectors).toEqual([[1]]);
@@ -465,6 +613,75 @@ describe("provider invocation resilience", () => {
     expect(outcomes[1]).toEqual({ member: "m2", outcome: { kind: "success" } });
   });
 
+  it("meters embedding usage from provider responses", async () => {
+    const outcomes: Array<{ member: string; outcome: PoolOutcome }> = [];
+    const usageObservations: UsageObservation[] = [];
+    const store = makeStore(
+      { p1: target("p1", [{ member: "m1", key: "k1" }]) },
+      outcomes,
+      {},
+      usageObservations,
+    );
+    scriptedHttp([
+      {
+        status: 200,
+        body: {
+          data: [{ embedding: [0.1, 0.2], index: 0 }],
+          model: "embed-metered",
+          usage: { prompt_tokens: 4, total_tokens: 4 },
+        },
+      },
+    ]);
+
+    const result = await completeProviderEmbedding(store, "space-1", {
+      provider_id: "p1",
+      inputs: ["alpha"],
+      task: "retrieval_embedding",
+      metering: { run_id: "run-embed" },
+    });
+
+    expect(result).toMatchObject({
+      vectors: [[0.1, 0.2]],
+      model: "embed-metered",
+      usage: { prompt_tokens: 4, total_tokens: 4 },
+    });
+    expect(usageObservations).toEqual([
+      expect.objectContaining({
+        space_id: "space-1",
+        event_type: "llm.embedding",
+        execution_channel: "managed_api",
+        run_id: "run-embed",
+        provider_id: "p1",
+        model: "embed-metered",
+        task: "retrieval_embedding",
+        provider_usage: { prompt_tokens: 4, total_tokens: 4 },
+        usage_accuracy: "provider_reported",
+      }),
+    ]);
+  });
+
+  it("does not call a fallback embedding provider when usage metering fails", async () => {
+    const store = makeStore(
+      {
+        p1: target("p1", [{ member: "m1", key: "k1" }], { fallback_provider_ids: ["p2"] }),
+        p2: target("p2", [{ member: "m2", key: "k2" }]),
+      },
+      [],
+      {},
+      [],
+      async () => { throw new Error("metering unavailable"); },
+    );
+    const attempts = scriptedHttp([{ status: 200 }, { status: 200 }]);
+
+    await expect(completeProviderEmbedding(store, "space-1", {
+      provider_id: "p1",
+      inputs: ["alpha"],
+      metering: { subject_user_id: "user-1" },
+    })).rejects.toMatchObject({ code: "usage_metering_failed", statusCode: 502 });
+
+    expect(attempts.map((attempt) => attempt.key)).toEqual(["k1"]);
+  });
+
   it("embedding falls back to provider fallback with the fallback provider default model", async () => {
     const outcomes: Array<{ member: string; outcome: PoolOutcome }> = [];
     const store = makeStore(
@@ -480,6 +697,7 @@ describe("provider invocation resilience", () => {
       provider_id: "p1",
       model: "explicit-embed-model",
       inputs: ["alpha"],
+      metering: { subject_user_id: "user-1" },
     });
 
     expect(attempts[0]).toMatchObject({ key: "k1", model: "explicit-embed-model" });
@@ -499,6 +717,7 @@ describe("provider invocation resilience", () => {
     await completeProviderEmbedding(store, "space-1", {
       inputs: ["alpha"],
       task: "retrieval_embedding",
+      metering: { subject_user_id: "user-1" },
     });
 
     expect(attempts[0]).toMatchObject({ key: "kd", model: "default-of-default" });
@@ -527,9 +746,10 @@ describe("provider invocation resilience", () => {
       dimensions: 2560,
       inputType: "query",
       task: "retrieval_embedding",
+      metering: { subject_user_id: "user-1" },
     });
 
-    expect(result).toEqual({ vectors: [[0.1, 0.2]], model: "zembed-1" });
+    expect(result).toEqual({ vectors: [[0.1, 0.2]], model: "zembed-1", usage: {} });
     expect(attempts[0]).toMatchObject({
       url: "https://api.zeroentropy.dev/v1/models/embed",
       key: "kz",
@@ -565,9 +785,14 @@ describe("provider invocation resilience", () => {
       dimensions: 1536,
       inputType: "query",
       task: "retrieval_embedding",
+      metering: { subject_user_id: "user-1" },
     });
 
-    expect(result).toEqual({ vectors: [[0.1, 0.2], [0.3, 0.4]], model: "embed-v4.0" });
+    expect(result).toEqual({
+      vectors: [[0.1, 0.2], [0.3, 0.4]],
+      model: "embed-v4.0",
+      usage: {},
+    });
     expect(attempts[0]).toMatchObject({
       url: "https://api.cohere.com/v2/embed",
       key: "kc",
@@ -579,6 +804,39 @@ describe("provider invocation resilience", () => {
       output_dimension: 1536,
       embedding_types: ["float"],
     });
+  });
+
+  it("does not call a fallback rerank provider when usage metering fails", async () => {
+    const store = makeStore(
+      {
+        p1: target("p1", [{ member: "m1", key: "k1" }], {
+          provider_type: "cohere",
+          base_url: "https://api.p1.test",
+          fallback_provider_ids: ["p2"],
+        }),
+        p2: target("p2", [{ member: "m2", key: "k2" }], {
+          provider_type: "cohere",
+          base_url: "https://api.p2.test",
+        }),
+      },
+      [],
+      {},
+      [],
+      async () => { throw new Error("metering unavailable"); },
+    );
+    const attempts = scriptedHttp([{
+      status: 200,
+      body: { results: [{ index: 0, relevance_score: 0.9 }] },
+    }, { status: 200 }]);
+
+    await expect(completeProviderRerank(store, "space-1", {
+      provider_id: "p1",
+      query: "alpha",
+      documents: ["alpha result"],
+      metering: { subject_user_id: "user-1" },
+    })).rejects.toMatchObject({ code: "usage_metering_failed", statusCode: 502 });
+
+    expect(attempts.map((attempt) => attempt.key)).toEqual(["k1"]);
   });
 
   it("rerank supports ZeroEntropy /models/rerank with a task-specific default model", async () => {
@@ -611,6 +869,7 @@ describe("provider invocation resilience", () => {
       query: "alpha",
       documents: ["doc a", "doc b"],
       task: "retrieval_rerank",
+      metering: { subject_user_id: "user-1" },
     });
 
     expect(result).toMatchObject({
@@ -635,6 +894,7 @@ describe("provider invocation resilience", () => {
 
   it("rerank supports Cohere v2 rerank with a task-specific default model", async () => {
     const outcomes: Array<{ member: string; outcome: PoolOutcome }> = [];
+    const usageObservations: UsageObservation[] = [];
     const store = makeStore(
       {
         co: target("co", [{ member: "mc", key: "kc" }], {
@@ -644,6 +904,8 @@ describe("provider invocation resilience", () => {
         }),
       },
       outcomes,
+      {},
+      usageObservations,
     );
     const attempts = scriptedHttp([
       {
@@ -663,6 +925,7 @@ describe("provider invocation resilience", () => {
       query: "alpha",
       documents: ["doc a", "doc b"],
       task: "retrieval_rerank",
+      metering: { subject_user_id: "user-1" },
     });
 
     expect(result).toMatchObject({
@@ -673,6 +936,19 @@ describe("provider invocation resilience", () => {
       model: "rerank-v4.0-pro",
       usage: { billed_units: { search_units: 1 } },
     });
+    expect(usageObservations).toEqual([
+      expect.objectContaining({
+        space_id: "space-1",
+        event_type: "llm.rerank",
+        execution_channel: "managed_api",
+        provider_id: "co",
+        provider_type: "cohere",
+        model: "rerank-v4.0-pro",
+        task: "retrieval_rerank",
+        provider_usage: { billed_units: { search_units: 1 } },
+        usage_accuracy: "provider_reported",
+      }),
+    ]);
     expect(attempts[0]).toMatchObject({
       url: "https://api.cohere.com/v2/rerank",
       key: "kc",

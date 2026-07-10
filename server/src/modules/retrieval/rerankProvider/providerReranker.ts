@@ -99,6 +99,7 @@ export class ProviderReranker implements Reranker {
         max_tokens: DEFAULT_RERANK_MAX_TOKENS,
         task: RETRIEVAL_RERANK_TASK,
         egressPolicy: effectivePolicy,
+        metering: { subject_user_id: viewerUserId },
       });
     } catch {
       return null;
@@ -132,6 +133,7 @@ export class ProviderReranker implements Reranker {
         topN: eligible.length,
         task: RETRIEVAL_RERANK_TASK,
         egressPolicy,
+        metering: { subject_user_id: viewerUserId },
       });
       const scores: RerankScore[] = [];
       const seen = new Set<number>();

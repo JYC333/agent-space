@@ -2,7 +2,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { readClaudeTokenUsage, readCodexTokenUsage } from "../src/modules/providers";
+import {
+  readClaudeTokenUsage,
+  readClaudeUsageImportEvents,
+  readCodexTokenUsage,
+  readCodexUsageImportEvents,
+} from "../src/modules/providers";
 
 let tempDir: string | undefined;
 
@@ -82,6 +87,67 @@ describe("readClaudeTokenUsage", () => {
       (100 * 15 + 50 * 75) / 1e6 +
       (10 * 0.8 + 5 * 4 + 40 * 1.0) / 1e6;
     expect(usage.cost_usd).toBeCloseTo(Math.round(expected * 1e6) / 1e6, 9);
+  });
+
+  it("emits lower-bound import events without raw transcript content", async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "aspace-usage-"));
+    const proj = join(tempDir, "projects", "-app-server");
+    await mkdir(proj, { recursive: true });
+
+    await writeFile(
+      join(proj, "session-a.jsonl"),
+      [
+        JSON.stringify({ type: "user", message: { role: "user", content: "do not import me" } }),
+        JSON.stringify({
+          type: "assistant",
+          timestamp: "2026-06-14T10:00:00.000Z",
+          requestId: "req-1",
+          message: {
+            id: "msg-1",
+            role: "assistant",
+            model: "claude-sonnet-4-6",
+            content: [{ type: "text", text: "drop completion text" }],
+            usage: {
+              input_tokens: 11,
+              output_tokens: 7,
+              cache_creation_input_tokens: 3,
+              cache_read_input_tokens: 5,
+            },
+          },
+        }),
+      ].join("\n"),
+    );
+
+    const scan = await readClaudeUsageImportEvents(tempDir, "managed_profile:claude_code:profile-1");
+
+    expect(scan).toMatchObject({
+      runtime: "claude_code",
+      source: "transcripts",
+      candidate_event_count: 1,
+      session_count: 1,
+      duplicate_count: 0,
+    });
+    expect(scan.events[0]).toMatchObject({
+      occurred_at: "2026-06-14T10:00:00.000Z",
+      model: "claude-sonnet-4-6",
+      usage_details: {
+        input: 11,
+        output: 7,
+        input_cache_creation: 3,
+        input_cache_read: 5,
+      },
+      provider_usage: {
+        input_tokens: 11,
+        output_tokens: 7,
+        cache_creation_input_tokens: 3,
+        cache_read_input_tokens: 5,
+      },
+      dedupe_confidence: "high",
+    });
+    expect(scan.events[0]?.external_session_id).toMatch(/^claude_code:/);
+    expect(scan.events[0]?.session_path).toBe("projects/-app-server/session-a.jsonl");
+    expect(JSON.stringify(scan.events[0])).not.toContain("do not import me");
+    expect(JSON.stringify(scan.events[0])).not.toContain("drop completion text");
   });
 
   it("returns an unavailable (not error) result when no transcripts exist", async () => {
@@ -176,5 +242,67 @@ describe("readCodexTokenUsage", () => {
     expect(usage.available).toBe(false);
     expect(usage.source).toBe("codex_sessions");
     expect(usage.input_tokens).toBe(0);
+  });
+
+  it("emits Codex import events from cumulative token_count deltas", async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "aspace-codex-usage-"));
+    const day = join(tempDir, "sessions", "2026", "06", "14");
+    await mkdir(day, { recursive: true });
+
+    await writeFile(
+      join(day, "session.jsonl"),
+      [
+        codexLine({
+          type: "turn_context",
+          payload: { model: "openai/gpt-5.2-codex" },
+        }),
+        codexLine({
+          type: "event_msg",
+          timestamp: "2026-06-14T10:00:00.000Z",
+          payload: {
+            type: "token_count",
+            info: {
+              total_token_usage: {
+                input_tokens: 100,
+                cached_input_tokens: 20,
+                output_tokens: 10,
+              },
+            },
+          },
+        }),
+        codexLine({
+          type: "event_msg",
+          timestamp: "2026-06-14T10:01:00.000Z",
+          payload: {
+            type: "token_count",
+            info: {
+              total_token_usage: {
+                input_tokens: 160,
+                cached_input_tokens: 40,
+                output_tokens: 16,
+              },
+            },
+          },
+        }),
+      ].join("\n"),
+    );
+
+    const scan = await readCodexUsageImportEvents(tempDir, "managed_profile:codex_cli:profile-1");
+
+    expect(scan).toMatchObject({
+      runtime: "codex_cli",
+      source: "codex_sessions",
+      candidate_event_count: 2,
+      session_count: 1,
+    });
+    expect(scan.events.map((event) => event.usage_details)).toEqual([
+      { input: 80, input_cache_read: 20, output: 10 },
+      { input: 40, input_cache_read: 20, output: 6 },
+    ]);
+    expect(scan.events[0]).toMatchObject({
+      model: "gpt-5.2-codex",
+      session_path: "sessions/2026/06/14/session.jsonl",
+      dedupe_confidence: "medium",
+    });
   });
 });

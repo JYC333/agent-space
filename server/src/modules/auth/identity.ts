@@ -34,6 +34,8 @@ export interface UserSpace {
   name: string;
   type: string;
   role: string;
+  /** Immutable, creation-time only. Visible to every member (transparency requirement). */
+  oversight_mode: string;
   created_at: string;
   updated_at: string;
 }
@@ -87,6 +89,7 @@ type SpaceRow = {
   type: string;
   role: string;
   created_by_user_id: string | null;
+  oversight_mode: string;
   created_at: Date | string;
   updated_at: Date | string;
 };
@@ -263,7 +266,7 @@ export class PgAuthRepository implements AuthRepository {
 
   async getUserSpaces(userId: string): Promise<UserSpace[]> {
     const res = await this.pool.query<SpaceRow>(
-      `SELECT s.id, s.name, s.type, m.role, s.created_by_user_id, s.created_at, s.updated_at
+      `SELECT s.id, s.name, s.type, m.role, s.created_by_user_id, s.oversight_mode, s.created_at, s.updated_at
          FROM space_memberships m
          JOIN spaces s ON s.id = m.space_id
         WHERE m.user_id = $1 AND m.status = 'active'
@@ -275,6 +278,7 @@ export class PgAuthRepository implements AuthRepository {
       name: row.name,
       type: row.type,
       role: row.role,
+      oversight_mode: row.oversight_mode,
       created_at: asIso(row.created_at)!,
       updated_at: asIso(row.updated_at)!,
     }));
@@ -282,7 +286,7 @@ export class PgAuthRepository implements AuthRepository {
 
   async getSpaceForUser(userId: string, spaceId: string): Promise<SpaceView | AuthFailure | null> {
     const res = await this.pool.query<SpaceRow>(
-      `SELECT s.id, s.name, s.type, m.role, s.created_by_user_id, s.created_at, s.updated_at
+      `SELECT s.id, s.name, s.type, m.role, s.created_by_user_id, s.oversight_mode, s.created_at, s.updated_at
          FROM spaces s
          JOIN space_memberships m ON m.space_id = s.id
         WHERE s.id = $1 AND m.user_id = $2 AND m.status = 'active'
@@ -299,6 +303,7 @@ export class PgAuthRepository implements AuthRepository {
       name: row.name,
       type: row.type,
       role: row.role,
+      oversight_mode: row.oversight_mode,
       created_by_user_id: row.created_by_user_id,
       created_at: asIso(row.created_at)!,
       updated_at: asIso(row.updated_at)!,

@@ -4,6 +4,7 @@ import type { SpaceUserIdentity } from "../routeUtils/common";
 import { TRUST_BY_SOURCE_TYPE } from "./repository";
 import { assessActivityMemoryDuplicate } from "./memoryDedup";
 import { insertProposalRow } from "../proposals/reviewPackets";
+import { contentOwnerFilterSql, contentReadSql } from "../access/contentAccessSql";
 
 interface ActivityRow {
   id: string;
@@ -53,17 +54,21 @@ export class PgActivityConsolidationRepository {
     let idFilter = "";
     if (input.activityIds?.length) {
       params.push(input.activityIds);
-      idFilter = `AND id::text = ANY($${params.length}::text[])`;
+      idFilter = `AND ar.id::text = ANY($${params.length}::text[])`;
     }
+    params.push(input.actingUserId);
+    const userExpr = `$${params.length}`;
     params.push(input.batchLimit);
     const result = await this.db.query<ActivityRow>(
       `SELECT ${ACTIVITY_COLUMNS}
-         FROM activity_records
-        WHERE space_id = $1
-          AND status = 'raw'
-          AND aggregate_key IS NULL
+         FROM activity_records ar
+        WHERE ar.space_id = $1
+          AND ar.status = 'raw'
+          AND ar.aggregate_key IS NULL
+          AND ${contentReadSql("activity", "ar", userExpr)}
+          AND ${contentOwnerFilterSql("activity", "ar", userExpr)}
           ${idFilter}
-        ORDER BY created_at ASC
+        ORDER BY ar.created_at ASC
         LIMIT $${params.length}`,
       params,
     );

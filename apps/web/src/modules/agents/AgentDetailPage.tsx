@@ -31,6 +31,7 @@ import {
   type RetrievalToolDomainState,
 } from './RetrievalToolDomainControls'
 import { promptLibraryPath } from '../prompts/paths'
+import { ContentAccessControl } from '../../components/ContentAccessControl'
 
 export default function AgentDetailPage() {
   const { agentId } = useParams()
@@ -100,6 +101,7 @@ export default function AgentDetailPage() {
           <p className="text-sm text-muted-foreground">{agent.description ?? 'No description'}</p>
         </div>
         <div className="flex gap-2 shrink-0">
+          <ContentAccessControl resourceType="agent" resourceId={agent.id} ownerUserId={agent.created_by_user_id} />
           {/* Chat works for any agent: the chat turn runs the agent's current
               version through the same execution path (a disabled agent's turn
               is correctly blocked by policy). */}

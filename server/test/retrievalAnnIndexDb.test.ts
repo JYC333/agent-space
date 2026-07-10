@@ -83,6 +83,11 @@ beforeEach(async () => {
   );
   await pool.query(`INSERT INTO spaces (id, name, type, created_at, updated_at) VALUES ($1, 'Ann', 'personal', now(), now())`, [SPACE]);
   await pool.query(`INSERT INTO users (id, display_name, status, created_at, updated_at) VALUES ($1, 'U', 'active', now(), now())`, [VIEWER]);
+  await pool.query(
+    `INSERT INTO space_memberships (id, space_id, user_id, role, status, created_at, updated_at)
+     VALUES ('ann-viewer', $1, $2, 'owner', 'active', now(), now())`,
+    [SPACE, VIEWER],
+  );
 });
 
 async function seed(id: string, title: string, content: string): Promise<void> {

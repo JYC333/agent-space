@@ -184,7 +184,7 @@ function memoryRow(overrides: Partial<MemoryRow> = {}): MemoryRow {
     status: "active",
     visibility: "private",
     sensitivity_level: "normal",
-    selected_user_ids: null,
+    access_level: "full",
     last_confirmed_at: null,
     confidence: 1,
     importance: 0.5,

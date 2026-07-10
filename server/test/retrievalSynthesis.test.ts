@@ -11,6 +11,7 @@ import { RETRIEVAL_SYNTHESIS_TASK, SYNTHESIS_TOTAL_TEXT_MAX_CHARS } from "../src
 import { buildSynthesisPrompt, parseSynthesis } from "../src/modules/retrieval/synthesisProvider/prompt";
 import { ProviderSynthesizer } from "../src/modules/retrieval/synthesisProvider/providerSynthesizer";
 import type { RevalidatedObject, ScoredCandidate } from "../src/modules/retrieval/types";
+import { resolveTestUsageAttribution } from "./support/usageAttribution";
 
 const NOW = Date.parse("2026-06-23T00:00:00.000Z");
 
@@ -165,6 +166,7 @@ describe("retrieval synthesis: ProviderSynthesizer", () => {
   it("requires the retrieval_synthesis task policy instead of falling back to the default provider", async () => {
     let requestedProviderId: string | null | undefined;
     const store = {
+      resolveUsageAttribution: resolveTestUsageAttribution,
       async getTaskChain(_spaceId: string, task: string) {
         expect(task).toBe(RETRIEVAL_SYNTHESIS_TASK);
         return null;

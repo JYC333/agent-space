@@ -24,6 +24,8 @@ CREATE TABLE spaces (
   id TEXT PRIMARY KEY,           -- e.g. "personal", "family", "acme-team"
   name TEXT NOT NULL,
   type TEXT NOT NULL,            -- personal | household | team
+  created_by_user_id TEXT,
+  oversight_mode TEXT NOT NULL,  -- none | summary | content | full; creation-time immutable
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -32,8 +34,8 @@ CREATE TABLE space_memberships (
   id TEXT PRIMARY KEY,
   space_id TEXT NOT NULL REFERENCES spaces(id),
   user_id TEXT NOT NULL,
-  role TEXT NOT NULL,            -- owner | admin | member | guest
-  status TEXT NOT NULL,          -- active | invited | suspended
+  role TEXT NOT NULL,            -- owner | admin | reviewer | member | guest
+  status TEXT NOT NULL,          -- active for current membership; invitations are separate rows
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -52,37 +54,42 @@ CREATE TABLE workspace_memberships (
 
 - A personal space has **exactly one member**: the space owner.
 - `Space.type = "personal"` is the structural marker; it is not redundant with membership.
-- Do not infer that a user has no personal space from the absence of a `SpaceMembership` row —
-  the canonical personal space may be implicit in single-user deployments.
+- The canonical personal Space has an active owner `space_memberships` row;
+  absence of that row is inconsistent state, not an implicit membership.
+- Personal Spaces always use `oversight_mode=none`.
 
-## Private memory definition
+## Personal-space private memory definition
 
-"User-private memory" means **all three** of the following are true:
+"Personal-space private memory" means **all three** of the following are true:
 
 1. `MemoryEntry.visibility = "private"`
 2. `MemoryEntry.space_id = <the user's personal space id>`
 3. `MemoryEntry.owner_user_id = <that user's id>`
 
-If any condition is absent, the memory is not correctly private:
-- `visibility=private` in a shared space is an anti-pattern (see below).
-- Missing `owner_user_id` is rejected by the memory proposal/apply path.
+Private content is also valid in shared Spaces, but it is not personal-space
+memory. Missing `owner_user_id` is rejected by the memory proposal/apply path.
 
-## Anti-pattern: private memory in shared spaces
+## Private content in shared spaces
 
-Storing `visibility=private` memory in a household, team, or other multi-member space is an
-anti-pattern.
+Private content is valid in any Space and remains owner-only. Other members,
+including Space admins, do not receive a read bypass **by default**. A Space
+may instead choose an immutable creation-time oversight mode: `none` (the
+default), `summary`, `content`, or `full`. It grants active owner/admin members
+of that same Space read-only oversight of other members' otherwise-hidden
+content; `summary` yields summary access, while `content` and `full` yield full
+access. Only `full` may read `highly_restricted` memory. It never overrides a
+workspace/project gate, grants no write/publish/proposal authority, and gives
+instance admins nothing. The mode is returned to every member, shown during
+Space creation, and displayed read-only afterwards so it cannot be discovered
+after the fact.
 
-- **Write-layer enforcement (active):** the memory proposal/apply path rejects
-  `visibility=private` when the target space is not of type `personal`. All write
-  routes are covered because they share this path.
-- **Read-time safety net (active):** `canReadMemory()` in
-  `server/src/modules/memory/memoryReadAuth.ts` blocks
-  non-owner reads for private visibility regardless of space type. This catches any
-  private memories that were written before enforcement was added.
-
-Team / family / lab spaces **must not** read any user's private memory unless that memory has
-been explicitly granted through `PersonalMemoryGrant` (run-scoped, summary-only, one-time)
-or a future publish mechanism. See `docs/PERSONAL_MEMORY_GRANT.md`.
+Sharing uses either `space_shared` or explicit same-Space `selected_users`
+grants. On a `space_shared` row, grants are optional disclosure upgrades: a
+summary-visible row can give named members full content, and a grant cannot
+narrow a full base row. On `selected_users`, an active grant's access level is
+authoritative for that reader. Private rows never consult grants.
+PersonalMemoryGrant is a separate run-scoped mechanism for personal memory
+reasoning context.
 
 ## Personal ledger / participation records
 
@@ -96,15 +103,20 @@ space; it records only a pointer and the user's personal context around the acti
 - Every data record (Memory, Session, Task, Run, etc.) carries a `space_id`.
 - The ContextBuilder requires `space_id` and `user_id` — it will raise if either is missing.
 - Memory queries filter by `space_id` first. No query can retrieve memory across spaces.
-- `space_shared` visibility means visible to all members of the same space.
-- `workspace_shared` visibility means visible to workspace members only.
-- `private` visibility means visible to the owner only, and must only be written to personal spaces.
+- `space_shared` visibility means visible to all eligible members of the same space; named active grants may upgrade summary disclosure to full.
+- Workspace and Project are independent scope gates; they are not visibility values.
+- `private` visibility has no grant-based reader; eligible Space owner/admin
+  oversight may add read-only access according to the immutable Space mode.
+- `selected_users` visibility requires explicit same-Space grants for ordinary
+  readers; the grant level controls that reader's disclosure, while eligible
+  oversight remains the only non-grant exception.
 
 ## Roles
 
 Space-level roles:
 - `owner` — full control, can delete the space
 - `admin` — manage members and workspaces
+- `reviewer` — proposal/review responsibility without admin membership control
 - `member` — normal access
 - `guest` — read-only, limited access
 
@@ -114,26 +126,22 @@ Workspace-level roles:
 - `viewer` — read-only
 - `agent_operator` — can trigger agent runs
 
-## Cross-space provenance
+## Cross-space transfer
 
-`source_pointers` records metadata that an object in one space references an object in
-another. `/api/v1/source-pointers` is metadata-only: create requires active membership in
-both spaces and validates source object existence.
-**SourcePointer does not grant read access** — all reads still require membership,
-visibility, and policy checks in the source space. `memory.cross_space_read` remains
-deny-by-default. `PersonalMemoryGrant` is the explicit grant mechanism for allowing a
-shared-space run to use a user's personal-space private memory as reasoning-only context.
-Federation and `visibility=public` remain deferred. See `docs/PERSONAL_MEMORY_GRANT.md`,
-`docs/SOURCE_POINTER.md`, `docs/TARGET_VIEW_MODEL.md`, and `docs/FEDERATED_ACCESS_MODEL.md`.
+There is no direct cross-Space content read or cross-Space grant. An owner may
+publish an immutable snapshot to explicitly selected target Spaces. A target
+member imports that snapshot as a new private resource owned by the importer;
+the source resource is never exposed. `PersonalMemoryGrant` remains the separate
+reasoning-context mechanism for a shared-space run. See
+`docs/CONTENT_PUBLICATIONS.md` and `docs/PERSONAL_MEMORY_GRANT.md`.
 
 ## See also
 
 - `docs/README.md` — full documentation index
 - `docs/TARGET_VIEW_MODEL.md` — target model concepts (PersonalView, ExecutionContext, etc.)
 - `docs/PERSONAL_MEMORY_GRANT.md` — explicit personal memory grant mechanism
-- `docs/SOURCE_POINTER.md` — cross-space provenance metadata
+- `docs/CONTENT_PUBLICATIONS.md` — targeted cross-space snapshot transfer
 - `docs/POLICY_AND_PRIVACY_BOUNDARIES.md` — policy enforcement inventory
 - `docs/FEDERATED_ACCESS_MODEL.md` — federated access (deferred)
-- `docs/PUBLISH_PROJECTION.md` — public publish pipeline (deferred)
-- `server/src/modules/memory/memoryReadAuth.ts` — memory read authorization
+- `server/src/modules/access/contentAccessPolicy.ts` — memory and content read authorization
 - `server/src/modules/memory/memoryApplyRepository.ts` — accepted memory proposal apply path

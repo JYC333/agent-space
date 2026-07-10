@@ -106,7 +106,7 @@ list for the current space/user. Query params:
 - `memory_id`: optional exact memory filter
 - `access_type`: optional exact access-type filter
 - `workspace_id`: optional workspace context required for readable
-  `workspace_shared` memories owned by another user
+  workspace-scoped `space_shared` memories owned by another user
 - `project_id`: optional exact project filter
 
 The route joins each log to `memory_entries`, applies `canReadMemory` with the
@@ -245,14 +245,14 @@ Implemented gates:
 - explicit maintenance exclusion of:
   - `sensitivity_level = highly_restricted`
   - `scope_type = system`
-  - `visibility = public_template`
+  - `visibility = published snapshot`
 
 For `summary_only` rows:
 
 - Owner scans may inspect full content for duplicate/thin checks.
 - Non-owner scans do not inspect full content and cannot get content-prefix
   duplicate or thin findings from that row.
-- Reports record `access_safety.summary_only_full_content_used` when owner-only
+- Reports record `access_safety.summary_access_full_content_used` when owner-only
   summary content was used internally.
 
 The bounded SQL query can load same-space rows into server memory before
@@ -429,8 +429,8 @@ Focused coverage:
 - `packages/protocol/test/policy.test.ts`
 
 The real Postgres test uses Testcontainers, applies `server/migrations`, and
-covers migrated schema behavior for selected/restricted visibility, owner
-`summary_only` handling, `highly_restricted` exclusion, and transaction
+covers the baseline schema behavior for selected-user grants, `summary`
+access handling, `highly_restricted` exclusion, and transaction
 rollback of artifacts, proposals, access logs, and `access_count`.
 
 ## Not Implemented

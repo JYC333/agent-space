@@ -19,7 +19,7 @@ function row(id: string, projectId: string | null): ContextMemoryRow {
     sensitivity_level: "normal",
     deleted_at: null,
     workspace_id: null,
-    selected_user_ids: null,
+    access_level: "full",
     project_id: projectId,
   } as unknown as ContextMemoryRow;
 }

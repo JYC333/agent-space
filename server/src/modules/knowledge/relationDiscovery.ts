@@ -7,7 +7,7 @@ import type {
 } from "@agent-space/protocol" with { "resolution-mode": "import" };
 import { extractRetrievalLinks } from "../retrieval/linkExtractor";
 import type { Queryable } from "../routeUtils/common";
-import { artifactVisibleSql, spaceObjectVisibleSql } from "../access/visibility";
+import { contentReadSql } from "../access/contentAccessSql";
 import {
   loadSourceConnectionIdsForTargets,
   loadSourcePolicySnapshots,
@@ -129,7 +129,7 @@ export interface RelationDiscoveryLlmExtractor {
 type ConfidenceTier = "high" | "medium" | "low";
 
 function readableClause(userParam: string, alias = "so"): string {
-  return spaceObjectVisibleSql(alias, userParam);
+  return contentReadSql("space_object", alias, userParam);
 }
 
 export interface RelationDiscoveryScanInput {
@@ -389,17 +389,12 @@ async function loadVisibleActivities(
   limit: number,
 ): Promise<VisibleActivityRow[]> {
   const result = await db.query<VisibleActivityRow>(
-    `SELECT id, title, content, visibility, owner_user_id, user_id, subject_user_id
-       FROM activity_records
-      WHERE space_id = $1
-        AND status <> 'archived'
-        AND (
-          visibility = 'space_shared'
-          OR owner_user_id = $2
-          OR user_id = $2
-          OR subject_user_id = $2
-        )
-      ORDER BY occurred_at DESC, created_at DESC, id DESC
+    `SELECT ar.id, ar.title, ar.content, ar.visibility, ar.owner_user_id, ar.user_id, ar.subject_user_id
+       FROM activity_records ar
+      WHERE ar.space_id = $1
+        AND ar.status <> 'archived'
+        AND ${contentReadSql("activity", "ar", "$2")}
+      ORDER BY ar.occurred_at DESC, ar.created_at DESC, ar.id DESC
       LIMIT $3`,
     [spaceId, userId, limit],
   );
@@ -417,7 +412,7 @@ async function loadVisibleArtifacts(
        FROM artifacts a
       WHERE a.space_id = $1
         AND content IS NOT NULL
-        AND ${artifactVisibleSql({ userExpr: "$2" })}
+        AND ${contentReadSql("artifact", "a", "$2")}
       ORDER BY a.created_at DESC, a.id DESC
       LIMIT $3`,
     [spaceId, userId, limit],

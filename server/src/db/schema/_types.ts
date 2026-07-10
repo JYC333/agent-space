@@ -1,16 +1,15 @@
-import { customType } from "drizzle-orm/pg-core";
+import { customType, pgEnum } from "drizzle-orm/pg-core";
 
-// Mirrors the `retrieval_object_type` Postgres DOMAIN declared in
-// server/migrations/0001_baseline.sql (a closed varchar(64) enum enforced by
-// a CHECK constraint). drizzle-kit's introspection can't parse DOMAIN types,
-// so this customType only needs to report the domain's own SQL type name —
-// the DOMAIN definition and its CHECK constraint stay baseline-owned and are
-// not declared here.
-export const retrievalObjectType = customType<{ data: string }>({
-  dataType() {
-    return "retrieval_object_type";
-  },
-});
+export const retrievalObjectType = pgEnum("retrieval_object_type", [
+  "knowledge_item",
+  "note",
+  "source",
+  "claim",
+  "memory_entry",
+  "project_public_summary",
+  "source_item",
+  "extracted_evidence",
+]);
 
 // tsvector full-text search column (retrieval_chunks.tsv). Not a pgvector
 // type — plain Postgres full-text search, which drizzle-orm/pg-core has no

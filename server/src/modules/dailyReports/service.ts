@@ -6,6 +6,7 @@ import { resolveProviderCommandStore } from "../providers/commands/store";
 import { completeProviderText } from "../providers/invocation/invocation";
 import type { Queryable } from "../routeUtils/common";
 import { insertProposalRow } from "../proposals/reviewPackets";
+import { contentOwnerFilterSql, contentReadSql } from "../access/contentAccessSql";
 import {
   assertValidLocalDate,
   assertValidTimezone,
@@ -161,11 +162,11 @@ export class DailyCaptureReportService {
       `INSERT INTO runs (
          id, space_id, agent_id, agent_version_id, run_type, trigger_origin, source,
          mode, status, instructed_by_user_id, prompt, started_at, created_at, updated_at,
-         visibility, required_sandbox_level, usage_accuracy
+         owner_user_id, visibility, access_level, required_sandbox_level, usage_accuracy
        ) VALUES (
          $1, $2, $3, $4, 'reflection', $5, 'managed',
          'live', 'running', $6, $7, $8, $8, $8,
-         'space_shared', 'none', 'estimated'
+         $6, 'space_shared', 'full', 'none', 'estimated'
        )`,
       [
         runId,
@@ -223,6 +224,11 @@ export class DailyCaptureReportService {
         system: systemPrompt,
         user: userPrompt,
         task: "daily_report",
+        metering: {
+          source_resource_type: "run",
+          source_resource_id: runId,
+          run_id: runId,
+        },
       });
       rawJson = completion.text;
     } catch (error) {
@@ -440,12 +446,13 @@ export class DailyCaptureReportService {
   ): Promise<{ id: string; run_id: string | null } | null> {
     const result = await this.db.query<{ id: string; run_id: string | null }>(
       `SELECT id, run_id
-         FROM artifacts
-        WHERE space_id = $1
-          AND owner_user_id = $2
-          AND artifact_type = 'daily_capture_report'
-          AND metadata_json->>'report_date' = $3
-        ORDER BY created_at DESC
+         FROM artifacts a
+        WHERE a.space_id = $1
+          AND ${contentReadSql("artifact", "a", "$2")}
+          AND ${contentOwnerFilterSql("artifact", "a", "$2")}
+          AND a.artifact_type = 'daily_capture_report'
+          AND a.metadata_json->>'report_date' = $3
+        ORDER BY a.created_at DESC
         LIMIT 1`,
       [spaceId, userId, localDate],
     );
@@ -464,14 +471,15 @@ export class DailyCaptureReportService {
     const bounds = localDayUtcBounds(input.localDate, input.setting.timezone);
     const result = await this.db.query<{ id: string; title: string | null; content: string | null }>(
       `SELECT id, title, content
-         FROM activity_records
-        WHERE space_id = $1
-          AND (owner_user_id = $2 OR user_id = $2)
-          AND activity_type = ANY($3::text[])
-          AND status <> 'archived'
-          AND occurred_at >= $4
-          AND occurred_at < $5
-        ORDER BY occurred_at ASC`,
+         FROM activity_records ar
+        WHERE ar.space_id = $1
+          AND ${contentReadSql("activity", "ar", "$2")}
+          AND ${contentOwnerFilterSql("activity", "ar", "$2")}
+          AND ar.activity_type = ANY($3::text[])
+          AND ar.status <> 'archived'
+          AND ar.occurred_at >= $4
+          AND ar.occurred_at < $5
+        ORDER BY ar.occurred_at ASC`,
       [input.spaceId, input.userId, sourceTypes, bounds.startUtcIso, bounds.endUtcIso],
     );
     return result.rows;

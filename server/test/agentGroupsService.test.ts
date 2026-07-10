@@ -66,6 +66,12 @@ class AgentGroupServiceDb {
         rowCount: 1,
       };
     }
+    if (sql.includes("SELECT id") && sql.includes("r.run_group_id = $2")) {
+      return {
+        rows: this.rootRunId ? [{ id: this.rootRunId } as Row] : [],
+        rowCount: this.rootRunId ? 1 : 0,
+      };
+    }
     if (sql.includes("FROM runs r")) {
       const runId = String(params[1] ?? this.rootRunId ?? "run-root");
       const run = this.insertedRuns.get(runId) ?? runRecord(runId);
@@ -107,6 +113,12 @@ class AgentGroupServiceDb {
     if (sql.includes("FROM run_delegations")) {
       return { rows: [], rowCount: 0 };
     }
+    if (sql.includes("AS effective_access_level")) {
+      return {
+        rows: [{ effective_access_level: "full" } as Row],
+        rowCount: 1,
+      };
+    }
     if (sql.includes("FROM runs")) {
       return {
         rows: this.rootRunId ? [{ id: this.rootRunId } as Row] : [],
@@ -114,18 +126,26 @@ class AgentGroupServiceDb {
       };
     }
     if (sql.includes("COALESCE(av.capabilities_json")) {
+      const ids = Array.isArray(params[2]) ? params[2] : [];
       return {
-        rows: params.slice(1).map(agentId => ({
+        rows: ids.map(agentId => ({
           id: String(agentId),
           name: String(agentId).replace("agent-", ""),
           description: `${String(agentId)} description`,
           role_instruction: `${String(agentId)} role`,
           capabilities_json: [`${String(agentId)}.capability`],
         })) as Row[],
-        rowCount: params.length - 1,
+        rowCount: ids.length,
       };
     }
     if (sql.includes("FROM agents")) {
+      if (sql.includes("id = ANY")) {
+        const ids = Array.isArray(params[2]) ? params[2] : [];
+        return {
+          rows: ids.map(agentId => ({ id: String(agentId), status: "active" })) as Row[],
+          rowCount: ids.length,
+        };
+      }
       if (sql.includes(" id IN ")) {
         return {
           rows: params.slice(1).map(agentId => ({ id: String(agentId), status: "active" })) as Row[],
@@ -262,6 +282,9 @@ class AgentGroupServiceDb {
         }] as Row[],
         rowCount: 1,
       };
+    }
+    if (sql.includes("FROM artifacts a") || sql.includes("FROM proposals p")) {
+      return { rows: [], rowCount: 0 };
     }
     throw new Error(`Unexpected SQL: ${sql}`);
   }

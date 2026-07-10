@@ -26,6 +26,13 @@ import {
 } from "./promptRegistry";
 import { promptProvenanceOf, type PromptProvenance } from "../prompts/provenance";
 import {
+  contentOwnerFilterSql,
+  contentReadSql,
+  contentVisibilityParamFilterSql,
+} from "../access/contentAccessSql";
+import { isContentVisibility } from "../access/contentAccessTypes";
+import { contentOwnerFromDb } from "../access/contentAccessQuery";
+import {
   DEFAULT_MEMORY_POLICY,
   DEFAULT_MODEL_CONFIG,
   DEFAULT_RUNTIME_CONFIG,
@@ -60,6 +67,7 @@ export interface AgentRecord {
   agent_kind: string;
   current_version_id: string | null;
   visibility: string;
+  access_level: string;
   created_at: unknown;
   updated_at: unknown;
   model_provider_id?: string | null;
@@ -125,6 +133,7 @@ export interface AgentOut {
   name: string;
   description: string | null;
   visibility: string;
+  access_level: string;
   role_instruction: string | null;
   status: string;
   agent_kind: string;
@@ -180,7 +189,7 @@ export interface AgentRuntimeProfileOut {
 const AGENT_COLUMNS = `
   a.id, a.space_id, a.owner_user_id, a.name, a.description, a.role_instruction,
   a.status, a.agent_kind,
-  a.current_version_id, a.visibility, a.created_at, a.updated_at,
+  a.current_version_id, a.visibility, a.access_level, a.created_at, a.updated_at,
   COALESCE(arp.model_provider_id, av.model_provider_id) AS model_provider_id,
   COALESCE(arp.model_name, av.model_name) AS model_name,
   av.system_prompt,
@@ -385,6 +394,7 @@ export class PgAgentRepository {
 
   async list(
     spaceId: string,
+    userId: string,
     filters: {
       createdByUserId?: string | null;
       visibility?: string | null;
@@ -393,15 +403,15 @@ export class PgAgentRepository {
       offset: number;
     },
   ): Promise<AgentOut[]> {
-    const params: unknown[] = [spaceId];
-    const clauses = ["a.space_id = $1"];
+    const params: unknown[] = [spaceId, userId];
+    const clauses = ["a.space_id = $1", contentReadSql("agent", "a", "$2")];
     if (filters.createdByUserId) {
       params.push(filters.createdByUserId);
-      clauses.push(`a.owner_user_id = $${params.length}`);
+      clauses.push(contentOwnerFilterSql("agent", "a", `$${params.length}`));
     }
     if (filters.visibility) {
       params.push(filters.visibility);
-      clauses.push(`a.visibility = $${params.length}`);
+      clauses.push(contentVisibilityParamFilterSql("a", `$${params.length}`));
     }
     if (filters.status) {
       const statuses = filters.status.split(",").map((s) => s.trim()).filter(Boolean);
@@ -438,6 +448,21 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
         WHERE a.space_id = $1 AND a.id = $2
         LIMIT 1`,
       [spaceId, agentId],
+    );
+    return result.rows[0] ? agentOut(result.rows[0]) : null;
+  }
+
+  async getVisible(spaceId: string, userId: string, agentId: string): Promise<AgentOut | null> {
+    const result = await this.pool.query<AgentRecord>(
+      `SELECT ${AGENT_COLUMNS}
+         FROM agents a
+         LEFT JOIN agent_versions av ON av.id = a.current_version_id
+${DEFAULT_RUNTIME_PROFILE_JOIN}
+         LEFT JOIN model_providers mp ON mp.id = COALESCE(arp.model_provider_id, av.model_provider_id)
+        WHERE a.space_id = $1 AND a.id = $2
+          AND ${contentReadSql("agent", "a", "$3")}
+        LIMIT 1`,
+      [spaceId, agentId, userId],
     );
     return result.rows[0] ? agentOut(result.rows[0]) : null;
   }
@@ -594,6 +619,9 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
     scheduleConfigJson?: Record<string, unknown> | null;
     outputSchemaJson?: Record<string, unknown> | null;
   }): Promise<AgentOut> {
+    if (input.visibility && !isContentVisibility(input.visibility)) {
+      throw new HttpError(422, "Invalid visibility");
+    }
     const adapterType = normalizeAdapterType(input.adapterType);
     const providerId = input.defaultModelProviderId ?? null;
     const modelName = input.defaultModel ?? null;
@@ -637,26 +665,26 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
 
   async update(
     spaceId: string,
+    userId: string,
     agentId: string,
     patch: {
       name?: string;
       description?: string | null;
-      visibility?: string;
       roleInstruction?: string | null;
       status?: string;
     },
   ): Promise<AgentOut> {
-    const existing = await this.get(spaceId, agentId);
-    if (!existing) throw new HttpError(404, "Agent not found");
+    if (!(await contentOwnerFromDb(this.pool, { spaceId, userId }, "agent", agentId))) {
+      throw new HttpError(404, "Agent not found");
+    }
     const now = new Date().toISOString();
     const result = await this.pool.query<AgentRecord>(
       `UPDATE agents
           SET name = COALESCE($3, name),
               description = CASE WHEN $4::boolean THEN $5 ELSE description END,
-              visibility = COALESCE($6, visibility),
-              role_instruction = CASE WHEN $7::boolean THEN $8 ELSE role_instruction END,
-              status = COALESCE($9, status),
-              updated_at = $10
+              role_instruction = CASE WHEN $6::boolean THEN $7 ELSE role_instruction END,
+              status = COALESCE($8, status),
+              updated_at = $9
         WHERE space_id = $1 AND id = $2
         RETURNING id`,
       [
@@ -665,7 +693,6 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
         patch.name ?? null,
         Object.hasOwn(patch, "description"),
         patch.description ?? null,
-        patch.visibility ?? null,
         Object.hasOwn(patch, "roleInstruction"),
         patch.roleInstruction ?? null,
         patch.status ?? null,

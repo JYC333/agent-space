@@ -8,7 +8,9 @@ import { normalizeSourceConnectionReadGovernance, enforceSourceDerivedImportTarg
 import type { SourceItemRow } from "./sourceRepositoryRows";
 import { ITEM_COLUMNS } from "./sourceRepositoryRows";
 import { isSpaceOwnerOrAdmin } from "../access/roles";
-import { artifactVisibleSql } from "../access/visibility";
+import { contentReadSql } from "../access/contentAccessSql";
+import { contentDecisionFromDb } from "../access/contentAccessQuery";
+import { inheritContentAccessGrants } from "../access/contentAccessInheritance";
 import { insertProposalRow } from "../proposals/reviewPackets";
 import { canAccessProject } from "../memory/projectAccess";
 import { parseStructuredReaderContent, type ReaderPmDoc } from "./contentParsing";
@@ -74,7 +76,7 @@ async function loadVisibleArtifactForReader(
     `SELECT a.id, a.space_id, a.artifact_type, a.title, a.content, a.storage_path, a.mime_type, a.visibility, a.owner_user_id
        FROM artifacts a
       WHERE a.id = $1 AND a.space_id = $2
-        AND ${artifactVisibleSql({ userExpr: "$3" })}`,
+        AND ${contentReadSql("artifact", "a", "$3")}`,
     [artifactId, spaceId, userId],
   );
   return result.rows[0] ?? null;
@@ -212,6 +214,7 @@ async function enforceConnectionReadConsent(
     endpoint_url: null,
     status: "active",
     visibility: "private",
+    access_level: "full",
     fetch_frequency: "manual",
     capture_policy: "reference_only",
     trust_level: "normal",
@@ -319,6 +322,7 @@ export class PgReaderRepository {
     identity: SpaceUserIdentity,
     itemId: string,
   ): Promise<ReaderDocumentOut | null> {
+    if ((await contentDecisionFromDb(this.db, identity, "source_item", itemId)) !== "full") return null;
     const result = await this.db.query<SourceItemRow>(
       `SELECT ${ITEM_COLUMNS} FROM source_items WHERE space_id = $1 AND id = $2 AND deleted_at IS NULL`,
       [identity.spaceId, itemId],
@@ -357,8 +361,9 @@ export class PgReaderRepository {
       `SELECT id, space_id, source_item_id, snapshot_type, artifact_id, content_hash, source_uri
          FROM source_snapshots
         WHERE space_id = $1 AND source_item_id = $2 AND snapshot_type = 'extracted' AND artifact_id IS NOT NULL
+          AND ${contentReadSql("source_snapshot", "source_snapshots", "$3")}
         ORDER BY captured_at DESC LIMIT 1`,
-      [identity.spaceId, itemId],
+      [identity.spaceId, itemId, identity.userId],
     );
     const snap = snapResult.rows[0];
     if (snap?.artifact_id) {
@@ -444,6 +449,7 @@ export class PgReaderRepository {
     identity: SpaceUserIdentity,
     snapshotId: string,
   ): Promise<ReaderDocumentOut | null> {
+    if ((await contentDecisionFromDb(this.db, identity, "source_snapshot", snapshotId)) !== "full") return null;
     const result = await this.db.query<SourceSnapshotRow>(
       `SELECT id, space_id, source_item_id, connection_id, snapshot_type, artifact_id, content_hash, source_uri
          FROM source_snapshots WHERE space_id = $1 AND id = $2`,
@@ -542,7 +548,7 @@ export class PgReaderRepository {
 // ── Annotation repository ─────────────────────────────────────────────────────
 
 const ANNOTATION_TYPES = new Set(["highlight", "comment", "excerpt", "bookmark"]);
-const VISIBILITY_VALUES = new Set(["private", "space_shared"]);
+const VISIBILITY_VALUES = new Set(["private", "space_shared", "selected_users"]);
 
 export interface ReaderAnnotationRow {
   id: string;
@@ -556,6 +562,8 @@ export interface ReaderAnnotationRow {
   color: string | null;
   label: string | null;
   visibility: string;
+  access_level: string;
+  owner_user_id: string;
   status: string;
   anchor_state: string;
   created_by_user_id: string;
@@ -564,8 +572,18 @@ export interface ReaderAnnotationRow {
 }
 
 const ANNOTATION_COLUMNS = `id, space_id, source_item_id, artifact_id, source_snapshot_id,
-  annotation_type, quote_text, anchor_json, color, label, visibility, status, anchor_state,
-  created_by_user_id, created_at, updated_at`;
+  annotation_type, quote_text, anchor_json, color, label, visibility, access_level, status, anchor_state,
+  created_by_user_id, owner_user_id, created_at, updated_at`;
+
+async function assertAnnotationReadable(
+  db: Queryable,
+  identity: SpaceUserIdentity,
+  annotation: ReaderAnnotationRow,
+): Promise<void> {
+  if ((await contentDecisionFromDb(db, identity, "reader_annotation", annotation.id)) === "deny") {
+    throw new HttpError(404, "Not found");
+  }
+}
 
 export interface ReaderAnnotationOut {
   id: string;
@@ -579,6 +597,8 @@ export interface ReaderAnnotationOut {
   color: string | null;
   label: string | null;
   visibility: string;
+  access_level: string;
+  owner_user_id: string;
   status: string;
   anchor_state: string;
   created_by_user_id: string;
@@ -599,6 +619,8 @@ function annotationOut(row: ReaderAnnotationRow): ReaderAnnotationOut {
     color: row.color,
     label: row.label,
     visibility: row.visibility,
+    access_level: row.access_level,
+    owner_user_id: row.owner_user_id,
     status: row.status,
     anchor_state: row.anchor_state,
     created_by_user_id: row.created_by_user_id,
@@ -627,6 +649,9 @@ async function assertDocumentReadable(
   documentId: string,
 ): Promise<void> {
   if (documentType === "source_item") {
+    if ((await contentDecisionFromDb(db, identity, "source_item", documentId)) !== "full") {
+      throw new HttpError(404, "Document not found");
+    }
     const r = await db.query<SourceItemRow>(
       `SELECT ${ITEM_COLUMNS} FROM source_items WHERE space_id = $1 AND id = $2 AND deleted_at IS NULL`,
       [identity.spaceId, documentId],
@@ -640,6 +665,9 @@ async function assertDocumentReadable(
     return;
   }
   if (documentType === "source_snapshot") {
+    if ((await contentDecisionFromDb(db, identity, "source_snapshot", documentId)) !== "full") {
+      throw new HttpError(404, "Document not found");
+    }
     const r = await db.query<{ source_item_id: string | null; connection_id: string | null; artifact_id: string | null }>(
       `SELECT source_item_id, connection_id, artifact_id FROM source_snapshots WHERE space_id = $1 AND id = $2`,
       [identity.spaceId, documentId],
@@ -755,11 +783,11 @@ export class PgAnnotationRepository {
 
     const result = await this.db.query<ReaderAnnotationRow>(
       `SELECT ${ANNOTATION_COLUMNS}
-         FROM reader_annotations
+         FROM reader_annotations ra
         WHERE space_id = $1
           AND ${col} = $2
           AND status = 'active'
-          AND (visibility = 'space_shared' OR created_by_user_id = $3)
+          AND ${contentReadSql("reader_annotation", "ra", "$3")}
         ORDER BY created_at ASC`,
       [identity.spaceId, documentId, identity.userId],
     );
@@ -822,7 +850,7 @@ export class PgAnnotationRepository {
 
     const visibility = optionalString(body.visibility) ?? "private";
     if (!VISIBILITY_VALUES.has(visibility)) {
-      throw new HttpError(422, "visibility must be 'private' or 'space_shared'");
+      throw new HttpError(422, "visibility must be private, space_shared, or selected_users");
     }
 
     const color = optionalString(body.color);
@@ -834,11 +862,11 @@ export class PgAnnotationRepository {
       `INSERT INTO reader_annotations (
          id, space_id, source_item_id, artifact_id, source_snapshot_id,
          annotation_type, quote_text, anchor_json, color, label,
-         visibility, status, anchor_state, created_by_user_id, created_at, updated_at
+         visibility, status, anchor_state, created_by_user_id, owner_user_id, created_at, updated_at
        ) VALUES (
          $1, $2, $3, $4, $5,
          $6, $7, $8::jsonb, $9, $10,
-         $11, 'active', $12, $13, $14, $14
+         $11, 'active', $12, $13, $13, $14, $14
        ) RETURNING ${ANNOTATION_COLUMNS}`,
       [
         id, identity.spaceId, sourceItemId, artifactId, sourceSnapshotId,
@@ -860,18 +888,15 @@ export class PgAnnotationRepository {
 
     const sets: string[] = [];
     const params: unknown[] = [identity.spaceId, annotationId];
+    if (body.visibility !== undefined || body.access_level !== undefined || body.grants !== undefined) {
+      throw new HttpError(422, "Use the content-access API to update annotation permissions");
+    }
 
     const color = optionalString(body.color);
     if (body.color !== undefined) { params.push(color); sets.push(`color = $${params.length}`); }
 
     const label = optionalString(body.label);
     if (body.label !== undefined) { params.push(label); sets.push(`label = $${params.length}`); }
-
-    const visibility = optionalString(body.visibility);
-    if (visibility !== null && visibility !== undefined) {
-      if (!VISIBILITY_VALUES.has(visibility)) throw new HttpError(422, "Invalid visibility");
-      params.push(visibility); sets.push(`visibility = $${params.length}`);
-    }
 
     const status = optionalString(body.status);
     if (status !== null && status !== undefined) {
@@ -1005,9 +1030,7 @@ export class PgCommentRepository {
     );
     const ann = annResult.rows[0];
     if (!ann) throw new HttpError(404, "Annotation not found");
-    if (ann.visibility === "private" && ann.created_by_user_id !== identity.userId) {
-      throw new HttpError(404, "Not found");
-    }
+    await assertAnnotationReadable(this.db, identity, ann);
     // Also verify the caller can still read the underlying document (e.g. space_shared
     // annotations remain accessible only while the document itself is accessible).
     const annDoc = annotationDocumentTarget(ann);
@@ -1055,9 +1078,7 @@ export class PgCommentRepository {
     const ann = annotation.rows[0];
     if (!ann) throw new HttpError(404, "Annotation not found");
 
-    if (ann.visibility === "private" && ann.created_by_user_id !== identity.userId) {
-      throw new HttpError(404, "Not found");
-    }
+    await assertAnnotationReadable(this.db, identity, ann);
     const annDoc = annotationDocumentTarget(ann);
     if (annDoc) {
       await assertDocumentReadable(this.db, identity, annDoc.documentType, annDoc.documentId);
@@ -1159,9 +1180,7 @@ export class PgCommentRepository {
     );
     const ann = annResult.rows[0];
     if (!ann) throw new HttpError(404, "Not found");
-    if (ann.visibility === "private" && ann.created_by_user_id !== identity.userId) {
-      throw new HttpError(404, "Not found");
-    }
+    await assertAnnotationReadable(this.db, identity, ann);
     const annDoc = annotationDocumentTarget(ann);
     if (annDoc) {
       await assertDocumentReadable(this.db, identity, annDoc.documentType, annDoc.documentId);
@@ -1273,15 +1292,7 @@ export class PgReaderActionRepository {
     );
     const ann = annResult.rows[0];
     if (!ann) throw new HttpError(404, "Not found");
-    if (ann.visibility === "private") {
-      if (ann.created_by_user_id !== identity.userId) {
-        // No-oracle: non-owner must not learn the annotation exists.
-        throw new HttpError(404, "Not found");
-      }
-      // Private annotations must not generate space-scoped evidence — evidence
-      // has no visibility field and is readable by all space members.
-      throw new HttpError(422, "Cannot create evidence from a private annotation. Change visibility to space_shared first.");
-    }
+    await assertAnnotationReadable(this.db, identity, ann);
     const doc = annotationDocumentTarget(ann);
     if (doc) await assertDocumentReadable(this.db, identity, doc.documentType, doc.documentId);
 
@@ -1298,19 +1309,24 @@ export class PgReaderActionRepository {
     }
     const r = await this.db.query<EvidenceRow>(
       `INSERT INTO extracted_evidence (
-         id, space_id, source_item_id, source_object_type, source_object_id,
+         id, space_id, owner_user_id, visibility, access_level,
+         source_item_id, source_object_type, source_object_id,
          evidence_type, title, content_excerpt, content_hash,
          trust_level, extraction_method, status, metadata_json,
          created_by_user_id, created_at, updated_at
        ) VALUES (
-         $1, $2, $3, 'reader_annotation', $4,
-         'excerpt', $5, $6, $7,
-         'normal', 'manual', 'candidate', $8::jsonb,
-         $9, $10, $10
+         $1, $2, $3, $4, $5,
+         $6, 'reader_annotation', $7,
+         'excerpt', $8, $9, $10,
+         'normal', 'manual', 'candidate', $11::jsonb,
+         $12, $13, $13
        ) RETURNING id, title, status, evidence_type, source_item_id, source_object_type, source_object_id`,
       [
         randomUUID(),
         identity.spaceId,
+        ann.owner_user_id,
+        ann.visibility,
+        ann.access_level,
         ann.source_item_id,
         annotationId,
         title,
@@ -1326,6 +1342,16 @@ export class PgReaderActionRepository {
         now,
       ],
     );
+    if (ann.visibility === "selected_users") {
+      await inheritContentAccessGrants(this.db, {
+        spaceId: identity.spaceId,
+        sourceResourceType: "reader_annotation",
+        sourceResourceId: ann.id,
+        targetResourceType: "extracted_evidence",
+        targetResourceId: r.rows[0]!.id,
+        inheritedAt: now,
+      });
+    }
     return r.rows[0]!;
   }
 
@@ -1340,9 +1366,7 @@ export class PgReaderActionRepository {
     );
     const ann = annResult.rows[0];
     if (!ann) throw new HttpError(404, "Not found");
-    if (ann.visibility === "private" && ann.created_by_user_id !== identity.userId) {
-      throw new HttpError(404, "Not found");
-    }
+    await assertAnnotationReadable(this.db, identity, ann);
     const doc = annotationDocumentTarget(ann);
     if (doc) await assertDocumentReadable(this.db, identity, doc.documentType, doc.documentId);
 
@@ -1371,7 +1395,7 @@ export class PgReaderActionRepository {
           title,
           content: ann.quote_text,
           content_format: "plain",
-          visibility: "space_shared",
+          visibility: "private",
           source_refs: sourceRefs,
         }
       : {
@@ -1390,9 +1414,20 @@ export class PgReaderActionRepository {
       payload,
       rationale,
       createdByUserId: identity.userId,
-      visibility: ann.visibility === "space_shared" ? "space_shared" : "private",
+      visibility: ann.visibility,
+      accessLevel: ann.access_level === "summary" ? "summary" : "full",
       riskLevel: "low",
     });
+    if (ann.visibility === "selected_users") {
+      await inheritContentAccessGrants(this.db, {
+        spaceId: identity.spaceId,
+        sourceResourceType: "reader_annotation",
+        sourceResourceId: ann.id,
+        targetResourceType: "proposal",
+        targetResourceId: row.id,
+        inheritedAt: new Date().toISOString(),
+      });
+    }
 
     return { id: row.id, proposal_type: row.proposal_type, status: row.status, title: row.title };
   }
@@ -1407,8 +1442,8 @@ export class PgReaderActionRepository {
     }
     // Prefix all annotation columns with ra. to avoid ambiguity with joined tables.
     const cols = `ra.id, ra.space_id, ra.source_item_id, ra.artifact_id, ra.source_snapshot_id,
-  ra.annotation_type, ra.quote_text, ra.anchor_json, ra.color, ra.label, ra.visibility, ra.status, ra.anchor_state,
-  ra.created_by_user_id, ra.created_at, ra.updated_at`;
+  ra.annotation_type, ra.quote_text, ra.anchor_json, ra.color, ra.label, ra.visibility, ra.access_level,
+  ra.status, ra.anchor_state, ra.created_by_user_id, ra.owner_user_id, ra.created_at, ra.updated_at`;
     const r = await this.db.query<ReaderAnnotationRow>(
       `SELECT ${cols}
          FROM reader_annotations ra
@@ -1426,7 +1461,8 @@ export class PgReaderActionRepository {
              AND psb.status = 'active'
         WHERE ra.space_id = $1
           AND ra.status = 'active'
-          AND ra.visibility = 'space_shared'
+          AND ${contentReadSql("reader_annotation", "ra", "$3")}
+          AND ${contentReadSql("source_item", "ii", "$3")}
           AND (
             sc.consent_json->>'owner_user_id' = $3
             OR sc.consent_json->'allowed_reader_user_ids' @> to_jsonb($3::text)

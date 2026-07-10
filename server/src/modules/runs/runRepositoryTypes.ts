@@ -52,7 +52,9 @@ export interface RunRecord {
   ended_at: string | null;
   created_at?: string;
   updated_at?: string;
+  owner_user_id?: string | null;
   visibility?: string;
+  access_level?: string;
 }
 
 export interface RunListFilters {

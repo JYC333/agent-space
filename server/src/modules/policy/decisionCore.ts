@@ -134,24 +134,6 @@ const crossSpaceMemoryRead: Invariant = (ctx) => {
   });
 };
 
-const sourcePointerNotAuth: Invariant = (ctx) => {
-  if (ctx.authorized_by_source_pointer) {
-    return makeDecision({
-      decision: "deny",
-      message:
-        "SourcePointer does not grant read access. SourcePointers store provenance metadata only; they cannot be used as authorization evidence.",
-      risk_level: "critical",
-      reason_code: "hard_invariant_source_pointer_not_auth",
-      policy_rule_id: "hard_invariant_source_pointer_not_auth",
-      policy_source: "hard_invariant",
-      audit_code: "source_pointer_used_as_auth",
-      action: str(ctx.action) || null,
-      space_id: (ctx.space_id as string | undefined) ?? null,
-    });
-  }
-  return null;
-};
-
 const personalContextBlockNotPersisted: Invariant = (ctx) => {
   const action = str(ctx.action);
   if (!PERSISTENCE_ACTIONS.has(action)) return null;
@@ -272,7 +254,6 @@ const unknownTargetSpaceEgressFailsClosed: Invariant = (ctx) => {
 
 const HARD_INVARIANTS: readonly Invariant[] = [
   crossSpaceMemoryRead,
-  sourcePointerNotAuth,
   personalContextBlockNotPersisted,
   rawPrivateMemoryBlocksEgress,
   publicTargetBlocksGrantDerived,

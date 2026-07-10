@@ -11,7 +11,14 @@ import {
 import { HttpError } from "../routeUtils/common";
 import { canAccessProject } from "../memory/projectAccess";
 import { workspaceProjectReadAccessSql } from "../workspaces/access";
-import { artifactVisibleSql } from "../access/visibility";
+import {
+  contentAccessLevelSql,
+  contentOwnerFilterSql,
+  contentReadSql,
+  contentVisibilityFilterSql,
+} from "../access/contentAccessSql";
+import { contentResourceDefinition } from "../access/contentAccessRegistry";
+import { resolveOversightLevel } from "../access/oversightResolver";
 import {
   loadSourcePolicySnapshots,
   loadViewerSpaceRole,
@@ -29,6 +36,7 @@ import {
   resolveReadableScopes,
   type EvidenceContextRow,
 } from "./contextRepositoryHelpers";
+import { memorySensitivityReadSql } from "../memory/memorySensitivitySql";
 
 const ALLOWED_RELATION_TYPES = [
   "derived_from",
@@ -42,6 +50,15 @@ const MAX_HOPS = 2;
 const DEFAULT_MAX_MEMORIES = 20;
 
 const CONTEXT_MEMORY_COLUMNS = `${MEMORY_COLUMNS}, agent_id, access_count, last_accessed_at, last_retrieved_at`;
+const MEMORY_DEFINITION = contentResourceDefinition("memory")!;
+
+function contextMemoryColumns(alias: string, userExpr: string): string {
+  return `${CONTEXT_MEMORY_COLUMNS}, ${contentAccessLevelSql({
+    definition: MEMORY_DEFINITION,
+    alias,
+    userExpr,
+  })} AS effective_access_level`;
+}
 
 export interface ContextMemoryRow extends MemoryRow {
   agent_id: string | null;
@@ -274,8 +291,11 @@ export class PgRunContextRepository {
     tokenBudget: Record<string, unknown>;
   }> {
     const { projectId, ...base } = params;
-    const projectFilter = await this.resolveProjectFilter(base.spaceId, base.userId, projectId);
-    const input = { ...base, projectFilter };
+    const [projectFilter, oversightLevel] = await Promise.all([
+      this.resolveProjectFilter(base.spaceId, base.userId, projectId),
+      resolveOversightLevel(this.db, base.spaceId, base.userId),
+    ]);
+    const input = { ...base, projectFilter, oversightLevel };
     const readableScopes = resolveReadableScopes(
       input.agentMemoryPolicy,
       input.includeSystemScope,
@@ -529,23 +549,19 @@ export class PgRunContextRepository {
     const ids = [...new Set(input.memoryIds.filter((id) => id.length > 0))];
     if (ids.length === 0) return [];
     const idColumn = input.scopeType === "workspace" ? "workspace_id" : "agent_id";
-    const visibilities =
-      input.scopeType === "workspace"
-        ? ["space_shared", "workspace_shared"]
-        : ["space_shared"];
     const result = await this.db.query<{ id: string }>(
-      `SELECT id
-         FROM memory_entries
-        WHERE space_id = $1
-          AND scope_type = $2
+      `SELECT me.id
+         FROM memory_entries me
+        WHERE me.space_id = $1
+          AND me.scope_type = $2
           AND ${idColumn} = $3
-          AND status = 'active'
-          AND deleted_at IS NULL
-          AND project_id IS NULL
-          AND visibility = ANY($4::varchar[])
-          AND COALESCE(sensitivity_level, 'normal') <> 'highly_restricted'
-          AND id = ANY($5::varchar[])`,
-      [input.spaceId, input.scopeType, input.scopeId, visibilities, ids],
+          AND me.status = 'active'
+          AND me.deleted_at IS NULL
+          AND me.project_id IS NULL
+          AND ${contentVisibilityFilterSql("me", ["space_shared"])}
+          AND COALESCE(me.sensitivity_level, 'normal') <> 'highly_restricted'
+          AND me.id = ANY($4::varchar[])`,
+      [input.spaceId, input.scopeType, input.scopeId, ids],
     );
     return result.rows.map((row) => row.id);
   }
@@ -595,6 +611,7 @@ export class PgRunContextRepository {
     const params: unknown[] = [
       input.spaceId,
       ["context_candidate", "supports", "mentions"],
+      input.userId,
     ];
     const targetPredicates = targets.map((target) => {
       const typeIndex = params.length + 1;
@@ -631,6 +648,15 @@ export class PgRunContextRepository {
         WHERE ev.space_id = $1
           AND ev.status IN ('candidate', 'active')
           AND ev.deleted_at IS NULL
+          AND ${contentReadSql("extracted_evidence", "ev", "$3")}
+          AND (
+            ev.source_item_id IS NULL
+            OR (ii.id IS NOT NULL AND ${contentReadSql("source_item", "ii", "$3")})
+          )
+          AND (
+            ev.source_snapshot_id IS NULL
+            OR (ss.id IS NOT NULL AND ${contentReadSql("source_snapshot", "ss", "$3")})
+          )
           AND el.status = 'active'
           AND el.link_type = ANY($2::varchar[])
           AND (${targetPredicates.join(" OR ")})
@@ -696,8 +722,16 @@ export class PgRunContextRepository {
          FROM artifacts a
         WHERE a.space_id = $1
           AND a.id = ANY($2::varchar[])
-          AND ${artifactVisibleSql({ userExpr: "$3", workspaceMatchExpr: "$4" })}`,
-      [input.spaceId, ids, input.userId, input.workspaceId ?? null],
+          AND ${contentReadSql("artifact", "a", "$3")}
+          AND (a.workspace_id IS NULL OR ($4::varchar IS NOT NULL AND a.workspace_id = $4))
+          AND (a.project_id IS NULL OR ($5::varchar IS NOT NULL AND a.project_id = $5))`,
+      [
+        input.spaceId,
+        ids,
+        input.userId,
+        input.workspaceId ?? null,
+        input.projectId ?? null,
+      ],
     );
     const byId = new Map(result.rows.map((row) => [row.id, row]));
     const revocations = input.ignoreRevocations
@@ -1238,12 +1272,14 @@ export class PgRunContextRepository {
   }): Promise<ContextMemoryRow[]> {
     if (input.readableScopes.size === 0) return [];
     const result = await this.db.query<ContextMemoryRow>(
-      `SELECT ${CONTEXT_MEMORY_COLUMNS}
-         FROM memory_entries
+      `SELECT ${contextMemoryColumns("me", "$3")}
+         FROM memory_entries me
         WHERE space_id = $1
           AND deleted_at IS NULL
           AND status = 'active'
           AND scope_type = ANY($2)
+          AND ${contentReadSql("memory", "me", "$3")}
+          AND ${memorySensitivityReadSql("me", "$3")}
           AND (
             subject_user_id = $3
             OR owner_user_id = $3
@@ -1295,7 +1331,7 @@ export class PgRunContextRepository {
       if (candidateIds.length === 0) break;
 
       const rows = hardFilterRows(
-        await this.loadMemoriesByIds(input.spaceId, candidateIds),
+        await this.loadMemoriesByIds(input.spaceId, input.userId, candidateIds),
         input,
       ).filter((row) => input.readableScopes.has(row.scope_type ?? ""));
       const newIds = new Set(rows.map((row) => row.id));
@@ -1320,16 +1356,18 @@ export class PgRunContextRepository {
   }): Promise<ContextMemoryRow[]> {
     if (!input.query?.trim() || input.readableScopes.size === 0) return [];
     const result = await this.db.query<ContextMemoryRow>(
-      `SELECT ${CONTEXT_MEMORY_COLUMNS}
-         FROM memory_entries
+      `SELECT ${contextMemoryColumns("me", "$4")}
+         FROM memory_entries me
         WHERE space_id = $1
           AND deleted_at IS NULL
           AND status = 'active'
           AND scope_type = ANY($2)
           AND (title ILIKE $3 OR content ILIKE $3)
+          AND ${contentReadSql("memory", "me", "$4")}
+          AND ${memorySensitivityReadSql("me", "$4")}
         ORDER BY importance DESC, confidence DESC
         LIMIT 20`,
-      [input.spaceId, [...input.readableScopes], `%${input.query}%`],
+      [input.spaceId, [...input.readableScopes], `%${input.query}%`, input.userId],
     );
     return hardFilterRows(result.rows, input).filter((row) =>
       input.readableScopes.has(row.scope_type ?? ""),
@@ -1348,7 +1386,7 @@ export class PgRunContextRepository {
   }): Promise<ContextMemoryRow[]> {
     if (input.ids.length === 0) return [];
     const rows = hardFilterRows(
-      await this.loadMemoriesByIds(input.spaceId, input.ids),
+      await this.loadMemoriesByIds(input.spaceId, input.userId, input.ids),
       input,
     );
     return rows
@@ -1362,17 +1400,20 @@ export class PgRunContextRepository {
 
   private async loadMemoriesByIds(
     spaceId: string,
+    userId: string,
     ids: readonly string[],
   ): Promise<ContextMemoryRow[]> {
     if (ids.length === 0) return [];
     const result = await this.db.query<ContextMemoryRow>(
-      `SELECT ${CONTEXT_MEMORY_COLUMNS}
-         FROM memory_entries
+      `SELECT ${contextMemoryColumns("me", "$3")}
+         FROM memory_entries me
         WHERE space_id = $1
           AND deleted_at IS NULL
           AND status = 'active'
-          AND id = ANY($2)`,
-      [spaceId, [...ids]],
+          AND id = ANY($2)
+          AND ${contentReadSql("memory", "me", "$3")}
+          AND ${memorySensitivityReadSql("me", "$3")}`,
+      [spaceId, [...ids], userId],
     );
     return result.rows;
   }
@@ -1422,8 +1463,8 @@ export class PgRunContextRepository {
     const maxItems = clampMaxItems(filter.max_items);
     const where = [
       `space_id = $1`,
-      `owner_user_id = $2`,
-      `visibility = 'private'`,
+      contentOwnerFilterSql("memory", "memory_entries", "$2"),
+      contentVisibilityFilterSql("memory_entries", ["private"]),
       `sensitivity_level = ANY($3)`,
       `status = 'active'`,
       `deleted_at IS NULL`,

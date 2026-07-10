@@ -57,7 +57,12 @@ afterAll(async () => {
 beforeEach(async () => {
   if (!available || !pool) return;
   await pool.query(
-    "TRUNCATE actors, agents, agent_versions, agent_runtime_profiles, agent_run_groups, agent_run_group_members, agent_run_messages, context_snapshots, runs, run_delegations, run_steps, run_events, run_execution_locks, run_evaluations, run_finalizations, jobs, job_events, artifacts, tasks, task_runs, task_evaluations CASCADE",
+    "TRUNCATE content_access_grants, space_memberships, actors, agents, agent_versions, agent_runtime_profiles, agent_run_groups, agent_run_group_members, agent_run_messages, context_snapshots, runs, run_delegations, run_steps, run_events, run_execution_locks, run_evaluations, run_finalizations, jobs, job_events, artifacts, tasks, task_runs, task_evaluations CASCADE",
+  );
+  await pool.query(
+    `INSERT INTO space_memberships (id, space_id, user_id, role, status, created_at, updated_at)
+     VALUES ($1, 'space-1', 'user-1', 'owner', 'active', now(), now())`,
+    [randomUUID()],
   );
 });
 

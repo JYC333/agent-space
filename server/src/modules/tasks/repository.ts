@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import type { Pool } from "../../db/pool";
 import {
   HttpError,
-  canReadByVisibility,
   countFromRow,
   numberValue,
   optionalObject,
@@ -17,7 +16,8 @@ import {
 import { PgRunRepository } from "../runs/repository";
 import { runToOut } from "../runs/runReadModel";
 import { PgRunContextRepository } from "../context/repository";
-import { artifactVisibleSql, taskVisibleSql } from "../access/visibility";
+import { contentReadSql } from "../access/contentAccessSql";
+import { isContentVisibility } from "../access/contentAccessTypes";
 import {
   bounded01,
   boardColumnOut,
@@ -198,7 +198,7 @@ export class PgTaskRepository {
       "sm.user_id = $1",
       "sm.status = 'active'",
       "t.deleted_at IS NULL",
-      taskVisibleSql({ userExpr: "$1" }),
+      contentReadSql("task", "t", "$1"),
       "(t.assigned_user_id = $1 OR t.claimed_by_user_id = $1 OR t.created_by_user_id = $1)",
     ];
     if (filters.status) {
@@ -224,11 +224,13 @@ export class PgTaskRepository {
 
   async createTask(identity: SpaceUserIdentity, body: Record<string, unknown>) {
     const now = new Date().toISOString();
+    const visibility = optionalString(body.visibility) ?? "private";
+    if (!isContentVisibility(visibility)) throw new HttpError(422, "Invalid visibility");
     const result = await this.pool.query<TaskRow>(
       `INSERT INTO tasks (
          id, space_id, workspace_id, project_id, board_id, column_id, parent_task_id,
          title, description, task_type, status, priority, risk_level, visibility,
-         created_by_user_id, assigned_user_id, assigned_agent_id,
+         owner_user_id, created_by_user_id, assigned_user_id, assigned_agent_id,
          source_activity_id, source_run_id, source_proposal_id, source_artifact_id,
          acceptance_criteria_json, definition_of_done, required_outputs_json,
          due_at, start_after, max_runs, max_cost, max_duration_seconds,
@@ -236,7 +238,7 @@ export class PgTaskRepository {
        ) VALUES (
          $1, $2, $3, $4, $5, $6, $7,
          $8, $9, $10, $11, $12, $13, $14,
-         $15, $16, $17,
+         $15, $15, $16, $17,
          $18, $19, $20, $21,
          $22::jsonb, $23, $24::jsonb,
          $25::timestamptz, $26::timestamptz, $27::int, $28::float, $29::int,
@@ -256,7 +258,7 @@ export class PgTaskRepository {
         optionalString(body.status) ?? "inbox",
         optionalString(body.priority) ?? "normal",
         optionalString(body.risk_level) ?? "low",
-        optionalString(body.visibility) ?? "space_shared",
+        visibility,
         identity.userId,
         optionalString(body.assigned_user_id),
         optionalString(body.assigned_agent_id),
@@ -433,8 +435,12 @@ export class PgTaskRepository {
   async listTaskRuns(identity: SpaceUserIdentity, taskId: string, limit: number, offset: number) {
     if (!(await getVisibleTaskRow(this.pool, identity, taskId))) throw new HttpError(404, "Task not found");
     const total = await this.pool.query<{ total: string }>(
-      `SELECT count(*)::text AS total FROM task_runs WHERE space_id = $1 AND task_id = $2`,
-      [identity.spaceId, taskId],
+      `SELECT count(*)::text AS total
+         FROM task_runs tr
+         JOIN runs r ON r.id = tr.run_id AND r.space_id = tr.space_id
+        WHERE tr.space_id = $1 AND tr.task_id = $2
+          AND ${contentReadSql("run", "r", "$3")}`,
+      [identity.spaceId, taskId, identity.userId],
     );
     const rows = await this.pool.query<TaskRunListRow>(
       `SELECT tr.id AS task_run_id, tr.space_id AS task_run_space_id, tr.task_id AS task_run_task_id,
@@ -444,13 +450,15 @@ export class PgTaskRepository {
               r.parent_run_id, r.project_id, r.scheduled_at, r.adapter_type, r.capability_id,
               r.model_provider_id, r.model_override_json, r.required_sandbox_level, r.trigger_origin,
               r.instructed_by_user_id, r.error_message, r.error_json, r.output_json, r.usage_json,
-              r.started_at, r.ended_at, r.created_at, r.updated_at, r.visibility
+              r.started_at, r.ended_at, r.created_at, r.updated_at,
+              r.owner_user_id, r.visibility, r.access_level
         FROM task_runs tr
          JOIN runs r ON r.id = tr.run_id AND r.space_id = tr.space_id
         WHERE tr.space_id = $1 AND tr.task_id = $2
+          AND ${contentReadSql("run", "r", "$3")}
         ORDER BY tr.created_at DESC, tr.id DESC
-        LIMIT $3 OFFSET $4`,
-      [identity.spaceId, taskId, limit, offset],
+        LIMIT $4 OFFSET $5`,
+      [identity.spaceId, taskId, identity.userId, limit, offset],
     );
     return page(
       rows.rows.map((row) => ({ link: taskRunOutFromList(row), run: runToOut(row) })),
@@ -468,7 +476,7 @@ export class PgTaskRepository {
          JOIN tasks t ON t.id = ta.task_id AND t.space_id = ta.space_id
          JOIN artifacts a ON a.id = ta.artifact_id AND a.space_id = ta.space_id
         WHERE ta.space_id = $1 AND ta.task_id = $2
-          AND ${artifactVisibleSql({ userExpr: "$3", workspaceMatchExpr: "t.workspace_id" })}`,
+          AND ${contentReadSql("artifact", "a", "$3")}`,
       [identity.spaceId, taskId, identity.userId],
     );
     const rows = await this.pool.query<TaskArtifactRow>(
@@ -480,7 +488,7 @@ export class PgTaskRepository {
          JOIN tasks t ON t.id = ta.task_id AND t.space_id = ta.space_id
          JOIN artifacts a ON a.id = ta.artifact_id AND a.space_id = ta.space_id
        WHERE ta.space_id = $1 AND ta.task_id = $2
-          AND ${artifactVisibleSql({ userExpr: "$3", workspaceMatchExpr: "t.workspace_id" })}
+          AND ${contentReadSql("artifact", "a", "$3")}
         ORDER BY ta.created_at DESC, ta.id DESC
         LIMIT $4 OFFSET $5`,
       [identity.spaceId, taskId, identity.userId, limit, offset],
@@ -496,7 +504,7 @@ export class PgTaskRepository {
          JOIN proposals p ON p.id = tp.proposal_id AND p.space_id = tp.space_id
          LEFT JOIN runs r ON r.id = p.created_by_run_id AND r.space_id = p.space_id
         WHERE tp.space_id = $1 AND tp.task_id = $2
-          AND (p.visibility = 'space_shared' OR p.created_by_user_id = $3 OR r.instructed_by_user_id = $3)`,
+          AND ${contentReadSql("proposal", "p", "$3")}`,
       [identity.spaceId, taskId, identity.userId],
     );
     const rows = await this.pool.query<TaskProposalRow>(
@@ -508,7 +516,7 @@ export class PgTaskRepository {
          JOIN proposals p ON p.id = tp.proposal_id AND p.space_id = tp.space_id
          LEFT JOIN runs r ON r.id = p.created_by_run_id AND r.space_id = p.space_id
         WHERE tp.space_id = $1 AND tp.task_id = $2
-          AND (p.visibility = 'space_shared' OR p.created_by_user_id = $3 OR r.instructed_by_user_id = $3)
+          AND ${contentReadSql("proposal", "p", "$3")}
         ORDER BY tp.created_at DESC, tp.id DESC
         LIMIT $4 OFFSET $5`,
       [identity.spaceId, taskId, identity.userId, limit, offset],
@@ -642,11 +650,13 @@ async function validateContextArtifactAttachments(
 }
 
 async function getVisibleTaskRow(db: Queryable, identity: SpaceUserIdentity, taskId: string): Promise<TaskRow | null> {
-  const result = await db.query<TaskRow>(`SELECT ${TASK_COLUMNS} FROM tasks WHERE space_id = $1 AND id = $2 AND deleted_at IS NULL`, [identity.spaceId, taskId]);
-  const row = result.rows[0];
-  if (!row) return null;
-  if (!canReadByVisibility(row.visibility, identity.userId, [row.created_by_user_id, row.assigned_user_id, row.claimed_by_user_id])) return null;
-  return row;
+  const result = await db.query<TaskRow>(
+    `SELECT ${TASK_COLUMNS} FROM tasks t
+      WHERE t.space_id = $1 AND t.id = $2 AND t.deleted_at IS NULL
+        AND ${contentReadSql("task", "t", "$3")}`,
+    [identity.spaceId, taskId, identity.userId],
+  );
+  return result.rows[0] ?? null;
 }
 
 function buildTaskWhere(identity: SpaceUserIdentity, filters: { boardId: string | null; workspaceId: string | null; projectId: string | null; status: string | null; assignedToMe: boolean; q: string | null }) {
@@ -654,7 +664,7 @@ function buildTaskWhere(identity: SpaceUserIdentity, filters: { boardId: string 
   const clauses = [
     "t.space_id = $1",
     "t.deleted_at IS NULL",
-    taskVisibleSql({ userExpr: "$2" }),
+    contentReadSql("task", "t", "$2"),
   ];
   const add = (value: unknown) => {
     params.push(value);

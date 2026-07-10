@@ -96,7 +96,7 @@ function fakePool(
         rowCount: 1,
       };
     }
-    if (/FROM space_memberships/.test(normalized)) {
+    if (/FROM space_memberships/.test(normalized) && !/FROM memory_entries/.test(normalized)) {
       return { rows: [{ role: options.role ?? "admin" }], rowCount: 1 };
     }
     if (normalized.startsWith("SELECT") && /FROM memory_entries/.test(normalized)) {
@@ -133,7 +133,7 @@ function row(overrides: Partial<MemoryRow> = {}): MemoryRow {
     status: "active",
     visibility: "private",
     sensitivity_level: "normal",
-    selected_user_ids: null,
+    access_level: "full",
     last_confirmed_at: null,
     confidence: 1,
     importance: 0.5,
@@ -301,13 +301,13 @@ describe("Memory maintenance routes", () => {
     });
   });
 
-  it("includes workspace-shared access-log entries only when workspace context is provided", async () => {
+  it("includes workspace-scoped shared access-log entries only when workspace context is provided", async () => {
     __setMemoryIdentityForTests({ spaceId: "space-1", userId: "user-1" });
     const workspaceShared = row({
       id: "memory-workspace",
       title: "Workspace memory",
       owner_user_id: "user-2",
-      visibility: "workspace_shared",
+      visibility: "space_shared",
       workspace_id: "workspace-1",
     });
     const query = vi.fn(async (sql: string) => {

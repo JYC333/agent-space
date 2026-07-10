@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { ServerConfig } from "../../config";
 import { getDbPool, type Pool } from "../../db/pool";
 import { HttpError, type Queryable } from "../routeUtils/common";
+import { contentVisibilityFilterSql } from "../access/contentAccessSql";
 
 export interface PolicyDigestResult {
   id: string;
@@ -72,9 +73,6 @@ interface MemorySummaryRow {
   sensitivity_level: string | null;
   version: number | string;
 }
-
-const WORKSPACE_DIGEST_VISIBILITIES = ["space_shared", "workspace_shared"] as const;
-const AGENT_DIGEST_VISIBILITIES = ["space_shared"] as const;
 
 /**
  * Per-digest advisory lock keys. Generation and dirty-marking MUST use the same
@@ -444,7 +442,7 @@ export class PgContextDigestService {
    *
    * The digest is a cache-SHARED bundle, so the visibility filter is a privacy
    * gate, not a scoping mechanism: only non-private memories (space_shared /
-   * workspace_shared; agent: space_shared only), project-free memories, and
+   * space-shared workspace or agent memory, project-free memories, and
    * non-`highly_restricted` rows are eligible. Private / per-user-gated memory
    * and project-scoped memory are never folded into the shared digest — they are
    * rendered directly per run instead. Scoping is done separately by
@@ -461,25 +459,18 @@ export class PgContextDigestService {
     const result = await this.db.query<MemorySummaryRow>(
       `SELECT id, title, content, namespace, memory_layer, memory_type,
               visibility, sensitivity_level, version
-         FROM memory_entries
-        WHERE space_id = $1
-          AND scope_type = $2
+         FROM memory_entries me
+        WHERE me.space_id = $1
+          AND me.scope_type = $2
           AND ${idColumn} = $3
-          AND status = 'active'
-          AND deleted_at IS NULL
-          AND project_id IS NULL
-          AND visibility = ANY($4::varchar[])
-          AND COALESCE(sensitivity_level, 'normal') <> 'highly_restricted'
-        ORDER BY importance DESC, created_at ASC
+          AND me.status = 'active'
+          AND me.deleted_at IS NULL
+          AND me.project_id IS NULL
+          AND ${contentVisibilityFilterSql("me", ["space_shared"])}
+          AND COALESCE(me.sensitivity_level, 'normal') <> 'highly_restricted'
+        ORDER BY me.importance DESC, me.created_at ASC
         LIMIT 200`,
-      [
-        spaceId,
-        scopeType,
-        scopeId,
-        scopeType === "workspace"
-          ? [...WORKSPACE_DIGEST_VISIBILITIES]
-          : [...AGENT_DIGEST_VISIBILITIES],
-      ],
+      [spaceId, scopeType, scopeId],
     );
     return result.rows;
   }

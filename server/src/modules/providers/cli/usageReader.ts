@@ -14,8 +14,9 @@
  * an exact bill.
  */
 
+import { createHash } from "node:crypto";
 import { readdir, readFile, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join, relative } from "node:path";
 
 export interface TokenUsage {
   available: boolean;
@@ -27,6 +28,33 @@ export interface TokenUsage {
   cost_usd: number;
   message_count: number;
   session_count: number;
+}
+
+export interface CliUsageImportEvent {
+  runtime: "claude_code" | "codex_cli";
+  occurred_at: string;
+  model: string | null;
+  external_session_id: string;
+  session_path: string;
+  session_name: string | null;
+  usage_details: Record<string, number>;
+  provider_usage: Record<string, unknown>;
+  idempotency_key: string;
+  dedupe_confidence: "high" | "medium" | "low";
+  dimensions: Record<string, string | number | boolean>;
+  metadata: Record<string, string | number | boolean>;
+}
+
+export interface CliUsageImportScan {
+  runtime: "claude_code" | "codex_cli";
+  source: "transcripts" | "codex_sessions";
+  events: CliUsageImportEvent[];
+  session_count: number;
+  candidate_event_count: number;
+  duplicate_count: number;
+  unreadable_file_count: number;
+  unsupported_file_count: number;
+  date_range: { from: string; to: string } | null;
 }
 
 // Claude model list price, USD per 1M tokens: input / output / cache-write / cache-read.
@@ -67,6 +95,24 @@ function num(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
+export function usageImportHash(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+export function usagePayloadHash(value: Record<string, unknown>): string {
+  return usageImportHash(JSON.stringify(sortJson(value)));
+}
+
+function sortJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortJson);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, nested]) => [key, sortJson(nested)]),
+  );
+}
+
 function priceFor(model: string | undefined) {
   if (!model) return null;
   return CLAUDE_PRICING.find((p) => p.match.test(model)) ?? null;
@@ -102,6 +148,7 @@ function parseLine(line: string): {
   key: string | null;
   model: string | undefined;
   usage: Record<string, unknown>;
+  occurredAt: string | null;
 } | null {
   let obj: Record<string, unknown>;
   try {
@@ -127,7 +174,8 @@ function parseLine(line: string): {
     : typeof obj.model === "string"
       ? obj.model
       : undefined;
-  return { key, model, usage };
+  const occurredAt = timestampValue(obj.timestamp ?? obj.created_at ?? message.created_at);
+  return { key, model, usage, occurredAt };
 }
 
 /**
@@ -193,4 +241,120 @@ export async function readClaudeTokenUsage(profileDir: string): Promise<TokenUsa
   total.available = total.message_count > 0;
   total.cost_usd = Math.round(total.cost_usd * 1e6) / 1e6;
   return total;
+}
+
+export async function readClaudeUsageImportEvents(
+  profileDir: string,
+  sourceFingerprint: string,
+): Promise<CliUsageImportScan> {
+  const roots = [join(profileDir, "projects"), join(profileDir, "sessions")];
+  const files: string[] = [];
+  for (const root of roots) files.push(...(await collectJsonl(root)));
+
+  const events: CliUsageImportEvent[] = [];
+  const seen = new Set<string>();
+  const sessions = new Set<string>();
+  let duplicateCount = 0;
+  let unreadableFileCount = 0;
+  let unsupportedFileCount = 0;
+
+  for (const file of files) {
+    let raw: string;
+    let fallbackOccurredAt = new Date().toISOString();
+    try {
+      const info = await stat(file);
+      if (info.size > 64 * 1024 * 1024) {
+        unsupportedFileCount += 1;
+        continue;
+      }
+      fallbackOccurredAt = info.mtime.toISOString();
+      raw = await readFile(file, "utf8");
+    } catch {
+      unreadableFileCount += 1;
+      continue;
+    }
+    const sessionPath = relativeSessionPath(profileDir, file);
+    const externalSessionId = `claude_code:${usageImportHash(`${sourceFingerprint}:${sessionPath}`).slice(0, 32)}`;
+    let contributed = false;
+    let lineNumber = 0;
+    for (const line of raw.split("\n")) {
+      lineNumber += 1;
+      if (!line.trim()) continue;
+      const parsed = parseLine(line);
+      if (!parsed) continue;
+      const usageHash = usagePayloadHash(parsed.usage);
+      const eventMarker = parsed.key ?? `${sessionPath}:${lineNumber}`;
+      const seenKey = `${eventMarker}:${usageHash}`;
+      if (seen.has(seenKey)) {
+        duplicateCount += 1;
+        continue;
+      }
+      seen.add(seenKey);
+      events.push({
+        runtime: "claude_code",
+        occurred_at: parsed.occurredAt ?? fallbackOccurredAt,
+        model: parsed.model ?? null,
+        external_session_id: externalSessionId,
+        session_path: sessionPath,
+        session_name: sessionName(sessionPath),
+        usage_details: claudeUsageDetails(parsed.usage),
+        provider_usage: parsed.usage,
+        idempotency_key: `usage:cli:claude_code:${usageImportHash(`${sourceFingerprint}:${eventMarker}:${usageHash}`)}`,
+        dedupe_confidence: parsed.key ? "high" : "medium",
+        dimensions: { runtime: "claude_code", cli_history_source: "transcripts" },
+        metadata: { source_line: lineNumber },
+      });
+      contributed = true;
+    }
+    if (contributed) sessions.add(sessionPath);
+  }
+
+  return {
+    runtime: "claude_code",
+    source: "transcripts",
+    events,
+    session_count: sessions.size,
+    candidate_event_count: events.length,
+    duplicate_count: duplicateCount,
+    unreadable_file_count: unreadableFileCount,
+    unsupported_file_count: unsupportedFileCount,
+    date_range: dateRange(events),
+  };
+}
+
+function claudeUsageDetails(usage: Record<string, unknown>): Record<string, number> {
+  return {
+    input: num(usage.input_tokens),
+    output: num(usage.output_tokens),
+    input_cache_creation: num(usage.cache_creation_input_tokens),
+    input_cache_read: num(usage.cache_read_input_tokens),
+  };
+}
+
+export function relativeSessionPath(root: string, file: string): string {
+  return relative(root, file).split(/[\\/]/).filter(Boolean).join("/");
+}
+
+export function sessionName(sessionPath: string): string | null {
+  const name = basename(sessionPath).replace(/\.jsonl$/i, "");
+  return name || null;
+}
+
+export function timestampValue(value: unknown): string | null {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+export function dateRange(events: Array<{ occurred_at: string }>): { from: string; to: string } | null {
+  if (events.length === 0) return null;
+  const values = events
+    .map((event) => new Date(event.occurred_at).getTime())
+    .filter((value) => Number.isFinite(value))
+    .sort((a, b) => a - b);
+  if (values.length === 0) return null;
+  return {
+    from: new Date(values[0]).toISOString(),
+    to: new Date(values[values.length - 1]).toISOString(),
+  };
 }

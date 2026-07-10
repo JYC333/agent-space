@@ -115,7 +115,7 @@ class DrilldownFakeDb {
       };
     }
 
-    if (/FROM space_memberships/.test(norm)) {
+    if (/^SELECT role FROM space_memberships/.test(norm)) {
       return { rows: [{ role: "member" }] as Row[], rowCount: 1 };
     }
 

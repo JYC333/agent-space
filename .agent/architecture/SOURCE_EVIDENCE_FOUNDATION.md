@@ -246,7 +246,7 @@ When a user (or an agent acting on a user's behalf) decides that a source
 6. **Permissions / space boundary.** Promotion is same-space only; cross-space
    promotion is denied. Existing knowledge create / source CRUD policy gates
    apply. Agent/run provenance is not human-ownership authority for private or
-   restricted Knowledge.
+   selected-user Knowledge.
 
 This promotion path is the **only** sanctioned bridge between the two stacks.
 Absent it, the stacks stay fully independent.

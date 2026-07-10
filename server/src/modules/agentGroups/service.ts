@@ -111,9 +111,9 @@ export class AgentGroupRunService {
 
     return withDbTransaction(this.pool, async (client) => {
       const repos = this.repos(client);
-      await assertAgentsActive(repos.groups, input.space_id, memberAgentIds);
+      await assertAgentsActive(repos.groups, input.space_id, identity.userId, memberAgentIds);
       const capabilitySnapshots = new Map(
-        (await repos.groups.listAgentCapabilitySnapshots(input.space_id, memberAgentIds))
+        (await repos.groups.listAgentCapabilitySnapshots(input.space_id, identity.userId, memberAgentIds))
           .map((snapshot) => [snapshot.id, snapshot]),
       );
 
@@ -235,12 +235,13 @@ export class AgentGroupRunService {
           input.space_id,
           group.id,
           recipientAgentId,
+          identity.userId,
           "recipient_segments.recipient_agent_ids",
         );
       }
       const recipientSnapshots = plannedRecipientRunCount > 1
         ? new Map(
-          (await repos.groups.listAgentCapabilitySnapshots(input.space_id, allRecipientAgentIds))
+          (await repos.groups.listAgentCapabilitySnapshots(input.space_id, identity.userId, allRecipientAgentIds))
             .map((snapshot) => [snapshot.id, snapshot]),
         )
         : new Map<string, AgentCapabilitySnapshotRecord>();
@@ -253,7 +254,11 @@ export class AgentGroupRunService {
       }> = [];
 
       if (group.root_run_id) {
-        const rootRun = await repos.runs.getRun(input.space_id, group.root_run_id);
+        const rootRun = await repos.runs.getVisibleRun(
+          input.space_id,
+          identity.userId,
+          group.root_run_id,
+        );
         if (!rootRun || rootRun.run_group_id !== group.id) {
           throw new HttpError(409, "Agent group root run is not available");
         }
@@ -463,11 +468,11 @@ export class AgentGroupRunService {
   }> {
     const repo = new PgAgentGroupRepository(this.pool);
     const timeline = await this.getTimeline(identity, groupId, { limit: 200, offset: 0 });
-    const runIds = await repo.listRunIdsForGroup(identity.spaceId, groupId);
+    const runIds = await repo.listRunIdsForGroup(identity.spaceId, groupId, identity.userId);
     const childRunIds = runIds.filter((runId) => runId !== timeline.group.root_run_id);
     const [artifactIds, proposalIds, policyDecisionRecordIds] = await Promise.all([
-      repo.listArtifactIdsForRuns(identity.spaceId, runIds),
-      repo.listProposalIdsForRuns(identity.spaceId, runIds),
+      repo.listArtifactIdsForRuns(identity.spaceId, identity.userId, runIds),
+      repo.listProposalIdsForRuns(identity.spaceId, identity.userId, runIds),
       repo.listPolicyDecisionRecordIdsForGroup(identity.spaceId, groupId),
     ]);
     return {
@@ -550,7 +555,11 @@ export class AgentGroupRunService {
       throw new HttpError(409, "root_run_id must match the agent group root run");
     }
 
-    const parentRun = await repos.runs.getRun(input.space_id, input.parent_run_id);
+    const parentRun = await repos.runs.getVisibleRun(
+      input.space_id,
+      identity.userId,
+      input.parent_run_id,
+    );
     if (!parentRun || parentRun.run_group_id !== group.id) {
       throw new HttpError(404, "Parent run not found in this agent group");
     }
@@ -561,7 +570,7 @@ export class AgentGroupRunService {
       throw new HttpError(409, "Parent run does not belong to the group root lineage");
     }
 
-    await assertAgentsExist(repos.groups, input.space_id, [
+    await assertAgentsExist(repos.groups, input.space_id, identity.userId, [
       input.requesting_agent_id,
       input.target_agent_id,
     ]);
@@ -732,11 +741,13 @@ export class AgentGroupRunService {
           space_id: input.space_id,
           group_id: input.group_id,
           agent_id: input.requesting_agent_id,
+          user_id: group.manager_user_id,
         }),
         repo.getMemberWithAgentStatus({
           space_id: input.space_id,
           group_id: input.group_id,
           agent_id: input.target_agent_id,
+          user_id: group.manager_user_id,
         }),
         repo.runDepth({ space_id: input.space_id, run_id: input.parent_run_id }),
         repo.countDelegationsForParent({
@@ -803,9 +814,10 @@ export class AgentGroupRunService {
 async function assertAgentsActive(
   repo: PgAgentGroupRepository,
   spaceId: string,
+  userId: string,
   agentIds: readonly string[],
 ): Promise<void> {
-  const statuses = await repo.listAgentStatuses(spaceId, agentIds);
+  const statuses = await repo.listAgentStatuses(spaceId, userId, agentIds);
   const byId = new Map(statuses.map((row) => [row.id, row.status]));
   for (const agentId of agentIds) {
     const status = byId.get(agentId);
@@ -821,12 +833,14 @@ async function assertActiveGroupMember(
   spaceId: string,
   groupId: string,
   agentId: string,
+  userId: string,
   fieldName: string,
 ): Promise<void> {
   const member = await repo.getMemberWithAgentStatus({
     space_id: spaceId,
     group_id: groupId,
     agent_id: agentId,
+    user_id: userId,
   });
   if (!member) {
     throw new HttpError(422, `${fieldName} must be a member of this agent group`);
@@ -842,9 +856,10 @@ async function assertActiveGroupMember(
 async function assertAgentsExist(
   repo: PgAgentGroupRepository,
   spaceId: string,
+  userId: string,
   agentIds: readonly string[],
 ): Promise<void> {
-  const statuses = await repo.listAgentStatuses(spaceId, uniqueIds(agentIds));
+  const statuses = await repo.listAgentStatuses(spaceId, userId, uniqueIds(agentIds));
   const existing = new Set(statuses.map((row) => row.id));
   for (const agentId of agentIds) {
     if (!existing.has(agentId)) {

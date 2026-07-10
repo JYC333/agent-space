@@ -279,11 +279,17 @@ runtime adapter. Runtime status must not advertise Docker support.
 
 ## Usage And Output Parsing
 
-There is no product runtime-adapter usage endpoint in the new flow. Run history
-and trace read models remain the source for execution evidence. Current CLI
-specs use generic/plain-text parser behavior: normalized output text, redacted
-stdout/stderr, stable nonzero/timeout error codes, and no artifact paths unless
-explicitly parseable.
+The retired `/runtime-adapters/*/usage` endpoint is not part of the current
+product. Run history and trace read models remain the source for execution
+evidence, while token accounting lives under `/usage`: managed provider calls
+and provider-proxy responses emit ledger events, and managed CLI profiles can
+import transcript-derived lower bounds. CLI login/quota snapshots remain under
+`/credentials/cli/usage*` and are not token-accounting events.
+
+Current CLI specs use generic/plain-text output parser behavior: normalized
+output text, redacted stdout/stderr, stable nonzero/timeout error codes, and no
+artifact paths unless explicitly parseable. Raw output and transcripts are not
+stored in the usage ledger.
 
 ## Adding an Adapter
 

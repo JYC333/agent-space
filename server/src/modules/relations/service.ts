@@ -178,7 +178,7 @@ export class RelationsService {
   }
 
   async getPerson(identity: SpaceUserIdentity, objectId: string): Promise<PersonOut> {
-    const row = await this.repository.getPerson(this.pool, identity.spaceId, objectId);
+    const row = await this.repository.getPerson(this.pool, identity.spaceId, objectId, identity.userId);
     if (!row) throw new HttpError(404, "Relation person not found");
     return personOut(row);
   }
@@ -187,23 +187,25 @@ export class RelationsService {
     identity: SpaceUserIdentity,
     filters: { q: string | null; limit: number; offset: number },
   ): Promise<{ items: PersonOut[]; total: number; limit: number; offset: number }> {
-    const { rows, total } = await this.repository.listPeople(identity.spaceId, filters);
+    const { rows, total } = await this.repository.listPeople(identity.spaceId, identity.userId, filters);
     return page(rows.map(personOut), total, filters.limit, filters.offset);
   }
 
   async updatePerson(identity: SpaceUserIdentity, objectId: string, body: Record<string, unknown>): Promise<PersonOut> {
+    await this.requireOwnedRelationObject(identity, objectId);
     const patch: { title?: string; summary?: string | null; pronouns?: string | null; headline?: string | null } = {};
     if (body.title !== undefined) patch.title = requiredString(body.title, "title");
     if (body.summary !== undefined) patch.summary = optionalString(body.summary);
     if (body.pronouns !== undefined) patch.pronouns = optionalString(body.pronouns);
     if (body.headline !== undefined) patch.headline = optionalString(body.headline);
-    const updated = await this.repository.updatePerson(identity.spaceId, objectId, patch);
+    const updated = await this.repository.updatePerson(identity.spaceId, objectId, identity.userId, patch);
     if (!updated) throw new HttpError(404, "Relation person not found");
     return personOut(updated);
   }
 
   async archivePerson(identity: SpaceUserIdentity, objectId: string): Promise<void> {
-    const existing = await this.repository.getPerson(this.pool, identity.spaceId, objectId);
+    await this.requireOwnedRelationObject(identity, objectId);
+    const existing = await this.repository.getPerson(this.pool, identity.spaceId, objectId, identity.userId);
     if (!existing) throw new HttpError(404, "Relation person not found");
     await this.repository.archivePerson(identity.spaceId, objectId);
   }
@@ -214,7 +216,7 @@ export class RelationsService {
     if (!ORG_TYPES.has(orgType)) throw new HttpError(422, `org_type must be one of ${[...ORG_TYPES].join(", ")}`);
     const parentObjectId = optionalString(body.parent_organization_object_id);
     if (parentObjectId) {
-      const parent = await this.repository.getOrganization(this.pool, identity.spaceId, parentObjectId);
+      const parent = await this.repository.getOrganization(this.pool, identity.spaceId, parentObjectId, identity.userId);
       if (!parent) throw new HttpError(422, "parent_organization_object_id does not reference an existing organization");
     }
     return withDbTransaction(this.pool, async (client) => {
@@ -232,7 +234,7 @@ export class RelationsService {
   }
 
   async getOrganization(identity: SpaceUserIdentity, objectId: string): Promise<OrganizationOut> {
-    const row = await this.repository.getOrganization(this.pool, identity.spaceId, objectId);
+    const row = await this.repository.getOrganization(this.pool, identity.spaceId, objectId, identity.userId);
     if (!row) throw new HttpError(404, "Relation organization not found");
     return organizationOut(row);
   }
@@ -241,12 +243,12 @@ export class RelationsService {
     identity: SpaceUserIdentity,
     filters: { q: string | null; limit: number; offset: number },
   ): Promise<{ items: OrganizationOut[]; total: number; limit: number; offset: number }> {
-    const { rows, total } = await this.repository.listOrganizations(identity.spaceId, filters);
+    const { rows, total } = await this.repository.listOrganizations(identity.spaceId, identity.userId, filters);
     return page(rows.map(organizationOut), total, filters.limit, filters.offset);
   }
 
   async createIdentity(identity: SpaceUserIdentity, objectId: string, body: Record<string, unknown>) {
-    await this.requireRelationObject(identity, objectId);
+    await this.requireOwnedRelationObject(identity, objectId);
     const idType = requiredString(body.id_type, "id_type");
     if (!IDENTITY_TYPES.has(idType)) throw new HttpError(422, `id_type must be one of ${[...IDENTITY_TYPES].join(", ")}`);
     const source = optionalString(body.source) ?? "manual";
@@ -272,7 +274,7 @@ export class RelationsService {
   }
 
   async deleteIdentity(identity: SpaceUserIdentity, identityId: string): Promise<void> {
-    const deleted = await this.repository.deleteIdentity(identity.spaceId, identityId);
+    const deleted = await this.repository.deleteIdentity(identity.spaceId, identityId, identity.userId);
     if (!deleted) throw new HttpError(404, "Relation identity not found");
   }
 
@@ -283,9 +285,10 @@ export class RelationsService {
     if (!PROVENANCE_SOURCES.has(source)) throw new HttpError(422, `source must be one of ${[...PROVENANCE_SOURCES].join(", ")}`);
     const confidence = numberValue(body.confidence);
     assertConfidence(confidence);
+    await this.requireOwnedRelationObject(identity, personObjectId);
     const [person, organization] = await Promise.all([
-      this.repository.getPerson(this.pool, identity.spaceId, personObjectId),
-      this.repository.getOrganization(this.pool, identity.spaceId, organizationObjectId),
+      this.repository.getPerson(this.pool, identity.spaceId, personObjectId, identity.userId),
+      this.repository.getOrganization(this.pool, identity.spaceId, organizationObjectId, identity.userId),
     ]);
     if (!person) throw new HttpError(422, "person_object_id does not reference an existing relation person");
     if (!organization) throw new HttpError(422, "organization_object_id does not reference an existing relation organization");
@@ -310,11 +313,14 @@ export class RelationsService {
     identity: SpaceUserIdentity,
     filters: { personObjectId: string | null; organizationObjectId: string | null },
   ) {
-    const rows = await this.repository.listAffiliations(identity.spaceId, filters);
+    const rows = await this.repository.listAffiliations(identity.spaceId, identity.userId, filters);
     return rows.map(affiliationOut);
   }
 
   async endAffiliation(identity: SpaceUserIdentity, affiliationId: string, endDate: string | null) {
+    const personObjectId = await this.repository.affiliationPersonObjectId(identity.spaceId, affiliationId);
+    if (!personObjectId) throw new HttpError(404, "Relation affiliation not found");
+    await this.requireOwnedRelationObject(identity, personObjectId);
     return withDbTransaction(this.pool, async (client) => {
       const row = await this.repository.endAffiliation(client, identity.spaceId, affiliationId, endDate);
       if (!row) throw new HttpError(404, "Relation affiliation not found");
@@ -323,7 +329,7 @@ export class RelationsService {
   }
 
   async createNote(identity: SpaceUserIdentity, objectId: string, body: Record<string, unknown>) {
-    await this.requireRelationObject(identity, objectId);
+    await this.requireOwnedRelationObject(identity, objectId);
     const row = await this.repository.createNote({
       spaceId: identity.spaceId,
       objectId,
@@ -341,7 +347,7 @@ export class RelationsService {
   }
 
   async createSourceLink(identity: SpaceUserIdentity, objectId: string, body: Record<string, unknown>) {
-    await this.requireRelationObject(identity, objectId);
+    await this.requireOwnedRelationObject(identity, objectId);
     const linkType = requiredString(body.link_type, "link_type");
     if (!SOURCE_LINK_TYPES.has(linkType)) {
       throw new HttpError(422, `link_type must be one of ${[...SOURCE_LINK_TYPES].join(", ")}`);
@@ -379,12 +385,18 @@ export class RelationsService {
   }
 
   async search(identity: SpaceUserIdentity, q: string, limit: number) {
-    return this.repository.search(identity.spaceId, q, Math.max(1, Math.min(50, limit)));
+    return this.repository.search(identity.spaceId, identity.userId, q, Math.max(1, Math.min(50, limit)));
   }
 
   private async requireRelationObject(identity: SpaceUserIdentity, objectId: string): Promise<void> {
-    const exists = await this.repository.existsRelationObject(identity.spaceId, objectId);
+    const exists = await this.repository.existsRelationObject(identity.spaceId, objectId, identity.userId);
     if (!exists) throw new HttpError(404, "Relation object not found");
+  }
+
+  private async requireOwnedRelationObject(identity: SpaceUserIdentity, objectId: string): Promise<void> {
+    if (!(await this.repository.isOwnedRelationObject(identity.spaceId, objectId, identity.userId))) {
+      throw new HttpError(404, "Relation object not found");
+    }
   }
 
   private async requireSourceLinkReferences(
@@ -413,7 +425,7 @@ export class RelationsService {
     const checks: Array<Promise<void>> = [];
     if (input.activityId) {
       checks.push(
-        this.repository.activityExistsInSpace(identity.spaceId, input.activityId).then((exists) => {
+        this.repository.activityExistsInSpace(identity.spaceId, input.activityId, identity.userId).then((exists) => {
           if (!exists) throw new HttpError(422, "activity_id does not reference an activity in this space");
         }),
       );

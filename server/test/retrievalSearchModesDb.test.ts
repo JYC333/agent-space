@@ -128,6 +128,11 @@ beforeEach(async () => {
      VALUES ($1, 'U', 'active', now(), now())`,
     [VIEWER],
   );
+  await pool.query(
+    `INSERT INTO space_memberships (id, space_id, user_id, role, status, created_at, updated_at)
+     VALUES ('modes-viewer', $1, $2, 'owner', 'active', now(), now())`,
+    [SPACE, VIEWER],
+  );
 });
 
 async function seed(): Promise<void> {

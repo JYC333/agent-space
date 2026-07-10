@@ -27,7 +27,7 @@ export class ProviderQueryEmbedder implements QueryEmbedder {
   async embedQuery(
     spaceId: string,
     text: string,
-    opts: { cache?: boolean } = {},
+    opts: { cache?: boolean; subjectUserId?: string } = {},
   ): Promise<number[] | null> {
     const trimmed = text.trim();
     if (!trimmed) return null;
@@ -44,6 +44,7 @@ export class ProviderQueryEmbedder implements QueryEmbedder {
         dimensions: this.expectedDimensions,
         inputType: "query",
         egressPolicy: this.egressPolicy,
+        metering: { subject_user_id: opts.subjectUserId },
       });
       const vector = result.vectors[0];
       if (!Array.isArray(vector) || vector.length !== this.expectedDimensions) return null;

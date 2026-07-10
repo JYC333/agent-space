@@ -23,6 +23,7 @@ CREATE TABLE spaces (
   name varchar(256) NOT NULL,
   type varchar(32) NOT NULL,
   created_by_user_id varchar(36),
+  oversight_mode varchar(16) NOT NULL DEFAULT 'none',
   created_at timestamptz NOT NULL,
   updated_at timestamptz NOT NULL
 );
@@ -221,13 +222,16 @@ describe("PgAuthRepository", () => {
     });
     expect(rawSession).toMatch(/^[0-9a-f]{64}$/);
 
-    const spaces = await pool.query("SELECT id, name, type FROM spaces WHERE created_by_user_id = $1", [
+    const spaces = await pool.query("SELECT id, name, type, oversight_mode FROM spaces WHERE created_by_user_id = $1", [
       user.id,
     ]);
     expect(spaces.rows).toHaveLength(1);
     expect(spaces.rows[0]).toMatchObject({
       name: "New User's Personal Space",
       type: "personal",
+      // Personal Spaces are forced to 'none' — there is no request body in
+      // this bootstrap path, so the column default is the only enforcement.
+      oversight_mode: "none",
     });
     const spaceId = spaces.rows[0].id as string;
     const membership = await pool.query(

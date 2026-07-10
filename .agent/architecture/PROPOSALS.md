@@ -55,14 +55,14 @@ Proposals are the product review and application boundary for durable mutations.
   `knowledge_create`, `knowledge_update`, `knowledge_archive`,
   `claim_create`, `claim_update`, `claim_archive`,
   `object_relation_create`, and `object_relation_delete`.
-- Knowledge read and proposal creation endpoints are viewer-aware. Private and
-  restricted Knowledge is owner-readable for the MVP; unauthorized same-space
+- Knowledge read and proposal creation endpoints are viewer-aware. Private
+  Knowledge requires its owner and selected-user Knowledge requires an active grant; unauthorized same-space
   users receive 404 for item reads and cannot create update/archive/relation
   proposals involving hidden endpoints.
 - Knowledge proposal apply must repeat domain-specific authorization after
   `proposal.apply` allows acceptance when that applier is registered. Malformed
   or internally seeded proposals must not mutate another user's private or
-  restricted Knowledge or relations that include private or restricted endpoints.
+  selected-user Knowledge or relations that include inaccessible endpoints.
 - Claim proposal apply enforces claim lifecycle rules: no `superseded` or
   `archived` claim creation, terminal archived claims, restricted
   `active/disputed/superseded/rejected` transitions, disputed-resolution

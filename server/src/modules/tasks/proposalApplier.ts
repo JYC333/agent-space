@@ -140,12 +140,12 @@ async function applyFollowUpTaskProposal(ctx: ProposalApplyContext): Promise<Pro
   const inserted = await ctx.db.query<{ id: string; space_id: string; title: string; status: string }>(
     `INSERT INTO tasks (
        id, space_id, workspace_id, title, description, task_type, status, priority,
-       risk_level, visibility, created_by_user_id, source_proposal_id, source_run_id,
+       risk_level, visibility, owner_user_id, created_by_user_id, source_proposal_id, source_run_id,
        acceptance_criteria_json, required_outputs_json, tags, metadata_json,
        created_at, updated_at
      ) VALUES (
        $1, $2, $3, $4, $5, $6, 'inbox', $7,
-       $8, $9, $10, $11, $12,
+       $8, $9, $10, $10, $11, $12,
        $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb,
        $17, $17
      ) RETURNING id, space_id, title, status`,

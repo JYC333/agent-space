@@ -11,7 +11,7 @@
  */
 
 import { z } from "zod";
-import { IdSchema, ISODateTimeSchema } from "./common.js";
+import { IdSchema, ISODateTimeSchema, SpaceOversightModeSchema } from "./common.js";
 
 // ---------------------------------------------------------------------------
 // Lightweight references (id + the minimum a UI needs to label the entity)
@@ -21,6 +21,10 @@ export const SpaceRefSchema = z.object({
   id: IdSchema,
   name: z.string(),
   type: z.string(), // personal | family | team (see SPACE_TYPE_VALUES)
+  // Older consumers may omit the field; server-produced Space DTOs always
+  // include the persisted mode and parsing normalizes legacy payloads to the
+  // fail-closed default.
+  oversight_mode: SpaceOversightModeSchema.default("none"),
 });
 
 export const UserRefSchema = z.object({

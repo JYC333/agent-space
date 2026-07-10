@@ -1,6 +1,7 @@
 import type { ServerConfig } from "../../config";
 import { dateIso, dbPool, HttpError, page, requiredString, optionalString, numberValue, withDbTransaction, type SpaceUserIdentity } from "../routeUtils/common";
 import { AcademicRepository, type AcademicAuthorRow, type AcademicCitationRow, type AcademicPaperRow } from "./repository";
+import { contentOwnerFromDb } from "../access/contentAccessQuery";
 
 const PAPER_TYPES = new Set(["article", "preprint", "conference_paper", "book_chapter", "thesis", "report", "other"]);
 
@@ -82,7 +83,11 @@ export class AcademicService {
     const doi = optionalString(body.doi);
     const arxivId = optionalString(body.arxiv_id);
     if (doi || arxivId) {
-      const existing = await this.repository.findByExternalId(identity.spaceId, { doi, arxivId });
+      const existing = await this.repository.findByExternalId(
+        identity.spaceId,
+        identity.userId,
+        { doi, arxivId },
+      );
       if (existing) throw new HttpError(409, "A paper with this doi/arxiv_id already exists in this space");
     }
     return withDbTransaction(this.pool, async (client) => {
@@ -105,7 +110,7 @@ export class AcademicService {
   }
 
   async getPaper(identity: SpaceUserIdentity, objectId: string): Promise<PaperOut> {
-    const row = await this.repository.getPaper(this.pool, identity.spaceId, objectId);
+    const row = await this.repository.getPaper(this.pool, identity.spaceId, objectId, identity.userId);
     if (!row) throw new HttpError(404, "Paper not found");
     return paperOut(row);
   }
@@ -114,27 +119,29 @@ export class AcademicService {
     identity: SpaceUserIdentity,
     filters: { q: string | null; limit: number; offset: number },
   ): Promise<{ items: PaperOut[]; total: number; limit: number; offset: number }> {
-    const { rows, total } = await this.repository.listPapers(identity.spaceId, filters);
+    const { rows, total } = await this.repository.listPapers(identity.spaceId, identity.userId, filters);
     return page(rows.map(paperOut), total, filters.limit, filters.offset);
   }
 
   async updatePaper(identity: SpaceUserIdentity, objectId: string, body: Record<string, unknown>): Promise<PaperOut> {
+    await this.assertPaperOwner(identity, objectId);
     const patch: { title?: string; summary?: string | null; venue?: string | null; citedByCount?: number | null; referenceCount?: number | null } = {};
     if (body.title !== undefined) patch.title = requiredString(body.title, "title");
     if (body.summary !== undefined) patch.summary = optionalString(body.summary);
     if (body.venue !== undefined) patch.venue = optionalString(body.venue);
     if (body.cited_by_count !== undefined) patch.citedByCount = numberValue(body.cited_by_count);
     if (body.reference_count !== undefined) patch.referenceCount = numberValue(body.reference_count);
-    const updated = await this.repository.updatePaper(identity.spaceId, objectId, patch);
+    const updated = await this.repository.updatePaper(identity.spaceId, objectId, identity.userId, patch);
     if (!updated) throw new HttpError(404, "Paper not found");
     return paperOut(updated);
   }
 
   async linkAuthor(identity: SpaceUserIdentity, paperObjectId: string, body: Record<string, unknown>) {
-    const paper = await this.repository.getPaper(this.pool, identity.spaceId, paperObjectId);
+    await this.assertPaperOwner(identity, paperObjectId);
+    const paper = await this.repository.getPaper(this.pool, identity.spaceId, paperObjectId, identity.userId);
     if (!paper) throw new HttpError(404, "Paper not found");
     const personObjectId = requiredString(body.person_object_id, "person_object_id");
-    const personExists = await this.repository.personExists(identity.spaceId, personObjectId);
+    const personExists = await this.repository.personExists(identity.spaceId, personObjectId, identity.userId);
     if (!personExists) throw new HttpError(422, "person_object_id does not reference an existing relation person");
     const relationId = await this.repository.linkAuthor(identity.spaceId, paperObjectId, personObjectId, {
       authorPosition: numberValue(body.author_position),
@@ -145,18 +152,19 @@ export class AcademicService {
   }
 
   async listAuthors(identity: SpaceUserIdentity, paperObjectId: string) {
-    const paper = await this.repository.getPaper(this.pool, identity.spaceId, paperObjectId);
+    const paper = await this.repository.getPaper(this.pool, identity.spaceId, paperObjectId, identity.userId);
     if (!paper) throw new HttpError(404, "Paper not found");
-    const rows = await this.repository.listAuthors(identity.spaceId, paperObjectId);
+    const rows = await this.repository.listAuthors(identity.spaceId, paperObjectId, identity.userId);
     return rows.map(authorOut);
   }
 
   async linkCitation(identity: SpaceUserIdentity, citingPaperObjectId: string, body: Record<string, unknown>) {
     const citedPaperObjectId = requiredString(body.cited_paper_object_id, "cited_paper_object_id");
     if (citedPaperObjectId === citingPaperObjectId) throw new HttpError(422, "A paper cannot cite itself");
+    await this.assertPaperOwner(identity, citingPaperObjectId);
     const [citingPaper, citedPaper] = await Promise.all([
-      this.repository.getPaper(this.pool, identity.spaceId, citingPaperObjectId),
-      this.repository.getPaper(this.pool, identity.spaceId, citedPaperObjectId),
+      this.repository.getPaper(this.pool, identity.spaceId, citingPaperObjectId, identity.userId),
+      this.repository.getPaper(this.pool, identity.spaceId, citedPaperObjectId, identity.userId),
     ]);
     if (!citingPaper) throw new HttpError(404, "Citing paper not found");
     if (!citedPaper) throw new HttpError(422, "cited_paper_object_id does not reference an existing paper in this space");
@@ -165,16 +173,22 @@ export class AcademicService {
   }
 
   async listCitations(identity: SpaceUserIdentity, paperObjectId: string) {
-    const paper = await this.repository.getPaper(this.pool, identity.spaceId, paperObjectId);
+    const paper = await this.repository.getPaper(this.pool, identity.spaceId, paperObjectId, identity.userId);
     if (!paper) throw new HttpError(404, "Paper not found");
-    const rows = await this.repository.listCitations(identity.spaceId, paperObjectId);
+    const rows = await this.repository.listCitations(identity.spaceId, paperObjectId, identity.userId);
     return rows.map(citationOut);
   }
 
   async listCitedBy(identity: SpaceUserIdentity, paperObjectId: string) {
-    const paper = await this.repository.getPaper(this.pool, identity.spaceId, paperObjectId);
+    const paper = await this.repository.getPaper(this.pool, identity.spaceId, paperObjectId, identity.userId);
     if (!paper) throw new HttpError(404, "Paper not found");
-    const rows = await this.repository.listCitedBy(identity.spaceId, paperObjectId);
+    const rows = await this.repository.listCitedBy(identity.spaceId, paperObjectId, identity.userId);
     return rows.map(citationOut);
+  }
+
+  private async assertPaperOwner(identity: SpaceUserIdentity, objectId: string): Promise<void> {
+    if (!(await contentOwnerFromDb(this.pool, identity, "space_object", objectId))) {
+      throw new HttpError(404, "Paper not found");
+    }
   }
 }

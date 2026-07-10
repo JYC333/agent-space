@@ -14,6 +14,11 @@ import {
 import { loadProtocol } from "../providers/protocolRuntime";
 import { loadSourcePolicySnapshots } from "../retrieval/sourcePolicy";
 import { CLAIM_KINDS } from "./knowledgeRepositoryRows";
+import {
+  contentOwnerFilterSql,
+  contentReadSql,
+  contentVisibilityFilterSql,
+} from "../access/contentAccessSql";
 
 export const CLAIM_CANDIDATE_PACKET_ARTIFACT_TYPE = "claim_candidate_packet";
 export const CLAIM_CANDIDATE_PACKET_PROPOSAL_TYPE = "claim_candidate_packet";
@@ -181,17 +186,20 @@ async function loadVisibleSourceArtifacts(
   promotePrivateSourcesToSpaceOps: boolean,
 ): Promise<SourceArtifactRow[]> {
   const allowedVisibilities = reviewScope === "space_ops"
-    ? promotePrivateSourcesToSpaceOps ? ["space_shared", "private"] : ["space_shared"]
-    : ["private"];
+    ? promotePrivateSourcesToSpaceOps
+      ? (["space_shared", "private"] as const)
+      : (["space_shared"] as const)
+    : (["private"] as const);
   const result = await db.query<SourceArtifactRow>(
-    `SELECT id, artifact_type, title, visibility, metadata_json
-       FROM artifacts
-      WHERE space_id = $1
-        AND owner_user_id = $2
-        AND visibility = ANY($5::varchar[])
-        AND id = ANY($3::varchar[])
-        AND artifact_type = ANY($4::varchar[])
-      ORDER BY array_position($3::varchar[], id)`,
+    `SELECT a.id, a.artifact_type, a.title, a.visibility, a.metadata_json
+       FROM artifacts a
+      WHERE a.space_id = $1
+        AND ${contentReadSql("artifact", "a", "$2")}
+        AND ${contentOwnerFilterSql("artifact", "a", "$2")}
+        AND ${contentVisibilityFilterSql("a", allowedVisibilities)}
+        AND a.id = ANY($3::varchar[])
+        AND a.artifact_type = ANY($4::varchar[])
+      ORDER BY array_position($3::varchar[], a.id)`,
     [
       spaceId,
       ownerUserId,
@@ -203,7 +211,6 @@ async function loadVisibleSourceArtifacts(
         "memory_maintenance_report",
         "claim_contradiction_report",
       ],
-      allowedVisibilities,
     ],
   );
   return result.rows;

@@ -18,6 +18,7 @@ import { EmptyState } from '../../components/ui/empty-state'
 import { PreviewBadge, DryRunBanner } from '../../components/PreviewBadge'
 import { ScopeBadge } from '../../components/ScopeBadge'
 import { ContextArtifactPicker } from '../artifacts/ContextArtifactPicker'
+import { ContentAccessControl } from '../../components/ContentAccessControl'
 
 type TaskDetailTab = 'overview' | 'runs' | 'artifacts' | 'proposals'
 
@@ -155,7 +156,10 @@ export default function TaskDetailPage() {
       </div>
 
       <div className="border-b border-border pb-4 space-y-3">
-        <h1 className="text-xl font-semibold tracking-tight">{task.title}</h1>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <h1 className="text-xl font-semibold tracking-tight">{task.title}</h1>
+          <ContentAccessControl resourceType="task" resourceId={task.id} ownerUserId={task.owner_user_id} />
+        </div>
         <p className="text-xs text-muted-foreground">Viewing: {activeSpaceName ?? activeSpaceId ?? 'No operational space selected'}</p>
         <div className="flex flex-wrap gap-1.5 items-center">
           <StatusBadge status={task.status} />

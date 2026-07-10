@@ -93,6 +93,12 @@ NetworkProfiles are space-scoped reusable routing profiles. They support
 proxy URLs with embedded usernames or passwords are rejected. `NO_PROXY` values
 are applied to both server-side provider fetches and CLI subprocess proxy env.
 
+Provider calls emit best-effort observations to the append-only `usage` module.
+Managed API invocations and provider-proxy responses are normalized into
+mutually exclusive token buckets; pricing rules may add auditable cost
+estimates. Prompts, completions, request/response bodies, credentials, and raw
+CLI transcripts are excluded. See `docs/TOKEN_USAGE_METERING.md`.
+
 ## Per-Space Model Config (Lightweight Future-Proofing)
 
 Agent records carry `model_config_json` — the model used for a specific agent can differ from the system default:
@@ -108,15 +114,17 @@ This is the only per-agent provider customization implemented now. It covers the
 
 ## What We Have NOT Built
 
-- Per-space API key management UI (enterprise BYO keys)
-- Provider routing table (route space A to Anthropic, space B to Azure OpenAI)
+- A separate Space-owned enterprise BYO-key authority beyond the current
+  user-owned providers and explicit Space grants
+- A general rule-based provider routing table beyond Space defaults,
+  provider-task policies, and provider fallback chains
 - Provider health dashboard
-- Cost tracking / token usage metering
-- On-premise LLM endpoint configuration UI
+- Dedicated on-prem fleet administration beyond configurable provider base URLs
 
-These are deferred until commercial need. The current provider store is enough
-for personal/family use because keys are encrypted, space-owned, policy-gated,
-and not injected as broad process environment.
+These are deferred until commercial need. The current provider store and usage
+ledger cover the implemented personal/family operational model: keys are
+encrypted, user-owned, Space-granted, policy-gated, and never injected as broad
+process environment.
 
 ## Provider Risks to Document
 

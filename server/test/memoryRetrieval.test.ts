@@ -24,10 +24,11 @@ interface MemRow {
   deleted_at: unknown;
   sensitivity_level: string | null;
   visibility: string | null;
+  access_level: string;
+  effective_access_level?: string;
   owner_user_id: string | null;
   scope_type: string | null;
   workspace_id: string | null;
-  selected_user_ids: unknown;
   project_id: string | null;
   title: string | null;
   content: string | null;
@@ -41,10 +42,10 @@ function memRow(overrides: Partial<MemRow> = {}): MemRow {
     deleted_at: null,
     sensitivity_level: "normal",
     visibility: "space_shared",
+    access_level: "full",
     owner_user_id: USER_A,
     scope_type: "user",
     workspace_id: null,
-    selected_user_ids: null,
     project_id: null,
     title: "Coffee preferences",
     content: "Prefers oat milk flat white in the morning.",
@@ -142,9 +143,21 @@ class MemorySearchFakeDb implements Queryable {
       const batch = Array.isArray(params[1]);
       const spaceId = batch ? params[0] as string : params[1] as string;
       const ids = batch ? params[1] as string[] : [params[0] as string];
+      const viewerUserId = batch && typeof params[2] === "string" ? params[2] as string : null;
       const rows = this.memories.filter(
         (m) => ids.includes(m.id) && m.space_id === spaceId && m.status === "active" && m.deleted_at === null,
-      );
+      ).filter((m) => {
+        if (!viewerUserId) return true;
+        if (m.sensitivity_level === "highly_restricted" && m.owner_user_id !== viewerUserId) return false;
+        if (m.project_id) {
+          const project = this.projects.get(m.project_id);
+          const projectAllowed = this.spaceType === "personal"
+            || project?.owner_user_id === viewerUserId
+            || this.members.has(`${m.project_id}:${viewerUserId}`);
+          if (!projectAllowed) return false;
+        }
+        return m.owner_user_id === viewerUserId || m.visibility === "space_shared";
+      }).map((m) => ({ ...m, effective_access_level: m.owner_user_id === viewerUserId ? "full" : m.access_level }));
       return result(rows as Row[]);
     }
     if (norm.includes("FROM spaces WHERE id")) {
@@ -275,9 +288,9 @@ describe("Memory zero-LLM retrieval create-safety", () => {
     ).toHaveLength(0);
   });
 
-  it("matches a summary_only memory but redacts its content for a non-owner", async () => {
+  it("matches summary-access memory but redacts its content for a non-owner", async () => {
     const db = new MemorySearchFakeDb();
-    db.addMemory(memRow({ visibility: "summary_only", owner_user_id: USER_B }));
+    db.addMemory(memRow({ visibility: "space_shared", access_level: "summary", owner_user_id: USER_B }));
     db.addAlias(MEM_A, "Coffee preferences", "title");
 
     const out = await service(db).assessCreateSafety({
@@ -288,7 +301,7 @@ describe("Memory zero-LLM retrieval create-safety", () => {
     });
 
     expect(out.matches[0]?.object_id).toBe(MEM_A);
-    // Content must not leak through the snippet for a non-owner under summary_only.
+    // Content must not leak through the snippet for summary access.
     expect(out.matches[0]?.snippet).toBeNull();
   });
 
@@ -392,30 +405,21 @@ describe("Memory retrieval projection eligibility", () => {
   const base = {
     scope_type: "user",
     visibility: "space_shared",
+    access_level: "full",
     owner_user_id: null,
     sensitivity_level: "normal",
-    selected_user_ids: null,
   };
 
   it("keeps memories that can be returned by at least one viewer", () => {
     expect(isMemoryRetrievalProjectable(base)).toBe(true);
     expect(isMemoryRetrievalProjectable({ ...base, visibility: "private", owner_user_id: USER_A })).toBe(true);
-    expect(
-      isMemoryRetrievalProjectable({
-        ...base,
-        visibility: "restricted",
-        selected_user_ids: [USER_A],
-      }),
-    ).toBe(true);
+    expect(isMemoryRetrievalProjectable({ ...base, visibility: "selected_users" })).toBe(true);
   });
 
   it("drops memory rows that this retrieval surface can never return", () => {
     expect(isMemoryRetrievalProjectable({ ...base, scope_type: "system" })).toBe(false);
-    expect(isMemoryRetrievalProjectable({ ...base, visibility: "public_template" })).toBe(false);
-    expect(isMemoryRetrievalProjectable({ ...base, visibility: "private" })).toBe(false);
-    expect(isMemoryRetrievalProjectable({ ...base, visibility: "workspace_shared" })).toBe(false);
-    expect(isMemoryRetrievalProjectable({ ...base, sensitivity_level: "highly_restricted" })).toBe(false);
-    expect(isMemoryRetrievalProjectable({ ...base, visibility: "restricted", selected_user_ids: [] })).toBe(false);
+    expect(isMemoryRetrievalProjectable({ ...base, visibility: "unknown" })).toBe(false);
+    expect(isMemoryRetrievalProjectable({ ...base, scope_type: "system" })).toBe(false);
   });
 });
 
@@ -446,12 +450,12 @@ class MemoryProjectionFakeDb implements Queryable {
           workspace_id: null,
           owner_user_id: USER_A,
           visibility: "space_shared",
+          access_level: "full",
           memory_type: "semantic",
           title: "Coffee preferences",
           content: "Prefers oat milk flat white.",
           sensitivity_level: "normal",
           scope_type: "user",
-          selected_user_ids: null,
           ...this.rowOverrides,
         },
       ] as Row[]);

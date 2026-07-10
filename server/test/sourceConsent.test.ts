@@ -181,6 +181,7 @@ function existingConnection(overrides: Partial<SourceConnectionRow> = {}): Sourc
     owner_user_id: "user-1",
     credential_id: null,
     visibility: "private",
+    access_level: "full",
     name: "Inbox",
     endpoint_url: null,
     status: "active",

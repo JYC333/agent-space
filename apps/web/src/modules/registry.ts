@@ -304,6 +304,15 @@ export const MODULE_REGISTRY: Module[] = [
     hasSubRoutes: true,
     component: lazy(() => import('./artifacts/ArtifactsModule')),
   },
+  {
+    id: 'publications', label: 'Shared', path: '/publications',
+    section: 'knowledge', group: 'work', icon: 'share-2',
+    description: 'Review targeted snapshots shared with this space and manage publications from this space.',
+    source: 'built_in', capabilityId: undefined,
+    enabled: true, visible: true, planned: false,
+    perspectiveType: 'space-scoped',
+    component: lazy(() => import('./publications/PublicationsPage')),
+  },
 
   // ── Knowledge ─────────────────────────────────────────────────────────────
   {
@@ -542,6 +551,15 @@ export const MODULE_REGISTRY: Module[] = [
     enabled: true, visible: true, planned: false,
     perspectiveType: 'space-scoped',
     component: lazy(() => import('./providers/ModelProvidersPage')),
+  },
+  {
+    id: 'usage', label: 'Token Usage', path: '/usage',
+    section: 'dev', group: 'system', icon: 'bar-chart-3',
+    description: 'Inspect model token usage, accuracy, platform attribution, sessions, dimensions, and local CLI history imports.',
+    source: 'built_in', capabilityId: undefined,
+    enabled: true, visible: true, planned: false,
+    perspectiveType: 'space-scoped',
+    component: lazy(() => import('./usage/UsagePage')),
   },
   {
     id: 'network_profiles', label: 'Network', path: '/network-profiles',

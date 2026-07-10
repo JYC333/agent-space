@@ -2,7 +2,6 @@ import type { ServerConfig } from "../../config";
 import { getDbPool } from "../../db/pool";
 import {
   HttpError,
-  canReadByVisibility,
   numberValue,
   type Queryable,
   type SpaceUserIdentity,
@@ -12,10 +11,9 @@ import {
   ProviderInvocationError,
   completeProviderText,
 } from "../providers/invocation/invocation";
-import {
-  canReadMemory,
-  type MemoryAuthFields,
-} from "../memory/memoryReadAuth";
+import type { MemoryAuthFields } from "../memory/memoryReadAuth";
+import { contentResourceDefinition } from "../access/contentAccessRegistry";
+import { contentAccessLevelSql, contentReadSql } from "../access/contentAccessSql";
 import { writePolicyAudit } from "../policy/auditWriter";
 import { assertProjectWriter } from "./access";
 import {
@@ -55,6 +53,7 @@ interface GeneratorMemoryRow extends MemoryAuthFields {
   updated_at: unknown;
   source_trust: string | null;
 }
+const MEMORY_DEFINITION = contentResourceDefinition("memory")!;
 
 interface ActivityContextRow {
   id: string;
@@ -115,6 +114,7 @@ type CompleteText = (
     system: string;
     user: string;
     maxTokens: number;
+    subjectUserId: string;
   },
 ) => Promise<{ text: string; model: string; usage: Record<string, unknown> }>;
 
@@ -164,6 +164,7 @@ export class ProjectPublicSummaryGenerator {
         system: prompt.system,
         user: prompt.user,
         maxTokens: clampMaxTokens(input.maxTokens),
+        subjectUserId: identity.userId,
       });
     } catch (error) {
       if (error instanceof ProviderInvocationError) {
@@ -315,66 +316,63 @@ export class ProjectPublicSummaryGenerator {
     return result.rows[0] ?? null;
   }
 
+  // loadMemories/loadActivities/loadArtifacts/loadProposals all pass
+  // includeOversight: false — their output can become a `review_status =
+  // 'approved'` project public summary, readable by the whole Space. Space
+  // oversight is a read-only capability for the admin's own browsing; it must
+  // not let another member's otherwise-private content flow into a
+  // space-wide published artifact just because the triggering owner/admin
+  // happens to have oversight visibility (Decision Matrix #4/#7).
   private async loadMemories(identity: SpaceUserIdentity, projectId: string): Promise<GeneratorMemoryRow[]> {
     const result = await this.db.query<GeneratorMemoryRow>(
-      `SELECT id, space_id, subject_user_id, owner_user_id, workspace_id,
+      `SELECT me.id, me.space_id, me.subject_user_id, me.owner_user_id, me.workspace_id,
               scope_type, namespace, memory_type, title, content, visibility,
-              sensitivity_level, selected_user_ids, tags, importance, updated_at,
+              access_level, ${contentAccessLevelSql({ definition: MEMORY_DEFINITION, alias: "me", userExpr: "$3", includeOversight: false })} AS effective_access_level,
+              sensitivity_level, tags, importance, updated_at,
               source_trust, project_id, deleted_at
-         FROM memory_entries
+         FROM memory_entries me
         WHERE space_id = $1
           AND project_id = $2
           AND status = 'active'
           AND deleted_at IS NULL
           AND sensitivity_level <> 'highly_restricted'
+          AND scope_type <> 'system'
+          AND ${contentReadSql("memory", "me", "$3", { includeOversight: false })}
         ORDER BY importance DESC, updated_at DESC, id DESC
         LIMIT 24`,
-      [identity.spaceId, projectId],
+      [identity.spaceId, projectId, identity.userId],
     );
-    return result.rows.filter((row) =>
-      canReadMemory(row, {
-        userId: identity.userId,
-        spaceId: identity.spaceId,
-        workspaceId: null,
-        includeSystemScope: false,
-      }),
-    );
+    return result.rows;
   }
 
   private async loadActivities(identity: SpaceUserIdentity, projectId: string): Promise<ActivityContextRow[]> {
     const result = await this.db.query<ActivityContextRow>(
       `SELECT id, activity_type, title, content, visibility, owner_user_id,
               user_id, subject_user_id, occurred_at
-         FROM activity_records
+         FROM activity_records ar
         WHERE space_id = $1
           AND project_id = $2
           AND status <> 'archived'
+          AND ${contentReadSql("activity", "ar", "$3", { includeOversight: false })}
         ORDER BY occurred_at DESC, created_at DESC, id DESC
         LIMIT 16`,
-      [identity.spaceId, projectId],
+      [identity.spaceId, projectId, identity.userId],
     );
-    return result.rows.filter((row) =>
-      canReadByVisibility(row.visibility, identity.userId, [
-        row.owner_user_id,
-        row.user_id,
-        row.subject_user_id,
-      ]),
-    );
+    return result.rows;
   }
 
   private async loadArtifacts(identity: SpaceUserIdentity, projectId: string): Promise<ArtifactContextRow[]> {
     const result = await this.db.query<ArtifactContextRow>(
       `SELECT id, artifact_type, title, mime_type, visibility, owner_user_id, created_at
-         FROM artifacts
+         FROM artifacts a
         WHERE space_id = $1
           AND project_id = $2
+          AND ${contentReadSql("artifact", "a", "$3", { includeOversight: false })}
         ORDER BY created_at DESC, id DESC
         LIMIT 16`,
-      [identity.spaceId, projectId],
+      [identity.spaceId, projectId, identity.userId],
     );
-    return result.rows.filter((row) =>
-      canReadByVisibility(row.visibility, identity.userId, [row.owner_user_id]),
-    );
+    return result.rows;
   }
 
   private async loadProposals(identity: SpaceUserIdentity, projectId: string): Promise<ProposalContextRow[]> {
@@ -388,15 +386,12 @@ export class ProjectPublicSummaryGenerator {
           AND run_for_instructed.space_id = p.space_id
         WHERE p.space_id = $1
           AND p.project_id = $2
+          AND ${contentReadSql("proposal", "p", "$3", { includeOversight: false })}
         ORDER BY p.created_at DESC, p.id DESC
         LIMIT 16`,
-      [identity.spaceId, projectId],
+      [identity.spaceId, projectId, identity.userId],
     );
-    return result.rows.filter((row) =>
-      row.visibility === "space_shared" ||
-      row.created_by_user_id === identity.userId ||
-      row.instructed_by_user_id === identity.userId,
-    );
+    return result.rows;
   }
 }
 
@@ -418,5 +413,6 @@ function providerCompleteText(store: ProviderCommandStore): CompleteText {
     user: input.user,
     max_tokens: input.maxTokens,
     task: PROJECT_PUBLIC_SUMMARY_TASK,
+    metering: { subject_user_id: input.subjectUserId },
   });
 }

@@ -146,7 +146,8 @@ function sourceConnection(overrides: Partial<SourceConnectionRow> = {}): SourceC
     connector_id: CONNECTOR,
     owner_user_id: OWNER,
     credential_id: null,
-    visibility: "space_discoverable",
+    visibility: "space_shared",
+    access_level: "full",
     name: "arXiv",
     endpoint_url: "https://example.org/rss",
     status: "active",
@@ -175,12 +176,12 @@ async function seedItem(title: string, createdAt: string): Promise<string> {
   const id = randomUUID();
   await pool!.query(
     `INSERT INTO source_items (
-       id, space_id, connection_id, item_type, source_object_type, source_object_id,
+       id, space_id, owner_user_id, visibility, connection_id, item_type, source_object_type, source_object_id,
        title, source_uri, excerpt, first_seen_at, last_seen_at,
        content_state, retention_policy, created_at, updated_at
-     ) VALUES ($1,$2,$3,'external_url','source_item',$1,$4,$6,'Paper abstract',
-       $5,$5,'excerpt_saved','summary_only',$5,$5)`,
-    [id, SPACE, CONNECTION, title, createdAt, `https://example.org/paper/${id}`],
+     ) VALUES ($1,$2,$3,'space_shared',$4,'external_url','source_item',$1,$5,$7,'Paper abstract',
+       $6,$6,'excerpt_saved','summary_only',$6,$6)`,
+    [id, SPACE, OWNER, CONNECTION, title, createdAt, `https://example.org/paper/${id}`],
   );
   return id;
 }
@@ -190,12 +191,12 @@ async function seedEvidence(itemId: string, title: string): Promise<string> {
   const now = new Date().toISOString();
   await pool!.query(
     `INSERT INTO extracted_evidence (
-       id, space_id, source_item_id, source_object_type, source_object_id,
+       id, space_id, owner_user_id, visibility, source_item_id, source_object_type, source_object_id,
        evidence_type, title, content_excerpt, trust_level, extraction_method,
        confidence, status, metadata_json, created_at, updated_at
-     ) VALUES ($1,$2,$3,'source_item',$3,'excerpt',$4,'Important excerpt',
-       'normal','manual',0.8,'candidate','{}'::jsonb,$5,$5)`,
-    [id, SPACE, itemId, title, now],
+     ) VALUES ($1,$2,$3,'space_shared',$4,'source_item',$4,'excerpt',$5,'Important excerpt',
+       'normal','manual',0.8,'candidate','{}'::jsonb,$6,$6)`,
+    [id, SPACE, OWNER, itemId, title, now],
   );
   return id;
 }
@@ -300,6 +301,7 @@ describe("source post-processing repository (real Postgres)", () => {
     const initial = await repo().collectInputBatch({
       spaceId: SPACE,
       sourceConnectionId: CONNECTION,
+      viewerUserId: OWNER,
       inputConfig,
       cursor: null,
     });
@@ -310,6 +312,7 @@ describe("source post-processing repository (real Postgres)", () => {
     const next = await repo().collectInputBatch({
       spaceId: SPACE,
       sourceConnectionId: CONNECTION,
+      viewerUserId: OWNER,
       inputConfig,
       cursor: { id: first, created_at: "2026-07-01T00:00:00.000Z" },
     });

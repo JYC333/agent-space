@@ -1,5 +1,5 @@
 import type { Queryable } from "../routeUtils/common";
-import { canReadByVisibility } from "../routeUtils/common";
+import { contentReadSql } from "../access/contentAccessSql";
 import {
   RetrievalRegistry,
   type CanonicalObject,
@@ -255,14 +255,12 @@ async function revalidateKnowledgeMany(
         WHERE ki.space_id = $1
           AND ki.object_id = ANY($2::varchar[])
           AND so.object_type = 'knowledge_item'
-          AND so.status = 'active'`,
-      [spaceId, ids],
+          AND so.status = 'active'
+          AND ${contentReadSql("space_object", "so", "$3")}`,
+      [spaceId, ids, viewerUserId],
     );
     const rows = new Map<string, RevalidatedObject>();
     for (const row of result.rows) {
-      if (!canReadByVisibility(row.visibility, viewerUserId, [row.owner_user_id, row.created_by_user_id])) {
-        continue;
-      }
       rows.set(row.id, { title: row.title, text: row.excerpt ?? row.plain_text ?? row.content });
     }
     return rows;
@@ -277,14 +275,12 @@ async function revalidateKnowledgeMany(
         WHERE n.space_id = $1
           AND n.object_id = ANY($2::varchar[])
           AND so.object_type = 'note'
-          AND so.status = 'active'`,
-      [spaceId, ids],
+          AND so.status = 'active'
+          AND ${contentReadSql("space_object", "so", "$3")}`,
+      [spaceId, ids, viewerUserId],
     );
     const rows = new Map<string, RevalidatedObject>();
     for (const row of result.rows) {
-      if (!canReadByVisibility(row.visibility, viewerUserId, [row.owner_user_id, row.created_by_user_id])) {
-        continue;
-      }
       rows.set(row.id, { title: row.title, text: row.excerpt ?? row.plain_text });
     }
     return rows;
@@ -299,14 +295,12 @@ async function revalidateKnowledgeMany(
         WHERE c.space_id = $1
           AND c.object_id = ANY($2::varchar[])
           AND so.object_type = 'claim'
-          AND so.status = 'active'`,
-      [spaceId, ids],
+          AND so.status = 'active'
+          AND ${contentReadSql("space_object", "so", "$3")}`,
+      [spaceId, ids, viewerUserId],
     );
     const rows = new Map<string, RevalidatedObject>();
     for (const row of result.rows) {
-      if (!canReadByVisibility(row.visibility, viewerUserId, [row.owner_user_id, row.created_by_user_id])) {
-        continue;
-      }
       rows.set(row.id, { title: row.title, text: joinText([row.claim_text]) });
     }
     return rows;
@@ -320,14 +314,12 @@ async function revalidateKnowledgeMany(
       WHERE s.space_id = $1
         AND s.object_id = ANY($2::varchar[])
         AND so.object_type = 'source'
-        AND so.status = 'processed'`,
-    [spaceId, ids],
+        AND so.status = 'processed'
+        AND ${contentReadSql("space_object", "so", "$3")}`,
+    [spaceId, ids, viewerUserId],
   );
   const rows = new Map<string, RevalidatedObject>();
   for (const row of result.rows) {
-    if (!canReadByVisibility(row.visibility, viewerUserId, [row.owner_user_id, row.created_by_user_id])) {
-      continue;
-    }
     rows.set(row.id, { title: row.title, text: row.summary ?? row.raw_text ?? row.uri });
   }
   return rows;

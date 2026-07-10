@@ -1,4 +1,5 @@
 import type { ProviderFailureClass } from "../invocation/resilience";
+import type { UsageAttribution, UsageObservation } from "../../usage";
 
 export type RotationStrategy = "fill_first" | "round_robin" | "least_used" | "random";
 
@@ -149,6 +150,8 @@ export interface ProviderCommandStore {
   ): Promise<void>;
   getInvocationTarget(spaceId: string, providerId?: string | null): Promise<InvocationTarget>;
   recordPoolOutcome(memberId: string, outcome: PoolOutcome): Promise<void>;
+  resolveUsageAttribution(input: UsageObservation): Promise<UsageAttribution>;
+  recordUsageObservation(input: UsageObservation, attribution: UsageAttribution): Promise<void>;
   resolveProviderApiKey(spaceId: string, providerId: string): Promise<string>;
   resolveCredentialApiKey(spaceId: string, credentialId: string): Promise<string>;
   listConfiguredModels(spaceId: string, providerId: string): Promise<string[]>;

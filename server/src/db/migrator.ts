@@ -6,12 +6,11 @@
  * generated baseline for empty database bootstrap; applied schema versions are
  * immutable for any database that has recorded them.
  *
- * New `NNNN_*.sql` files are normally produced by `npm run schema:generate`
- * (drizzle-kit diffing `server/src/db/schema/` against `server/drizzle/meta/`
- * and copying the result here under the next sequential prefix), not
- * hand-written — see the "Schema Authoring" section of
- * `.agent/architecture/DATABASE_AND_TRANSACTIONS.md`. This runner doesn't
- * care which produced a file; it only reads ordered `.sql` files from disk.
+ * During the consolidated-baseline phase, `npm run schema:generate`
+ * (drizzle-kit diffing `server/src/db/schema/` against `server/drizzle/meta/`)
+ * merges generated SQL into `0001_baseline.sql` instead of creating a new
+ * migration file. This runner doesn't care which produced a file; it only reads
+ * ordered `.sql` files from disk.
  *
  * Design:
  * - Migrations are ordered `.sql` files named `NNNN_name.sql` under a directory;

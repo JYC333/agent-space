@@ -59,6 +59,7 @@ Core modules are `always_on=True`. Optional product routes are still mounted by 
 | `providers` | infra | `/providers*`, `/credentials/cli*`, `/internal/providers-credentials/*` | yes | Model providers, credential pools, provider invocation, and CLI credential broker/audit. There is no separate credentials route module. |
 | `runtime_tool_bindings` | infra | `/runtime-tool-bindings*` | empty | Runtime tool binding reads. |
 | `runtimeHost` | infra | `/internal/runtime-host/execute` | empty | Internal runtime-host execution for server-owned model/runtime paths. |
+| `usage` | frontend-support | `/usage*` | yes | Token usage ledger and permission-filtered read models for managed API calls, provider-proxy calls, and managed-profile CLI transcript imports. Usage events are registered content resources with owner, visibility, disclosure level, source snapshot, and copied `selected_users` or `space_shared` disclosure grants. User aggregation filters events through the canonical content predicate before grouping; instance operations receive only de-identified totals. Protocol/schema values reserve future manual and cross-instance imports, but no product ingestion endpoint exposes them. Raw prompts, messages, request/response bodies, transcripts, and provider secrets are excluded. |
 | `runs` | kernel | `/runs*`, `/internal/runs/execute` | yes, lazy | Run lifecycle, execution, events, finalization, runtime bridge, outputs/artifacts. |
 | `artifacts` | product | `/artifacts*` | empty | Client-facing artifact list/get/export and run materialization artifacts. |
 | `projects` | product | `/projects*` | yes | Projects and project-workspace links. |
@@ -74,7 +75,7 @@ Core modules are `always_on=True`. Optional product routes are still mounted by 
 | `memory` | kernel | `/memory*` | yes, lazy | Memory entries, read logging, search, and memory proposal creation. |
 | `context` | kernel | `/context/build` | empty | Frontend context preview/native context build route. |
 | `activity` | product | `/activity*` | yes | Activity records, upload, review/archive, consolidation, and summary runs. |
-| `source_pointers` | product | `/source-pointers*` | empty | Metadata-only cross-space provenance pointers; no read grant. |
+| `publications` | product | `/publications*` | empty | Targeted immutable snapshots, target-Space discovery/import, and revocation. |
 | `sources` | product | `/sources*` | empty | Source connections, source items, extraction evidence, trust helpers, summary runs. |
 | `knowledge` | product | `/knowledge*`, `/notes/collections*` | empty | Knowledge items, notes, sources, entity links, source links, read model, and proposal appliers. |
 | `relations` | product | `/relations*` | yes | People, organizations, identities, affiliations, relation notes, and relation provenance links over shared `space_objects` / `object_relations`. |

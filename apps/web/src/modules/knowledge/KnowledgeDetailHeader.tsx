@@ -5,6 +5,7 @@ import { Button } from '../../components/ui/button'
 import { Card } from '../../components/ui/card'
 import { ScopeBadge } from '../../components/ScopeBadge'
 import { fmt } from './utils'
+import { ContentAccessControl } from '../../components/ContentAccessControl'
 
 interface KnowledgeDetailHeaderProps {
   item: KnowledgeItem
@@ -45,9 +46,12 @@ export default function KnowledgeDetailHeader({
             ID <span className="font-mono select-all text-foreground">{item.id}</span>
           </p>
         </div>
-        <Button size="sm" variant="destructive" onClick={onArchive} disabled={archiving}>
-          <Archive className="size-4 mr-1" />Propose archive
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <ContentAccessControl resourceType="space_object" resourceId={item.id} ownerUserId={item.owner_user_id} />
+          <Button size="sm" variant="destructive" onClick={onArchive} disabled={archiving}>
+            <Archive className="size-4 mr-1" />Propose archive
+          </Button>
+        </div>
       </div>
       <div className="flex flex-wrap gap-1.5 items-center">
         <Badge variant="secondary">{item.knowledge_kind}</Badge>

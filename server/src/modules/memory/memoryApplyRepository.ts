@@ -10,11 +10,6 @@
  * orchestration, source-monitoring enforcement, personal-memory egress guard,
  * digest invalidation, and proposal accept state machine live in the proposal
  * apply service.
- *
- * Gap: private memory placement is enforced as a hard invariant
- * (visibility=private requires a personal space). The active-policy overlay
- * (custom `memory.private_placement` deny / allow-with-log + policy traces) is
- * not implemented yet.
  */
 
 import { randomUUID } from "node:crypto";
@@ -37,6 +32,7 @@ import {
 import { RetrievalProjectionService } from "../retrieval";
 import { memoryRetrievalRegistry } from "./retrievalAdapter";
 import { assertProjectInSpace } from "../projects/access";
+import { isContentAccessLevel, isContentVisibility } from "../access/contentAccessTypes";
 
 // The memory retrieval projection is a derived index. A projection failure must
 // not roll back an accepted canonical memory write, but the reindex runs inside
@@ -77,14 +73,10 @@ export class MemoryApplyUnsupportedError extends Error {
 
 const MEMORY_APPLY_TYPES = new Set(["memory_create", "memory_update", "memory_archive"]);
 
-// Visibilities controlled by a single owner. For these, a memory with no
-// explicit owner is attributed to the acting/creating user; with no
-// `selected_user_ids` a `restricted` row is then owner-only.
-const OWNER_SCOPED_VISIBILITIES = new Set(["private", "restricted", "selected_users"]);
+const OWNER_SCOPED_VISIBILITIES = new Set(["private", "selected_users"]);
 
-// Payload markers that make a proposal grant-derived (mirror of the legacy
-// `is_grant_derived_proposal` rule); plus any run context, which requires the
-// not-yet-implemented egress-context apply path.
+// Payload markers that make a proposal grant-derived, plus any run context
+// that requires the separate egress-context apply path.
 const GRANT_DERIVED_MARKERS = [
   "personal_context_derived",
   "egress_guard_required",
@@ -128,10 +120,10 @@ export interface AppliedMemoryRow {
   content: string;
   status: string;
   visibility: string;
+  access_level: string;
   sensitivity_level: string;
   owner_user_id: string | null;
   subject_user_id: string | null;
-  selected_user_ids: unknown;
   workspace_id: string | null;
   project_id: string | null;
   source_trust: string | null;
@@ -156,15 +148,15 @@ export interface MemoryDigestTarget {
 
 const INSERT_COLUMNS = `id, space_id, scope_type, memory_type, content, status,
   created_at, updated_at, subject_user_id, owner_user_id,
-  sensitivity_level, selected_user_ids, last_confirmed_at, workspace_id, namespace,
+  sensitivity_level, access_level, last_confirmed_at, workspace_id, namespace,
   title, visibility, confidence, importance, source_id,
   created_by, approved_by, version, access_count, tags, memory_layer,
   created_from_proposal_id, root_memory_id, supersedes_memory_id, source_trust, agent_id,
   project_id`;
 
 const RETURNING_COLUMNS = `id, space_id, scope_type, namespace, memory_type, title,
-  content, status, visibility, sensitivity_level, owner_user_id, subject_user_id,
-  selected_user_ids, workspace_id, project_id, source_trust,
+  content, status, visibility, access_level, sensitivity_level, owner_user_id, subject_user_id,
+  workspace_id, project_id, source_trust,
   root_memory_id, supersedes_memory_id, memory_layer, version, agent_id`;
 
 /** Columns + values needed for one new active memory version. */
@@ -173,12 +165,12 @@ interface NewMemoryFields {
   memoryType: string;
   content: string;
   visibility: string;
+  accessLevel: string;
   sensitivity: string;
   namespace: string;
   title: string;
   ownerUserId: string | null;
   subjectUserId: string | null;
-  selectedUserIds: unknown;
   workspaceId: string | null;
   projectId: string | null;
   agentId: string | null;
@@ -291,34 +283,31 @@ export class PgMemoryApplyRepository {
   async applyCreate(proposal: ApplyProposal, userId: string): Promise<MemoryApplyResult> {
     const payload = proposal.payload_json ?? {};
     const explicitVisibility = strOr(payload.target_visibility) ?? strOr(payload.visibility);
-    const vis = lower(explicitVisibility ?? (await this.defaultDerivedVisibility(proposal.space_id)));
+    const vis = lower(explicitVisibility ?? "private");
+    const accessLevel = lower(strOr(payload.target_access_level) ?? strOr(payload.access_level) ?? "full");
     const sens = lower(strOr(payload.sensitivity_level) ?? "normal");
+    assertContentPolicyFields(vis, accessLevel, sens);
     const content = strOr(payload.proposed_content) ?? strOr(payload.content) ?? "";
     const memType = strOr(payload.memory_type) ?? "semantic";
     const scope = strOr(payload.target_scope) ?? strOr(payload.scope_type) ?? "user";
     const namespace = strOr(payload.target_namespace) ?? strOr(payload.namespace) ?? "user.default";
 
-    // Owner-scoped visibilities (incl. the multi-member-space `restricted`
-    // default) attribute the memory to the proposal's creating user, not the
-    // accepting user.
     const acting = String(proposal.created_by_user_id ?? userId);
     const entries = provenanceEntriesFromPayload(payload);
     const ownerUserId = this.resolveOwner(strOr(payload.owner_user_id), vis, acting);
     const projectId = await this.resolveProjectId(proposal, payload, null);
-
-    await this.assertPrivatePlacement(proposal.space_id, vis);
 
     const memId = await this.insertMemory(proposal, {
       scope,
       memoryType: memType,
       content,
       visibility: vis,
+      accessLevel,
       sensitivity: sens,
       namespace,
       title: proposal.title ?? "",
       ownerUserId,
       subjectUserId: strOr(payload.subject_user_id),
-      selectedUserIds: payload.selected_user_ids ?? null,
       workspaceId: proposal.workspace_id,
       projectId,
       agentId: strOr(payload.agent_id),
@@ -365,6 +354,10 @@ export class PgMemoryApplyRepository {
       strOr(payload.target_visibility) ?? strOr(payload.visibility) ?? old.visibility,
     );
     const sens = lower(strOr(payload.sensitivity_level) ?? old.sensitivity_level ?? "normal");
+    const accessLevel = lower(
+      strOr(payload.target_access_level) ?? strOr(payload.access_level) ?? old.access_level ?? "full",
+    );
+    assertContentPolicyFields(vis, accessLevel, sens);
     const content = strOr(payload.proposed_content) ?? strOr(payload.content) ?? old.content;
     const title = strOr(payload.proposed_title) ?? strOr(payload.title) ?? old.title ?? "";
     const scope = strOr(payload.target_scope) ?? old.scope_type;
@@ -380,19 +373,17 @@ export class PgMemoryApplyRepository {
     );
     const projectId = await this.resolveProjectId(proposal, payload, old.project_id);
 
-    await this.assertPrivatePlacement(proposal.space_id, vis);
-
     const newMem = await this.insertMemory(proposal, {
       scope,
       memoryType: memType,
       content,
       visibility: vis,
+      accessLevel,
       sensitivity: sens,
       namespace,
       title,
       ownerUserId,
       subjectUserId: strOr(payload.subject_user_id) ?? old.subject_user_id,
-      selectedUserIds: payload.selected_user_ids ?? old.selected_user_ids ?? null,
       workspaceId: proposal.workspace_id ?? old.workspace_id,
       projectId,
       agentId: strOr(payload.agent_id) ?? old.agent_id,
@@ -490,8 +481,6 @@ export class PgMemoryApplyRepository {
 
   private resolveOwner(owner: string | null, visibility: string, actingUserId: string): string | null {
     let ownerUserId = owner;
-    // Owner-scoped visibilities attribute to the acting user when no owner is
-    // given, so a `restricted` memory with no `selected_user_ids` is owner-only.
     if (OWNER_SCOPED_VISIBILITIES.has(visibility) && ownerUserId == null) {
       ownerUserId = actingUserId;
     }
@@ -499,39 +488,6 @@ export class PgMemoryApplyRepository {
       throw new MemoryApplyError("owner_user_id is required for private visibility");
     }
     return ownerUserId;
-  }
-
-  private async spaceType(spaceId: string): Promise<string> {
-    const res = await this.db.query<{ type: string }>(
-      `SELECT type FROM spaces WHERE id = $1`,
-      [spaceId],
-    );
-    return res.rows[0]?.type ?? "unknown";
-  }
-
-  /**
-   * Default visibility for a `memory_create` with no explicit visibility. A
-   * single-member personal space keeps `space_shared` (equivalent to owner-only
-   * there). A multi-member household/team space defaults to `restricted`
-   * owner-only, so one member's assistant/sources-derived memory is not
-   * auto-shared — sharing it with the space is an explicit promotion
-   * (`memory_update` to `space_shared`). See SHARED_SPACE_MEMORY_ISOLATION.md.
-   * `private` is intentionally not used here because it is barred outside
-   * personal spaces by the placement invariant.
-   */
-  private async defaultDerivedVisibility(spaceId: string): Promise<string> {
-    return (await this.spaceType(spaceId)) === "personal" ? "space_shared" : "restricted";
-  }
-
-  /** Hard invariant of `check_private_memory_placement`: private → personal space. */
-  private async assertPrivatePlacement(spaceId: string, visibility: string): Promise<void> {
-    if (visibility !== "private") return;
-    const spaceType = await this.spaceType(spaceId);
-    if (spaceType !== "personal") {
-      throw new MemoryApplyError(
-        `visibility='private' is only permitted in personal spaces; space '${spaceId}' has type '${spaceType}'`,
-      );
-    }
   }
 
   private async insertMemory(
@@ -543,7 +499,7 @@ export class PgMemoryApplyRepository {
       `INSERT INTO memory_entries (${INSERT_COLUMNS}) VALUES (
          $1, $2, $3, $4, $5, 'active',
          $6, $6, $7, $8,
-         $9, $10::jsonb, NULL, $11, $12,
+         $9, $10, NULL, $11, $12,
          $13, $14, 1.0, 0.5, NULL,
          $15, $16, 1, 0, NULL, $17,
          $18, $19, $20, $21, $22, $23
@@ -559,7 +515,7 @@ export class PgMemoryApplyRepository {
         f.subjectUserId, // $7
         f.ownerUserId, // $8
         f.sensitivity, // $9
-        f.selectedUserIds === undefined ? null : f.selectedUserIds == null ? null : JSON.stringify(f.selectedUserIds), // $10
+        f.accessLevel, // $10
         f.workspaceId, // $11
         f.namespace, // $12
         f.title, // $13
@@ -637,6 +593,22 @@ function strOr(value: unknown): string | null {
 
 function lower(value: string): string {
   return value.toLowerCase();
+}
+
+function assertContentPolicyFields(
+  visibility: string,
+  accessLevel: string,
+  sensitivity: string,
+): void {
+  if (!isContentVisibility(visibility)) {
+    throw new MemoryApplyError("invalid memory visibility");
+  }
+  if (!isContentAccessLevel(accessLevel)) {
+    throw new MemoryApplyError("invalid memory access level");
+  }
+  if (sensitivity === "highly_restricted" && visibility !== "private") {
+    throw new MemoryApplyError("highly restricted memory must be private");
+  }
 }
 
 function memoryLayer(payload: Record<string, unknown>): string | null {

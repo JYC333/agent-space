@@ -1,5 +1,10 @@
 import type { RetrievalEvalReportCase, RetrievalEvalReportRequest } from "@agent-space/protocol" with { "resolution-mode": "import" };
 import type { Queryable } from "../routeUtils/common";
+import {
+  contentOwnerFilterSql,
+  contentReadSql,
+  contentVisibilityFilterSql,
+} from "../access/contentAccessSql";
 
 interface BriefArtifactRow {
   artifact_type: string;
@@ -51,11 +56,12 @@ export async function buildRetrievalEvalDiagnosticsReport(
     : ["retrieval_brief", "retrieval_maintenance_report", "retrieval_eval_report"];
   const rows = await db.query<BriefArtifactRow>(
     `SELECT artifact_type, metadata_json
-       FROM artifacts
-      WHERE space_id = $1
-        AND owner_user_id = $2
-        AND visibility = 'private'
-        AND artifact_type = ANY($5::varchar[])
+       FROM artifacts a
+      WHERE a.space_id = $1
+        AND ${contentReadSql("artifact", "a", "$2")}
+        AND ${contentOwnerFilterSql("artifact", "a", "$2")}
+        AND ${contentVisibilityFilterSql("a", ["private"])}
+        AND a.artifact_type = ANY($5::varchar[])
         AND NOT (
           artifact_type = 'retrieval_eval_report'
           AND (
@@ -72,11 +78,12 @@ export async function buildRetrievalEvalDiagnosticsReport(
     ? []
     : (await db.query<BriefArtifactRow>(
         `SELECT artifact_type, metadata_json
-           FROM artifacts
-          WHERE space_id = $1
-            AND owner_user_id = $2
-            AND visibility = 'private'
-            AND artifact_type = ANY($5::varchar[])
+           FROM artifacts a
+          WHERE a.space_id = $1
+            AND ${contentReadSql("artifact", "a", "$2")}
+            AND ${contentOwnerFilterSql("artifact", "a", "$2")}
+            AND ${contentVisibilityFilterSql("a", ["private"])}
+            AND a.artifact_type = ANY($5::varchar[])
             AND NOT (
               artifact_type = 'retrieval_eval_report'
               AND (

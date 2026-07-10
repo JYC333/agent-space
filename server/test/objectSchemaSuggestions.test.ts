@@ -4,7 +4,11 @@ import type { QueryResult, Queryable } from "../src/modules/routeUtils/common";
 
 class FakeObjectSchemaSuggestionDb implements Queryable {
   async query<Row = Record<string, unknown>>(sql: string): Promise<QueryResult<Row>> {
-    if (/\b(?:content|plain_text|raw_text|claim_text|summary)\b/.test(sql)) {
+    // Ignore quoted enum/string literals (for example the canonical access
+    // predicate's `'summary'` level) while still rejecting raw content column
+    // selections such as `SELECT content`.
+    const sqlWithoutStringLiterals = sql.replace(/'(?:''|[^'])*'/g, "''");
+    if (/\b(?:content|plain_text|raw_text|claim_text|summary)\b/.test(sqlWithoutStringLiterals)) {
       throw new Error("object schema suggestion scan must not select raw content columns");
     }
     if (/s\.status/.test(sql)) throw new Error("source usage must read status from space_objects, not sources");
@@ -80,7 +84,7 @@ class FakeObjectSchemaSuggestionDb implements Queryable {
         rowCount: 1,
       };
     }
-    if (/FROM space_memberships/.test(sql)) {
+    if (/SELECT\s+role\s+FROM space_memberships/.test(sql)) {
       return { rows: [{ role: "member" }] as Row[], rowCount: 1 };
     }
     if (/FROM claims c/.test(sql)) {

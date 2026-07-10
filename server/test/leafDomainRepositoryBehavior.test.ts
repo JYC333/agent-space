@@ -263,7 +263,7 @@ function sourceConnectionRow(policyOverrides: Record<string, unknown> = {}) {
     connector_id: "connector-1",
     owner_user_id: "user-1",
     credential_id: null,
-    visibility: "space_discoverable",
+    visibility: "space_shared",
     name: "Source",
     endpoint_url: "https://example.test/feed",
     status: "active",
@@ -434,7 +434,8 @@ describe("Leaf domain repository behavior", () => {
     const calls: Array<{ sql: string; params: readonly unknown[] }> = [];
     const db = new FakeDb((sql, params) => {
       calls.push({ sql, params });
-      if (sql.includes("FROM source_connections")) return [sourceConnectionRow({ visibility: "space_discoverable" })];
+      if (sql.includes("AS effective_access_level")) return [{ effective_access_level: "full" }];
+      if (sql.includes("FROM source_connections")) return [sourceConnectionRow({ visibility: "space_shared" })];
       if (sql.includes("FROM space_memberships") && sql.includes("user_id = ANY")) return [{ user_id: "user-2" }];
       if (sql.includes("INSERT INTO source_connection_user_subscriptions")) return [{ status: "subscribed" }];
       if (sql.includes("INSERT INTO activity_records")) throw new Error("subscribed recommendation should not notify");
@@ -553,7 +554,7 @@ describe("Leaf domain repository behavior", () => {
           owner_user_id: "user-1",
           scope_type: "user",
           workspace_id: null,
-          selected_user_ids: null,
+          access_level: "full",
           project_id: null,
           title: "Existing memory",
           content: "Remember the sourced activity.",
@@ -636,6 +637,7 @@ describe("Leaf domain repository behavior", () => {
   it("creates project source bindings after project writer validation", async () => {
     let insertParams: readonly unknown[] | null = null;
     const db = new FakeDb((sql, params) => {
+      if (sql.includes("AS effective_access_level")) return [{ effective_access_level: "full" }];
       if (sql.includes("FROM source_connections")) return [sourceConnectionRow()];
       if (sql.includes("FROM projects")) return [{ id: "project-1", owner_user_id: "user-1" }];
       if (sql.includes("INSERT INTO project_source_bindings")) {
@@ -663,6 +665,7 @@ describe("Leaf domain repository behavior", () => {
     let bindingId: string | null = null;
     let backfillParams: readonly unknown[] | null = null;
     const db = new FakeDb((sql, params) => {
+      if (sql.includes("AS effective_access_level")) return [{ effective_access_level: "full" }];
       if (sql.includes("SELECT DISTINCT si.id")) {
         backfillParams = params;
         return [];
@@ -876,7 +879,9 @@ describe("Leaf domain repository behavior", () => {
     })).rejects.toThrow("Summary input not found");
 
     const itemSelect = calls.find((call) => call.sql.includes("FROM source_items si"));
-    expect(itemSelect?.sql).toContain("si.created_by_user_id = $3");
+    expect(itemSelect?.sql).toContain("si.owner_user_id = $3");
+    expect(itemSelect?.sql).toContain("FROM content_access_grants content_grant");
+    expect(itemSelect?.sql).toContain("FROM space_memberships content_member");
     expect(itemSelect?.sql).toContain("FROM source_connection_user_subscriptions scus_read");
     expect(itemSelect?.sql).toContain("scus_read.status = 'subscribed'");
   });
@@ -1014,8 +1019,8 @@ describe("Leaf domain repository behavior", () => {
     });
 
     expect(seenObjectLookups).toEqual([
-      ["claim-a", "space-1"],
-      ["claim-b", "space-1"],
+      ["claim-a", "space-1", "user-1"],
+      ["claim-b", "space-1", "user-1"],
     ]);
     expect(proposal).toMatchObject({ proposal_type: "object_relation_create", status: "pending" });
     expect(payloads[0]).toMatchObject({
@@ -1033,9 +1038,10 @@ describe("Leaf domain repository behavior", () => {
       if (norm.includes("FROM knowledge_items ki")) return [{ total: "3" }];
       if (norm.includes("FROM sources s")) return [{ total: "4" }];
       if (norm.includes("FROM claims c")) {
-        expect(sql).toContain("so.visibility IN ('space_shared', 'workspace_shared')");
+        expect(sql).toContain("so.visibility = 'space_shared'");
+        expect(sql).toContain("content_access_grants");
+        expect(sql).toContain("space_memberships");
         expect(sql).toContain("so.owner_user_id = $2");
-        expect(sql).toContain("so.created_by_user_id = $2");
         expect(params).toEqual(["space-1", "user-1"]);
         return [{ total: "1" }];
       }
@@ -1059,8 +1065,9 @@ describe("Leaf domain repository behavior", () => {
       if (norm.includes("FROM object_relations r")) {
         expect(sql).toContain("JOIN space_objects from_so");
         expect(sql).toContain("JOIN space_objects to_so");
-        expect(sql).toContain("from_so.visibility IN ('space_shared', 'workspace_shared')");
-        expect(sql).toContain("to_so.visibility IN ('space_shared', 'workspace_shared')");
+        expect(sql).toContain("from_so.visibility = 'space_shared'");
+        expect(sql).toContain("to_so.visibility = 'space_shared'");
+        expect(sql).toContain("content_access_grants");
         expect(sql).toContain("from_so.owner_user_id = $2");
         expect(sql).toContain("to_so.owner_user_id = $2");
         expect(sql).toContain("from_so.deleted_at IS NULL");
@@ -1086,10 +1093,11 @@ describe("Leaf domain repository behavior", () => {
         expect(sql).toContain("to_so.object_type AS to_object_type");
         expect(sql).toContain("LEFT JOIN space_objects source_claim_so");
         expect(sql).toContain("LEFT JOIN space_objects source_so");
-        expect(sql).toContain("from_so.visibility IN ('space_shared', 'workspace_shared')");
-        expect(sql).toContain("to_so.visibility IN ('space_shared', 'workspace_shared')");
-        expect(sql).toContain("source_claim_so.visibility IN ('space_shared', 'workspace_shared')");
-        expect(sql).toContain("source_so.visibility IN ('space_shared', 'workspace_shared')");
+        expect(sql).toContain("from_so.visibility = 'space_shared'");
+        expect(sql).toContain("to_so.visibility = 'space_shared'");
+        expect(sql).toContain("source_claim_so.visibility = 'space_shared'");
+        expect(sql).toContain("source_so.visibility = 'space_shared'");
+        expect(sql).toContain("content_access_grants");
         expect(sql).toContain("r.source_claim_id IS NULL OR");
         expect(sql).toContain("r.source_object_id IS NULL OR");
         expect(params).toEqual(["space-1", "user-1", "claim-1"]);

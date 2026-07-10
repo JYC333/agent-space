@@ -55,6 +55,11 @@ beforeEach(async () => {
      VALUES ($1, 'Claim Review Loop Space', 'household', $2, now(), now())`,
     [SPACE, VIEWER],
   );
+  await pool.query(
+    `INSERT INTO space_memberships (id, space_id, user_id, role, status, created_at, updated_at)
+     VALUES (gen_random_uuid()::varchar, $1, $2, 'owner', 'active', now(), now())`,
+    [SPACE, VIEWER],
+  );
   // Subject the seeded claims point at (claims.subject_object_id has an FK to
   // space_objects).
   await pool.query(

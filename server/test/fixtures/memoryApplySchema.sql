@@ -30,7 +30,7 @@ CREATE TABLE public.memory_entries (
     subject_user_id character varying(36),
     owner_user_id character varying(36),
     sensitivity_level character varying(32) NOT NULL DEFAULT 'normal',
-    selected_user_ids jsonb,
+    access_level character varying(16) NOT NULL DEFAULT 'full',
     last_confirmed_at timestamp with time zone,
     workspace_id character varying(36),
     project_id character varying(36),

@@ -12,7 +12,7 @@ import { PgRunContextRepository } from "../src/modules/context/repository";
 // Real-PostgreSQL coverage for the per-run ContextBuilder project cut: a run
 // bound to project P sees P's memory (only if the instructing user can access P)
 // plus project-free memory; other projects are excluded; a run with no project
-// sees project-free memory only; undefined projectId keeps legacy behavior.
+// sees project-free memory only; omitted projectId follows the same fail-closed cut.
 
 const MIGRATIONS_DIR = join(process.cwd(), "migrations");
 const SPACE = "11111111-1111-4111-8111-111111111111";
@@ -142,8 +142,8 @@ describe("Per-run ContextBuilder project cut (real Postgres)", () => {
     expect(await retrieveIds(null)).toEqual(["m-free"]);
   });
 
-  it("undefined projectId keeps legacy behavior (no project cut)", async () => {
+  it("omitted projectId applies the project-free cut", async () => {
     if (!available || !pool) return;
-    expect(await retrieveIds(undefined)).toEqual(["m-free", "m-p", "m-q"]);
+    expect(await retrieveIds(undefined)).toEqual(["m-free"]);
   });
 });

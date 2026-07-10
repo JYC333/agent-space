@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { PoolClient } from "../../db/pool";
 import { HttpError, type Queryable } from "../routeUtils/common";
+import { contentReadSql } from "../access/contentAccessSql";
 
 export interface AcademicPaperRow {
   object_id: string;
@@ -66,9 +67,9 @@ export class AcademicRepository {
     const now = new Date().toISOString();
     await client.query(
       `INSERT INTO space_objects (
-         id, space_id, object_type, title, summary, status, visibility,
+         id, space_id, object_type, title, summary, status, visibility, access_level, owner_user_id,
          created_by_user_id, created_at, updated_at
-       ) VALUES ($1, $2, 'source', $3, $4, 'raw', 'space_shared', $5, $6, $6)`,
+       ) VALUES ($1, $2, 'source', $3, $4, 'raw', 'space_shared', 'full', $5, $5, $6, $6)`,
       [objectId, input.spaceId, input.title, input.summary, input.createdByUserId, now],
     );
     await client.query(
@@ -94,29 +95,36 @@ export class AcademicRepository {
         now,
       ],
     );
-    const created = await this.getPaper(client, input.spaceId, objectId);
+    const created = await this.getPaper(client, input.spaceId, objectId, input.createdByUserId ?? "");
     if (!created) throw new HttpError(500, "Failed to create academic paper");
     return created;
   }
 
-  async getPaper(db: Queryable, spaceId: string, objectId: string): Promise<AcademicPaperRow | null> {
+  async getPaper(
+    db: Queryable,
+    spaceId: string,
+    objectId: string,
+    userId: string,
+  ): Promise<AcademicPaperRow | null> {
     const result = await db.query<AcademicPaperRow>(
       `SELECT ${PAPER_COLUMNS}
          FROM space_objects so
          JOIN academic_papers ap ON ap.object_id = so.id AND ap.space_id = so.space_id
         WHERE so.id = $1 AND so.space_id = $2 AND so.status <> 'deleted'
+          AND ${contentReadSql("space_object", "so", "$3")}
         LIMIT 1`,
-      [objectId, spaceId],
+      [objectId, spaceId, userId],
     );
     return result.rows[0] ?? null;
   }
 
   async findByExternalId(
     spaceId: string,
+    userId: string,
     input: { doi: string | null; arxivId: string | null },
   ): Promise<AcademicPaperRow | null> {
     if (!input.doi && !input.arxivId) return null;
-    const params: unknown[] = [spaceId];
+    const params: unknown[] = [spaceId, userId];
     const clauses: string[] = [];
     if (input.doi) {
       params.push(input.doi);
@@ -131,6 +139,7 @@ export class AcademicRepository {
          FROM space_objects so
          JOIN academic_papers ap ON ap.object_id = so.id AND ap.space_id = so.space_id
         WHERE so.space_id = $1 AND so.status <> 'deleted' AND (${clauses.join(" OR ")})
+          AND ${contentReadSql("space_object", "so", "$2")}
         LIMIT 1`,
       params,
     );
@@ -139,10 +148,15 @@ export class AcademicRepository {
 
   async listPapers(
     spaceId: string,
+    userId: string,
     filters: { q: string | null; limit: number; offset: number },
   ): Promise<{ rows: AcademicPaperRow[]; total: number }> {
-    const params: unknown[] = [spaceId];
-    const clauses = ["so.space_id = $1", "so.status <> 'deleted'"];
+    const params: unknown[] = [spaceId, userId];
+    const clauses = [
+      "so.space_id = $1",
+      "so.status <> 'deleted'",
+      contentReadSql("space_object", "so", "$2"),
+    ];
     if (filters.q) {
       params.push(`%${filters.q}%`);
       clauses.push(`so.title ILIKE $${params.length}`);
@@ -174,6 +188,7 @@ export class AcademicRepository {
   async updatePaper(
     spaceId: string,
     objectId: string,
+    userId: string,
     patch: { title?: string; summary?: string | null; venue?: string | null; citedByCount?: number | null; referenceCount?: number | null },
   ): Promise<AcademicPaperRow | null> {
     const now = new Date().toISOString();
@@ -206,13 +221,16 @@ export class AcademicRepository {
         ],
       );
     }
-    return this.getPaper(this.db, spaceId, objectId);
+    return this.getPaper(this.db, spaceId, objectId, userId);
   }
 
-  async personExists(spaceId: string, objectId: string): Promise<boolean> {
+  async personExists(spaceId: string, objectId: string, userId: string): Promise<boolean> {
     const result = await this.db.query(
-      `SELECT 1 FROM space_objects WHERE id = $1 AND space_id = $2 AND object_type = 'person' AND status <> 'deleted' LIMIT 1`,
-      [objectId, spaceId],
+      `SELECT 1 FROM space_objects so
+        WHERE so.id = $1 AND so.space_id = $2 AND so.object_type = 'person' AND so.status <> 'deleted'
+          AND ${contentReadSql("space_object", "so", "$3")}
+        LIMIT 1`,
+      [objectId, spaceId, userId],
     );
     return result.rows.length > 0;
   }
@@ -249,7 +267,7 @@ export class AcademicRepository {
     return result.rows[0]!.id;
   }
 
-  async listAuthors(spaceId: string, paperObjectId: string): Promise<AcademicAuthorRow[]> {
+  async listAuthors(spaceId: string, paperObjectId: string, userId: string): Promise<AcademicAuthorRow[]> {
     const result = await this.db.query<AcademicAuthorRow>(
       `SELECT
          so.id AS person_object_id,
@@ -263,8 +281,9 @@ export class AcademicRepository {
         AND orl.from_object_id = $2
         AND orl.relation_type = 'authored_by'
         AND orl.status = 'active'
+        AND ${contentReadSql("space_object", "so", "$3")}
       ORDER BY author_position NULLS LAST, so.title ASC`,
-      [spaceId, paperObjectId],
+      [spaceId, paperObjectId, userId],
     );
     return result.rows;
   }
@@ -286,28 +305,30 @@ export class AcademicRepository {
     return result.rows[0]!.id;
   }
 
-  async listCitations(spaceId: string, paperObjectId: string): Promise<AcademicCitationRow[]> {
+  async listCitations(spaceId: string, paperObjectId: string, userId: string): Promise<AcademicCitationRow[]> {
     const result = await this.db.query<AcademicCitationRow>(
       `SELECT so.id AS paper_object_id, so.title, ap.doi, ap.arxiv_id
          FROM object_relations orl
          JOIN space_objects so ON so.id = orl.to_object_id AND so.space_id = orl.space_id
          JOIN academic_papers ap ON ap.object_id = so.id AND ap.space_id = so.space_id
         WHERE orl.space_id = $1 AND orl.from_object_id = $2 AND orl.relation_type = 'cites' AND orl.status = 'active'
+          AND ${contentReadSql("space_object", "so", "$3")}
         ORDER BY so.title ASC`,
-      [spaceId, paperObjectId],
+      [spaceId, paperObjectId, userId],
     );
     return result.rows;
   }
 
-  async listCitedBy(spaceId: string, paperObjectId: string): Promise<AcademicCitationRow[]> {
+  async listCitedBy(spaceId: string, paperObjectId: string, userId: string): Promise<AcademicCitationRow[]> {
     const result = await this.db.query<AcademicCitationRow>(
       `SELECT so.id AS paper_object_id, so.title, ap.doi, ap.arxiv_id
          FROM object_relations orl
          JOIN space_objects so ON so.id = orl.from_object_id AND so.space_id = orl.space_id
          JOIN academic_papers ap ON ap.object_id = so.id AND ap.space_id = so.space_id
         WHERE orl.space_id = $1 AND orl.to_object_id = $2 AND orl.relation_type = 'cites' AND orl.status = 'active'
+          AND ${contentReadSql("space_object", "so", "$3")}
         ORDER BY so.title ASC`,
-      [spaceId, paperObjectId],
+      [spaceId, paperObjectId, userId],
     );
     return result.rows;
   }

@@ -139,7 +139,7 @@ export class RetrievalFeedbackService {
           AND actor_user_id = $2
           AND surface = $3
           AND query_hash = $4
-          AND object_type = ANY($5::varchar[])
+          AND object_type = ANY($5::retrieval_object_type[])
           AND object_id = ANY($6::varchar[])
           AND created_at >= $7
         ORDER BY created_at DESC`,

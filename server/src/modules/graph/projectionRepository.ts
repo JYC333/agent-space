@@ -1,4 +1,4 @@
-import { spaceObjectVisibleSql } from "../access/visibility";
+import { contentReadSql } from "../access/contentAccessSql";
 import type { Queryable, SpaceUserIdentity } from "../routeUtils/common";
 
 export interface GraphObjectRow {
@@ -64,7 +64,7 @@ export class GraphProjectionRepository {
         WHERE so.space_id = $1
           AND so.id = $3
           AND ${activeObjectClause("so")}
-          AND ${spaceObjectVisibleSql("so", "$2")}
+          AND ${contentReadSql("space_object", "so", "$2")}
           ${projectCorpusClause}`,
       params,
     );
@@ -83,7 +83,7 @@ export class GraphProjectionRepository {
          FROM space_objects so
         WHERE so.space_id = $1
           AND ${activeObjectClause("so")}
-          AND ${spaceObjectVisibleSql("so", "$2")}
+          AND ${contentReadSql("space_object", "so", "$2")}
           ${kindClause}
           ${projectCorpusClause}`,
       params,
@@ -103,7 +103,7 @@ export class GraphProjectionRepository {
          FROM space_objects so
         WHERE so.space_id = $1
           AND ${activeObjectClause("so")}
-          AND ${spaceObjectVisibleSql("so", "$2")}
+          AND ${contentReadSql("space_object", "so", "$2")}
           ${kindClause}
           ${projectCorpusClause}
         GROUP BY so.object_type
@@ -127,7 +127,7 @@ export class GraphProjectionRepository {
            FROM space_objects so
           WHERE so.space_id = $1
             AND ${activeObjectClause("so")}
-            AND ${spaceObjectVisibleSql("so", "$2")}
+            AND ${contentReadSql("space_object", "so", "$2")}
             ${nodeKindClause}
             ${projectCorpusClause}
        ),
@@ -173,7 +173,7 @@ export class GraphProjectionRepository {
          FROM space_objects so
         WHERE so.space_id = $1
           AND ${activeObjectClause("so")}
-          AND ${spaceObjectVisibleSql("so", "$2")}
+          AND ${contentReadSql("space_object", "so", "$2")}
           ${nodeKindClause}
           ${projectCorpusClause}
         ORDER BY so.updated_at DESC, so.id ASC
@@ -214,8 +214,8 @@ export class GraphProjectionRepository {
           AND ${activeObjectClause("to_so")}
         WHERE r.space_id = $1
           AND r.status = 'active'
-          AND ${spaceObjectVisibleSql("from_so", "$2")}
-          AND ${spaceObjectVisibleSql("to_so", "$2")}
+          AND ${contentReadSql("space_object", "from_so", "$2")}
+          AND ${contentReadSql("space_object", "to_so", "$2")}
           AND from_so.object_type <> to_so.object_type
           ${nodeKindClause}
           ${targetNodeKindClause}
@@ -259,8 +259,8 @@ export class GraphProjectionRepository {
           AND r.status = 'active'
           AND r.from_object_id = ANY($3::varchar[])
           AND r.to_object_id = ANY($3::varchar[])
-          AND ${spaceObjectVisibleSql("from_so", "$2")}
-          AND ${spaceObjectVisibleSql("to_so", "$2")}
+          AND ${contentReadSql("space_object", "from_so", "$2")}
+          AND ${contentReadSql("space_object", "to_so", "$2")}
           ${edgeKindClause}
         ORDER BY COALESCE(r.confidence, 0) DESC, r.updated_at DESC, r.id ASC
         LIMIT $4`,
@@ -292,7 +292,7 @@ export class GraphProjectionRepository {
            FROM space_objects so
           WHERE so.space_id = $1
             AND ${activeObjectClause("so")}
-            AND ${spaceObjectVisibleSql("so", "$2")}
+            AND ${contentReadSql("space_object", "so", "$2")}
             ${nodeKindClause ? `AND (so.id = $3 OR ${nodeKindClause.replace(/^ AND /, "")})` : ""}
             ${projectCorpusClause}
        ),
@@ -403,7 +403,7 @@ export class GraphProjectionRepository {
           WHERE so.space_id = $1
             AND so.object_type = $3
             AND ${activeObjectClause("so")}
-            AND ${spaceObjectVisibleSql("so", "$2")}
+            AND ${contentReadSql("space_object", "so", "$2")}
             ${projectCorpusClause}
        ),
        visible_edges AS (
@@ -462,7 +462,7 @@ export class GraphProjectionRepository {
            FROM space_objects so
           WHERE so.space_id = $1
             AND ${activeObjectClause("so")}
-            AND ${spaceObjectVisibleSql("so", "$2")}
+            AND ${contentReadSql("space_object", "so", "$2")}
             ${nodeKindClause}
             ${projectCorpusClause}
        ),

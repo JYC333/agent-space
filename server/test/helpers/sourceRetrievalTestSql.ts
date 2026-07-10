@@ -7,13 +7,20 @@ export function handleSourceRetrievalTestSql<Row = Record<string, unknown>>(
   const norm = sql.replace(/\s+/g, " ").trim();
 
   if (
-    norm.startsWith("SELECT id, connection_id, item_type, title, source_uri, canonical_uri,") &&
+    (
+      norm.startsWith("SELECT id, connection_id, item_type, title, source_uri, canonical_uri,") ||
+      norm.startsWith("SELECT id, owner_user_id, visibility, access_level, connection_id,") ||
+      norm.startsWith("SELECT id, space_id, connection_id, item_type, title")
+    ) &&
     norm.includes("FROM source_items")
   ) {
     return empty<Row>();
   }
   if (
-    norm.startsWith("SELECT ee.id, ee.source_item_id, ss.connection_id AS source_snapshot_connection_id,") &&
+    (
+      norm.startsWith("SELECT ee.id, ee.source_item_id, ss.connection_id AS source_snapshot_connection_id,") ||
+      norm.startsWith("SELECT ee.id, ee.owner_user_id, ee.visibility, ee.access_level,")
+    ) &&
     norm.includes("FROM extracted_evidence ee")
   ) {
     return empty<Row>();
@@ -72,6 +79,9 @@ export function handleSourceRetrievalTestSql<Row = Record<string, unknown>>(
       rows: [jobRow(params) as Row],
       rowCount: 1,
     };
+  }
+  if (norm.startsWith("INSERT INTO project_corpus_items")) {
+    return { rows: [] as Row[], rowCount: 0 };
   }
 
   return null;

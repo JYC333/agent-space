@@ -36,6 +36,7 @@ import type {
   ProviderCommandStore,
   ProviderInfo,
 } from "../commands/store";
+import type { UsageAttribution, UsageObservation } from "../../usage";
 import { Agent as UndiciAgent, fetch as undiciFetch } from "undici";
 import { classifyProviderFailure, type ProviderResilienceDecision } from "./resilience";
 import { fetchWithNetworkProfile, type ResolvedNetworkProfile } from "../../networkProfiles";
@@ -70,6 +71,7 @@ export interface ProviderChatRequestBody {
   max_tokens?: number;
   tools?: CanonicalToolDefinition[] | null;
   egressPolicy?: RetrievalEgressPolicy | null;
+  metering: ProviderMeteringContext;
 }
 
 export interface ProviderChatResponseBody {
@@ -80,6 +82,8 @@ export interface ProviderChatResponseBody {
   tool_calls?: CanonicalToolCall[];
   finish_reason?: string | null;
 }
+
+export type ProviderMeteringContext = Partial<UsageObservation>;
 
 export class ProviderInvocationError extends Error {
   constructor(
@@ -492,6 +496,156 @@ function providerEgressDeniedError(target: InvocationTarget): ProviderInvocation
   );
 }
 
+async function recordProviderUsage(
+  store: ProviderCommandStore,
+  target: InvocationTarget,
+  input: {
+    spaceId: string;
+    eventType: UsageObservation["event_type"];
+    model: string | null | undefined;
+    usage: Record<string, unknown>;
+    metering?: ProviderMeteringContext | null;
+    attribution: UsageAttribution;
+  },
+): Promise<void> {
+  const context = input.metering ?? {};
+  const provider = target.provider;
+  const observation: UsageObservation = {
+    ...context,
+    space_id: input.spaceId,
+    event_type: input.eventType,
+    source_type: context.source_type ?? "local_run",
+    execution_channel: context.execution_channel ?? "managed_api",
+    provider_id: provider.id,
+    provider_type: provider.provider_type,
+    provider_name_snapshot: provider.name,
+    vendor: context.vendor ?? provider.provider_type,
+    model: input.model ?? context.model ?? provider.default_model,
+    provider_usage: input.usage,
+    usage_accuracy: context.usage_accuracy ?? (hasUsage(input.usage) ? "provider_reported" : "unknown"),
+  };
+  try {
+    await store.recordUsageObservation(observation, input.attribution);
+  } catch {
+    throw new ProviderInvocationError(
+      502,
+      "Usage metering failed",
+      undefined,
+      "usage_metering_failed",
+    );
+  }
+}
+
+function isUsageMeteringFailure(error: unknown): boolean {
+  return error instanceof ProviderInvocationError && error.code === "usage_metering_failed";
+}
+
+function hasUsage(value: Record<string, unknown>): boolean {
+  return Object.values(value).some(hasUsageValue);
+}
+
+function hasUsageValue(value: unknown): boolean {
+  if (value === null || value === undefined) return false;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value === "string") return value.trim().length > 0;
+  if (typeof value === "boolean") return true;
+  if (Array.isArray(value)) return value.some(hasUsageValue);
+  if (typeof value === "object") return Object.values(value).some(hasUsageValue);
+  return false;
+}
+
+function meteringContext(
+  context: ProviderMeteringContext,
+  task: string | null | undefined,
+): ProviderMeteringContext {
+  return {
+    ...context,
+    task: context.task ?? task ?? null,
+  };
+}
+
+function assertMeteringContext(context: ProviderMeteringContext): void {
+  const sourceType = Boolean(context.source_resource_type?.trim());
+  const sourceId = Boolean(context.source_resource_id?.trim());
+  if (sourceType !== sourceId) {
+    throw new ProviderInvocationError(
+      422,
+      "Model invocation metering source type and id must be provided together",
+      undefined,
+      "usage_attribution_required",
+    );
+  }
+  const attributed = Boolean(
+    context.subject_user_id?.trim() ||
+    context.run_id?.trim() ||
+    context.agent_id?.trim() ||
+    (sourceType && sourceId) ||
+    (context.space_system_task === true && context.meter_subject_type === "space_system"),
+  );
+  if (!attributed) {
+    throw new ProviderInvocationError(
+      422,
+      "Model invocation requires usage owner or source attribution",
+      undefined,
+      "usage_attribution_required",
+    );
+  }
+}
+
+async function resolveProviderUsageAttribution(
+  store: ProviderCommandStore,
+  spaceId: string,
+  eventType: UsageObservation["event_type"],
+  context: ProviderMeteringContext,
+): Promise<UsageAttribution> {
+  try {
+    return await store.resolveUsageAttribution({
+      ...context,
+      space_id: spaceId,
+      event_type: eventType,
+      source_type: context.source_type ?? "local_run",
+      execution_channel: context.execution_channel ?? "managed_api",
+    });
+  } catch (error) {
+    if (error instanceof ProviderInvocationError) throw error;
+    const candidateStatus = (error as { statusCode?: unknown })?.statusCode;
+    const statusCode = typeof candidateStatus === "number" && candidateStatus >= 400 && candidateStatus <= 599
+      ? candidateStatus
+      : 502;
+    throw new ProviderInvocationError(
+      statusCode,
+      statusCode < 500 && error instanceof Error ? error.message : "Usage attribution failed",
+      undefined,
+      statusCode < 500 ? "usage_attribution_required" : "usage_attribution_failed",
+    );
+  }
+}
+
+function requiredAttribution(attribution: UsageAttribution | undefined): UsageAttribution {
+  if (attribution) return attribution;
+  throw new ProviderInvocationError(
+    502,
+    "Usage attribution was not prepared",
+    undefined,
+    "usage_attribution_failed",
+  );
+}
+
+function mergeUsage(...items: Array<Record<string, unknown> | null | undefined>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const item of items) {
+    if (!item) continue;
+    for (const [key, value] of Object.entries(item)) {
+      if (typeof value === "number" && Number.isFinite(value)) {
+        out[key] = typeof out[key] === "number" ? (out[key] as number) + value : value;
+      } else if (out[key] === undefined && value !== undefined) {
+        out[key] = value;
+      }
+    }
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Resilience engine
 // ---------------------------------------------------------------------------
@@ -526,6 +680,7 @@ async function invokeProviderWithPool(
   store: ProviderCommandStore,
   target: InvocationTarget,
   body: ProviderChatRequestBody,
+  attribution: UsageAttribution,
 ): Promise<ProviderChatResponseBody> {
   if (target.candidates.length === 0) {
     throw new ProviderInvocationError(
@@ -543,6 +698,14 @@ async function invokeProviderWithPool(
         if (candidate.member_id) {
           await store.recordPoolOutcome(candidate.member_id, { kind: "success" });
         }
+        await recordProviderUsage(store, target, {
+          spaceId: target.provider.space_id,
+          eventType: "llm.generation",
+          model: result.model,
+          usage: result.usage,
+          metering: body.metering,
+          attribution,
+        });
         return result;
       } catch (error) {
         lastError = error;
@@ -588,6 +751,13 @@ export async function completeProviderChat(
   spaceId: string,
   body: ProviderChatRequestBody,
 ): Promise<ProviderChatResponseBody> {
+  assertMeteringContext(body.metering);
+  const attribution = await resolveProviderUsageAttribution(
+    store,
+    spaceId,
+    "llm.generation",
+    body.metering,
+  );
   const primary = await store.getInvocationTarget(spaceId, body.provider_id);
   const chain: InvocationTarget[] = [primary];
   for (const fallbackId of primary.fallback_provider_ids) {
@@ -608,8 +778,9 @@ export async function completeProviderChat(
       // Fallback providers serve THEIR OWN default model: an explicit model
       // name from the request only binds to the provider it was meant for.
       const effectiveBody = index === 0 ? body : { ...body, model: null };
-      return await invokeProviderWithPool(store, target, effectiveBody);
+      return await invokeProviderWithPool(store, target, effectiveBody, attribution);
     } catch (error) {
+      if (isUsageMeteringFailure(error)) throw error;
       lastError = error;
       if (
         error instanceof ProviderInvocationError &&
@@ -633,6 +804,7 @@ export interface ProviderTextCompletionInput {
   /** Auxiliary-task name; resolves a ProviderTaskPolicy chain when present. */
   task?: string | null;
   egressPolicy?: RetrievalEgressPolicy | null;
+  metering: ProviderMeteringContext;
 }
 
 export interface ProviderMessagesCompletionInput {
@@ -645,6 +817,7 @@ export interface ProviderMessagesCompletionInput {
   /** Auxiliary-task name; resolves a ProviderTaskPolicy chain when present. */
   task?: string | null;
   egressPolicy?: RetrievalEgressPolicy | null;
+  metering: ProviderMeteringContext;
 }
 
 /**
@@ -666,6 +839,7 @@ export async function completeProviderText(
     max_tokens: input.max_tokens,
     task: input.task,
     egressPolicy: input.egressPolicy,
+    metering: input.metering,
   });
 }
 
@@ -688,6 +862,7 @@ export async function completeProviderMessages(
     max_tokens: input.max_tokens,
     tools: input.tools,
     egressPolicy: input.egressPolicy,
+    metering: meteringContext(input.metering, input.task),
   });
 
   const taskChain = input.task ? await store.getTaskChain(spaceId, input.task) : null;
@@ -704,6 +879,7 @@ export async function completeProviderMessages(
           finish_reason: result.finish_reason,
         };
       } catch (error) {
+        if (isUsageMeteringFailure(error)) throw error;
         lastError = error;
         if (
           error instanceof ProviderInvocationError &&
@@ -743,11 +919,13 @@ export interface ProviderEmbeddingInput {
   /** Auxiliary task whose ProviderTaskPolicy chain is tried first (e.g. retrieval_embedding). */
   task?: string;
   egressPolicy?: RetrievalEgressPolicy | null;
+  metering: ProviderMeteringContext;
 }
 
 export interface ProviderEmbeddingResult {
   vectors: number[][];
   model: string;
+  usage: Record<string, unknown>;
 }
 
 export interface ProviderRerankInput {
@@ -761,6 +939,7 @@ export interface ProviderRerankInput {
   /** Auxiliary task whose ProviderTaskPolicy chain is tried first. */
   task?: string;
   egressPolicy?: RetrievalEgressPolicy | null;
+  metering: ProviderMeteringContext;
 }
 
 export interface ProviderRerankResult {
@@ -781,7 +960,14 @@ export async function completeProviderEmbedding(
   spaceId: string,
   input: ProviderEmbeddingInput,
 ): Promise<ProviderEmbeddingResult> {
-  if (input.inputs.length === 0) return { vectors: [], model: "" };
+  if (input.inputs.length === 0) return { vectors: [], model: "", usage: {} };
+  assertMeteringContext(input.metering);
+  const attribution = await resolveProviderUsageAttribution(
+    store,
+    spaceId,
+    "llm.embedding",
+    input.metering,
+  );
   const taskChain = input.task ? await store.getTaskChain(spaceId, input.task) : null;
   if (taskChain) {
     let lastError: unknown = null;
@@ -796,8 +982,11 @@ export async function completeProviderEmbedding(
           input.dimensions,
           input.inputType,
           input.egressPolicy,
+          meteringContext(input.metering, input.task),
+          attribution,
         );
       } catch (error) {
+        if (isUsageMeteringFailure(error)) throw error;
         lastError = error;
         if (
           error instanceof ProviderInvocationError &&
@@ -823,6 +1012,8 @@ export async function completeProviderEmbedding(
     input.dimensions,
     input.inputType,
     input.egressPolicy,
+    meteringContext(input.metering, input.task),
+    attribution,
   );
 }
 
@@ -835,6 +1026,8 @@ async function completeProviderEmbeddingWithFallback(
   dimensions?: number | null,
   inputType?: "query" | "document",
   egressPolicy?: RetrievalEgressPolicy | null,
+  metering?: ProviderMeteringContext | null,
+  attribution?: UsageAttribution,
 ): Promise<ProviderEmbeddingResult> {
   const target = await store.getInvocationTarget(spaceId, providerId);
   const chain: InvocationTarget[] = [target];
@@ -860,8 +1053,11 @@ async function completeProviderEmbeddingWithFallback(
         inputs,
         dimensions,
         inputType,
+        metering,
+        attribution,
       );
     } catch (error) {
+      if (isUsageMeteringFailure(error)) throw error;
       lastError = error;
       if (
         error instanceof ProviderInvocationError &&
@@ -883,6 +1079,8 @@ async function invokeEmbeddingProviderWithPool(
   inputs: string[],
   dimensions?: number | null,
   inputType?: "query" | "document",
+  metering?: ProviderMeteringContext | null,
+  attribution?: UsageAttribution,
 ): Promise<ProviderEmbeddingResult> {
   if (target.candidates.length === 0) {
     throw new ProviderInvocationError(
@@ -900,6 +1098,14 @@ async function invokeEmbeddingProviderWithPool(
         if (candidate.member_id) {
           await store.recordPoolOutcome(candidate.member_id, { kind: "success" });
         }
+        await recordProviderUsage(store, target, {
+          spaceId: target.provider.space_id,
+          eventType: "llm.embedding",
+          model: result.model,
+          usage: result.usage,
+          metering,
+          attribution: requiredAttribution(attribution),
+        });
         return result;
       } catch (error) {
         lastError = error;
@@ -950,8 +1156,18 @@ async function embedOnce(
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ model: resolvedModel, input: inputs }),
     });
-    const data = (await parseJsonResponse(response)) as { embeddings?: number[][]; model?: string };
-    return { vectors: data.embeddings ?? [], model: data.model ?? resolvedModel };
+    const data = (await parseJsonResponse(response)) as {
+      embeddings?: number[][];
+      model?: string;
+      prompt_eval_count?: number;
+      usage?: Record<string, unknown>;
+    };
+    return {
+      vectors: data.embeddings ?? [],
+      model: data.model ?? resolvedModel,
+      usage: data.usage ??
+        (typeof data.prompt_eval_count === "number" ? { input_tokens: data.prompt_eval_count } : {}),
+    };
   }
 
   if (provider.provider_type === "zeroentropy") {
@@ -976,10 +1192,13 @@ async function embedOnce(
     });
     const data = (await parseJsonResponse(response)) as {
       results?: Array<{ embedding?: number[] }>;
+      usage?: Record<string, unknown>;
+      meta?: Record<string, unknown>;
     };
     return {
       vectors: (data.results ?? []).map((row) => row.embedding ?? []),
       model: resolvedModel,
+      usage: data.usage ?? data.meta ?? {},
     };
   }
 
@@ -988,6 +1207,7 @@ async function embedOnce(
       throw new ProviderInvocationError(400, `ModelProvider '${provider.id}' has no API key credential`);
     }
     const vectors: number[][] = [];
+    let usage: Record<string, unknown> = {};
     for (const batch of batches(inputs, 96)) {
       const body: Record<string, unknown> = {
         model: resolvedModel,
@@ -1012,10 +1232,12 @@ async function embedOnce(
       });
       const data = (await parseJsonResponse(response)) as {
         embeddings?: { float?: number[][] } | number[][];
+        meta?: Record<string, unknown>;
       };
       vectors.push(...cohereFloatEmbeddings(data.embeddings));
+      usage = mergeUsage(usage, data.meta);
     }
-    return { vectors, model: resolvedModel };
+    return { vectors, model: resolvedModel, usage };
   }
 
   if (["openai", "openrouter", "other"].includes(provider.provider_type)) {
@@ -1034,9 +1256,14 @@ async function embedOnce(
     const data = (await parseJsonResponse(response)) as {
       data?: Array<{ embedding: number[]; index?: number }>;
       model?: string;
+      usage?: Record<string, unknown>;
     };
     const sorted = [...(data.data ?? [])].sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
-    return { vectors: sorted.map((row) => row.embedding), model: data.model ?? resolvedModel };
+    return {
+      vectors: sorted.map((row) => row.embedding),
+      model: data.model ?? resolvedModel,
+      usage: data.usage ?? {},
+    };
   }
 
   throw new ProviderInvocationError(
@@ -1056,6 +1283,13 @@ export async function completeProviderRerank(
   input: ProviderRerankInput,
 ): Promise<ProviderRerankResult> {
   if (input.documents.length === 0) return { scores: [], model: "", usage: {} };
+  assertMeteringContext(input.metering);
+  const attribution = await resolveProviderUsageAttribution(
+    store,
+    spaceId,
+    "llm.rerank",
+    input.metering,
+  );
   const taskChain = input.task ? await store.getTaskChain(spaceId, input.task) : null;
   if (taskChain) {
     let lastError: unknown = null;
@@ -1070,8 +1304,11 @@ export async function completeProviderRerank(
           input.documents,
           input.topN,
           input.egressPolicy,
+          meteringContext(input.metering, input.task),
+          attribution,
         );
       } catch (error) {
+        if (isUsageMeteringFailure(error)) throw error;
         lastError = error;
         if (
           error instanceof ProviderInvocationError &&
@@ -1097,6 +1334,8 @@ export async function completeProviderRerank(
     input.documents,
     input.topN,
     input.egressPolicy,
+    meteringContext(input.metering, input.task),
+    attribution,
   );
 }
 
@@ -1109,6 +1348,8 @@ async function completeProviderRerankWithFallback(
   documents: string[],
   topN?: number | null,
   egressPolicy?: RetrievalEgressPolicy | null,
+  metering?: ProviderMeteringContext | null,
+  attribution?: UsageAttribution,
 ): Promise<ProviderRerankResult> {
   const target = await store.getInvocationTarget(spaceId, providerId);
   const chain: InvocationTarget[] = [target];
@@ -1134,8 +1375,11 @@ async function completeProviderRerankWithFallback(
         query,
         documents,
         topN,
+        metering,
+        attribution,
       );
     } catch (error) {
+      if (isUsageMeteringFailure(error)) throw error;
       lastError = error;
       if (
         error instanceof ProviderInvocationError &&
@@ -1157,6 +1401,8 @@ async function invokeRerankProviderWithPool(
   query: string,
   documents: string[],
   topN?: number | null,
+  metering?: ProviderMeteringContext | null,
+  attribution?: UsageAttribution,
 ): Promise<ProviderRerankResult> {
   if (target.candidates.length === 0) {
     throw new ProviderInvocationError(
@@ -1174,6 +1420,14 @@ async function invokeRerankProviderWithPool(
         if (candidate.member_id) {
           await store.recordPoolOutcome(candidate.member_id, { kind: "success" });
         }
+        await recordProviderUsage(store, target, {
+          spaceId: target.provider.space_id,
+          eventType: "llm.rerank",
+          model: result.model,
+          usage: result.usage,
+          metering,
+          attribution: requiredAttribution(attribution),
+        });
         return result;
       } catch (error) {
         lastError = error;

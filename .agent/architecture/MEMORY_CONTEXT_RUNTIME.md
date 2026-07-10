@@ -44,7 +44,7 @@ No route, run, condenser, retriever, context builder, activity processor, or age
 
 ---
 
-## 2. Read authorization (`server/src/modules/memory/memoryReadAuth.ts`)
+## 2. Read authorization (`server/src/modules/access/contentAccess*.ts`)
 
 ```
 can_read_memory(entry, user_id, space_id, workspace_id, include_system_scope) -> bool
@@ -54,7 +54,8 @@ Hard filter applied before any ranking:
 - `space_id` match (never cross-space without PersonalMemoryGrant)
 - `deleted_at IS NULL`
 - `status == "active"`
-- Visibility gate (private → owner_user_id match; workspace_shared → workspace_id match; restricted → selected_user_ids)
+- Canonical content gate (active Space membership, scope, owner, visibility,
+  and `content_access_grants`)
 - Agent permission gate (agent_memory_policy.readable_scopes)
 
 `summary_only_redact_content(entry, viewer_user_id)` — returns True if the viewer may only see summary (PersonalMemoryGrant summary-only mode).
@@ -540,7 +541,7 @@ refreshes/jobs fail closed for archived or missing scopes.
 - `workspace` / `agent`: the run agent's `readable_scopes` includes the digest
   scope, status is `active`, and every claimed `source_memory_ids_json` id still
   revalidates against live `memory_entries` for the same space/scope, active,
-  undeleted, shared visibility, and non-`highly_restricted`.
+  undeleted, canonically readable by the run owner, and non-`highly_restricted`.
 
 A digest is dropped when it is dirty, out-of-scope for `readable_scopes`, has
 malformed/missing source metadata for non-empty content, or claims any stale or
@@ -632,7 +633,7 @@ After applying `policy_change`:
 | Gate | Location | When |
 |------|---------|------|
 | Hard memory filter | `server/src/modules/context/repository.ts` and memory repositories | Every retrieval query |
-| Read authorization | `server/src/modules/memory/memoryReadAuth.ts` | Context assembly, direct reads |
+| Read authorization | `server/src/modules/access/contentAccess*.ts` | Context assembly, direct reads |
 | Policy-aware read gate | `server/src/modules/policy/decisionCore.ts` | Run context reads |
 | Private memory placement | Policy hard invariant + memory applier | Memory proposal apply |
 | Write authority boundary | `server/src/modules/proposals/applyService.ts` | Accepted proposals only |

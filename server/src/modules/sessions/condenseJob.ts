@@ -44,6 +44,7 @@ export function registerSessionCondenseHandler(
         system: prompt.system,
         user: prompt.user,
         task: "session_condense",
+        metering: { subject_user_id: userId },
       });
       return completion.text;
     };

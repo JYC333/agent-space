@@ -86,7 +86,7 @@ describe("run-event SSE streaming edge", () => {
     __setAuthIdentityForTests({ spaceId: "personal", userId: "user-1" });
     const events = [runEvent(0), runEvent(1)];
     __setStreamingRepositoryFactoryForTests(() => ({
-      async getRun() {
+      async getVisibleRun() {
         return runRecord();
       },
       async listRunEventsPage(_spaceId, _runId, filters) {
@@ -124,7 +124,7 @@ describe("run-event SSE streaming edge", () => {
   it("uses Last-Event-ID to resume at the next run event index", async () => {
     __setAuthIdentityForTests({ spaceId: "personal", userId: "user-1" });
     __setStreamingRepositoryFactoryForTests(() => ({
-      async getRun() {
+      async getVisibleRun() {
         return runRecord();
       },
       async listRunEventsPage(_spaceId, _runId, filters) {
@@ -158,7 +158,7 @@ describe("run-event SSE streaming edge", () => {
   it("denies missing or invisible runs before opening SSE", async () => {
     __setAuthIdentityForTests({ spaceId: "personal", userId: "user-1" });
     __setStreamingRepositoryFactoryForTests(() => ({
-      async getRun() {
+      async getVisibleRun() {
         return null;
       },
       async listRunEventsPage() {

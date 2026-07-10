@@ -63,9 +63,10 @@ beforeEach(async () => {
   for (const workspaceId of [WORKSPACE, OTHER_WORKSPACE]) {
     await pool.query(
       `INSERT INTO workspaces (
-         id, space_id, name, status, workspace_type, kind, visibility, protected, system_managed, created_at, updated_at
-       ) VALUES ($1,$2,'Experiment WS','active','project','git','private',false,false,$3,$3)`,
-      [workspaceId, SPACE, now],
+         id, space_id, owner_user_id, name, status, workspace_type, kind, visibility,
+         protected, system_managed, created_at, updated_at
+       ) VALUES ($1,$2,$3,'Experiment WS','active','project','git','private',false,false,$4,$4)`,
+      [workspaceId, SPACE, OWNER, now],
     );
   }
   await pool.query(

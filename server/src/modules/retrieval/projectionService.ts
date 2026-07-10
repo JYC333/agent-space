@@ -115,12 +115,12 @@ export class RetrievalProjectionService {
     if (objectTypes.length === 0) return;
     await this.db.query(
       `DELETE FROM retrieval_edges
-        WHERE space_id = $1 AND from_object_type = ANY($2::varchar[])`,
+        WHERE space_id = $1 AND from_object_type = ANY($2::retrieval_object_type[])`,
       [spaceId, objectTypes],
     );
     await this.db.query(
       `DELETE FROM retrieval_objects
-        WHERE space_id = $1 AND object_type = ANY($2::varchar[])`,
+        WHERE space_id = $1 AND object_type = ANY($2::retrieval_object_type[])`,
       [spaceId, objectTypes],
     );
   }

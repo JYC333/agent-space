@@ -28,6 +28,7 @@ export const artifacts = pgTable("artifacts", {
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).notNull(),
 	metadataJson: jsonb("metadata_json"),
 	visibility: varchar({ length: 32 }).default('space_shared').notNull(),
+	accessLevel: varchar("access_level", { length: 16 }).default('full').notNull(),
 	ownerUserId: varchar("owner_user_id", { length: 36 }),
 	trustLevel: varchar("trust_level", { length: 32 }),
 	projectId: varchar("project_id", { length: 36 }),
@@ -72,5 +73,7 @@ export const artifacts = pgTable("artifacts", {
 		}).onDelete("set null"),
 	check("ck_artifacts_storage_path_relative", sql`(storage_path IS NULL) OR ((storage_path)::text !~~ '/%'::text)`),
 	check("ck_artifacts_trust_level", sql`(trust_level IS NULL) OR ((trust_level)::text = ANY (ARRAY[('high'::character varying)::text, ('medium'::character varying)::text, ('low'::character varying)::text, ('unknown'::character varying)::text]))`),
-	check("ck_artifacts_workspace_shared_workspace", sql`((visibility)::text <> 'workspace_shared'::text) OR (workspace_id IS NOT NULL)`),
+	check("ck_artifacts_visibility", sql`visibility IN ('private', 'space_shared', 'selected_users')`),
+	check("ck_artifacts_access_level", sql`access_level IN ('full', 'summary')`),
+	check("ck_artifacts_private_owner", sql`visibility = 'space_shared' OR owner_user_id IS NOT NULL`),
 ]);

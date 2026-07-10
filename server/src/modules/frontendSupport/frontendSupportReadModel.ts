@@ -1,8 +1,5 @@
 import { HttpError, intQuery } from "../routeUtils/common";
-import {
-  artifactVisibleSql as sharedArtifactVisibleSql,
-  taskVisibleSql as sharedTaskVisibleSql,
-} from "../access/visibility";
+import { contentReadSql } from "../access/contentAccessSql";
 import type { HomeSummaryOut } from "./frontendSupportTypes";
 
 export const ACTIVE_RUN_STATUSES = ["queued", "running", "waiting_for_review"];
@@ -22,27 +19,20 @@ export function boundedQueryInt(
   return parsed;
 }
 
-export function runVisibleSql(userParam: string): string {
-  return `(
-    r.visibility = 'space_shared'
-    OR r.instructed_by_user_id = ${userParam}
-  )`;
+export function runReadSql(userParam: string): string {
+  return contentReadSql("run", "r", userParam);
 }
 
-export function proposalVisibleSql(userParam: string): string {
-  return `(
-    p.visibility = 'space_shared'
-    OR p.created_by_user_id = ${userParam}
-    OR run_for_instructed.instructed_by_user_id = ${userParam}
-  )`;
+export function proposalReadSql(userParam: string): string {
+  return contentReadSql("proposal", "p", userParam);
 }
 
-export function artifactVisibleSql(userParam: string): string {
-  return sharedArtifactVisibleSql({ userExpr: userParam });
+export function artifactReadSql(userParam: string): string {
+  return contentReadSql("artifact", "a", userParam);
 }
 
-export function taskVisibleSql(userParam: string): string {
-  return sharedTaskVisibleSql({ userExpr: userParam, includePublicTemplate: true });
+export function taskReadSql(userParam: string): string {
+  return contentReadSql("task", "t", userParam);
 }
 
 export function proposalVisibleSelect(): string {

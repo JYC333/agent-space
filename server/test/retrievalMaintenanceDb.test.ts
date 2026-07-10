@@ -57,6 +57,11 @@ beforeEach(async () => {
   for (const id of [VIEWER, OTHER]) {
     await pool.query(`INSERT INTO users (id, display_name, status, created_at, updated_at) VALUES ($1, 'U', 'active', now(), now())`, [id]);
   }
+  await pool.query(
+    `INSERT INTO space_memberships (id, space_id, user_id, role, status, created_at, updated_at)
+     VALUES ('maintenance-viewer', $1, $2, 'owner', 'active', now(), now())`,
+    [SPACE, VIEWER],
+  );
 });
 
 async function seed(doc: {

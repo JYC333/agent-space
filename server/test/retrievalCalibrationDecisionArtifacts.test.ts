@@ -14,7 +14,7 @@ function fakeDb(
   const db: Queryable = {
     async query<Row = Record<string, unknown>>(sql: string, params: readonly unknown[] = []) {
       calls.push({ sql, params });
-      if (/SELECT id, artifact_type, visibility\s+FROM artifacts/.test(sql)) {
+      if (/SELECT a\.id, a\.artifact_type, a\.visibility\s+FROM artifacts a/.test(sql)) {
         return { rows: evidenceRows as Row[], rowCount: evidenceRows.length };
       }
       return { rows: [] as Row[], rowCount: 1 };
@@ -51,9 +51,10 @@ describe("retrieval calibration decision artifacts", () => {
     });
 
     expect(artifactId).toMatch(/[0-9a-f-]{36}/);
-    const select = calls.find((call) => /SELECT id, artifact_type, visibility\s+FROM artifacts/.test(call.sql));
+    const select = calls.find((call) => /SELECT a\.id, a\.artifact_type, a\.visibility\s+FROM artifacts a/.test(call.sql));
     expect(select?.params[2]).toContain("memory_maintenance_report");
-    expect(select?.params[4]).toEqual(["private", "space_shared"]);
+    expect(select?.params[3]).toBe("user-1");
+    expect(select?.sql).toContain("a.visibility IN ('private', 'space_shared')");
     const insert = calls.find((call) => /INSERT INTO artifacts/.test(call.sql));
     expect(insert).toBeDefined();
     expect(insert!.params[4]).toBe(RETRIEVAL_CALIBRATION_DECISION_ARTIFACT_TYPE);
@@ -103,8 +104,8 @@ describe("retrieval calibration decision artifacts", () => {
       request,
     });
 
-    const select = calls.find((call) => /SELECT id, artifact_type, visibility\s+FROM artifacts/.test(call.sql));
-    expect(select?.params[4]).toEqual(["space_shared"]);
+    const select = calls.find((call) => /SELECT a\.id, a\.artifact_type, a\.visibility\s+FROM artifacts a/.test(call.sql));
+    expect(select?.sql).toContain("a.visibility = 'space_shared'");
     const insert = calls.find((call) => /INSERT INTO artifacts/.test(call.sql));
     expect(insert).toBeDefined();
     expect(insert!.params[14]).toBe("space_shared");

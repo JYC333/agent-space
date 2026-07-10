@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Queryable } from "../routeUtils/common";
+import { inheritContentAccessGrants } from "../access/contentAccessInheritance";
 
 interface SourceItemForMaterialization {
   id: string;
@@ -8,6 +9,9 @@ interface SourceItemForMaterialization {
   metadata_json: unknown;
   source_object_id: string | null;
   created_by_user_id: string | null;
+  owner_user_id: string | null;
+  visibility: string;
+  access_level: string;
 }
 
 interface ArxivItemMetadata {
@@ -91,7 +95,8 @@ export async function materializeAcademicPaperFromSourceItem(
   input: { spaceId: string; sourceItemId: string },
 ): Promise<MaterializeAcademicPaperResult | null> {
   const itemResult = await db.query<SourceItemForMaterialization>(
-    `SELECT id, space_id, title, metadata_json, source_object_id, created_by_user_id
+    `SELECT id, space_id, title, metadata_json, source_object_id, created_by_user_id,
+            owner_user_id, visibility, access_level
        FROM source_items
       WHERE space_id = $1 AND id = $2 AND deleted_at IS NULL
       LIMIT 1`,
@@ -130,11 +135,30 @@ export async function materializeAcademicPaperFromSourceItem(
   const title = (item.title?.trim() || arxiv.arxivId).slice(0, 1024);
   await db.query(
     `INSERT INTO space_objects (
-       id, space_id, object_type, title, summary, status, visibility,
-       created_by_user_id, created_at, updated_at
-     ) VALUES ($1, $2, 'source', $3, NULL, 'processed', 'space_shared', $4, $5, $5)`,
-    [objectId, input.spaceId, title, item.created_by_user_id, now],
+       id, space_id, object_type, title, summary, status, visibility, access_level,
+       owner_user_id, created_by_user_id, created_at, updated_at
+     ) VALUES ($1, $2, 'source', $3, NULL, 'processed', $4, $5, $6, $7, $8, $8)`,
+    [
+      objectId,
+      input.spaceId,
+      title,
+      item.visibility,
+      item.access_level,
+      item.owner_user_id,
+      item.created_by_user_id,
+      now,
+    ],
   );
+  if (item.visibility === "selected_users") {
+    await inheritContentAccessGrants(db, {
+      spaceId: input.spaceId,
+      sourceResourceType: "source_item",
+      sourceResourceId: item.id,
+      targetResourceType: "space_object",
+      targetResourceId: objectId,
+      inheritedAt: now,
+    });
+  }
   await db.query(
     `INSERT INTO sources (object_id, space_id, source_type, uri, metadata_json)
      VALUES ($1, $2, 'paper', $3, $4::jsonb)`,

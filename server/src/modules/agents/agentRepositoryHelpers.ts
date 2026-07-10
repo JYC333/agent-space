@@ -41,6 +41,7 @@ export function agentOut(row: AgentRecord): AgentOut {
     name: row.name,
     description: row.description,
     visibility: row.visibility,
+    access_level: row.access_level,
     role_instruction: row.role_instruction,
     status: row.status,
     agent_kind: row.agent_kind,

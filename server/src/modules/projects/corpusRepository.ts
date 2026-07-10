@@ -11,7 +11,7 @@ import {
   type Queryable,
   type SpaceUserIdentity,
 } from "../routeUtils/common";
-import { spaceObjectVisibleSql } from "../access/visibility";
+import { contentReadSql } from "../access/contentAccessSql";
 import { sourceItemReadableClause } from "../sources/sourceItemAccess";
 import { assertProjectReadable, assertProjectWriter } from "./access";
 
@@ -118,8 +118,14 @@ export class ProjectCorpusRepository {
     },
   ): Promise<Record<string, unknown>> {
     await assertProjectReadable(this.db, identity.spaceId, projectId, identity.userId);
-    const params: unknown[] = [identity.spaceId, projectId];
-    const clauses = ["pci.space_id = $1", "pci.project_id = $2"];
+    const params: unknown[] = [identity.spaceId, projectId, identity.userId];
+    const clauses = [
+      "pci.space_id = $1",
+      "pci.project_id = $2",
+      `(pci.object_id IS NULL OR (so.id IS NOT NULL AND ${contentReadSql("space_object", "so", "$3")}))`,
+      `(pci.source_item_id IS NULL OR (si.id IS NOT NULL AND ${sourceItemReadableClause("si", "$3", false)}))`,
+      `(pci.evidence_id IS NULL OR (ev.id IS NOT NULL AND ${contentReadSql("extracted_evidence", "ev", "$3")}))`,
+    ];
     if (filters.status) {
       if (!STATUSES.has(filters.status as ProjectCorpusStatus)) {
         throw new HttpError(422, "status must be active or archived");
@@ -408,7 +414,7 @@ export class ProjectCorpusRepository {
           WHERE so.space_id = $1
             AND so.id = $2
             AND so.deleted_at IS NULL
-            AND ${spaceObjectVisibleSql("so", "$3")}
+            AND ${contentReadSql("space_object", "so", "$3")}
           LIMIT 1`,
         [identity.spaceId, objectId, identity.userId],
       );
@@ -437,6 +443,7 @@ export class ProjectCorpusRepository {
           WHERE ev.space_id = $1
             AND ev.id = $2
             AND ev.deleted_at IS NULL
+            AND ${contentReadSql("extracted_evidence", "ev", "$3")}
             AND (
               (
                 ev.source_item_id IS NOT NULL
@@ -447,12 +454,11 @@ export class ProjectCorpusRepository {
                 ev.source_item_id IS NULL
                 AND ev.source_object_id IS NOT NULL
                 AND so.deleted_at IS NULL
-                AND ${spaceObjectVisibleSql("so", "$3")}
+                AND ${contentReadSql("space_object", "so", "$3")}
               )
               OR (
                 ev.source_item_id IS NULL
                 AND ev.source_object_id IS NULL
-                AND ev.created_by_user_id = $3
               )
             )
           LIMIT 1`,

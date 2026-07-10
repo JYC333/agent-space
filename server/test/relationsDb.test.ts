@@ -52,6 +52,11 @@ beforeEach(async () => {
        VALUES ($1, 'Relations Space', 'household', $2, now(), now())`,
       [spaceId, USER],
     );
+    await pool.query(
+      `INSERT INTO space_memberships (id, space_id, user_id, role, status, created_at, updated_at)
+       VALUES (gen_random_uuid()::varchar, $1, $2, 'owner', 'active', now(), now())`,
+      [spaceId, USER],
+    );
   }
 });
 
@@ -199,7 +204,7 @@ describe("relations module (real Postgres)", () => {
         person_object_id: person.object_id,
         organization_object_id: org.object_id,
       }),
-    ).rejects.toMatchObject({ statusCode: 422 });
+    ).rejects.toMatchObject({ statusCode: 404 });
   });
 
   it("creates and lists relation notes", async () => {

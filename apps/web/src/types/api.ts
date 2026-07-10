@@ -3,6 +3,8 @@
 export type SpaceType      = 'personal' | 'household' | 'team'
 export type MemberRole     = 'owner' | 'admin' | 'reviewer' | 'member' | 'guest' | 'viewer'
 export type InviteStatus   = 'pending' | 'accepted' | 'revoked' | 'expired'
+/** Immutable after Space creation; personal Spaces are always 'none'. */
+export type SpaceOversightMode = 'none' | 'summary' | 'content' | 'full'
 
 export interface CurrentUser {
   id: string
@@ -20,6 +22,7 @@ export interface SpaceWithMembership {
   name: string
   type: SpaceType
   role: MemberRole
+  oversight_mode: SpaceOversightMode
   created_at: string
   updated_at: string
 }
@@ -51,8 +54,32 @@ export interface SpaceInvitationOut {
 export type MemoryType       = 'preference' | 'semantic' | 'episodic' | 'procedural' | 'project'
 export type MemoryScope      = 'user' | 'workspace' | 'capability' | 'agent' | 'system' | 'space'
 export type MemoryStatus     = 'active' | 'archived' | 'proposed' | 'rejected' | 'superseded'
-export type MemoryVisibility = 'private' | 'space_shared' | 'workspace_shared' | 'selected_users' | 'summary_only' | 'restricted' | 'public_template'
-export type ObjectVisibility = 'private' | 'space_shared' | 'restricted' | string
+export type ContentVisibility = 'private' | 'space_shared' | 'selected_users'
+export type ContentAccessLevel = 'full' | 'summary'
+export interface ContentAccessGrantOut {
+  user_id: string
+  access_level: ContentAccessLevel
+  created_at: string
+  updated_at: string
+}
+export interface ContentAccessPolicy {
+  resource_type: string
+  resource_id: string
+  space_id: string
+  owner_user_id: string | null
+  visibility: ContentVisibility
+  access_level: ContentAccessLevel
+  workspace_id: string | null
+  project_id: string | null
+  grants: ContentAccessGrantOut[]
+}
+export interface ContentAccessUpdate {
+  visibility: ContentVisibility
+  access_level: ContentAccessLevel
+  grants: Array<{ user_id: string; access_level: ContentAccessLevel }>
+}
+export type MemoryVisibility = ContentVisibility
+export type ObjectVisibility = ContentVisibility
 export type ProposalStatus   = 'pending' | 'accepted' | 'rejected'
 export type KnowledgeItemKind =
   | 'concept'
@@ -64,7 +91,7 @@ export type KnowledgeItemKind =
   | 'summary'
 export type KnowledgeContentFormat = 'markdown' | 'plain' | 'prosemirror_json'
 export type KnowledgeItemStatus = 'draft' | 'active' | 'superseded' | 'archived'
-export type KnowledgeVisibility = 'private' | 'space_shared' | 'workspace_shared' | 'restricted'
+export type KnowledgeVisibility = ContentVisibility
 export type KnowledgeVerificationStatus = 'unverified' | 'needs_review' | 'verified'
 export type KnowledgeReflectionStatus = 'unreviewed' | 'reviewed' | 'distilled'
 export type KnowledgeRelationType =
@@ -915,7 +942,8 @@ export interface SourceConnection {
   connector_id: string
   owner_user_id: string
   credential_id: string | null
-  visibility: 'private' | 'space_discoverable'
+  visibility: ContentVisibility
+  access_level: ContentAccessLevel
   name: string
   endpoint_url: string | null
   status: 'active' | 'paused' | 'archived'
@@ -954,7 +982,7 @@ export interface SourceConnectionCreate {
   name: string
   endpoint_url?: string | null
   credential_id?: string | null
-  visibility?: 'private' | 'space_discoverable'
+  visibility?: 'private' | 'space_shared'
   fetch_frequency?: 'manual' | 'hourly' | 'daily' | 'weekly'
   next_check_at?: string | null
   schedule_rule?: SourceScheduleRule | null
@@ -1664,8 +1692,8 @@ export interface Memory {
   namespace: string | null
   status: MemoryStatus
   visibility: MemoryVisibility
+  access_level: ContentAccessLevel
   sensitivity_level?: string
-  selected_user_ids?: string[] | null
   last_confirmed_at?: string | null
   confidence: number
   importance: number
@@ -2042,6 +2070,8 @@ export interface ActivityInboxRecord {
   metadata_json: Record<string, unknown> | null
   aggregate_key?: string | null
   visibility?: ObjectVisibility
+  access_level?: ContentAccessLevel
+  owner_user_id?: string | null
   created_at: string
   updated_at: string
 }
@@ -2058,6 +2088,8 @@ export interface ActivityRecord {
   content: string | null
   payload_json: Record<string, unknown>
   visibility?: ObjectVisibility
+  access_level?: ContentAccessLevel
+  owner_user_id?: string | null
   occurred_at: string
   created_at: string
 }
@@ -2098,6 +2130,7 @@ export interface ChatTurnOut {
 export interface Task {
   id: string
   space_id: string
+  owner_user_id: string | null
   workspace_id: string | null
   board_id: string | null
   column_id: string | null
@@ -2109,6 +2142,7 @@ export interface Task {
   priority: string
   risk_level: string
   visibility: ObjectVisibility
+  access_level: ContentAccessLevel
   created_by_user_id: string | null
   created_by_agent_id: string | null
   assigned_user_id: string | null
@@ -2239,6 +2273,8 @@ export interface Run {
   model_provider_id?: string | null
   resolved_model?: RunResolvedModel | null
   visibility?: ObjectVisibility
+  access_level?: ContentAccessLevel
+  owner_user_id?: string | null
   task_id?: string | null
 }
 
@@ -2496,7 +2532,7 @@ export interface Proposal {
   owner_user_id?: string | null
   subject_user_id?: string | null
   sensitivity_level?: string | null
-  selected_user_ids?: string[] | null
+  access_level?: ContentAccessLevel | null
   grant_id?: string | null
   required_approver_user_id?: string | null
   requires_approval_type?: string | null
@@ -3173,6 +3209,7 @@ export interface AgentOut {
   name: string
   description: string | null
   visibility: string
+  access_level: ContentAccessLevel
   role_instruction: string | null
   status: string
   // 'standard' | 'system_assistant' (the space's system-managed default Assistant)

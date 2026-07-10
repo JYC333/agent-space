@@ -1,91 +1,100 @@
-/**
- * Memory read authorization (`can_read_memory`,
- * `summary_only_redact_content`, `user_in_selected_ids`).
- *
- * This is the security boundary for the server memory read model: visibility,
- * sensitivity, owner/subject separation, scope (system / public_template), and
- * workspace/selected-user gating must stay stable or reads leak across
- * users/spaces. The compatibility fixture
- * (`server/test/fixtures/memory_read_auth_matrix.json`) locks this.
- *
- * Owner is never inferred from subject_user_id.
- */
+import { decideContentAccess, isContentOwner } from "../access/contentAccessPolicy";
+import type {
+  ContentAccessDecision,
+  ContentAccessGrant,
+  OversightMode,
+} from "../access/contentAccessTypes";
+import { isContentAccessLevel, isContentVisibility } from "../access/contentAccessTypes";
 
-/** The subset of memory columns the authorization decision reads. */
+/** Memory-specific adapter around the canonical content-access decision. */
 export interface MemoryAuthFields {
+  id?: string;
   space_id: string;
   deleted_at: unknown;
   sensitivity_level: string | null;
   visibility: string | null;
+  access_level: string | null;
+  effective_access_level?: string | null;
   owner_user_id: string | null;
   scope_type: string | null;
   workspace_id: string | null;
-  selected_user_ids: unknown;
+  content_access_grants?: readonly ContentAccessGrant[] | null;
 }
 
 export interface MemoryReadContext {
   userId: string;
   spaceId: string;
+  activeSpaceMember?: boolean;
+  scopeAllowed?: boolean;
   workspaceId?: string | null;
   includeSystemScope?: boolean;
-  includePublicTemplates?: boolean;
+  /**
+   * The viewer's effective Space oversight mode, already gated by role.
+   * Omitted is treated as `'none'` — fail closed. Only `'full'` pierces the
+   * `highly_restricted` sensitivity gate below; `'summary'`/`'content'` still
+   * deny it (Decision Matrix row E).
+   */
+  oversightLevel?: OversightMode;
 }
 
-export function userInSelectedIds(selected: unknown, userId: string): boolean {
-  if (selected === null || selected === undefined) return false;
-  if (Array.isArray(selected)) return selected.includes(userId);
-  if (typeof selected === "string") return userId === selected;
-  return false;
-}
-
-/**
- * Return true if this reader may see the memory in any form (full or
- * summary-only redacted).
- */
-export function canReadMemory(
+export function memoryAccessDecision(
   memory: MemoryAuthFields,
-  ctx: MemoryReadContext,
-): boolean {
-  const includeSystemScope = ctx.includeSystemScope ?? false;
-  const includePublicTemplates = ctx.includePublicTemplates ?? false;
-
-  if (memory.space_id !== ctx.spaceId || memory.deleted_at !== null) return false;
-
-  const sens = (memory.sensitivity_level || "normal").toLowerCase();
-  const vis = (memory.visibility || "private").toLowerCase();
-  const owner = memory.owner_user_id;
-  const scopeT = memory.scope_type;
-
-  if (!includePublicTemplates && vis === "public_template") return false;
-  if (!includeSystemScope && scopeT === "system") return false;
-
-  if (sens === "highly_restricted") {
-    return Boolean(owner && owner === ctx.userId);
+  context: MemoryReadContext,
+): ContentAccessDecision {
+  if (memory.deleted_at !== null) return "deny";
+  if (
+    memory.space_id !== context.spaceId
+    || context.activeSpaceMember === false
+    || context.scopeAllowed === false
+    || !isContentVisibility(memory.visibility)
+    || !isContentAccessLevel(memory.access_level)
+  ) return "deny";
+  if (memory.scope_type === "system" && context.includeSystemScope !== true) return "deny";
+  if (memory.workspace_id && memory.workspace_id !== context.workspaceId) return "deny";
+  const resource = {
+    id: memory.id ?? "memory",
+    space_id: memory.space_id,
+    owner_user_id: memory.owner_user_id,
+    visibility: memory.visibility,
+    access_level: memory.access_level,
+    workspace_id: memory.workspace_id,
+  };
+  const decision = isContentAccessLevel(memory.effective_access_level)
+    ? memory.effective_access_level
+    : decideContentAccess(
+        resource,
+        {
+          userId: context.userId,
+          spaceId: context.spaceId,
+          activeSpaceMember: context.activeSpaceMember ?? true,
+          scopeAllowed: context.scopeAllowed ?? true,
+          oversightLevel: context.oversightLevel,
+        },
+        memory.content_access_grants ?? [],
+      );
+  if (decision === "deny") return decision;
+  if (
+    memory.sensitivity_level === "highly_restricted"
+    && !isContentOwner(resource, context.userId)
+    && context.oversightLevel !== "full"
+  ) {
+    return "deny";
   }
-
-  if (owner && owner === ctx.userId) return true;
-
-  if (vis === "private") return false;
-  if (vis === "restricted") return userInSelectedIds(memory.selected_user_ids, ctx.userId);
-  if (vis === "selected_users") return userInSelectedIds(memory.selected_user_ids, ctx.userId);
-  if (vis === "summary_only") return true;
-  if (vis === "workspace_shared") {
-    if (ctx.workspaceId === null || ctx.workspaceId === undefined) return false;
-    if (memory.workspace_id === null || memory.workspace_id === undefined) return false;
-    return memory.workspace_id === ctx.workspaceId;
-  }
-  if (vis === "space_shared") return true;
-  if (vis === "public_template" && includePublicTemplates) return true;
-
-  return false;
+  return decision;
 }
 
-/** True if full `content` must be withheld (summary_only visibility, non-owner). */
-export function summaryOnlyRedactContent(
-  memory: Pick<MemoryAuthFields, "visibility" | "owner_user_id">,
+export function canReadMemory(memory: MemoryAuthFields, context: MemoryReadContext): boolean {
+  return memoryAccessDecision(memory, context) !== "deny";
+}
+
+export function shouldRedactMemoryContent(
+  memory: Pick<MemoryAuthFields, "owner_user_id"> & {
+    effective_access_level?: string | null;
+    access_level?: string | null;
+  },
   viewerUserId: string,
 ): boolean {
-  if ((memory.visibility || "").toLowerCase() !== "summary_only") return false;
-  if (memory.owner_user_id && memory.owner_user_id === viewerUserId) return false;
-  return true;
+  if (isContentOwner(memory, viewerUserId)) return false;
+  if (memory.effective_access_level) return memory.effective_access_level === "summary";
+  return memory.access_level === "summary";
 }

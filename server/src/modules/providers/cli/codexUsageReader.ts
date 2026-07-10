@@ -9,7 +9,18 @@
 
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { unsupportedTokenUsage, type TokenUsage } from "./usageReader";
+import {
+  dateRange,
+  relativeSessionPath,
+  sessionName,
+  timestampValue,
+  unsupportedTokenUsage,
+  usageImportHash,
+  usagePayloadHash,
+  type CliUsageImportEvent,
+  type CliUsageImportScan,
+  type TokenUsage,
+} from "./usageReader";
 
 interface Counts {
   input: number;
@@ -189,4 +200,112 @@ export async function readCodexTokenUsage(profileDir: string): Promise<TokenUsag
   total.available = total.message_count > 0;
   total.cost_usd = Math.round(total.cost_usd * 1e6) / 1e6;
   return total;
+}
+
+export async function readCodexUsageImportEvents(
+  profileDir: string,
+  sourceFingerprint: string,
+): Promise<CliUsageImportScan> {
+  const roots = [join(profileDir, "sessions"), join(profileDir, "archived_sessions")];
+  const files: string[] = [];
+  for (const root of roots) files.push(...(await collectJsonl(root)));
+
+  const events: CliUsageImportEvent[] = [];
+  const sessions = new Set<string>();
+  let unreadableFileCount = 0;
+  let unsupportedFileCount = 0;
+
+  for (const file of files) {
+    let raw: string;
+    let fallbackOccurredAt = new Date().toISOString();
+    try {
+      const info = await stat(file);
+      if (info.size > 64 * 1024 * 1024) {
+        unsupportedFileCount += 1;
+        continue;
+      }
+      fallbackOccurredAt = info.mtime.toISOString();
+      raw = await readFile(file, "utf8");
+    } catch {
+      unreadableFileCount += 1;
+      continue;
+    }
+
+    const sessionPath = relativeSessionPath(profileDir, file);
+    const externalSessionId = `codex_cli:${usageImportHash(`${sourceFingerprint}:${sessionPath}`).slice(0, 32)}`;
+    let currentModel: string | undefined;
+    let previousTotal: Counts | null = null;
+    let lineNumber = 0;
+    let eventIndex = 0;
+    let contributed = false;
+
+    for (const line of raw.split("\n")) {
+      lineNumber += 1;
+      if (!line.trim()) continue;
+      let obj: Record<string, unknown>;
+      try {
+        obj = JSON.parse(line) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+      const payload = record(obj.payload);
+      if (!payload) continue;
+      if (obj.type === "turn_context") {
+        currentModel = normalizeModel(turnContextModel(payload)) ?? currentModel;
+        continue;
+      }
+      if (obj.type !== "event_msg") continue;
+      const parsed = parseTokenCount(payload, previousTotal);
+      if (!parsed) continue;
+      if (parsed.total) previousTotal = parsed.total;
+      if (!parsed.counts) continue;
+
+      eventIndex += 1;
+      const model = normalizeModel(currentModel ?? parsed.model) ?? null;
+      const usageDetails = codexUsageDetails(parsed.counts);
+      const providerUsage = {
+        input_tokens: parsed.counts.input,
+        cached_input_tokens: parsed.counts.cached,
+        output_tokens: parsed.counts.output,
+      };
+      const usageHash = usagePayloadHash(providerUsage);
+      events.push({
+        runtime: "codex_cli",
+        occurred_at: timestampValue(obj.timestamp ?? obj.time) ?? fallbackOccurredAt,
+        model,
+        external_session_id: externalSessionId,
+        session_path: sessionPath,
+        session_name: sessionName(sessionPath),
+        usage_details: usageDetails,
+        provider_usage: providerUsage,
+        idempotency_key: `usage:cli:codex_cli:${usageImportHash(`${sourceFingerprint}:${sessionPath}:${eventIndex}:${usageHash}`)}`,
+        dedupe_confidence: "medium",
+        dimensions: { runtime: "codex_cli", cli_history_source: "codex_sessions" },
+        metadata: { source_line: lineNumber, event_index: eventIndex },
+      });
+      contributed = true;
+    }
+    if (contributed) sessions.add(sessionPath);
+  }
+
+  return {
+    runtime: "codex_cli",
+    source: "codex_sessions",
+    events,
+    session_count: sessions.size,
+    candidate_event_count: events.length,
+    duplicate_count: 0,
+    unreadable_file_count: unreadableFileCount,
+    unsupported_file_count: unsupportedFileCount,
+    date_range: dateRange(events),
+  };
+}
+
+function codexUsageDetails(counts: Counts): Record<string, number> {
+  const cached = Math.min(counts.cached, counts.input);
+  return {
+    input: Math.max(0, counts.input - cached),
+    input_cache_read: cached,
+    output: counts.output,
+  };
 }

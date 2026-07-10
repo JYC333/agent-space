@@ -139,7 +139,7 @@ export interface QueryEmbedder {
   embedQuery(
     spaceId: string,
     text: string,
-    opts?: { cache?: boolean },
+    opts?: { cache?: boolean; subjectUserId?: string },
   ): Promise<number[] | null>;
 }
 

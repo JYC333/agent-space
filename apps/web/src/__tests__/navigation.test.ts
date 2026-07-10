@@ -47,6 +47,13 @@ describe('navigation model', () => {
     expect(byId.knowledge).toBe('space')
   })
 
+  it('keeps Token Usage off the primary rail, reachable from Settings for every member', () => {
+    const usage = RAIL_ITEMS.find(i => i.id === 'usage')
+    const spaceSettings = RAIL_ITEMS.find(i => i.id === 'space-settings')
+    expect(usage).toBeUndefined()
+    expect(spaceSettings?.activePaths).not.toContain('/usage')
+  })
+
   it('keeps Home as the first mobile tab', () => {
     expect(MOBILE_TAB_ITEMS[0].id).toBe('home')
   })

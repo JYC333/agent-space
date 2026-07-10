@@ -12,6 +12,7 @@ import { Button } from '../../components/ui/button'
 import { Badge } from '../../components/ui/badge'
 import { Skeleton } from '../../components/ui/skeleton'
 import { EmptyState } from '../../components/ui/empty-state'
+import { ContentAccessControl } from '../../components/ContentAccessControl'
 
 function fmt(dt: string) {
   return new Date(dt).toLocaleString()
@@ -99,7 +100,10 @@ export default function ActivityDetailPage() {
         <Card className="p-5 space-y-4">
           <div className="flex flex-wrap justify-between gap-2">
             <h1 className="text-lg font-semibold tracking-tight">{row.title ?? row.source_type}</h1>
-            <span className="text-xs text-muted-foreground">{fmt(row.created_at)}</span>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-muted-foreground">{fmt(row.created_at)}</span>
+              <ContentAccessControl resourceType="activity" resourceId={row.id} ownerUserId={row.owner_user_id ?? row.user_id} />
+            </div>
           </div>
           <p className="text-xs text-muted-foreground">Viewing: {activeSpaceName ?? activeSpaceId ?? 'No operational space selected'}</p>
           <div className="flex flex-wrap gap-1.5 items-center">

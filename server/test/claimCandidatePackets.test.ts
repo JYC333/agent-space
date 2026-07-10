@@ -47,9 +47,11 @@ class ClaimCandidatePacketFakeDb implements Queryable {
   ): Promise<QueryResult<Row>> {
     this.calls.push({ sql, params });
     const norm = sql.replace(/\s+/g, " ").trim();
-    if (norm.startsWith("SELECT id, artifact_type, title, visibility, metadata_json FROM artifacts")) {
+    if (norm.startsWith("SELECT a.id, a.artifact_type, a.title, a.visibility, a.metadata_json FROM artifacts a")) {
       const requested = Array.isArray(params[2]) ? params[2].map(String) : [];
-      const allowedVisibilities = Array.isArray(params[4]) ? params[4].map(String) : [];
+      const visibilityFilter = /AND a\.visibility (?:= '[^']+'|IN \([^)]+\)) AND a\.id/.exec(norm)?.[0] ?? "";
+      const allowedVisibilities = [...visibilityFilter.matchAll(/'(private|space_shared|selected_users)'/g)]
+        .map((match) => match[1]);
       const rows = requested
         .map((id) => this.artifacts.find((artifact) => artifact.id === id))
         .filter((row): row is ArtifactRow => Boolean(row))

@@ -10,7 +10,13 @@ import {
   SpaceRefSchema,
   UserRefSchema,
 } from "../src/schemas";
-import { VisibilitySchema, isVisibility, isSpaceType } from "../src/common";
+import {
+  VisibilitySchema,
+  isVisibility,
+  isSpaceType,
+  isSpaceOversightMode,
+  SpaceOversightModeSchema,
+} from "../src/common";
 
 describe("DTO schema validation", () => {
   it("parses a representative ActivityDTO (snake_case public API)", () => {
@@ -141,6 +147,10 @@ describe("DTO schema validation", () => {
     expect(SpaceRefSchema.parse({ id: "s1", name: "Home", type: "personal" }).type).toBe(
       "personal",
     );
+    expect(SpaceRefSchema.parse({ id: "s1", name: "Home", type: "team" }).oversight_mode).toBe("none");
+    expect(SpaceRefSchema.parse({ id: "s1", name: "Home", type: "team", oversight_mode: "full" }).oversight_mode).toBe("full");
+    expect(SpaceOversightModeSchema.safeParse("summary").success).toBe(true);
+    expect(isSpaceOversightMode("invalid")).toBe(false);
     expect(UserRefSchema.parse({ id: "u1", display_name: "Ann" }).display_name).toBe("Ann");
   });
 

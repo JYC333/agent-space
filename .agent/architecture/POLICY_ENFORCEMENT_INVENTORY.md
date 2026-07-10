@@ -101,12 +101,36 @@ Retrieval hard-filter metadata remains in `retrieval_trace_json` on context pack
 
 - Structural `space_id` filter; allow/allow_with_log rows do not enable reads.
 - Cross-space block traced when an allow-looking policy exists.
-- **SourcePointer** stores provenance metadata only; does **not** activate this domain.
+- **Targeted publication** copies an immutable snapshot and does **not** activate this domain.
 - **PersonalMemoryGrant** is the explicit exception path; see `docs/PERSONAL_MEMORY_GRANT.md`.
 - Future: explicit grants + federation + policy (see `docs/FEDERATED_ACCESS_MODEL.md`).
 - Tests: `server/test/policyDecisionCore.test.ts`,
   `server/test/memoryReadAuthMatrix.test.ts`,
   `server/test/memoryReadIntegration.test.ts`
+
+---
+
+## Content read oversight and disclosure upgrades
+
+**Status:** ✅ Enforced
+
+- The canonical content read predicate (`server/src/modules/access/contentAccess*.ts`) first
+  requires active same-Space membership and workspace/project scope, then merges ordinary
+  visibility, active grants, and the Space's creation-time `oversight_mode` with
+  `deny < summary < full` widest-wins semantics.
+- Space owner/admin roles do **not** independently bypass content reads. The sole exception is
+  an active owner/admin member of the resource's own Space when its immutable oversight mode is
+  not `none`; it is read-only and never applies to proposal creation, publication, visibility,
+  grant management, or other writes. Instance admins receive no such exception.
+- `space_shared` grant rows are optional per-user disclosure upgrades. `selected_users` grants
+  remain read grants and their `access_level` is authoritative for the grantee. `private` rows
+  never consult grants.
+- `highly_restricted` memory is an additional deny gate after content access: only its owner or
+  an active owner/admin in a `full`-oversight Space can read it. Shared context blends, digests,
+  public summaries, and maintenance scans still exclude it.
+- Tests: `server/test/contentAccessPolicy.test.ts`,
+  `server/test/contentAccessEquivalence.test.ts`, `server/test/memoryReadAuthMatrix.test.ts`,
+  `server/test/usageOversight.test.ts`.
 
 ---
 
@@ -129,20 +153,21 @@ active `Policy` row. Unsupported and reserved domains do not create active rows.
 
 ---
 
-## SourcePointer (provenance metadata)
+## Targeted Content Publications
 
-**Status:** Schema + metadata API — **no read grant**
+**Status:** Active immutable snapshot publication/import; **no source read grant**
 
-- Table `source_pointers`; HTTP/service boundary `server/src/modules/sourcePointers/routes.ts`.
-- Create requires active membership in both owner and source spaces.
-- Create validates the referenced source object exists in `source_space_id`.
-- Delete requires owner/admin in the owner space.
-- `granted_by_user_id` is server-assigned; client payload cannot set it.
-- `metadata_json` is bounded safe metadata and rejects content-bearing or grant-derived
-  personal-memory marker keys recursively.
-- SourcePointer must not activate `memory.cross_space_read`, bypass `can_read_memory`, or
-  serve as authorization evidence.
-- Tests: route registration is covered by `server/test/gateway.test.ts`; schema coverage is in `server/test/baselineSchema.test.ts`.
+- Tables `content_publications`, `content_publication_targets`, and
+  `content_publication_imports`; HTTP/service boundary under
+  `server/src/modules/publications/`.
+- Publish requires source ownership with full access and active membership in
+  every explicit target Space.
+- Only resource types with static serializer/importer adapters are publishable.
+- Target discovery requires active target-Space membership and never resolves
+  the live source resource.
+- Import verifies snapshot schema/hash and creates an independent private copy.
+- Revocation blocks later imports and preserves existing copies/provenance.
+- Tests: `server/test/publicationsRoutes.test.ts` and baseline schema tests.
 
 ---
 
@@ -283,12 +308,22 @@ managed-run creation:
 - attachable type allowlist: `retrieval_brief`, `retrieval_eval_report`,
   `retrieval_explain_report`, `retrieval_maintenance_report`,
   `memory_maintenance_report`;
-- visibility: `space_shared`/`public_template`, creator/owner-visible private
-  rows, and `workspace_shared` only when `artifacts.workspace_id` matches the
-  caller's workspace context;
+- visibility and grants: canonical content access predicate; workspace/project
+  scope is checked independently;
 - project gate: project-scoped artifacts require project visibility;
 - content mode: bounded summary only, with raw artifact content excluded from
   the runtime context pack.
+
+### Token usage disclosure guard
+
+The `usage` module resolves event ownership before normalization. User calls and
+CLI imports require an active same-Space owner; Run/Agent calls snapshot the
+registered source resource's owner, scope, visibility, disclosure level, and
+active grants for both `selected_users` and `space_shared` sources. The repository embeds the canonical `token_usage_event` content
+predicate in every dashboard query before aggregation. Detailed events and
+subject/session/dimension drilldowns additionally require effective `full`
+access. Instance-admin operations use a separate aggregate-only query and never
+reuse the user detail read model.
 
 ### Knowledge policy and proposal boundary
 
@@ -305,13 +340,16 @@ boundary protects Claim/ObjectRelation writes through `claim.create`,
 types still deny at the `proposal.apply` gate with
 `unsupported_proposal_type`.
 
-Knowledge read and proposal-creation endpoints enforce MVP visibility before
-creating proposals: `space_shared` and `workspace_shared` are readable to
-current-space members; `private` and `restricted` are owner-readable only.
+Knowledge read endpoints use canonical content access: `space_shared` is
+member-readable after scope checks, `private` has owner base access, and
+ordinary `selected_users` readers require an active explicit grant. Eligible
+Space oversight is the sole additional read path. Proposal creation and apply
+retain their separate mutation/ownership checks; oversight alone grants no
+durable-write authority.
 Relation reads omit rows unless both endpoints are visible to the viewer.
 `ProposalApplyService` also performs domain-specific Knowledge authorization
 after `proposal.apply` allows acceptance, so malformed proposals cannot mutate
-or relate another user's private or restricted Knowledge.
+or relate Knowledge the actor cannot read.
 
 Knowledge source monitoring is not complete. The apply service has an explicit
 Knowledge branch in source monitoring to document the boundary, but external or
@@ -371,11 +409,11 @@ Malformed effects on security-sensitive domains fail safe → **deny** (`get_act
 
 ---
 
-## Publish / public visibility
+## Targeted publication / anonymous visibility
 
-**Status:** 📄 Deferred — see `docs/PUBLISH_PROJECTION.md`
+**Status:** Targeted publication active; anonymous/global publication unsupported.
 
-- No `visibility=public`; proposal type `publish` not in `_SUPPORTED_ACCEPT_TYPES`.
+- Publication is separate from visibility and has no anonymous or global catalog.
 
 ---
 
@@ -426,7 +464,7 @@ See `docs/FUTURE_ROADMAP.md` for the full deferred list. Key items:
 
 1. Semantic leakage detection for grant-derived output.
 2. Shared persistence pipeline from approved egress review. Future phase required for full shared-content apply.
-3. Publish proposal apply + redaction pipeline.
+3. Cross-instance publication delivery and redaction policy.
 4. Federation remote fetch (see `docs/FEDERATED_ACCESS_MODEL.md`).
 5. `GET /api/v1/spaces/{space_id}/grant-stats`: space admin aggregate grant statistics endpoint. Deferred. Must return safe aggregate counts only.
 6. Consuming-only sub-limit: Combined active+consuming cap of 10 is enforced. Separate consuming-only cap of 3 is deferred.

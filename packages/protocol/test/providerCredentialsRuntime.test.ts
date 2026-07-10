@@ -23,6 +23,7 @@ describe("provider and credential runtime contracts", () => {
       provider_id: "provider-1",
       system: "You are concise",
       user: "hello",
+      subject_user_id: "user-1",
     });
     expect(parsed).toMatchObject({
       space_id: "space-1",
@@ -103,8 +104,35 @@ describe("provider and credential runtime contracts", () => {
       system: "",
       user: "hello",
       task: "reflector",
+      source_resource_type: "run",
+      source_resource_id: "run-1",
     });
     expect(parsed.task).toBe("reflector");
+    expect(() => ProviderCompletionInternalRequestSchema.parse({
+      space_id: "space-1",
+      provider_id: "provider-1",
+      system: "",
+      user: "hello",
+    })).toThrow();
+  });
+
+  it("requires an explicit subject for ownerless Space system completions", () => {
+    expect(ProviderCompletionInternalRequestSchema.parse({
+      space_id: "space-1",
+      provider_id: "provider-1",
+      system: "",
+      user: "refresh indexes",
+      space_system_task: true,
+      meter_subject_type: "space_system",
+      meter_subject_id: "retrieval_embedding_backfill",
+    })).toMatchObject({ meter_subject_type: "space_system" });
+    expect(() => ProviderCompletionInternalRequestSchema.parse({
+      space_id: "space-1",
+      provider_id: "provider-1",
+      system: "",
+      user: "refresh indexes",
+      space_system_task: true,
+    })).toThrow();
   });
 
   it("keeps the credential pool surface secret-free", () => {

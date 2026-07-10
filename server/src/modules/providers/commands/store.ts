@@ -29,6 +29,12 @@ import { mapProviderRowToDto } from "../dbReader";
 import { resolveNetworkProfileRepository } from "../../networkProfiles";
 import { isSpaceOwnerOrAdmin } from "../../access/roles";
 import {
+  recordAttributedUsageObservation,
+  resolveUsageObservationAttribution,
+  type UsageAttribution,
+  type UsageObservation,
+} from "../../usage";
+import {
   ROTATION_STRATEGIES,
   configRecord,
   configuredModelsFromRow,
@@ -726,6 +732,17 @@ class PgProviderCommandStore implements ProviderCommandStore {
         WHERE id = $1`,
       [memberId, now, !outcome.unhealthy, cooldownUntil, outcome.failure_class],
     );
+  }
+
+  async resolveUsageAttribution(input: UsageObservation): Promise<UsageAttribution> {
+    return resolveUsageObservationAttribution(this.config, input);
+  }
+
+  async recordUsageObservation(
+    input: UsageObservation,
+    attribution: UsageAttribution,
+  ): Promise<void> {
+    await recordAttributedUsageObservation(this.config, input, attribution);
   }
 
   async resolveProviderApiKey(spaceId: string, providerId: string): Promise<string> {

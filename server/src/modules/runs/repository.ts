@@ -12,6 +12,8 @@ import {
   type RuntimeAdapterType,
 } from "../runtimeAdapters/specs";
 import { assertProjectInSpace } from "../projects/access";
+import { contentReadSql } from "../access/contentAccessSql";
+import { contentDecisionFromDb } from "../access/contentAccessQuery";
 import {
   addOptionalFilter,
   extractErrorMessage,
@@ -410,13 +412,13 @@ export class PgRunRepository {
           run_type, trigger_origin, status, mode, prompt, instruction,
           scheduled_at, created_at, updated_at, adapter_type, capability_id,
           capabilities_json, model_provider_id, model_override_json, runtime_profile_snapshot_json,
-          required_sandbox_level, usage_accuracy, visibility, project_id, source
+          required_sandbox_level, usage_accuracy, owner_user_id, visibility, access_level, project_id, source
        )
        VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
           $11, $12, $13, $14, $15, $16, 'queued', $17, $18, $19, $20, $21, $21,
           $22, $23, $24::jsonb, $25, $26::jsonb, $27::jsonb, $28, 'estimated',
-          'space_shared', $29, 'managed'
+          $13, $29, $30, $31, 'managed'
        )
        RETURNING id, space_id, agent_id, agent_version_id, runtime_profile_id,
                  context_snapshot_id,
@@ -429,7 +431,7 @@ export class PgRunRepository {
                  instructed_by_user_id, instructed_by_agent_id, error_message,
                  error_json, output_json,
                  usage_json, started_at, ended_at, created_at, updated_at,
-                 visibility`,
+                 owner_user_id, visibility, access_level`,
       [
         runId,
         input.space_id,
@@ -459,6 +461,8 @@ export class PgRunRepository {
         modelOverrideJson,
         runtimeProfileSnapshotJson,
         requiredSandboxLevel,
+        agent.visibility === "space_shared" ? "space_shared" : "private",
+        agent.access_level,
         input.project_id ?? null,
       ],
     );
@@ -570,7 +574,7 @@ export class PgRunRepository {
           scheduled_at, started_at, created_at, updated_at, adapter_type,
           capability_id, capabilities_json, model_provider_id, model_override_json,
           runtime_profile_snapshot_json, required_sandbox_level, usage_accuracy,
-          visibility, project_id, source
+          owner_user_id, visibility, access_level, project_id, source
        )
        VALUES (
           $1, $2, $3, $4, NULL, $5, $6, NULL, NULL, $7,
@@ -578,7 +582,7 @@ export class PgRunRepository {
           NULL, $11, $11, $11, NULL,
           $12, $13::jsonb, NULL, $14::jsonb,
           NULL, 'none', 'estimated',
-          'space_shared', $15, $16
+          $7, 'space_shared', 'full', $15, $16
        )
        RETURNING id, space_id, agent_id, agent_version_id, runtime_profile_id,
                  context_snapshot_id,
@@ -591,7 +595,7 @@ export class PgRunRepository {
                  instructed_by_user_id, instructed_by_agent_id, error_message,
                  error_json, output_json,
                  usage_json, started_at, ended_at, created_at, updated_at,
-                 visibility`,
+                 owner_user_id, visibility, access_level`,
       [
         runId,
         input.space_id,
@@ -623,13 +627,15 @@ export class PgRunRepository {
   private async getAgentForRun(
     spaceId: string,
     agentId: string,
-  ): Promise<{ id: string; status: string; current_version_id: string | null } | null> {
+  ): Promise<{ id: string; status: string; current_version_id: string | null; visibility: string; access_level: string } | null> {
     const result = await this.db.query<{
       id: string;
       status: string;
       current_version_id: string | null;
+      visibility: string;
+      access_level: string;
     }>(
-      `SELECT id, status, current_version_id
+      `SELECT id, status, current_version_id, visibility, access_level
          FROM agents
         WHERE space_id = $1 AND id = $2`,
       [spaceId, agentId],
@@ -851,7 +857,7 @@ export class PgRunRepository {
               COALESCE(r.runtime_profile_snapshot_json->'runtime_config_json', '{}'::jsonb) AS runtime_config_json,
               r.trigger_origin, r.instructed_by_user_id, r.instructed_by_agent_id, r.error_message,
               r.error_json, r.output_json, r.usage_json, r.started_at,
-              r.ended_at, r.created_at, r.updated_at, r.visibility
+              r.ended_at, r.created_at, r.updated_at, r.owner_user_id, r.visibility, r.access_level
          FROM runs r
          LEFT JOIN agent_versions av
            ON av.id = r.agent_version_id
@@ -866,11 +872,21 @@ export class PgRunRepository {
     return result.rows[0] ?? null;
   }
 
+  async getVisibleRun(spaceId: string, userId: string, runId: string): Promise<RunRecord | null> {
+    const decision = await contentDecisionFromDb(
+      this.db,
+      { spaceId, userId },
+      "run",
+      runId,
+    );
+    return decision === "deny" ? null : this.getRun(spaceId, runId);
+  }
+
   async listRuns(filters: RunListFilters): Promise<RunRecord[]> {
     await assertProjectInSpace(this.db, filters.space_id, filters.project_id);
     const clauses = [
       "space_id = $1",
-      "(visibility = 'space_shared' OR (visibility IN ('private', 'restricted') AND instructed_by_user_id = $2))",
+      contentReadSql("run", "runs", "$2"),
     ];
     const params: unknown[] = [filters.space_id, filters.user_id];
     addOptionalFilter(clauses, params, "status", filters.status);
@@ -892,7 +908,7 @@ export class PgRunRepository {
               required_sandbox_level, trigger_origin, instructed_by_user_id,
               instructed_by_agent_id,
               error_message, error_json, output_json, usage_json, started_at,
-              ended_at, created_at, updated_at, visibility
+              ended_at, created_at, updated_at, owner_user_id, visibility, access_level
          FROM runs
         WHERE ${clauses.join(" AND ")}
         ORDER BY created_at DESC, id DESC

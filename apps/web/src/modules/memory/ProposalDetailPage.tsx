@@ -14,6 +14,7 @@ import { Skeleton } from '../../components/ui/skeleton'
 import { PreviewBadge, UrgencyBadge } from '../../components/PreviewBadge'
 import { EgressReviewNotice, isGrantDerivedProposal } from './EgressReviewNotice'
 import { codePatchAcceptOptions } from './codePatchConfirm'
+import { ContentAccessControl } from '../../components/ContentAccessControl'
 
 function fmt(dt: string | null | undefined) {
   return dt ? new Date(dt).toLocaleString() : '—'
@@ -156,12 +157,15 @@ export default function ProposalDetailPage() {
                 Viewing: {activeSpaceName ?? activeSpaceId ?? 'No operational space selected'}
               </p>
             </div>
-            {canDecide && (
-              <div className="flex gap-1.5 shrink-0">
+            <div className="flex flex-wrap gap-1.5 shrink-0">
+              <ContentAccessControl resourceType="proposal" resourceId={p.id} ownerUserId={p.user_id || null} />
+              {canDecide && (
+                <>
                 <Button size="sm" variant="success" disabled={busy} onClick={() => decide('accept')}>Accept</Button>
                 <Button size="sm" variant="destructive" disabled={busy} onClick={() => decide('reject')}>Reject</Button>
-              </div>
-            )}
+                </>
+              )}
+            </div>
           </div>
           <div className="flex flex-wrap gap-1.5 items-center">
             <Badge variant="secondary">{p.proposal_type}</Badge>

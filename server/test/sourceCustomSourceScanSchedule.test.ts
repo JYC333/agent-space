@@ -73,7 +73,12 @@ beforeEach(async () => {
     `TRUNCATE jobs, retrieval_edges, retrieval_chunks, retrieval_aliases, retrieval_objects,
               source_handler_runs, source_handler_versions, source_recipe_versions, source_connections, source_connectors,
               scheduler_tasks, settings, artifacts, extraction_jobs, source_items,
-              source_snapshots, extracted_evidence`,
+              source_snapshots, extracted_evidence, space_memberships`,
+  );
+  await pool.query(
+    `INSERT INTO space_memberships (id, space_id, user_id, role, status, created_at, updated_at)
+     VALUES ('custom-source-scheduler-owner', $1, 'user-1', 'owner', 'active', now(), now())`,
+    [SPACE_A],
   );
   await pool.query(
     `INSERT INTO source_connectors (

@@ -30,11 +30,14 @@ export const proposals = pgTable("proposals", {
 	rationale: text(),
 	createdByAgentId: varchar("created_by_agent_id", { length: 36 }),
 	createdByUserId: varchar("created_by_user_id", { length: 36 }),
+	ownerUserId: varchar("owner_user_id", { length: 36 }),
 	requiredApproverRole: varchar("required_approver_role", { length: 64 }),
 	visibility: varchar({ length: 32 }).default('space_shared').notNull(),
+	accessLevel: varchar("access_level", { length: 16 }).default('full').notNull(),
 	projectId: varchar("project_id", { length: 36 }),
 }, (table): PgTableExtraConfigValue[] => [
 	index("ix_proposals_created_by_run_id").using("btree", table.createdByRunId.asc().nullsLast()),
+	index("ix_proposals_owner_user_id").using("btree", table.ownerUserId.asc().nullsLast()),
 	index("ix_proposals_project_id").using("btree", table.projectId.asc().nullsLast()),
 	index("ix_proposals_proposal_type").using("btree", table.proposalType.asc().nullsLast()),
 	index("ix_proposals_risk_level").using("btree", table.riskLevel.asc().nullsLast()),
@@ -63,6 +66,11 @@ export const proposals = pgTable("proposals", {
 			name: "proposals_created_by_user_id_fkey"
 		}),
 	foreignKey({
+			columns: [table.ownerUserId],
+			foreignColumns: [users.id],
+			name: "proposals_owner_user_id_fkey"
+		}),
+	foreignKey({
 			columns: [table.reviewedBy],
 			foreignColumns: [users.id],
 			name: "proposals_reviewed_by_fkey"
@@ -79,6 +87,9 @@ export const proposals = pgTable("proposals", {
 		}),
 	check("ck_proposals_risk_level", sql`(risk_level)::text = ANY (ARRAY[('low'::character varying)::text, ('medium'::character varying)::text, ('high'::character varying)::text, ('critical'::character varying)::text])`),
 	check("ck_proposals_urgency", sql`(urgency)::text = ANY (ARRAY[('low'::character varying)::text, ('normal'::character varying)::text, ('high'::character varying)::text, ('critical'::character varying)::text])`),
+	check("ck_proposals_visibility", sql`visibility IN ('private', 'space_shared', 'selected_users')`),
+	check("ck_proposals_access_level", sql`access_level IN ('full', 'summary')`),
+	check("ck_proposals_private_owner", sql`visibility = 'space_shared' OR owner_user_id IS NOT NULL`),
 ]);
 
 export const proposalApprovals = pgTable("proposal_approvals", {

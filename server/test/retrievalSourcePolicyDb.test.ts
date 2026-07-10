@@ -134,13 +134,13 @@ async function seedRestrictedAndOpen(): Promise<void> {
   // ties the knowledge object to it (source_type = source_item).
   await pool!.query(
     `INSERT INTO source_items (
-       id, space_id, connection_id, item_type, title, first_seen_at, last_seen_at,
+       id, space_id, owner_user_id, visibility, connection_id, item_type, title, first_seen_at, last_seen_at,
        content_state, retention_policy, created_at, updated_at
      ) VALUES (
-       $1, $2, $3, 'feed_entry', 'Restricted alpha', now(), now(),
+       $1, $2, $3, 'space_shared', $4, 'feed_entry', 'Restricted alpha', now(), now(),
        'content_saved', 'full_text', now(), now()
      )`,
-    [SOURCE, SPACE, SOURCE],
+    [SOURCE, SPACE, OWNER, SOURCE],
   );
   await pool!.query(
     `INSERT INTO provenance_links (id, space_id, target_type, target_id, source_type, source_id, source_trust, created_at)

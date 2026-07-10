@@ -30,12 +30,14 @@ import { networkProfilesModule } from "../modules/networkProfiles";
 import { runtimeToolsModule } from "../modules/runtimeTools";
 import { runtimeToolBindingsModule } from "../modules/runtimeToolBindings";
 import { runtimeHostModule } from "../modules/runtimeHost";
+import { usageModule } from "../modules/usage";
 import { runsModule } from "../modules/runs";
 import { artifactsModule } from "../modules/artifacts";
 import { projectsModule } from "../modules/projects";
 import { projectPresetsModule } from "../modules/projectPresets";
 import { projectResearchModule } from "../modules/projectResearch";
 import { policyModule } from "../modules/policy";
+import { contentAccessModule } from "../modules/contentAccess";
 import { proposalsModule } from "../modules/proposals";
 import { sessionsModule } from "../modules/sessions";
 import { agentTemplatesModule } from "../modules/agentTemplates";
@@ -47,7 +49,7 @@ import { contextModule } from "../modules/context";
 import { contextOpsModule } from "../modules/contextOps";
 import { askSpaceModule } from "../modules/askSpace";
 import { activityModule } from "../modules/activity";
-import { sourcePointersModule } from "../modules/sourcePointers";
+import { publicationsModule } from "../modules/publications";
 import { sourcesModule } from "../modules/sources";
 import { knowledgeModule } from "../modules/knowledge";
 import { relationsModule } from "../modules/relations";
@@ -105,12 +107,14 @@ export const SERVER_MODULES: readonly ServerModule[] = [
   providersModule,
   runtimeToolBindingsModule,
   runtimeHostModule,
+  usageModule,
   runsModule,
   artifactsModule,
   projectsModule,
   projectPresetsModule,
   projectResearchModule,
   policyModule,
+  contentAccessModule,
   proposalsModule,
   sessionsModule,
   agentTemplatesModule,
@@ -122,7 +126,7 @@ export const SERVER_MODULES: readonly ServerModule[] = [
   contextOpsModule,
   askSpaceModule,
   activityModule,
-  sourcePointersModule,
+  publicationsModule,
   sourcesModule,
   knowledgeModule,
   relationsModule,

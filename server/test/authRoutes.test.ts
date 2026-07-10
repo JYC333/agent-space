@@ -47,6 +47,7 @@ function fakeRepo(overrides: Partial<AuthRepository> = {}): AuthRepository {
           name: "Personal",
           type: "personal",
           role: "owner",
+          oversight_mode: "none",
           created_at: "2026-06-15T12:00:00.000Z",
           updated_at: "2026-06-15T12:00:00.000Z",
         },
@@ -58,6 +59,7 @@ function fakeRepo(overrides: Partial<AuthRepository> = {}): AuthRepository {
         name: "Personal",
         type: "personal",
         role: "owner",
+        oversight_mode: "none",
         created_by_user_id: "user-1",
         created_at: "2026-06-15T12:00:00.000Z",
         updated_at: "2026-06-15T12:00:00.000Z",
@@ -90,6 +92,7 @@ function fakeSpaceRepo(overrides: Partial<SpaceRepository> = {}): SpaceRepositor
         name: input.name,
         type: input.type ?? "team",
         role: "owner",
+        oversight_mode: input.oversight_mode ?? "none",
         created_by_user_id: "user-1",
         created_at: "2026-06-15T12:00:00.000Z",
         updated_at: "2026-06-15T12:00:00.000Z",
@@ -251,6 +254,7 @@ describe("native server auth routes", () => {
         name: "Personal",
         type: "personal",
         role: "owner",
+        oversight_mode: "none",
         created_at: "2026-06-15T12:00:00.000Z",
         updated_at: "2026-06-15T12:00:00.000Z",
       },
@@ -394,6 +398,7 @@ describe("native server auth routes", () => {
             name: "Team",
             type: "team",
             role: "admin",
+            oversight_mode: "none",
             created_by_user_id: "user-1",
             created_at: "2026-06-15T12:00:00.000Z",
             updated_at: "2026-06-15T12:00:00.000Z",
@@ -421,10 +426,10 @@ describe("native server auth routes", () => {
       method: "POST",
       url: "/api/v1/spaces",
       headers: { "content-type": "application/json" },
-      payload: JSON.stringify({ name: "Team", type: "team" }),
+      payload: JSON.stringify({ name: "Team", type: "team", oversight_mode: "content" }),
     });
     expect(created.statusCode).toBe(201);
-    expect(created.json()).toMatchObject({ id: "space-new", role: "owner" });
+    expect(created.json()).toMatchObject({ id: "space-new", role: "owner", oversight_mode: "content" });
 
     const members = await app.inject({
       method: "GET",
@@ -516,6 +521,15 @@ describe("native server auth routes", () => {
       embedding_dimensions: 768,
       max_results_default: 12,
     });
+
+    const immutable = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/spaces/space-1/retrieval-settings",
+      headers: { "content-type": "application/json" },
+      payload: JSON.stringify({ oversight_mode: "full" }),
+    });
+    expect(immutable.statusCode).toBe(422);
+    expect(immutable.json()).toEqual({ detail: "oversight_mode is immutable after Space creation" });
   });
 
   it("serves logout locally and clears the session cookie", async () => {

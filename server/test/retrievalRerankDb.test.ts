@@ -123,7 +123,7 @@ beforeEach(async () => {
   );
   await pool.query(
     `INSERT INTO spaces (id, name, type, created_at, updated_at)
-     VALUES ($1, 'Rerank', 'personal', now(), now())`,
+     VALUES ($1, 'Rerank', 'team', now(), now())`,
     [SPACE],
   );
   for (const id of [VIEWER, OTHER]) {
@@ -131,6 +131,11 @@ beforeEach(async () => {
       `INSERT INTO users (id, display_name, status, created_at, updated_at)
        VALUES ($1, 'U', 'active', now(), now())`,
       [id],
+    );
+    await pool.query(
+      `INSERT INTO space_memberships (id, space_id, user_id, role, status, created_at, updated_at)
+       VALUES ($1, $2, $3, 'member', 'active', now(), now())`,
+      [id, SPACE, id],
     );
   }
 });

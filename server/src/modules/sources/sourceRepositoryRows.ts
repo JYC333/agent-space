@@ -21,6 +21,7 @@ export interface SourceConnectionRow {
   owner_user_id: string;
   credential_id: string | null;
   visibility: string;
+  access_level: string;
   name: string;
   endpoint_url: string | null;
   status: string;
@@ -52,6 +53,9 @@ export interface SourceConnectionRow {
 export interface SourceItemRow {
   id: string;
   space_id: string;
+  owner_user_id: string | null;
+  visibility: string;
+  access_level: string;
   connection_id: string | null;
   item_type: string;
   source_object_type: string | null;
@@ -111,6 +115,9 @@ export interface ExtractionJobRow {
 export interface EvidenceRow {
   id: string;
   space_id: string;
+  owner_user_id: string | null;
+  visibility: string;
+  access_level: string;
   source_item_id: string | null;
   extraction_job_id: string | null;
   source_snapshot_id: string | null;
@@ -193,6 +200,7 @@ const CONNECTION_TABLE_COLUMNS = [
   "owner_user_id",
   "credential_id",
   "visibility",
+  "access_level",
   "name",
   "endpoint_url",
   "status",
@@ -240,6 +248,9 @@ export function connectionColumnsWithConnectorForAlias(alias: string, connectorA
 const ITEM_TABLE_COLUMNS = [
   "id",
   "space_id",
+  "owner_user_id",
+  "visibility",
+  "access_level",
   "connection_id",
   "item_type",
   "source_object_type",
@@ -277,6 +288,9 @@ export const JOB_COLUMNS = `id, space_id, connection_id, source_item_id, source_
 const EVIDENCE_TABLE_COLUMNS = [
   "id",
   "space_id",
+  "owner_user_id",
+  "visibility",
+  "access_level",
   "source_item_id",
   "extraction_job_id",
   "source_snapshot_id",

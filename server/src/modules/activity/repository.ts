@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
   HttpError,
-  canReadByVisibility,
   countFromRow,
   dateIso,
   numberValue,
@@ -20,6 +19,8 @@ import { insertProposalRow } from "../proposals/reviewPackets";
 import { assertProjectReadable } from "../projects/access";
 import type { ProposalOut } from "@agent-space/protocol" with { "resolution-mode": "import" };
 import { assessActivityMemoryDuplicate } from "./memoryDedup";
+import { contentReadSql } from "../access/contentAccessSql";
+import { isContentVisibility } from "../access/contentAccessTypes";
 
 export interface ActivityRow {
   id: string;
@@ -48,6 +49,7 @@ export interface ActivityRow {
   processed_at: unknown;
   discarded_at: unknown;
   visibility: string;
+  access_level: string;
   owner_user_id: string | null;
   aggregate_key: string | null;
 }
@@ -100,7 +102,7 @@ const ACTIVITY_COLUMNS = `
   source_task_id, project_id, source_url, activity_type, title, content,
   payload_json, occurred_at, created_at, status, updated_at, source_kind,
   source_trust, source_integrity_json, entity_refs_json, subject_user_id,
-  processed_at, discarded_at, visibility, owner_user_id, aggregate_key
+  processed_at, discarded_at, visibility, access_level, owner_user_id, aggregate_key
 `;
 
 const SOURCE_TYPE_ALIASES: Record<string, string> = {
@@ -154,6 +156,8 @@ export class PgActivityRepository {
       await assertProjectReadable(this.db, identity.spaceId, projectId, identity.userId);
     }
     const now = new Date().toISOString();
+    const visibility = optionalString(body.visibility) ?? "private";
+    if (!isContentVisibility(visibility)) throw new HttpError(422, "Invalid visibility");
     const result = await this.db.query<ActivityRow>(
       `INSERT INTO activity_records (
          id, space_id, source_run_id, session_id, user_id, workspace_id, agent_id,
@@ -186,7 +190,7 @@ export class PgActivityRepository {
         toDbDate(body.occurred_at),
         now,
         TRUST_BY_SOURCE_TYPE[sourceType] ?? "untrusted_external",
-        optionalString(body.visibility) ?? "space_shared",
+        visibility,
       ],
     );
     return activityToOut(result.rows[0]!);
@@ -202,26 +206,24 @@ export class PgActivityRepository {
     const built = buildActivityWhere(identity, filters);
     const result = await this.db.query<ActivityRow>(
       `SELECT ${ACTIVITY_COLUMNS}
-         FROM activity_records
+         FROM activity_records ar
         ${built.where}
         ORDER BY occurred_at DESC, created_at DESC, id DESC
         LIMIT $${built.params.length + 1} OFFSET $${built.params.length + 2}`,
       [...built.params, filters.limit, filters.offset],
     );
-    return result.rows
-      .filter((row) => canReadActivity(row, identity.userId))
-      .map(activityToOut);
+    return result.rows.map(activityToOut);
   }
 
   async get(identity: SpaceUserIdentity, activityId: string): Promise<ActivityRow | null> {
     const result = await this.db.query<ActivityRow>(
       `SELECT ${ACTIVITY_COLUMNS}
-         FROM activity_records
-        WHERE id = $1 AND space_id = $2`,
-      [activityId, identity.spaceId],
+         FROM activity_records ar
+        WHERE id = $1 AND space_id = $2
+          AND ${contentReadSql("activity", "ar", "$3")}`,
+      [activityId, identity.spaceId, identity.userId],
     );
-    const row = result.rows[0];
-    return row && canReadActivity(row, identity.userId) ? row : null;
+    return result.rows[0] ?? null;
   }
 
   async getOut(identity: SpaceUserIdentity, activityId: string): Promise<Record<string, unknown> | null> {
@@ -301,13 +303,12 @@ export class PgActivityRepository {
       ? await this.db.query<ActivityRow>(
           `SELECT ${ACTIVITY_COLUMNS}
              FROM activity_records
-            WHERE space_id = $1 AND id::text = ANY($2::text[])`,
-          [identity.spaceId, input.activityIds],
+            WHERE space_id = $1
+              AND id::text = ANY($2::text[])
+              AND ${contentReadSql("activity", "activity_records", "$3")}`,
+          [identity.spaceId, input.activityIds, identity.userId],
         )
       : { rows: [] };
-    if (activityRows.rows.some((row) => !canReadActivity(row, identity.userId))) {
-      throw new HttpError(403, "Summary input is not visible in this space");
-    }
     if (activityRows.rows.length !== input.activityIds.length) {
       throw new HttpError(403, "Summary input is not visible in this space");
     }
@@ -536,8 +537,8 @@ function buildActivityWhere(
   identity: SpaceUserIdentity,
   filters: ActivityListFilters,
 ): { where: string; params: unknown[] } {
-  const params: unknown[] = [identity.spaceId];
-  const clauses = ["space_id = $1"];
+  const params: unknown[] = [identity.spaceId, identity.userId];
+  const clauses = ["space_id = $1", contentReadSql("activity", "ar", "$2")];
   const add = (value: unknown): string => {
     params.push(value);
     return `$${params.length}`;
@@ -569,19 +570,13 @@ export function activityToOut(row: ActivityRow): Record<string, unknown> {
     metadata_json: objectValue(row.payload_json),
     aggregate_key: row.aggregate_key,
     visibility: row.visibility,
+    access_level: row.access_level,
+    owner_user_id: row.owner_user_id,
     occurred_at: dateIso(row.occurred_at),
     created_at: dateIso(row.created_at) ?? new Date(0).toISOString(),
     updated_at: dateIso(row.updated_at) ?? new Date(0).toISOString(),
     project_id: row.project_id,
   };
-}
-
-function canReadActivity(row: ActivityRow, userId: string): boolean {
-  return canReadByVisibility(row.visibility, userId, [
-    row.owner_user_id,
-    row.user_id,
-    row.subject_user_id,
-  ]);
 }
 
 function normalizeSourceType(sourceType: string): string {

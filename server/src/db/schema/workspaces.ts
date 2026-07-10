@@ -18,11 +18,13 @@ export const workspaces = pgTable("workspaces", {
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).notNull(),
 	createdByUserId: varchar("created_by_user_id", { length: 36 }),
+	ownerUserId: varchar("owner_user_id", { length: 36 }),
 	slug: varchar({ length: 256 }),
 	workspaceType: varchar("workspace_type", { length: 32 }).notNull(),
 	kind: varchar({ length: 32 }).notNull(),
 	defaultBranch: varchar("default_branch", { length: 256 }),
 	visibility: varchar({ length: 32 }).notNull(),
+	accessLevel: varchar("access_level", { length: 16 }).default('full').notNull(),
 	protected: boolean().notNull(),
 	systemManaged: boolean("system_managed").notNull(),
 	registeredFrom: varchar("registered_from", { length: 32 }),
@@ -32,12 +34,18 @@ export const workspaces = pgTable("workspaces", {
 	snapshotMaxCount: integer("snapshot_max_count"),
 }, (table): PgTableExtraConfigValue[] => [
 	index("ix_workspaces_slug").using("btree", table.slug.asc().nullsLast()),
+	index("ix_workspaces_owner_user_id").using("btree", table.ownerUserId.asc().nullsLast()),
 	index("ix_workspaces_space_id").using("btree", table.spaceId.asc().nullsLast()),
 	index("ix_workspaces_status").using("btree", table.status.asc().nullsLast()),
 	foreignKey({
 			columns: [table.createdByUserId],
 			foreignColumns: [users.id],
 			name: "workspaces_created_by_user_id_fkey"
+		}),
+	foreignKey({
+			columns: [table.ownerUserId],
+			foreignColumns: [users.id],
+			name: "workspaces_owner_user_id_fkey"
 		}),
 	foreignKey({
 			columns: [table.spaceId],
@@ -47,7 +55,9 @@ export const workspaces = pgTable("workspaces", {
 	unique("uq_workspaces_space_id_id").on(table.id, table.spaceId),
 	check("ck_workspaces_workspace_type", sql`(workspace_type)::text = ANY (ARRAY['project'::text, 'repo'::text, 'knowledge_base'::text, 'personal'::text, 'team'::text, 'system_core'::text])`),
 	check("ck_workspaces_status", sql`(status)::text = ANY (ARRAY['active'::text, 'archived'::text, 'stale'::text])`),
-	check("ck_workspaces_visibility", sql`(visibility)::text = ANY (ARRAY['private'::text, 'space_shared'::text, 'workspace_shared'::text, 'restricted'::text])`),
+	check("ck_workspaces_visibility", sql`visibility IN ('private', 'space_shared', 'selected_users')`),
+	check("ck_workspaces_access_level", sql`access_level IN ('full', 'summary')`),
+	check("ck_workspaces_private_owner", sql`visibility = 'space_shared' OR owner_user_id IS NOT NULL`),
 ]);
 
 export const workingDirs = pgTable("working_dirs", {

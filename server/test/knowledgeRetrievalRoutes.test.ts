@@ -100,6 +100,7 @@ function authWithRole(role: string): AuthRepository {
         name: "Team",
         type: "team",
         role,
+        oversight_mode: "none",
         created_by_user_id: "user-1",
         created_at: "2026-06-18T00:00:00.000Z",
         updated_at: "2026-06-18T00:00:00.000Z",
@@ -263,7 +264,7 @@ describe("Knowledge retrieval routes", () => {
         const norm = sql.replace(/\s+/g, " ").trim();
         if (norm === "BEGIN" || norm === "COMMIT" || norm === "ROLLBACK") return { rows: [], rowCount: 0 };
         if (norm.startsWith("INSERT INTO proposals")) return { rows: [proposalRow(params)], rowCount: 1 };
-        if (norm.startsWith("SELECT id, artifact_type, title, visibility, metadata_json FROM artifacts")) {
+        if (norm.startsWith("SELECT a.id, a.artifact_type, a.title, a.visibility, a.metadata_json FROM artifacts a")) {
           return {
             rows: [{
               id: sourceArtifactId,
@@ -325,7 +326,7 @@ describe("Knowledge retrieval routes", () => {
         const norm = sql.replace(/\s+/g, " ").trim();
         if (norm === "BEGIN" || norm === "COMMIT" || norm === "ROLLBACK") return { rows: [], rowCount: 0 };
         if (norm.startsWith("INSERT INTO proposals")) return { rows: [proposalRow(params)], rowCount: 1 };
-        if (norm.startsWith("SELECT id, artifact_type, title, visibility, metadata_json FROM artifacts")) {
+        if (norm.startsWith("SELECT a.id, a.artifact_type, a.title, a.visibility, a.metadata_json FROM artifacts a")) {
           return {
             rows: [{
               id: sourceArtifactId,
@@ -400,10 +401,8 @@ describe("Knowledge retrieval routes", () => {
       source_artifact_count: 1,
     });
     expect(calls.find((call) =>
-      /SELECT id, artifact_type, title, visibility, metadata_json/.test(call.sql))?.params[4]).toEqual([
-      "space_shared",
-      "private",
-    ]);
+      /SELECT a\.id, a\.artifact_type, a\.title, a\.visibility, a\.metadata_json/.test(call.sql))?.sql)
+      .toContain("a.visibility IN ('space_shared', 'private')");
   });
 
   it("requires owner or admin role for retrieval eval report persistence", async () => {

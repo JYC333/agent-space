@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Queryable } from "../routeUtils/common";
+import { contentReadSql } from "../access/contentAccessSql";
 
 export interface AgentRunGroupRecord {
   id: string;
@@ -333,39 +334,41 @@ export class PgAgentGroupRepository {
     space_id: string;
     group_id: string;
     agent_id: string;
+    user_id: string;
   }): Promise<AgentRunGroupMemberWithAgentStatus | null> {
     const result = await this.db.query<AgentRunGroupMemberWithAgentStatus>(
       `SELECT ${MEMBER_COLUMNS_ALIASED},
               a.status AS agent_status
          FROM agent_run_group_members m
-         LEFT JOIN agents a
+         JOIN agents a
            ON a.space_id = m.space_id
           AND a.id = m.agent_id
-        WHERE m.space_id = $1 AND m.group_id = $2 AND m.agent_id = $3`,
-      [input.space_id, input.group_id, input.agent_id],
+        WHERE m.space_id = $1 AND m.group_id = $2 AND m.agent_id = $3
+          AND ${contentReadSql("agent", "a", "$4")}`,
+      [input.space_id, input.group_id, input.agent_id, input.user_id],
     );
     return result.rows[0] ?? null;
   }
 
-  async listAgentStatuses(spaceId: string, agentIds: readonly string[]): Promise<AgentStatusRecord[]> {
+  async listAgentStatuses(spaceId: string, userId: string, agentIds: readonly string[]): Promise<AgentStatusRecord[]> {
     if (agentIds.length === 0) return [];
-    const placeholders = agentIds.map((_, index) => `$${index + 2}`).join(", ");
     const result = await this.db.query<AgentStatusRecord>(
-      `SELECT id, status
-         FROM agents
-        WHERE space_id = $1 AND id IN (${placeholders})`,
-      [spaceId, ...agentIds],
+      `SELECT a.id, a.status
+         FROM agents a
+        WHERE a.space_id = $1 AND a.id = ANY($3::varchar[])
+          AND ${contentReadSql("agent", "a", "$2")}`,
+      [spaceId, userId, agentIds],
     );
     return result.rows;
   }
 
   async listAgentCapabilitySnapshots(
     spaceId: string,
+    userId: string,
     agentIds: readonly string[],
   ): Promise<AgentCapabilitySnapshotRecord[]> {
     const ids = [...new Set(agentIds.filter((id) => id.trim().length > 0))];
     if (ids.length === 0) return [];
-    const placeholders = ids.map((_, index) => `$${index + 2}`).join(", ");
     const result = await this.db.query<AgentCapabilitySnapshotRecord>(
       `SELECT a.id,
               COALESCE(NULLIF(a.name, ''), a.id) AS name,
@@ -377,8 +380,9 @@ export class PgAgentGroupRepository {
            ON av.id = a.current_version_id
           AND av.space_id = a.space_id
           AND av.agent_id = a.id
-        WHERE a.space_id = $1 AND a.id IN (${placeholders})`,
-      [spaceId, ...ids],
+        WHERE a.space_id = $1 AND a.id = ANY($3::varchar[])
+          AND ${contentReadSql("agent", "a", "$2")}`,
+      [spaceId, userId, ids],
     );
     return result.rows;
   }
@@ -760,39 +764,40 @@ export class PgAgentGroupRepository {
     return Number(result.rows[0]?.depth ?? 0);
   }
 
-  async listRunIdsForGroup(spaceId: string, groupId: string): Promise<string[]> {
+  async listRunIdsForGroup(spaceId: string, groupId: string, userId: string): Promise<string[]> {
     const result = await this.db.query<{ id: string }>(
       `SELECT id
-         FROM runs
-        WHERE space_id = $1 AND run_group_id = $2
-        ORDER BY created_at ASC, id ASC`,
-      [spaceId, groupId],
+         FROM runs r
+        WHERE r.space_id = $1 AND r.run_group_id = $2
+          AND ${contentReadSql("run", "r", "$3")}
+        ORDER BY r.created_at ASC, r.id ASC`,
+      [spaceId, groupId, userId],
     );
     return result.rows.map((row) => row.id);
   }
 
-  async listArtifactIdsForRuns(spaceId: string, runIds: readonly string[]): Promise<string[]> {
+  async listArtifactIdsForRuns(spaceId: string, userId: string, runIds: readonly string[]): Promise<string[]> {
     if (runIds.length === 0) return [];
-    const placeholders = runIds.map((_, index) => `$${index + 2}`).join(", ");
     const result = await this.db.query<{ id: string }>(
       `SELECT id
-         FROM artifacts
-        WHERE space_id = $1 AND run_id IN (${placeholders})
-        ORDER BY created_at ASC, id ASC`,
-      [spaceId, ...runIds],
+         FROM artifacts a
+        WHERE a.space_id = $1 AND a.run_id = ANY($3::varchar[])
+          AND ${contentReadSql("artifact", "a", "$2")}
+        ORDER BY a.created_at ASC, a.id ASC`,
+      [spaceId, userId, runIds],
     );
     return result.rows.map((row) => row.id);
   }
 
-  async listProposalIdsForRuns(spaceId: string, runIds: readonly string[]): Promise<string[]> {
+  async listProposalIdsForRuns(spaceId: string, userId: string, runIds: readonly string[]): Promise<string[]> {
     if (runIds.length === 0) return [];
-    const placeholders = runIds.map((_, index) => `$${index + 2}`).join(", ");
     const result = await this.db.query<{ id: string }>(
       `SELECT id
-         FROM proposals
-        WHERE space_id = $1 AND created_by_run_id IN (${placeholders})
-        ORDER BY created_at ASC, id ASC`,
-      [spaceId, ...runIds],
+         FROM proposals p
+        WHERE p.space_id = $1 AND p.created_by_run_id = ANY($3::varchar[])
+          AND ${contentReadSql("proposal", "p", "$2")}
+        ORDER BY p.created_at ASC, p.id ASC`,
+      [spaceId, userId, runIds],
     );
     return result.rows.map((row) => row.id);
   }

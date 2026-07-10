@@ -42,7 +42,7 @@ export const ProposalOutSchema = z
     owner_user_id: IdSchema.nullish(),
     subject_user_id: IdSchema.nullish(),
     sensitivity_level: z.string().nullish(),
-    selected_user_ids: z.array(z.unknown()).nullish(),
+    access_level: z.string().nullish(),
     provenance_entries: z.array(JsonObjectSchema).nullish(),
     source_activity_id: IdSchema.nullish(),
     grant_id: IdSchema.nullish(),

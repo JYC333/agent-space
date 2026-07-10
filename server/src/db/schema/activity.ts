@@ -35,6 +35,7 @@ export const activityRecords = pgTable("activity_records", {
 	processedAt: timestamp("processed_at", { withTimezone: true, mode: 'string' }),
 	discardedAt: timestamp("discarded_at", { withTimezone: true, mode: 'string' }),
 	visibility: varchar({ length: 32 }).default('space_shared').notNull(),
+	accessLevel: varchar("access_level", { length: 16 }).default('full').notNull(),
 	ownerUserId: varchar("owner_user_id", { length: 36 }),
 	projectId: varchar("project_id", { length: 36 }),
 	aggregateKey: varchar("aggregate_key", { length: 128 }),
@@ -107,4 +108,7 @@ export const activityRecords = pgTable("activity_records", {
 	check("ck_activity_records_source_kind", sql`(source_kind IS NULL) OR ((source_kind)::text = ANY (ARRAY[('user_capture'::character varying)::text, ('chat_message'::character varying)::text, ('external_chat'::character varying)::text, ('file_import'::character varying)::text, ('web_capture'::character varying)::text, ('run_event'::character varying)::text, ('workspace_event'::character varying)::text, ('system_event'::character varying)::text, ('external_source'::character varying)::text, ('source'::character varying)::text]))`),
 	check("ck_activity_records_source_trust", sql`(source_trust IS NULL) OR ((source_trust)::text = ANY (ARRAY[('user_confirmed'::character varying)::text, ('internal_system'::character varying)::text, ('trusted_external'::character varying)::text, ('untrusted_external'::character varying)::text, ('agent_inferred'::character varying)::text]))`),
 	check("ck_activity_records_status", sql`(status)::text = ANY (ARRAY[('raw'::character varying)::text, ('processed'::character varying)::text, ('proposals_generated'::character varying)::text, ('failed'::character varying)::text, ('archived'::character varying)::text])`),
+	check("ck_activity_records_visibility", sql`visibility IN ('private', 'space_shared', 'selected_users')`),
+	check("ck_activity_records_access_level", sql`access_level IN ('full', 'summary')`),
+	check("ck_activity_records_private_owner", sql`visibility = 'space_shared' OR owner_user_id IS NOT NULL`),
 ]);

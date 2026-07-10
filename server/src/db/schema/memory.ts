@@ -23,13 +23,13 @@ export const memoryEntries = pgTable("memory_entries", {
 	subjectUserId: varchar("subject_user_id", { length: 36 }),
 	ownerUserId: varchar("owner_user_id", { length: 36 }),
 	sensitivityLevel: varchar("sensitivity_level", { length: 32 }).default('normal').notNull(),
-	selectedUserIds: jsonb("selected_user_ids"),
 	lastConfirmedAt: timestamp("last_confirmed_at", { withTimezone: true, mode: 'string' }),
 	workspaceId: varchar("workspace_id", { length: 36 }),
 	agentId: varchar("agent_id", { length: 36 }),
 	namespace: varchar({ length: 255 }),
 	title: varchar({ length: 512 }),
 	visibility: varchar({ length: 32 }).notNull(),
+	accessLevel: varchar("access_level", { length: 16 }).default('full').notNull(),
 	confidence: doublePrecision().notNull(),
 	importance: doublePrecision().notNull(),
 	sourceId: varchar("source_id", { length: 36 }),
@@ -114,6 +114,10 @@ export const memoryEntries = pgTable("memory_entries", {
 	check("ck_memory_entries_memory_layer", sql`(memory_layer IS NULL) OR ((memory_layer)::text = ANY (ARRAY[('episodic'::character varying)::text, ('semantic'::character varying)::text]))`),
 	check("ck_memory_entries_sensitivity_level", sql`(sensitivity_level)::text = ANY (ARRAY[('normal'::character varying)::text, ('sensitive'::character varying)::text, ('restricted'::character varying)::text, ('highly_restricted'::character varying)::text])`),
 	check("ck_memory_entries_source_trust", sql`(source_trust IS NULL) OR ((source_trust)::text = ANY (ARRAY[('user_confirmed'::character varying)::text, ('internal_system'::character varying)::text, ('trusted_external'::character varying)::text, ('untrusted_external'::character varying)::text, ('agent_inferred'::character varying)::text]))`),
+	check("ck_memory_entries_visibility", sql`visibility IN ('private', 'space_shared', 'selected_users')`),
+	check("ck_memory_entries_access_level", sql`access_level IN ('full', 'summary')`),
+	check("ck_memory_entries_private_owner", sql`visibility = 'space_shared' OR owner_user_id IS NOT NULL`),
+	check("ck_memory_entries_highly_restricted_private", sql`sensitivity_level <> 'highly_restricted' OR visibility = 'private'`),
 ]);
 
 export const memoryAccessLogs = pgTable("memory_access_logs", {

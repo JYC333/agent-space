@@ -7,6 +7,7 @@ import type {
 } from "@agent-space/protocol" with { "resolution-mode": "import" };
 import type { ServerConfig } from "../../../config";
 import type { Queryable } from "../../routeUtils/common";
+import { inheritContentAccessGrants } from "../../access/contentAccessInheritance";
 import { sha256, sourceDomain } from "../sourceRepositoryMappers";
 import { linkEvidenceToBoundProjects, materializeProjectSourceItemLinks } from "../evidenceProjectLinker";
 import { reindexSourceItemAndEvidenceForRetrieval } from "../retrievalIndexing";
@@ -198,7 +199,7 @@ export class CustomSourceMaterializationService {
     const now = new Date().toISOString();
     const existing = await this.db.query<{ id: string; content_state: string }>(
       `SELECT id, content_state FROM source_items
-        WHERE space_id = $1 AND connection_id = $2 AND source_external_id = $3
+        WHERE space_id = $1::varchar AND connection_id = $2::varchar AND source_external_id = $3::varchar
         LIMIT 1`,
       [run.spaceId, run.sourceConnectionId, item.external_id],
     );
@@ -232,8 +233,8 @@ export class CustomSourceMaterializationService {
                     AND $10::text <> 'content_saved'
                     AND NOT EXISTS (
                       SELECT 1 FROM source_snapshots
-                       WHERE source_snapshots.space_id = $1
-                         AND source_snapshots.source_item_id = $2
+                       WHERE source_snapshots.space_id = $1::varchar
+                         AND source_snapshots.source_item_id = $2::varchar
                     )
                     THEN $10::varchar
                   ELSE content_state
@@ -241,7 +242,7 @@ export class CustomSourceMaterializationService {
                 retention_policy = $12,
                 metadata_json = COALESCE(metadata_json, '{}'::jsonb) || $11::jsonb,
                 updated_at = $9
-          WHERE space_id = $1 AND id = $2`,
+          WHERE space_id = $1::varchar AND id = $2::varchar`,
         [
           run.spaceId,
           itemId,
@@ -266,12 +267,16 @@ export class CustomSourceMaterializationService {
          id, space_id, connection_id, item_type, title, source_uri, canonical_uri,
          source_domain, source_external_id, author, occurred_at, first_seen_at,
          last_seen_at, content_hash, excerpt, content_state,
-         retention_policy, metadata_json, created_at, updated_at
+         retention_policy, metadata_json, created_at, updated_at,
+         owner_user_id, visibility, access_level
        ) VALUES (
-         $1, $2, $3, 'external_url', $4, $5, $5,
+         $1, $2::varchar, $3::varchar, 'external_url', $4, $5, $5,
          $6, $7, $8, $9::timestamptz, $10,
          $10, $11, $12, $13,
-         $15, $14::jsonb, $10, $10
+         $15, $14::jsonb, $10, $10,
+         (SELECT owner_user_id FROM source_connections WHERE space_id = $2::varchar AND id = $3::varchar),
+         (SELECT visibility FROM source_connections WHERE space_id = $2::varchar AND id = $3::varchar),
+         (SELECT access_level FROM source_connections WHERE space_id = $2::varchar AND id = $3::varchar)
        )`,
       [
         itemId,
@@ -291,6 +296,14 @@ export class CustomSourceMaterializationService {
         retentionPolicy,
       ],
     );
+    await inheritContentAccessGrants(this.db, {
+      spaceId: run.spaceId,
+      sourceResourceType: "source_connection",
+      sourceResourceId: run.sourceConnectionId,
+      targetResourceType: "source_item",
+      targetResourceId: itemId,
+      inheritedAt: now,
+    });
     return { itemId, created: true };
   }
 
@@ -315,11 +328,15 @@ export class CustomSourceMaterializationService {
       `INSERT INTO artifacts (
          id, space_id, artifact_type, title, content, storage_path, mime_type,
          exportable, export_formats_json, canonical_format, preview,
-         created_at, updated_at, visibility, trust_level
+         created_at, updated_at, visibility, access_level, owner_user_id, trust_level
        ) VALUES (
-         $1, $2, $8, $3, NULL, $4, $5,
+         $1, $2::varchar, $8, $3, NULL, $4, $5,
          false, $6::jsonb, NULL, false,
-         $7, $7, 'space_shared', 'low'
+         $7, $7,
+         (SELECT visibility FROM source_items WHERE space_id = $2::varchar AND id = $9::varchar),
+         (SELECT access_level FROM source_items WHERE space_id = $2::varchar AND id = $9::varchar),
+         (SELECT owner_user_id FROM source_items WHERE space_id = $2::varchar AND id = $9::varchar),
+         'low'
        )`,
       [
         artifactId,
@@ -330,21 +347,34 @@ export class CustomSourceMaterializationService {
         JSON.stringify([extension.replace(".", "") || "bin"]),
         now,
         descriptor.snapshotArtifactType,
+        sourceItemId,
       ],
     );
+    await inheritContentAccessGrants(this.db, {
+      spaceId: run.spaceId,
+      sourceResourceType: "source_item",
+      sourceResourceId: sourceItemId,
+      targetResourceType: "artifact",
+      targetResourceId: artifactId,
+      inheritedAt: now,
+    });
 
+    const snapshotId = randomUUID();
     await this.db.query(
       `INSERT INTO source_snapshots (
          id, space_id, source_item_id, connection_id, snapshot_type, artifact_id,
          content_hash, source_uri, capture_method, trust_level, metadata_json,
-         captured_at, created_at
+         captured_at, created_at, updated_at, owner_user_id, visibility, access_level
        ) VALUES (
-         $1, $2, $3, $4, $5, $6,
+         $1, $2::varchar, $3::varchar, $4::varchar, $5, $6,
          $7, NULL, $10, 'untrusted', $8::jsonb,
-         $9, $9
+         $9, $9, $9,
+         (SELECT owner_user_id FROM source_items WHERE space_id = $2::varchar AND id = $3::varchar),
+         (SELECT visibility FROM source_items WHERE space_id = $2::varchar AND id = $3::varchar),
+         (SELECT access_level FROM source_items WHERE space_id = $2::varchar AND id = $3::varchar)
        )`,
       [
-        randomUUID(),
+        snapshotId,
         run.spaceId,
         sourceItemId,
         run.sourceConnectionId,
@@ -360,6 +390,14 @@ export class CustomSourceMaterializationService {
         descriptor.captureMethod,
       ],
     );
+    await inheritContentAccessGrants(this.db, {
+      spaceId: run.spaceId,
+      sourceResourceType: "source_item",
+      sourceResourceId: sourceItemId,
+      targetResourceType: "source_snapshot",
+      targetResourceId: snapshotId,
+      inheritedAt: now,
+    });
   }
 
   private async materializeEvidence(
@@ -369,20 +407,24 @@ export class CustomSourceMaterializationService {
     descriptor: SourceMaterializationDescriptor,
   ): Promise<void> {
     const now = new Date().toISOString();
+    const evidenceId = randomUUID();
     await this.db.query(
       `INSERT INTO extracted_evidence (
          id, space_id, source_item_id, source_object_type, source_object_id,
          evidence_type, title, content_excerpt, content_hash,
          extraction_method, trust_level, confidence, status,
-         metadata_json, created_at, updated_at
+         metadata_json, created_at, updated_at, owner_user_id, visibility, access_level
        ) VALUES (
-         $1, $2, $3, 'source_item', $3,
+         $1, $2::varchar, $3::varchar, 'source_item', $3::varchar,
          $4, $5, $6, $7,
          $11, 'untrusted', $8::float, 'candidate',
-         $9::jsonb, $10, $10
+         $9::jsonb, $10, $10,
+         (SELECT owner_user_id FROM source_items WHERE space_id = $2::varchar AND id = $3::varchar),
+         (SELECT visibility FROM source_items WHERE space_id = $2::varchar AND id = $3::varchar),
+         (SELECT access_level FROM source_items WHERE space_id = $2::varchar AND id = $3::varchar)
        )`,
       [
-        randomUUID(),
+        evidenceId,
         run.spaceId,
         sourceItemId,
         normalizeEvidenceType(evidence.evidence_type),
@@ -398,6 +440,14 @@ export class CustomSourceMaterializationService {
         descriptor.captureMethod,
       ],
     );
+    await inheritContentAccessGrants(this.db, {
+      spaceId: run.spaceId,
+      sourceResourceType: "source_item",
+      sourceResourceId: sourceItemId,
+      targetResourceType: "extracted_evidence",
+      targetResourceId: evidenceId,
+      inheritedAt: now,
+    });
   }
 
   private async storeRawOutputArtifact(
@@ -416,11 +466,15 @@ export class CustomSourceMaterializationService {
       `INSERT INTO artifacts (
          id, space_id, artifact_type, title, content, storage_path, mime_type,
          exportable, export_formats_json, canonical_format, preview,
-         created_at, updated_at, visibility, trust_level
+         created_at, updated_at, visibility, access_level, owner_user_id, trust_level
        ) VALUES (
-         $1, $2, $7, $3, NULL, $4, 'application/json',
+         $1, $2::varchar, $7, $3, NULL, $4, 'application/json',
          true, $5::jsonb, 'json', false,
-         $6, $6, 'space_shared', 'low'
+         $6, $6,
+         (SELECT visibility FROM source_connections WHERE space_id = $2::varchar AND id = $8::varchar),
+         (SELECT access_level FROM source_connections WHERE space_id = $2::varchar AND id = $8::varchar),
+         (SELECT owner_user_id FROM source_connections WHERE space_id = $2::varchar AND id = $8::varchar),
+         'low'
        )`,
       [
         artifactId,
@@ -430,8 +484,17 @@ export class CustomSourceMaterializationService {
         JSON.stringify(["json"]),
         now,
         descriptor.outputArtifactType,
+        run.sourceConnectionId,
       ],
     );
+    await inheritContentAccessGrants(this.db, {
+      spaceId: run.spaceId,
+      sourceResourceType: "source_connection",
+      sourceResourceId: run.sourceConnectionId,
+      targetResourceType: "artifact",
+      targetResourceId: artifactId,
+      inheritedAt: now,
+    });
     return artifactId;
   }
 

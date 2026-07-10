@@ -109,6 +109,7 @@ async function insertMemory(over: Record<string, unknown>): Promise<void> {
     memory_type: "fact",
     status: "active",
     visibility: "space_shared",
+    access_level: "full",
     sensitivity_level: "normal",
     confidence: 1,
     importance: 0.5,
@@ -223,9 +224,9 @@ describe("Memory create-safety retrieval (real Postgres)", () => {
     expect(out.create_safety).toBe("unknown");
   });
 
-  it("matches a summary_only memory for a non-owner but redacts the snippet", async () => {
+  it("matches a summary-access memory for a non-owner but redacts the snippet", async () => {
     if (!available || !pool) return;
-    await insertMemory({ visibility: "summary_only", owner_user_id: OWNER });
+    await insertMemory({ visibility: "space_shared", access_level: "summary", owner_user_id: OWNER });
     await reindex();
 
     const out = await searchService().assessCreateSafety({

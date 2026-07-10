@@ -31,6 +31,8 @@ function fakeAnnotation(overrides: Record<string, unknown> = {}): Record<string,
     color: null,
     label: null,
     visibility: "space_shared",
+    access_level: "full",
+    owner_user_id: USER,
     status: "active",
     anchor_state: "unverified",
     created_by_user_id: USER,
@@ -45,6 +47,9 @@ function fakeItem(overrides: Partial<SourceItemRow> = {}): SourceItemRow {
   return {
     id: "item-1",
     space_id: SPACE,
+    owner_user_id: USER,
+    visibility: "space_shared",
+    access_level: "full",
     connection_id: null,
     item_type: "article",
     source_object_type: null,
@@ -166,6 +171,18 @@ function sequentialDb(
   const db: Queryable = {
     async query<Row>(sql: string, params: readonly unknown[] = []) {
       calls.push({ sql, params });
+      if (sql.includes("AS effective_access_level")) {
+        const resourceId = String(params[1] ?? "");
+        const userId = String(params[2] ?? "");
+        const resource = rowSets.flat().find((row) => {
+          if (!row || typeof row !== "object") return false;
+          return String((row as Record<string, unknown>).id ?? "") === resourceId;
+        }) as Record<string, unknown> | undefined;
+        const ownerUserId = resource?.owner_user_id ?? resource?.created_by_user_id;
+        const readable = ownerUserId === userId || resource?.visibility === "space_shared";
+        const rows = readable ? [{ effective_access_level: ownerUserId === userId ? "full" : resource?.access_level ?? "full" }] : [];
+        return { rows: rows as Row[], rowCount: rows.length };
+      }
       const rows = (rowSets[idx++] ?? []) as Row[];
       return { rows, rowCount: rows.length };
     },
@@ -237,7 +254,7 @@ describe("PgReaderRepository.getDocument", () => {
     expect(result?.plain_text).toBe("Full article text.");
     const artifactQueries = calls.filter((call) => call.sql.includes("FROM artifacts"));
     expect(artifactQueries.length).toBeGreaterThan(0);
-    expect(artifactQueries.some((call) => call.sql.includes("deleted_at"))).toBe(false);
+    expect(artifactQueries.some((call) => /\b(?:artifacts|content_resource)\.deleted_at\b/.test(call.sql))).toBe(false);
   });
 
   it("does not read legacy text/plain extracted-text artifacts as reader documents", async () => {
@@ -350,22 +367,30 @@ describe("PgAnnotationRepository.createAnnotation", () => {
 // ── PgReaderActionRepository unit tests ──────────────────────────────────────
 
 describe("PgReaderActionRepository.createEvidence", () => {
-  it("throws 422 when the caller owns the private annotation (no-oracle: owner sees 422, not 404)", async () => {
-    const { db } = sequentialDb([
+  it("creates private evidence when the caller owns a private annotation", async () => {
+    const { db, calls } = sequentialDb([
       // SELECT annotation → private, owned by the caller
       [fakeAnnotation({ visibility: "private", created_by_user_id: USER })],
+      [fakeItem({ visibility: "private" })],
+      [],
+      [fakeEvidenceRow()],
     ]);
     const repo = new PgReaderActionRepository(db);
 
-    await expect(
-      repo.createEvidence(identity, "ann-1", {}),
-    ).rejects.toMatchObject({ statusCode: 422 });
+    await repo.createEvidence(identity, "ann-1", {});
+
+    const insert = calls.find((call) => call.sql.includes("INSERT INTO extracted_evidence"));
+    expect(insert?.params).toContain("private");
   });
 
   it("throws 404 when a non-owner attempts evidence from a private annotation (no-oracle)", async () => {
     const { db } = sequentialDb([
       // SELECT annotation → private, owned by a different user
-      [fakeAnnotation({ visibility: "private", created_by_user_id: "other-user" })],
+      [fakeAnnotation({
+        visibility: "private",
+        owner_user_id: "other-user",
+        created_by_user_id: "other-user",
+      })],
     ]);
     const repo = new PgReaderActionRepository(db);
 

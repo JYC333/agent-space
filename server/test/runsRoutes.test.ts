@@ -56,7 +56,7 @@ describe("runs command routes", () => {
     let currentRun = run({ status: "succeeded", ended_at: "2026-06-12T10:00:01.000Z" });
     __setRunsCommandServicesFactoryForTests(() => ({
       repository: {
-        async getRun() {
+        async getVisibleRun() {
           return currentRun;
         },
       },
@@ -104,7 +104,7 @@ describe("runs command routes", () => {
   it("executes via the service-authenticated internal route", async () => {
     __setRunsCommandServicesFactoryForTests(() => ({
       repository: {
-        async getRun() {
+        async getVisibleRun() {
           return run();
         },
       },
@@ -152,7 +152,7 @@ describe("runs command routes", () => {
     let currentRun = run();
     __setRunsCommandServicesFactoryForTests(() => ({
       repository: {
-        async getRun() {
+        async getVisibleRun() {
           return currentRun;
         },
       },

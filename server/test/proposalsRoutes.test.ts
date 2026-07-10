@@ -55,7 +55,7 @@ function proposal(overrides: Partial<ProposalOut> = {}): ProposalOut {
     owner_user_id: null,
     subject_user_id: null,
     sensitivity_level: null,
-    selected_user_ids: null,
+    access_level: "full",
     provenance_entries: null,
     source_activity_id: null,
     grant_id: null,

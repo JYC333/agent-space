@@ -2,6 +2,7 @@ import type { ServerConfig } from "../../config";
 import { getDbPool } from "../../db/pool";
 import { assertProjectInSpace } from "../projects/access";
 import type { ProposalOut, ProposalPage } from "@agent-space/protocol" with { "resolution-mode": "import" };
+import { contentReadSql } from "../access/contentAccessSql";
 
 export interface QueryResult<Row> {
   rows: Row[];
@@ -19,6 +20,7 @@ export interface ProposalRow {
   id: string;
   space_id: string;
   created_by_user_id: string | null;
+  owner_user_id: string | null;
   workspace_id: string | null;
   created_by_run_id: string | null;
   proposal_type: string;
@@ -30,6 +32,7 @@ export interface ProposalRow {
   payload_json: unknown;
   rationale: string | null;
   visibility: string;
+  access_level: string;
   review_deadline: unknown;
   expires_at: unknown;
   created_at: unknown;
@@ -133,11 +136,7 @@ export class PgProposalRepository {
          ) active_egress_approval ON true
         WHERE p.space_id = $1
           AND p.id = $2
-          AND (
-            p.visibility = 'space_shared'
-            OR p.created_by_user_id = $3
-            OR run_for_instructed.instructed_by_user_id = $3
-          )`,
+          AND ${contentReadSql("proposal", "p", "$3")}`,
       [spaceId, proposalId, userId],
     );
     const row = result.rows[0];
@@ -153,11 +152,7 @@ function buildVisibleWhere(
   const params: unknown[] = [spaceId, userId];
   const clauses = [
     "p.space_id = $1",
-    `(
-      p.visibility = 'space_shared'
-      OR p.created_by_user_id = $2
-      OR run_for_instructed.instructed_by_user_id = $2
-    )`,
+    contentReadSql("proposal", "p", "$2"),
   ];
   const addParam = (value: unknown): string => {
     params.push(value);
@@ -186,6 +181,7 @@ function proposalSelectSql(): string {
   return `SELECT p.id,
                  p.space_id,
                  p.created_by_user_id,
+                 p.owner_user_id,
                  p.workspace_id,
                  p.created_by_run_id,
                  p.proposal_type,
@@ -197,6 +193,7 @@ function proposalSelectSql(): string {
                  p.payload_json,
                  p.rationale,
                  p.visibility,
+                 p.access_level,
                  p.review_deadline,
                  p.expires_at,
                  p.created_at,
@@ -256,9 +253,11 @@ export function proposalToOut(row: ProposalRow, now: Date): ProposalOut {
     owner_user_id: stringValue(payload.owner_user_id),
     subject_user_id: stringValue(payload.subject_user_id),
     sensitivity_level: stringValue(payload.sensitivity_level),
-    selected_user_ids: Array.isArray(payload.selected_user_ids)
-      ? payload.selected_user_ids
-      : null,
+    access_level: typeof payload.access_level === "string"
+      ? payload.access_level
+      : typeof payload.target_access_level === "string"
+        ? payload.target_access_level
+        : null,
     provenance_entries: provenanceEntries.length > 0 ? provenanceEntries : null,
     source_activity_id: sourceActivityId(payload, provenanceEntries),
     grant_id: stringValue(payload.grant_id),

@@ -42,20 +42,21 @@ begins.
 
 ---
 
-## SourcePointer and Federation
+## Federation
 
-- **Federation / cross-instance SourcePointer.** Multi-deployment federated pointer
-  resolution is explicitly deferred. See `docs/FEDERATED_ACCESS_MODEL.md`.
+- **Federation / cross-instance transfer.** Multi-deployment identity, remote fetch,
+  synchronization, and authorization are explicitly deferred. See
+  `docs/FEDERATED_ACCESS_MODEL.md`.
 
-- **Cross-space read activation via SourcePointer.** `memory.cross_space_read` remains
-  deny-by-default. Enabling it requires explicit grants + federation + policy design.
+- **Direct cross-space reads.** General direct reads remain deny-by-default.
+  Local transfer uses targeted immutable publication/import instead.
 
 ---
 
-## Public Publishing
+## Publication Expansion
 
-- **PublishProjection pipeline.** `visibility=public` and the `publish` proposal type
-  are not implemented. Deferred. See `docs/PUBLISH_PROJECTION.md`.
+- **Cross-instance publication.** Local targeted publication/import is implemented;
+  anonymous catalogs and cross-instance delivery remain deferred.
 
 ---
 
@@ -118,8 +119,7 @@ begins.
 ## See Also
 
 - `docs/PERSONAL_MEMORY_GRANT.md` — PersonalMemoryGrant current state and deferred items
-- `docs/SOURCE_POINTER.md` — SourcePointer current state and deferred federation
+- `docs/CONTENT_PUBLICATIONS.md` — targeted immutable publication/import
 - `docs/POLICY_AND_PRIVACY_BOUNDARIES.md` — current enforcement and deferred items
 - `docs/FEDERATED_ACCESS_MODEL.md` — federation design (deferred)
-- `docs/PUBLISH_PROJECTION.md` — publish pipeline (deferred)
 - `.agent/architecture/ROADMAP_AND_FUTURE_RISKS.md` — broader capability roadmap

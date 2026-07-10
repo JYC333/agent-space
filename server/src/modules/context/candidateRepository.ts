@@ -5,9 +5,10 @@ import {
   type MemoryRow,
   type Queryable,
 } from "../memory/repository";
-import { accessibleProjectIds } from "../memory/projectAccess";
-import { canReadMemory, summaryOnlyRedactContent } from "../memory/memoryReadAuth";
-import { canReadByVisibility } from "../access/visibility";
+import { shouldRedactMemoryContent } from "../memory/memoryReadAuth";
+import { memorySensitivityReadSql } from "../memory/memorySensitivitySql";
+import { contentResourceDefinition } from "../access/contentAccessRegistry";
+import { contentAccessLevelSql, contentReadSql } from "../access/contentAccessSql";
 import {
   loadSourceConnectionIdsForTargets,
   loadSourcePolicySnapshots,
@@ -46,6 +47,7 @@ const MAX_EXCERPT_CHARS = 800;
 
 /** Cap on candidate memory rows fetched before the read-auth filter. */
 const MEMORY_FETCH_CAP = 200;
+const MEMORY_DEFINITION = contentResourceDefinition("memory")!;
 
 /** Knowledge `knowledge_kind` values selected when `knowledge_item` is allowed. */
 const KNOWLEDGE_KINDS = [
@@ -61,7 +63,7 @@ const KNOWLEDGE_KINDS = [
 export interface CandidateRow {
   item_id: string;
   title: string | null;
-  /** null when content is withheld (e.g. summary_only visibility for non-owner). */
+  /** null when content is withheld by summary access for a non-owner. */
   text: string | null;
   source_connection_ids: string[];
 }
@@ -122,8 +124,8 @@ export class PgChatCandidateRepository {
 
   /**
    * Readable active memories ranked `importance DESC, confidence DESC`. The
-   * read-authorization filter runs in app code (like the memory read model), so
-   * the cap applies to the readable set. No access logging (see module note).
+   * canonical SQL predicate, including the `highly_restricted` gate, runs
+   * before the cap. No access logging (see module note).
    */
   async selectMemories(
     spaceId: string,
@@ -131,31 +133,21 @@ export class PgChatCandidateRepository {
     limit: number,
   ): Promise<CandidateRow[]> {
     const result = await this.db.query<MemoryRow>(
-      `SELECT ${MEMORY_COLUMNS} FROM memory_entries
+      `SELECT ${MEMORY_COLUMNS},
+              ${contentAccessLevelSql({ definition: MEMORY_DEFINITION, alias: "me", userExpr: "$2" })} AS effective_access_level
+         FROM memory_entries me
         WHERE space_id = $1 AND status = 'active' AND deleted_at IS NULL
+          AND scope_type <> 'system'
+          AND ${contentReadSql("memory", "me", "$2")}
+          AND ${memorySensitivityReadSql("me", "$2")}
         ORDER BY importance DESC, confidence DESC
         LIMIT ${MEMORY_FETCH_CAP}`,
-      [spaceId],
+      [spaceId, userId],
     );
-    const readable = result.rows.filter((row) =>
-      canReadMemory(row, {
-        userId,
-        spaceId,
-        workspaceId: null,
-        includeSystemScope: false,
-      }),
-    );
-    const accessible = await accessibleProjectIds(
-      this.db,
-      spaceId,
-      userId,
-      readable.map((row) => row.project_id),
-    );
-    const visible = readable.filter((row) => !row.project_id || accessible.has(row.project_id));
-    return visible.slice(0, limit).map((row) => ({
+    return result.rows.slice(0, limit).map((row) => ({
       item_id: row.id,
       title: row.title,
-      text: summaryOnlyRedactContent(row, userId) ? null : (row.content ?? ""),
+      text: shouldRedactMemoryContent(row, userId) ? null : (row.content ?? ""),
       source_connection_ids: [],
     }));
   }
@@ -180,6 +172,8 @@ export class PgChatCandidateRepository {
       params.push(`%${message.slice(0, 40)}%`);
       where.push(`(so.title ILIKE $${params.length} OR ki.content ILIKE $${params.length})`);
     }
+    params.push(userId);
+    where.push(contentReadSql("space_object", "so", `$${params.length}`));
     const result = await this.db.query<{
       id: string;
       title: string | null;
@@ -198,16 +192,13 @@ export class PgChatCandidateRepository {
         LIMIT ${clampLimit(limit)}`,
       params,
     );
-    const visible = result.rows.filter((row) =>
-      canReadByVisibility(row.visibility, userId, [row.owner_user_id, row.created_by_user_id]),
-    );
     const sourceIdsByTarget = await loadSourceConnectionIdsForTargets(
       this.db,
       spaceId,
       "knowledge",
-      visible.map((row) => row.id),
+      result.rows.map((row) => row.id),
     );
-    return visible.map((row) => ({
+    return result.rows.map((row) => ({
       item_id: row.id,
       title: row.title,
       text: row.content ?? "",
@@ -299,17 +290,16 @@ export class PgChatCandidateRepository {
       visibility: string;
       owner_user_id: string | null;
     }>(
-      `SELECT id, title, content, visibility, owner_user_id
-         FROM activity_records
-        WHERE space_id = $1
+      `SELECT ar.id, ar.title, ar.content, ar.visibility, ar.owner_user_id
+         FROM activity_records ar
+        WHERE ar.space_id = $1
           AND status NOT IN ('archived', 'failed')
+          AND ${contentReadSql("activity", "ar", "$2")}
         ORDER BY occurred_at DESC
         LIMIT ${clampLimit(limit)}`,
-      [spaceId],
+      [spaceId, userId],
     );
-    return result.rows
-      .filter((row) => canReadByVisibility(row.visibility, userId, [row.owner_user_id]))
-      .map((row) => ({
+    return result.rows.map((row) => ({
         item_id: row.id,
         title: row.title,
         text: row.content ?? "",

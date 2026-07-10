@@ -16,7 +16,7 @@ import {
 // Real-PostgreSQL integration tests for the memory appliers. These run the
 // actual INSERT/UPDATE memory_entries + provenance / relation writes against a
 // throwaway Postgres loaded with memoryApplySchema.sql, so the column set,
-// versioning, supersede, and placement invariant are exercised on the real
+// versioning, supersede, and access invariants are exercised on the real
 // stack. Skips gracefully when Docker is unavailable.
 
 const SCHEMA = readFileSync(join(process.cwd(), "test/fixtures/memoryApplySchema.sql"), "utf8");
@@ -116,6 +116,7 @@ async function insertActiveMemory(over: Record<string, unknown>): Promise<void> 
     content: "old content",
     status: "active",
     visibility: "space_shared",
+    access_level: "full",
     sensitivity_level: "normal",
     namespace: "user.default",
     created_at: new Date().toISOString(),
@@ -223,16 +224,14 @@ describe("PgMemoryApplyRepository against real Postgres", () => {
     expect((await pool.query("SELECT count(*)::int AS c FROM memory_entries")).rows[0].c).toBe(0);
   });
 
-  it("rejects private visibility in a non-personal space (placement invariant)", async () => {
+  it("allows private visibility in a multi-member space", async () => {
     if (!available || !repo || !pool) return;
     await pool.query("UPDATE spaces SET type = 'team' WHERE id = $1", [SPACE]);
-    await expect(
-      repo.applyCreate(
-        proposal({ payload_json: { target_visibility: "private", proposed_content: "x", owner_user_id: USER, provenance_entries: [userConf] } }),
-        USER,
-      ),
-    ).rejects.toBeInstanceOf(MemoryApplyError);
-    expect((await pool.query("SELECT count(*)::int AS c FROM memory_entries")).rows[0].c).toBe(0);
+    const out = await repo.applyCreate(
+      proposal({ payload_json: { target_visibility: "private", proposed_content: "x", owner_user_id: USER, provenance_entries: [userConf] } }),
+      USER,
+    );
+    expect(out.memory).toMatchObject({ visibility: "private", owner_user_id: USER });
   });
 
   it("allows private visibility in a personal space with owner fallback", async () => {
@@ -245,7 +244,7 @@ describe("PgMemoryApplyRepository against real Postgres", () => {
     expect(out.memory.owner_user_id).toBe(USER); // fell back to acting user
   });
 
-  it("defaults a no-visibility create to owner-only restricted in a multi-member space", async () => {
+  it("defaults a no-visibility create to owner-only private in a multi-member space", async () => {
     if (!available || !repo || !pool) return;
     await pool.query("UPDATE spaces SET type = 'team' WHERE id = $1", [SPACE]);
     const creator = "creator-9";
@@ -258,28 +257,26 @@ describe("PgMemoryApplyRepository against real Postgres", () => {
       USER, // accepting user differs from the creator the memory belongs to
     );
 
-    // restricted + owner=creator + no selected users == owner-only in a team space.
-    expect(out.memory.visibility).toBe("restricted");
+    expect(out.memory.visibility).toBe("private");
     expect(out.memory.owner_user_id).toBe(creator);
-    const row = (await pool.query("SELECT selected_user_ids FROM memory_entries WHERE id = $1", [out.memory.id])).rows[0];
-    expect(row.selected_user_ids).toBeNull();
+    expect(out.memory.access_level).toBe("full");
   });
 
-  it("keeps the personal-space no-visibility default at space_shared", async () => {
+  it("keeps the no-visibility default private in a personal space", async () => {
     if (!available || !repo) return; // space is 'personal' by default
     const out = await repo.applyCreate(
       proposal({ payload_json: { proposed_content: "personal default", provenance_entries: [userConf] } }),
       USER,
     );
-    expect(out.memory.visibility).toBe("space_shared");
+    expect(out.memory.visibility).toBe("private");
   });
 
-  it("promotes an owner-only restricted memory to space_shared via memory_update", async () => {
+  it("promotes an owner-only private memory to space_shared via memory_update", async () => {
     if (!available || !repo || !pool) return;
     await pool.query("UPDATE spaces SET type = 'team' WHERE id = $1", [SPACE]);
     await insertActiveMemory({
       id: "mem-personal",
-      visibility: "restricted",
+      visibility: "private",
       owner_user_id: USER,
       content: "personal note",
     });

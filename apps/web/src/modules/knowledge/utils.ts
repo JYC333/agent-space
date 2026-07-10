@@ -18,7 +18,7 @@ export const KNOWLEDGE_ITEM_KINDS: KnowledgeItemKind[] = [
 ]
 
 export const KNOWLEDGE_STATUSES: KnowledgeItemStatus[] = ['draft', 'active', 'superseded', 'archived']
-export const KNOWLEDGE_VISIBILITIES: KnowledgeVisibility[] = ['private', 'space_shared', 'workspace_shared', 'restricted']
+export const KNOWLEDGE_VISIBILITIES: KnowledgeVisibility[] = ['private', 'space_shared', 'selected_users']
 export const KNOWLEDGE_FORMATS: KnowledgeContentFormat[] = ['markdown', 'plain']
 
 export const KNOWLEDGE_RELATION_TYPES: KnowledgeRelationType[] = [

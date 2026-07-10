@@ -54,7 +54,12 @@ afterAll(async () => {
 beforeEach(async () => {
   if (!available || !pool) return;
   await pool.query(
-    "TRUNCATE retrieval_edges, retrieval_chunks, retrieval_aliases, retrieval_objects, extracted_evidence, source_snapshots, source_items, provenance_links, proposals, memory_entries, projects",
+    "TRUNCATE content_access_grants, space_memberships, retrieval_edges, retrieval_chunks, retrieval_aliases, retrieval_objects, extracted_evidence, source_snapshots, source_items, provenance_links, proposals, memory_entries, projects",
+  );
+  await pool.query(
+    `INSERT INTO space_memberships (id, space_id, user_id, role, status, created_at, updated_at)
+     VALUES ($1, $2, $3, 'owner', 'active', now(), now())`,
+    ["membership-1", SPACE, USER],
   );
 });
 
@@ -66,6 +71,7 @@ async function insertMemory(over: Record<string, unknown>): Promise<void> {
     memory_type: "fact",
     status: "active",
     visibility: "space_shared",
+    access_level: "full",
     sensitivity_level: "normal",
     confidence: 1,
     importance: 0.5,
@@ -76,10 +82,10 @@ async function insertMemory(over: Record<string, unknown>): Promise<void> {
   };
   const names = Object.keys(cols);
   const placeholders = names.map((n, i) =>
-    n === "selected_user_ids" || n === "tags" ? `$${i + 1}::jsonb` : `$${i + 1}`,
+    n === "tags" ? `$${i + 1}::jsonb` : `$${i + 1}`,
   );
   const values = names.map((n) =>
-    n === "selected_user_ids" || n === "tags"
+    n === "tags"
       ? cols[n] === undefined
         ? null
         : JSON.stringify(cols[n])
@@ -112,7 +118,7 @@ describe("PgMemoryProposalRepository against real Postgres", () => {
       space_id: null,
       subject_user_id: null,
       owner_user_id: null,
-      selected_user_ids: null,
+      access_level: "full",
       last_confirmed_at: null,
       workspace_id: null,
       memory_layer: null,
@@ -167,14 +173,11 @@ describe("PgMemoryProposalRepository against real Postgres", () => {
       type: null,
       scope: null,
       namespace: null,
-      visibility: null,
       sensitivity_level: null,
       confidence: null,
       importance: null,
       tags: null,
       subject_user_id: null,
-      owner_user_id: null,
-      selected_user_ids: null,
       workspace_id: null,
       memory_layer: null,
       actor_user_id: null,
@@ -222,14 +225,11 @@ describe("PgMemoryProposalRepository against real Postgres", () => {
         type: null,
         scope: null,
         namespace: null,
-        visibility: null,
         sensitivity_level: null,
         confidence: null,
         importance: null,
         tags: null,
         subject_user_id: null,
-        owner_user_id: null,
-        selected_user_ids: null,
         workspace_id: null,
         memory_layer: null,
         actor_user_id: null,

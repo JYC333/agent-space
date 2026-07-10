@@ -38,6 +38,7 @@ import { resolveProviderCommandStore } from "../../providers/commands/store";
 import { BUILTIN_RUNTIME_ADAPTER_SPECS, type RuntimeAdapterType } from "../../runtimeAdapters/specs";
 import { ITEM_COLUMNS, type EvidenceRow, type SourceItemRow, type SourceConnectionRow } from "../sourceRepositoryRows";
 import { sourceRetrievalRegistry } from "../retrievalAdapter";
+import { contentReadSql } from "../../access/contentAccessSql";
 import {
   PgSourcePostProcessingRepository,
   SOURCE_POST_PROCESSING_EVENT_JOB_TYPE,
@@ -233,6 +234,7 @@ export class SourcePostProcessingService {
       sourceConnectionId: rule.source_connection_id,
       inputConfig: deepInputConfig,
       cursor: null,
+      viewerUserId: input.actorUserId ?? connection.owner_user_id,
       explicitItemIds: itemIds,
     });
     if (batch.items.length === 0) return null;
@@ -525,6 +527,7 @@ export class SourcePostProcessingService {
         sourceConnectionId: decision.source_connection_id,
         inputConfig,
         cursor: null,
+        viewerUserId: identity.userId,
         explicitItemIds: [decision.source_item_id],
       });
       const run = await this.executeBatch({
@@ -593,7 +596,7 @@ export class SourcePostProcessingService {
       throw new HttpError(422, "At least one source_item_id or evidence_id is required");
     }
     const repo = new PgSourcePostProcessingRepository(this.db);
-    const sourceConnectionId = await this.resolveOneOffSourceConnection(identity.spaceId, itemIds, evidenceIds);
+    const sourceConnectionId = await this.resolveOneOffSourceConnection(identity.spaceId, itemIds, evidenceIds, identity.userId);
     const connection = await this.requireConnection(identity.spaceId, sourceConnectionId);
     const actions = normalizeActions(body.actions_json ?? { batch_digest: true });
     this.assertActions(actions);
@@ -610,6 +613,7 @@ export class SourcePostProcessingService {
         window: "explicit",
       },
       cursor: null,
+      viewerUserId: identity.userId,
       explicitItemIds: itemIds,
       explicitEvidenceIds: evidenceIds,
     });
@@ -741,6 +745,7 @@ export class SourcePostProcessingService {
       sourceConnectionId: rule.source_connection_id,
       inputConfig,
       cursor: cursorWatermark(rule.cursor_json),
+      viewerUserId: options.actorUserId,
     });
     if (batch.items.length === 0 && batch.evidence.length === 0 && triggerConfig.skip_when_no_new_items) {
       const run = await repo.createRun({
@@ -1721,12 +1726,14 @@ export class SourcePostProcessingService {
     spaceId: string,
     itemIds: string[],
     evidenceIds: string[],
+    viewerUserId: string,
   ): Promise<string> {
     const itemRows = itemIds.length
       ? await this.db.query<{ connection_id: string | null }>(
           `SELECT connection_id FROM source_items
-            WHERE space_id = $1 AND id::text = ANY($2::text[]) AND deleted_at IS NULL`,
-          [spaceId, itemIds],
+            WHERE space_id = $1 AND id::text = ANY($2::text[]) AND deleted_at IS NULL
+              AND ${contentReadSql("source_item", "source_items", "$3")}`,
+          [spaceId, itemIds, viewerUserId],
         )
       : { rows: [] };
     const evidenceRows = evidenceIds.length
@@ -1738,8 +1745,10 @@ export class SourcePostProcessingService {
               AND ii.id = ee.source_item_id
             WHERE ee.space_id = $1
               AND ee.id::text = ANY($2::text[])
-              AND ee.deleted_at IS NULL`,
-          [spaceId, evidenceIds],
+              AND ee.deleted_at IS NULL
+              AND ${contentReadSql("extracted_evidence", "ee", "$3")}
+              AND (ii.id IS NULL OR ${contentReadSql("source_item", "ii", "$3")})`,
+          [spaceId, evidenceIds, viewerUserId],
         )
       : { rows: [] };
     const ids = [...itemRows.rows, ...evidenceRows.rows]

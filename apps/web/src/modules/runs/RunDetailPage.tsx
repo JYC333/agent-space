@@ -19,6 +19,7 @@ import { useSpace } from '../../contexts/SpaceContext'
 import { PersonalContextPanel } from './PersonalContextPanel'
 import { isGrantDerivedProposal } from '../memory/EgressReviewNotice'
 import { promptLibraryPath } from '../prompts/paths'
+import { ContentAccessControl } from '../../components/ContentAccessControl'
 
 type RunDetailTab = 'activities' | 'artifacts' | 'proposals'
 
@@ -209,7 +210,10 @@ export default function RunDetailPage() {
       </Button>
 
       <div className="space-y-3 border-b border-border pb-4">
-        <h1 className="text-xl font-semibold tracking-tight font-mono">{r.id}</h1>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <h1 className="text-xl font-semibold tracking-tight font-mono">{r.id}</h1>
+          <ContentAccessControl resourceType="run" resourceId={r.id} ownerUserId={r.owner_user_id ?? null} />
+        </div>
         <p className="text-xs text-muted-foreground">Viewing: {activeSpaceName ?? activeSpaceId ?? 'No operational space selected'}</p>
         <div className="flex flex-wrap gap-1.5 items-center">
           <StatusBadge status={r.status} />

@@ -20,6 +20,7 @@ export const agents = pgTable("agents", {
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).notNull(),
 	visibility: varchar({ length: 32 }).notNull(),
+	accessLevel: varchar("access_level", { length: 16 }).default('full').notNull(),
 }, (table): PgTableExtraConfigValue[] => [
 	index("ix_agents_agent_kind").using("btree", table.agentKind.asc().nullsLast()),
 	index("ix_agents_current_version_id").using("btree", table.currentVersionId.asc().nullsLast()),
@@ -47,6 +48,9 @@ export const agents = pgTable("agents", {
 	unique("uq_agents_space_id_id").on(table.id, table.spaceId),
 	check("ck_agents_agent_kind", sql`(agent_kind)::text = ANY (ARRAY[('standard'::character varying)::text, ('system_assistant'::character varying)::text, ('system_evolver'::character varying)::text, ('system_source_post_processor'::character varying)::text])`),
 	check("ck_agents_status", sql`(status)::text = ANY (ARRAY[('active'::character varying)::text, ('inactive'::character varying)::text, ('archived'::character varying)::text, ('disabled'::character varying)::text])`),
+	check("ck_agents_visibility", sql`visibility IN ('private', 'space_shared', 'selected_users')`),
+	check("ck_agents_access_level", sql`access_level IN ('full', 'summary')`),
+	check("ck_agents_private_owner", sql`visibility = 'space_shared' OR owner_user_id IS NOT NULL`),
 ]);
 
 export const actors = pgTable("actors", {

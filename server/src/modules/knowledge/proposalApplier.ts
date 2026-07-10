@@ -23,6 +23,8 @@ import {
 } from "./retrievalObjectTypes";
 import { RETRIEVAL_OBJECT_TYPE_VALUES } from "../retrieval/objectTypes";
 import { allowedObjectKindKeys } from "./objectKindSubtypeKeys";
+import { isContentOwner } from "../access/contentAccessPolicy";
+import { contentDecisionFromDb } from "../access/contentAccessQuery";
 
 // The retrieval projection is a derived index. A projection failure must not
 // roll back an accepted canonical Knowledge mutation, but the reindex runs
@@ -258,8 +260,7 @@ const VALID_CONTENT_FORMATS = new Set(["markdown", "plain", "prosemirror_json"])
 const VALID_VISIBILITIES = new Set([
   "private",
   "space_shared",
-  "workspace_shared",
-  "restricted",
+  "selected_users",
 ]);
 
 const VALID_VERIFICATION_STATUSES = new Set(["unverified", "needs_review", "verified"]);
@@ -531,10 +532,10 @@ async function applyKnowledgeCreateProposal(
     throw new KnowledgeApplyValidationError("Knowledge owner must be the proposal creator");
   }
   if (
-    (visibility === "private" || visibility === "restricted") &&
+    (visibility === "private" || visibility === "selected_users") &&
     context.proposal.created_by_user_id == null
   ) {
-    throw new KnowledgeApplyValidationError("private or restricted Knowledge requires a human owner");
+    throw new KnowledgeApplyValidationError("private or selected-user Knowledge requires a human owner");
   }
 
   const projectId = optionalString(payload.project_id);
@@ -854,10 +855,10 @@ async function applyClaimCreateProposal(
     throw new KnowledgeApplyValidationError("Claim owner must be the proposal creator");
   }
   if (
-    (visibility === "private" || visibility === "restricted") &&
+    (visibility === "private" || visibility === "selected_users") &&
     context.proposal.created_by_user_id == null
   ) {
-    throw new KnowledgeApplyValidationError("private or restricted Claim requires a human owner");
+    throw new KnowledgeApplyValidationError("private or selected-user Claim requires a human owner");
   }
 
   const sources = await claimSourcesFromPayload(context, payload.sources);
@@ -1437,7 +1438,10 @@ async function requireKnowledgeItem(
   if (row.status !== "active" && row.status !== "draft") {
     throw new KnowledgeApplyValidationError("target Knowledge item is not active");
   }
-  if (!canApplyKnowledgeMutation(row, proposal)) {
+  if (
+    !(await proposalCanReadSpaceObject(db, proposal, row.id))
+    || !canApplyKnowledgeMutation(row, proposal)
+  ) {
     throw new KnowledgeApplyValidationError("Knowledge item not found or not editable");
   }
   return row;
@@ -1465,7 +1469,10 @@ async function requireClaimForMutation(
   if (row.status === "archived") {
     throw new KnowledgeApplyValidationError("target Claim is archived");
   }
-  if (!canApplyClaimMutation(row, proposal)) {
+  if (
+    !(await proposalCanReadSpaceObject(db, proposal, row.id))
+    || !canApplyClaimMutation(row, proposal)
+  ) {
     throw new KnowledgeApplyValidationError("Claim not found or not editable");
   }
   return row;
@@ -1569,7 +1576,7 @@ async function requireSpaceObject(
   proposal: ProposalApplyContext["proposal"],
 ): Promise<SpaceObjectRow> {
   const row = await getSpaceObjectById(db, spaceId, objectId);
-  if (!canApplySpaceObjectRead(row, proposal)) {
+  if (!(await proposalCanReadSpaceObject(db, proposal, row.id))) {
     throw new KnowledgeApplyValidationError("Space object not found");
   }
   return row;
@@ -2022,52 +2029,35 @@ function canApplyKnowledgeMutation(
   item: KnowledgeItemRow,
   proposal: ProposalApplyContext["proposal"],
 ): boolean {
-  if (item.space_id !== proposal.space_id) return false;
-  if (item.visibility === "space_shared" || item.visibility === "workspace_shared") {
-    return true;
-  }
-  if (item.visibility === "private" || item.visibility === "restricted") {
-    const ownerId = item.owner_user_id ?? item.created_by_user_id;
-    return ownerId !== null && proposal.created_by_user_id === ownerId;
-  }
-  return false;
+  return item.space_id === proposal.space_id && isContentOwner(item, proposal.created_by_user_id);
 }
 
 function canApplyClaimMutation(
   claim: ClaimRow,
   proposal: ProposalApplyContext["proposal"],
 ): boolean {
-  if (claim.space_id !== proposal.space_id) return false;
-  if (claim.visibility === "space_shared" || claim.visibility === "workspace_shared") {
-    return true;
-  }
-  if (claim.visibility === "private" || claim.visibility === "restricted") {
-    const ownerId = claim.owner_user_id ?? claim.created_by_user_id;
-    return ownerId !== null && proposal.created_by_user_id === ownerId;
-  }
-  return false;
-}
-
-function canApplySpaceObjectRead(
-  object: SpaceObjectRow,
-  proposal: ProposalApplyContext["proposal"],
-): boolean {
-  if (object.space_id !== proposal.space_id) return false;
-  if (object.visibility === "space_shared" || object.visibility === "workspace_shared") {
-    return true;
-  }
-  if (object.visibility === "private" || object.visibility === "restricted") {
-    const ownerId = object.owner_user_id ?? object.created_by_user_id;
-    return ownerId !== null && proposal.created_by_user_id === ownerId;
-  }
-  return false;
+  return claim.space_id === proposal.space_id && isContentOwner(claim, proposal.created_by_user_id);
 }
 
 function canApplySpaceObjectMutation(
   object: SpaceObjectRow,
   proposal: ProposalApplyContext["proposal"],
 ): boolean {
-  return canApplySpaceObjectRead(object, proposal);
+  return object.space_id === proposal.space_id && isContentOwner(object, proposal.created_by_user_id);
+}
+
+async function proposalCanReadSpaceObject(
+  db: Queryable,
+  proposal: ProposalApplyContext["proposal"],
+  objectId: string,
+): Promise<boolean> {
+  if (!proposal.created_by_user_id) return false;
+  return (await contentDecisionFromDb(
+    db,
+    { spaceId: proposal.space_id, userId: proposal.created_by_user_id },
+    "space_object",
+    objectId,
+  )) !== "deny";
 }
 
 function ensureOperation(payload: Record<string, unknown>, operation: string): void {

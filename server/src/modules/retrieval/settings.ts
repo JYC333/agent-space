@@ -17,6 +17,10 @@ import {
 } from "../settings";
 import { RetrievalEmbeddingStore } from "./embeddingStore";
 import { DEFAULT_EMBED_DIMENSIONS } from "./embedding/config";
+import {
+  contentReadSql,
+  contentVisibilityFilterSql,
+} from "../access/contentAccessSql";
 
 export interface SpaceRetrievalSettingsOut {
   space_id: string;
@@ -349,7 +353,7 @@ async function normalizeRankingConfigForUpdate(
   db: Queryable,
   spaceId: string,
   value: unknown,
-  _actorUserId: string | null,
+  actorUserId: string | null,
 ): Promise<RetrievalRuntimeRankingConfig> {
   const normalized = normalizeRuntimeRankingConfig(value);
   const checkedAt = new Date().toISOString();
@@ -370,8 +374,12 @@ async function normalizeRankingConfigForUpdate(
     if (!config.calibration_artifact_id) {
       throw new SpaceRetrievalSettingsError(`${mechanic} requires calibration_artifact_id before it can be ${config.state}`);
     }
+    if (!actorUserId) {
+      throw new SpaceRetrievalSettingsError("actor_user_id is required to use a calibration artifact");
+    }
     const gate = await evaluateCalibrationGate(db, {
       spaceId,
+      actorUserId,
       mechanic,
       calibrationArtifactId: config.calibration_artifact_id,
       minDelta: normalized.eval_gate.min_primary_metric_delta,
@@ -395,6 +403,7 @@ async function evaluateCalibrationGate(
   db: Queryable,
   input: {
     spaceId: string;
+    actorUserId: string;
     mechanic: ShippableRetrievalMechanic;
     calibrationArtifactId: string;
     minDelta: number;
@@ -403,14 +412,15 @@ async function evaluateCalibrationGate(
   },
 ): Promise<RuntimeMechanicConfig["eval_gate"]> {
   const result = await db.query<{ metadata_json: unknown }>(
-    `SELECT metadata_json
-       FROM artifacts
-      WHERE space_id = $1
-        AND id = $2
-        AND artifact_type = 'retrieval_calibration_decision'
-        AND visibility = 'space_shared'
+    `SELECT a.metadata_json
+       FROM artifacts a
+      WHERE a.space_id = $1
+        AND a.id = $2
+        AND a.artifact_type = 'retrieval_calibration_decision'
+        AND ${contentReadSql("artifact", "a", "$3")}
+        AND ${contentVisibilityFilterSql("a", ["space_shared"])}
       LIMIT 1`,
-    [input.spaceId, input.calibrationArtifactId],
+    [input.spaceId, input.calibrationArtifactId, input.actorUserId],
   );
   const row = result.rows[0];
   if (!row) {

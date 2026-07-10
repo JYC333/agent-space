@@ -54,7 +54,7 @@ describe("memory + sessions contracts", () => {
     status: "active",
     visibility: "private",
     sensitivity_level: "normal",
-    selected_user_ids: null,
+    access_level: "full",
     last_confirmed_at: null,
     confidence: 0.9,
     importance: 0.8,

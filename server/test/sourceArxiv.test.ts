@@ -521,6 +521,11 @@ class PresetDb implements Queryable {
 
   async query<Row = Record<string, unknown>>(sql: string, params: readonly unknown[] = []) {
     this.calls.push({ sql, params });
+    if (sql.includes("AS effective_access_level")) {
+      return this.lastConnection
+        ? { rows: [{ effective_access_level: "full" }] as Row[], rowCount: 1 }
+        : { rows: [] as Row[], rowCount: 0 };
+    }
     if (sql.includes("FROM settings")) {
       return { rows: [] as Row[], rowCount: 0 };
     }
@@ -561,6 +566,7 @@ function connectionRow(params: readonly unknown[]): Record<string, unknown> {
     owner_user_id: params[3],
     credential_id: params[4],
     visibility: params[5],
+    access_level: "full",
     name: params[6],
     endpoint_url: params[7],
     status: "active",

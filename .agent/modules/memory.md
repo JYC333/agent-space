@@ -28,7 +28,8 @@ MemoryEntry:
   memory_type, memory_layer (episodic|semantic)
   namespace, title, content
   status (active|archived|proposed|rejected|superseded)
-  visibility (private|space_shared|workspace_shared|restricted|public_template)
+  visibility (`private` | `space_shared` | `selected_users`) and access level
+  (`full` | `summary`)
   confidence, importance, version, tags
   created_from_proposal_id           (accepted proposal linkage)
   source_trust
@@ -187,9 +188,9 @@ What landed (`server/src/modules/memory/retrievalAdapter.ts`):
   separate from `knowledgeRetrievalRegistry` so the memory surface can never
   resolve Knowledge objects and vice versa.
 - `revalidate` is the single read-access gate: it reuses `canReadMemory` plus
-  summary-only content redaction plus project-membership gating (see "Project-
+  `access_level=summary` content redaction plus project-membership gating (see "Project-
   level access gate" above). It runs with no workspace/system/template context,
-  so workspace_shared and system/template memories owned by other users fail
+  so workspace-scoped space_shared and system/template memories owned by other users fail
   closed; the proposer's own memories still match (owner check precedes the
   visibility switch), which is what duplicate detection needs. The derived
   `retrieval_*` projection is never trusted for read access.
@@ -201,7 +202,7 @@ What landed (`server/src/modules/memory/retrievalAdapter.ts`):
   `memory_access_logs` (`access_type = create_safety_hit`); candidates the engine
   over-fetched and then dropped during revalidation are never logged.
 - Snippets come only from live-revalidated text, never the pre-revalidation
-  projection chunk, so a `summary_only` memory shown to a non-owner returns a
+  projection chunk, so a summary-level memory shown to a non-owner returns a
   null snippet (content redaction is preserved).
 - The projection is derived index data, kept fresh by a best-effort,
   SAVEPOINT-isolated reindex inside `acceptAndApply` (a projection failure never
@@ -227,7 +228,7 @@ retrieval maintenance and uses the Memory read boundary:
   scheduler.
 - `canReadMemory` plus summary-only redaction.
 - Project membership filtering through `accessibleProjectIds`.
-- `highly_restricted`, `system`, and `public_template` rows are excluded.
+- `highly_restricted`, `system`, and published snapshot rows are excluded.
 - Only final finding rows are logged to `memory_access_logs` with
   `access_type = maintenance_scan`; filtered candidates are never logged or
   counted. Non-persistent scans still write this read log.
@@ -253,9 +254,9 @@ no-edit update.
 - Supported `digest_type` values: `policy_bundle`, `workspace`, `agent`.
 - Digest content is rendered from active `MemoryEntry` + active `Policy` rows only. Unapproved proposal content is never included.
 - Workspace/agent memory digests are shared derived caches, so they include only cache-safe shared memory:
-  workspace digests may include `space_shared` and `workspace_shared` memory for that workspace;
+  workspace digests may include `space_shared` and workspace-scoped `space_shared` memory for that workspace;
   agent digests may include `space_shared` memory for that agent. User-specific or per-user gated
-  content (`private`, `restricted`, `selected_users`, `summary_only`, and `highly_restricted`) remains
+  content (`private`, `selected_users`, summary-level disclosure, and `highly_restricted` sensitivity) remains
   on the per-run retriever path.
 - `ContextDigestService` generates/versions digests deterministically (no LLM required).
 - Source hash versioning: if source IDs + version signals are unchanged, the existing digest is reused. If sources changed, old digest is marked `superseded` and a new version is created.

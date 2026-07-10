@@ -7,6 +7,8 @@ import { PgSchedulerTaskStore, type SchedulerTaskRow } from "../../scheduler/tas
 import { computeNextRunAt, InvalidScheduleError } from "../../automations/schedule";
 import type { SourceConnectionRow, SourceItemRow, EvidenceRow } from "../sourceRepositoryRows";
 import { ITEM_COLUMNS, EVIDENCE_COLUMNS, connectionColumnsWithConnectorForAlias } from "../sourceRepositoryRows";
+import { inheritContentAccessGrants } from "../../access/contentAccessInheritance";
+import { contentReadSql } from "../../access/contentAccessSql";
 import {
   reindexExtractedEvidenceAndParentForRetrieval,
 } from "../retrievalIndexing";
@@ -1420,6 +1422,7 @@ export class PgSourcePostProcessingRepository {
     sourceConnectionId: string;
     inputConfig: SourcePostProcessingInputConfig;
     cursor: SourceWatermark | null;
+    viewerUserId: string;
     explicitItemIds?: string[];
     explicitEvidenceIds?: string[];
   }): Promise<SourcePostProcessingInputBatch> {
@@ -1430,7 +1433,7 @@ export class PgSourcePostProcessingRepository {
 
     if (input.inputConfig.window === "explicit") {
       items = itemIds.length
-        ? await this.findItemsByIds(input.spaceId, input.sourceConnectionId, itemIds)
+        ? await this.findItemsByIds(input.spaceId, input.sourceConnectionId, itemIds, input.viewerUserId)
         : [];
     } else {
       const result = await this.findItemsForWindow(input);
@@ -1439,9 +1442,9 @@ export class PgSourcePostProcessingRepository {
     }
 
     const evidence = evidenceIds.length
-      ? await this.findEvidenceByIds(input.spaceId, input.sourceConnectionId, evidenceIds)
+      ? await this.findEvidenceByIds(input.spaceId, input.sourceConnectionId, evidenceIds, input.viewerUserId)
       : input.inputConfig.include_evidence && items.length
-        ? await this.findEvidenceForItems(input.spaceId, items.map((item) => item.id))
+        ? await this.findEvidenceForItems(input.spaceId, items.map((item) => item.id), input.viewerUserId)
         : [];
 
     return {
@@ -1470,12 +1473,15 @@ export class PgSourcePostProcessingRepository {
          storage_ref, storage_path, mime_type, exportable, export_formats_json,
          canonical_format, preview, relevant_period_start, relevant_period_end,
          created_at, updated_at, metadata_json, visibility, owner_user_id,
-         trust_level, project_id, workspace_id
+         access_level, trust_level, project_id, workspace_id
        ) VALUES (
-         $1, $2, $3, NULL, $4, $5, $6,
+         $1, $2::varchar, $3::varchar, NULL, $4, $5, $6,
          NULL, NULL, 'text/markdown; charset=utf-8', true, $7::jsonb,
          'markdown', false, NULL, NULL,
-         $8, $8, $9::jsonb, 'space_shared', $10,
+         $8, $8, $9::jsonb,
+         COALESCE((SELECT visibility FROM runs WHERE space_id = $2::varchar AND id = $3::varchar), 'private'),
+         COALESCE((SELECT owner_user_id FROM runs WHERE space_id = $2::varchar AND id = $3::varchar), $10),
+         COALESCE((SELECT access_level FROM runs WHERE space_id = $2::varchar AND id = $3::varchar), 'full'),
          'medium', $11, NULL
        )`,
       [
@@ -1492,6 +1498,16 @@ export class PgSourcePostProcessingRepository {
         input.projectId,
       ],
     );
+    if (input.runId) {
+      await inheritContentAccessGrants(this.db, {
+        spaceId: input.spaceId,
+        sourceResourceType: "run",
+        sourceResourceId: input.runId,
+        targetResourceType: "artifact",
+        targetResourceId: id,
+        inheritedAt: now,
+      });
+    }
     return id;
   }
 
@@ -1510,23 +1526,28 @@ export class PgSourcePostProcessingRepository {
     const now = new Date().toISOString();
     await this.db.query(
       `INSERT INTO extracted_evidence (
-         id, space_id, source_item_id, extraction_job_id, source_snapshot_id,
+         id, space_id, owner_user_id, visibility, access_level,
+         source_item_id, extraction_job_id, source_snapshot_id,
          source_object_type, source_object_id, evidence_type, title,
          content_excerpt, content_hash, artifact_id, source_uri, source_title,
          source_author, occurred_at, trust_level, extraction_method, confidence,
          status, metadata_json, created_by_user_id, created_by_agent_id,
          created_by_run_id, created_at, updated_at
        ) VALUES (
-         $1, $2, $3, NULL, NULL,
-         $4, $5, 'summary', $6,
-         $7, $8, $9, $10, $11,
-         $12, $13::timestamptz, 'normal', 'source_post_processing', 0.7,
-         'candidate', $14::jsonb, $15, $16,
-         $17, $18, $18
+         $1, $2, $3, $4, $5,
+         $6, NULL, NULL,
+         $7, $8, 'summary', $9,
+         $10, $11, $12, $13, $14,
+         $15, $16::timestamptz, 'normal', 'source_post_processing', 0.7,
+         'candidate', $17::jsonb, $18, $19,
+         $20, $21, $21
        )`,
       [
         id,
         input.spaceId,
+        input.item.owner_user_id,
+        input.item.visibility,
+        input.item.access_level,
         input.item.id,
         input.item.source_object_type,
         input.item.source_object_id,
@@ -1545,6 +1566,16 @@ export class PgSourcePostProcessingRepository {
         now,
       ],
     );
+    if (input.item.visibility === "selected_users") {
+      await inheritContentAccessGrants(this.db, {
+        spaceId: input.spaceId,
+        sourceResourceType: "source_item",
+        sourceResourceId: input.item.id,
+        targetResourceType: "extracted_evidence",
+        targetResourceId: id,
+        inheritedAt: now,
+      });
+    }
     await reindexExtractedEvidenceAndParentForRetrieval(this.db, {
       spaceId: input.spaceId,
       evidenceId: id,
@@ -1861,8 +1892,11 @@ export class PgSourcePostProcessingRepository {
     sourceConnectionId: string;
     inputConfig: SourcePostProcessingInputConfig;
     cursor: SourceWatermark | null;
+    viewerUserId: string;
   }): Promise<{ items: SourceItemRow[]; cursorAfter: SourceWatermark | null }> {
     const { clauses, params } = itemWindowWhere(input);
+    params.push(input.viewerUserId);
+    clauses.push(contentReadSql("source_item", "source_items", `$${params.length}`));
     params.push(input.inputConfig.item_limit);
     const result = await this.db.query<SourceItemRow>(
       `SELECT ${ITEM_COLUMNS}
@@ -1883,6 +1917,7 @@ export class PgSourcePostProcessingRepository {
     spaceId: string,
     sourceConnectionId: string,
     itemIds: string[],
+    viewerUserId: string,
   ): Promise<SourceItemRow[]> {
     const result = await this.db.query<SourceItemRow>(
       `SELECT ${ITEM_COLUMNS}
@@ -1891,8 +1926,9 @@ export class PgSourcePostProcessingRepository {
           AND connection_id = $2
           AND id::text = ANY($3::text[])
           AND deleted_at IS NULL
+          AND ${contentReadSql("source_item", "source_items", "$4")}
         ORDER BY created_at ASC, id ASC`,
-      [spaceId, sourceConnectionId, itemIds],
+      [spaceId, sourceConnectionId, itemIds, viewerUserId],
     );
     if (result.rows.length !== itemIds.length) {
       throw new HttpError(404, "Post-processing input item not found in this source");
@@ -1904,6 +1940,7 @@ export class PgSourcePostProcessingRepository {
     spaceId: string,
     sourceConnectionId: string,
     evidenceIds: string[],
+    viewerUserId: string,
   ): Promise<EvidenceRow[]> {
     const result = await this.db.query<EvidenceRow>(
       `SELECT ${EVIDENCE_COLUMNS}
@@ -1915,8 +1952,10 @@ export class PgSourcePostProcessingRepository {
           AND ee.id::text = ANY($2::text[])
           AND ee.deleted_at IS NULL
           AND (ii.connection_id = $3 OR ee.source_item_id IS NULL)
+          AND ${contentReadSql("extracted_evidence", "ee", "$4")}
+          AND (ii.id IS NULL OR ${contentReadSql("source_item", "ii", "$4")})
         ORDER BY ee.created_at ASC, ee.id ASC`,
-      [spaceId, evidenceIds, sourceConnectionId],
+      [spaceId, evidenceIds, sourceConnectionId, viewerUserId],
     );
     if (result.rows.length !== evidenceIds.length) {
       throw new HttpError(404, "Post-processing input evidence not found in this source");
@@ -1924,15 +1963,16 @@ export class PgSourcePostProcessingRepository {
     return result.rows;
   }
 
-  private async findEvidenceForItems(spaceId: string, itemIds: string[]): Promise<EvidenceRow[]> {
+  private async findEvidenceForItems(spaceId: string, itemIds: string[], viewerUserId: string): Promise<EvidenceRow[]> {
     const result = await this.db.query<EvidenceRow>(
       `SELECT ${EVIDENCE_COLUMNS}
          FROM extracted_evidence
         WHERE space_id = $1
           AND source_item_id::text = ANY($2::text[])
           AND deleted_at IS NULL
+          AND ${contentReadSql("extracted_evidence", "extracted_evidence", "$3")}
         ORDER BY created_at ASC, id ASC`,
-      [spaceId, itemIds],
+      [spaceId, itemIds, viewerUserId],
     );
     return result.rows;
   }

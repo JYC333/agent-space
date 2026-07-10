@@ -19,8 +19,24 @@ class FakeDb implements Queryable {
     params: readonly unknown[] = [],
   ): Promise<{ rows: Row[]; rowCount: number | null }> {
     const table = tableOf(sql);
-    const rows = filterRows(table, this.rowsByTable[table] ?? [], params) as Row[];
-    return { rows, rowCount: rows.length };
+    let rows = filterRows(table, this.rowsByTable[table] ?? [], params);
+    if (table === "memory_entries") {
+      const userId = String(params[1] ?? "");
+      const projects = this.rowsByTable.projects ?? [];
+      const projectMembers = this.rowsByTable.project_members ?? [];
+      rows = rows.filter((row) => {
+        const basicVisible = row.owner_user_id === userId || row.visibility === "space_shared";
+        if (!basicVisible) return false;
+        if (!row.project_id) return true;
+        const project = projects.find((candidate) => candidate.id === row.project_id);
+        return project?.owner_user_id === userId || projectMembers.some((member) =>
+          member.project_id === row.project_id
+          && member.user_id === userId
+          && member.status === "active"
+        );
+      });
+    }
+    return { rows: rows as Row[], rowCount: rows.length };
   }
 }
 
@@ -29,15 +45,15 @@ function tableOf(sql: string): string {
   if (sql.includes("FROM memory_entries")) return "memory_entries";
   if (sql.includes("FROM provenance_links")) return "provenance_links";
   if (sql.includes("FROM source_connections")) return "source_connections";
+  if (sql.includes("FROM knowledge_items ki")) return "knowledge_items";
+  if (sql.includes("FROM activity_records ar")) return "activity_records";
   if (sql.includes("FROM space_memberships")) return "space_memberships";
   if (sql.includes("FROM settings")) return "settings";
   if (sql.includes("FROM spaces")) return "spaces";
   if (sql.includes("FROM project_public_summaries")) return "project_public_summaries";
   if (sql.includes("FROM projects")) return "projects";
   if (sql.includes("FROM project_members")) return "project_members";
-  if (sql.includes("FROM knowledge_items")) return "knowledge_items";
   if (sql.includes("FROM sources")) return "sources";
-  if (sql.includes("FROM activity_records")) return "activity_records";
   return "unknown";
 }
 
@@ -79,7 +95,7 @@ function memoryRow(over: Record<string, unknown>): Record<string, unknown> {
     status: "active",
     visibility: "private",
     sensitivity_level: "normal",
-    selected_user_ids: null,
+    access_level: "full",
     deleted_at: null,
     importance: 0.9,
     confidence: 0.9,
@@ -215,14 +231,13 @@ describe("ChatContextCandidateCollector", () => {
         memoryRow({ id: "mine", owner_user_id: "user-1" }),
         // Private memory owned by another user — must be filtered out.
         memoryRow({ id: "theirs", owner_user_id: "user-2", subject_user_id: "user-2" }),
-        // Owner-only restricted memory of another user (the multi-member-space
-        // personal tier) — also filtered out.
+        // Another private memory remains filtered out.
         memoryRow({
-          id: "theirs-restricted",
+          id: "theirs-private-2",
           owner_user_id: "user-2",
           subject_user_id: "user-2",
-          visibility: "restricted",
-          selected_user_ids: null,
+          visibility: "private",
+          access_level: "full",
         }),
       ],
     });

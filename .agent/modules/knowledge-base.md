@@ -253,32 +253,40 @@ block the MVP persistence/API slice.
 
 These proposal types are supported by `ProposalApplyService`. They remain review-gated and are not direct-write API operations.
 
-`knowledge_create` sets `owner_user_id` to the proposal creator for the MVP. The API does not expose selected owner/user assignment yet, so one user cannot create private or restricted Knowledge owned by another user.
+`knowledge_create` sets `owner_user_id` to the proposal creator. Ownership cannot be assigned to another user through the Knowledge API; sharing is managed through the content-access API.
 
 Proposal creation is viewer-aware, and proposal apply performs defense-in-depth
 authorization again. Malformed, internally seeded, or future system-created
 proposals cannot update, archive, relate, or archive relations involving another
-user's private or restricted Knowledge. Agent/run provenance is not treated as
-human ownership authority for private or restricted Knowledge in the MVP.
+user's private or selected-user Knowledge without canonical access. Agent/run
+provenance is not treated as human ownership authority.
 
 ## Read Visibility
 
 Knowledge reads are viewer-aware:
 
 - `space_shared` is readable by any authenticated member of the current space.
-- `workspace_shared` is readable by any authenticated member of the current space for now. Workspace-role narrowing is future work.
-- `private` is readable only by `owner_user_id`, or by `created_by_user_id` when no owner is set.
-- `restricted` follows the same owner-only MVP rule as `private`.
+- workspace-scoped `space_shared` is readable by any authenticated member of the current space for now. Workspace-role narrowing is future work.
+- `private` has owner base access and never consults grants; private content
+  cannot omit its owner.
+- `selected_users` requires an active grant in `content_access_grants` for an
+  ordinary non-owner reader.
+- An active owner/admin may receive the Space's immutable read-only oversight
+  level over otherwise-hidden rows. Oversight does not grant Knowledge mutation,
+  relation-apply, publication, proposal-approval, or access-policy authority.
+- `space_shared` grants may upgrade a named reader's summary disclosure to full;
+  a `selected_users` grant's level is authoritative for that reader.
 
-Private or restricted rows with neither `owner_user_id` nor `created_by_user_id` fail closed for normal reads. Unauthorized reads return 404 and must not reveal existence.
+Private or selected-user rows require `owner_user_id`. Unauthorized reads
+return 404 and must not reveal existence.
 
 `GET /api/v1/knowledge/items` returns summary rows with `content_preview`; `GET /api/v1/knowledge/items/{id}` returns full content.
 
 Relation reads first require the requested item to be visible to the viewer, then omit any relation where either endpoint is not visible to the viewer.
 
-Relation apply uses the same endpoint visibility authority: private or restricted
-endpoints can only be used by their owner/creator, while shared endpoints remain
-collaborative within the current space.
+Relation apply uses the same endpoint visibility authority: private endpoints
+require their owner, selected-user endpoints require an active grant, and shared
+endpoints remain collaborative within the current scope.
 
 ## Source Monitoring
 
@@ -456,7 +464,7 @@ not replaced by Source.
   `card_review_states` are nullable — a state row can be created before first review.
 - Durable Knowledge writes go through proposals.
 - Agent-generated Knowledge never directly becomes active.
-- Private and restricted Knowledge reads are owner-only for the MVP.
+- Private Knowledge reads are owner-only; selected-user reads require grants.
 - Knowledge does not automatically enter Memory or ContextBuilder.
 - Knowledge promotion into Memory is a future explicit proposal flow.
 - Activity, Run, and Artifact are raw/source inputs, not active Knowledge.

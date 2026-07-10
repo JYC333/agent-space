@@ -98,6 +98,7 @@ export class ProviderSynthesizer implements Synthesizer {
         max_tokens: DEFAULT_SYNTHESIS_MAX_TOKENS,
         task: RETRIEVAL_SYNTHESIS_TASK,
         egressPolicy: effectivePolicy,
+        metering: { subject_user_id: viewerUserId },
       });
     } catch {
       return null;

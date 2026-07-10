@@ -19,8 +19,8 @@
     "test:watch": "vitest",
     "migrate": "npm run build && node dist/db/migrateCli.js up",
     "migrate:status": "npm run build && node dist/db/migrateCli.js status",
-    "schema:generate": "drizzle-kit generate --config=drizzle.config.ts && node scripts/db/schema-sync.mjs copy",
-    "schema:check": "node scripts/db/drizzle-schema-check.mjs && drizzle-kit check --config=drizzle.config.ts && node scripts/db/schema-sync.mjs check"
+    "schema:generate": "node scripts/db/schema-baseline.mjs generate",
+    "schema:check": "node scripts/db/schema-baseline.mjs check && drizzle-kit check --config=drizzle.config.ts"
   },
   "dependencies": {
     "@agent-space/protocol": "file:../packages/protocol",

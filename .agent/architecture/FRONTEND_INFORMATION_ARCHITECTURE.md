@@ -171,6 +171,7 @@ not be navigable.
 | Runs | Enabled | Functional |
 | Proposals | Enabled | Functional |
 | Artifacts | Enabled | Functional |
+| Shared Content | Enabled | Space-scoped targeted publication inbox/outbox at `/publications`; import creates an independent private copy. |
 | Memory | Enabled | Functional |
 | Context Preview | Enabled | Developer tool |
 | Job Queue | Enabled | Infrastructure debug tool |
@@ -182,6 +183,7 @@ not be navigable.
 | Capabilities | Enabled | Capability/skill control-plane; developer-heavy but user-visible for review |
 | Prompt Library | Enabled | Space-admin prompt control plane at `/prompts`; lists prompt assets and versions, previews/evaluates immutable prompt versions, manages staging/production deployment refs, supports proposal-backed production promotion and rollback, and shows distinct prompt sets plus read-only workflow/capability usage context for auto research assets |
 | Providers | Enabled | Functional; provider cards and create/edit forms show capability labels for Chat, Embeddings, and Native rerank, and creation is split into chat-provider, embedding-provider, and rerank-provider flows so retrieval-only providers are not confused with ordinary chat providers |
+| Token Usage | Enabled | Reached from personal Settings (`/settings` → Usage card) at `/usage`, visible to every active member — not a primary rail destination, since it is a lower-frequency review surface and Space Settings is admin-gated and would hide it from ordinary members. Defaults to `Mine` and supports `Shared in space` and `All visible`; all server aggregations are permission-filtered before grouping. The dashboard shows model token usage, estimated cost, accuracy, platform attribution, sessions, dimensions, read-only budget preview, and private local CLI history imports without exposing prompt or completion content. |
 | Runtime (CLI Adapters) | Enabled | Functional |
 | Agent Rooms | Enabled | Space-scoped room surface at `/agent-groups`; starts on create/list, then opens a chat-style room with conversation history and a Tiptap composer. Creating a room only creates the room and members; goal is optional room metadata that can be added or edited later. The first user message creates the room/root run, with the room goal passed as background instruction only when present rather than inserted as a synthetic chat message. User messages go to the manager agent by default when no structured mention is present. Structured `@agent` mention tokens are parsed into a visible route preview before send: one mention routes that segment directly to that agent, adjacent mentions fan out the same segment in parallel, and separated mention groups create segmented recipient prompts. The user can explicitly switch the turn to Agent coordination, which routes the full message to the manager for decomposition/delegation instead of directly fanning out. Room members are the automatic `agent.delegate` target pool for every active room agent, not only the manager; `agent.wait_for_results` lets any room agent wait for sibling/delegated same-room results when its answer depends on them. Member capability snapshots are included in room tool context. Chat history treats recipient/delegating agent `agent_message` rows as the main conversation and folds child-agent delegation details by user turn by default; advanced lifecycle controls, trace/run links, and policy records live behind room settings / advanced audit rather than the chat first screen. |
 | **Home** (user-scoped) | Enabled | Cross-space command center at `/home`; **not** a Space, not in the switcher |
@@ -292,15 +294,30 @@ These are improvements to collect from real use, not pre-conditions for dogfoodi
 
 ## 7. Backend Security Boundaries the Frontend Must Respect
 
+### Space oversight and disclosure upgrades
+
+The create-Space form exposes the immutable `none` / `summary` / `content` /
+`full` oversight choice with plain-language descriptions and an explicit
+"cannot be changed" notice. Space Settings displays the chosen mode read-only.
+The mode is included in every member's Space DTO, not hidden behind an admin
+surface. When editing a private or `selected_users` content policy in a Space
+whose mode is not `none`, `ContentAccessControl` keeps a persistent oversight
+hint visible. For `space_shared` content at summary level, the same control
+offers a member picker for per-user `full` disclosure upgrades; it does not
+offer grants at full base level because grants never narrow disclosure.
+
 | Backend rule | Frontend implication |
 |---|---|
 | All data routes require `get_identity` | Every data call inside `RequireAuth`; 401 event dispatched by `client.ts` |
 | Sessions are user-owned within a space; cross-space access → 404 | Sessions detail must treat 404 as "not accessible" |
-| Task visibility: private/restricted tasks return 404 on direct access | Task detail shows "not accessible" empty state |
+| Task visibility: private or ungranted selected-user tasks return 404 on direct access | Task detail shows "not accessible" empty state |
 | Board task list is filtered by visibility | Board view should indicate filtered content is possible |
 | Activity process/consolidate enforces visibility | Same 404 handling in Activity detail |
 | Proposals: accept/reject → 422 for unsupported types | Proposals page distinguishes unsupported-type errors |
 | Egress approval is a cross-space exception | Handled by `EgressReviewNotice` component |
+| Publications expose immutable target snapshots, never live source reads | Shared Content previews the snapshot and opens only imported copies |
+| Space oversight is read-only, creation-time immutable, and transparent to every member | Creation form explains the four modes; Space Settings is read-only; private/selected policies show the active oversight hint |
+| `space_shared` grants can widen disclosure from summary to full | Content access editor labels the picker as a disclosure upgrade and sends its per-member grant levels |
 | Raw activity is not memory — it is input awaiting processing | Labels reflect this: Activity Inbox = captured input |
 
 ---

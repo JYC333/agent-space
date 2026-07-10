@@ -7,6 +7,32 @@
 -- Regenerate when these tables' columns/constraints change: see
 -- server/test/integration/README or runsIntegration.test.ts.
 
+CREATE TABLE public.space_memberships (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    user_id character varying(36) NOT NULL,
+    role character varying(32) NOT NULL,
+    status character varying(32) NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT space_memberships_pkey PRIMARY KEY (id),
+    CONSTRAINT uq_space_memberships_space_user UNIQUE (space_id, user_id)
+);
+
+CREATE TABLE public.content_access_grants (
+    id character varying(36) NOT NULL,
+    resource_type character varying(64) NOT NULL,
+    resource_id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    grantee_user_id character varying(36) NOT NULL,
+    granted_by_user_id character varying(36) NOT NULL,
+    access_level character varying(16) DEFAULT 'full'::character varying NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    revoked_at timestamp with time zone,
+    revoked_by_user_id character varying(36),
+    CONSTRAINT content_access_grants_pkey PRIMARY KEY (id)
+);
+
 
 CREATE TABLE public.actors (
     id character varying(36) NOT NULL,
@@ -99,6 +125,7 @@ CREATE TABLE public.agents (
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     visibility character varying(32) NOT NULL,
+    access_level character varying(16) DEFAULT 'full'::character varying NOT NULL,
     CONSTRAINT ck_agents_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'inactive'::character varying, 'archived'::character varying, 'disabled'::character varying])::text[])))
 );
 
@@ -405,6 +432,8 @@ CREATE TABLE public.runs (
     estimated_cost double precision,
     exit_code integer,
     visibility character varying(32) DEFAULT 'space_shared'::character varying NOT NULL,
+    access_level character varying(16) DEFAULT 'full'::character varying NOT NULL,
+    owner_user_id character varying(36),
     has_personal_grant_context boolean DEFAULT false NOT NULL,
     personal_grant_context_json jsonb,
     source character varying(32),

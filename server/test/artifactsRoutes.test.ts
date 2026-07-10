@@ -43,6 +43,7 @@ function artifact(overrides: Partial<ArtifactOut> = {}): ArtifactOut {
     metadata_json: null,
     has_inline_content: true,
     visibility: "space_shared",
+    access_level: "full",
     owner_user_id: null,
     content: null,
     created_at: "2026-06-16T10:00:00.000Z",
@@ -135,21 +136,18 @@ describe("artifact routes", () => {
     expect(calls).toEqual([{ workspaceId: "ws-1" }]);
   });
 
-  it("requires a matching workspace parameter for workspace_shared artifacts", async () => {
+  it("uses canonical access for workspace-scoped shared artifacts", async () => {
     const calls: Array<{ sql: string; params: readonly unknown[] }> = [];
     const row = artifact({
       id: "workspace-artifact",
-      visibility: "workspace_shared",
+      visibility: "space_shared",
       owner_user_id: "other-user",
       workspace_id: "ws-1",
     });
     const fakeDb = {
       async query(sql: string, params: readonly unknown[] = []) {
         calls.push({ sql, params });
-        return {
-          rows: params[3] === "ws-1" ? [row] : [],
-          rowCount: params[3] === "ws-1" ? 1 : 0,
-        };
+        return { rows: [row], rowCount: 1 };
       },
     };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -158,16 +156,14 @@ describe("artifact routes", () => {
       sandboxRoot: "/tmp/artifacts/sandbox",
     });
 
-    await expect(repo.getVisible("space-1", "user-1", "workspace-artifact", false)).resolves.toBeNull();
-    await expect(repo.getVisible("space-1", "user-1", "workspace-artifact", false, "ws-2")).resolves.toBeNull();
-    await expect(repo.getVisible("space-1", "user-1", "workspace-artifact", false, "ws-1")).resolves.toMatchObject({
+    await expect(repo.getVisible("space-1", "user-1", "workspace-artifact", false)).resolves.toMatchObject({
       id: "workspace-artifact",
-      visibility: "workspace_shared",
+      visibility: "space_shared",
       workspace_id: "ws-1",
     });
     const lastCall = calls[calls.length - 1];
-    expect(lastCall?.sql).toContain("visibility = 'workspace_shared'");
-    expect(lastCall?.sql).toContain("workspace_id = $4");
+    expect(lastCall?.sql).toContain("visibility = 'space_shared'");
+    expect(lastCall?.sql).toContain("content_access_grants");
     expect(lastCall?.sql).toContain("project_workspaces");
     expect(lastCall?.sql).toContain("project_members");
   });

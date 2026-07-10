@@ -98,8 +98,10 @@ Required pattern:
 - Schema authoring is owned by Drizzle definitions under `server/src/db/schema/`.
   `server/drizzle/` stores Drizzle's generated snapshot/migration metadata, and
   `server/migrations/` stores the generated SQL artifacts that the server
-  migration runner applies. Do not hand-edit `server/migrations/*.sql` for
-  schema changes; edit the Drizzle schema and run `npm run schema:generate`.
+  migration runner applies. During the consolidated-baseline phase, generated
+  SQL is merged into `server/migrations/0001_baseline.sql` rather than leaving
+  a new `0002_*` file. Do not hand-edit migration SQL for schema changes; edit
+  the Drizzle schema and run `npm run schema:generate`.
   `ops/scripts/start.sh` also runs `npm run schema:generate` from `server/`
   before building the server image or applying migrations, so startup keeps the
   generated artifacts in sync with TypeScript schema files.
@@ -284,27 +286,27 @@ changes.
   git**: the snapshots are the state `generate` diffs against on every
   machine/CI run, not disposable build output.
 - `server/scripts/db/schema-sync.mjs` bridges generated SQL into the applied
-  migration directory. Every non-bootstrap journal entry in
-  `server/drizzle/meta/_journal.json` must have exactly one content-matching
-  copy under `server/migrations/`, and migration version prefixes must be
-  unique.
+  migration directory. During the consolidated-baseline phase, every
+  non-bootstrap journal entry in `server/drizzle/meta/_journal.json` must have
+  a content-matching body inside `server/migrations/0001_baseline.sql`, and
+  migration version prefixes must be unique.
 
 **Changing a table:**
 1. Edit the relevant file under `src/db/schema/`.
 2. `npm run schema:generate` (from `server/`) — runs `drizzle-kit generate`,
-   then copies the new file from `server/drizzle/` into
-   `server/migrations/` under the next sequential 4-digit prefix (drizzle's
-   own internal numbering starts at 0000 and would collide with
-   `0001_baseline`'s tracked version, so it's never used directly).
+   then merges the generated SQL from `server/drizzle/` into
+   `server/migrations/0001_baseline.sql`. Drizzle's own internal numbering
+   starts at 0000 and is never used directly by the runtime migrator.
    `ops/scripts/start.sh` runs this automatically before image build and
    migration; run it manually when you want to review generated files before
    starting the stack.
-3. Review the generated SQL artifact like any other migration. Do not hand-edit
-   it for ordinary schema changes; fix the Drizzle schema and regenerate.
+3. Review the generated SQL now consolidated into `0001_baseline.sql`. Do not
+   hand-edit it for ordinary schema changes; fix the Drizzle schema and
+   regenerate.
 4. `npm run schema:check` (CI-safe, no database needed) fails if schema TS
    was edited without regenerating, or if a drizzle-generated migration
-   wasn't copied into `server/migrations/`. It also fails on duplicate
-   migration version prefixes.
+   wasn't merged into `server/migrations/0001_baseline.sql`. It also fails on
+   duplicate migration version prefixes.
 
 **Narrow custom-SQL boundary:**
 Some PostgreSQL primitives are not expressible in the Drizzle DSL here:
@@ -315,8 +317,8 @@ table-structure SQL. They must not change table structure that
 `src/db/schema/` describes unless the schema files are updated in the same
 change. `schema:check` is file-based: it compares `src/db/schema/**` against
 committed `server/drizzle/meta/` snapshots and checks generated migrations
-were copied into `server/migrations/`. It does not inspect a live database
-or re-read custom SQL migrations for structural drift.
+were merged into `server/migrations/0001_baseline.sql`. It does not inspect a
+live database or re-read custom SQL migrations for structural drift.
 
 **Schema representation notes:**
 - The `retrieval_object_type` Postgres DOMAIN (a closed enum used by ~10

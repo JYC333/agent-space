@@ -296,6 +296,7 @@ export function registerProviderCommandRoutes(
           model: firstModelMatching(target.provider, looksLikeEmbeddingModel),
           inputs: ["agent-space retrieval provider connection test"],
           inputType: "document",
+          metering: { subject_user_id: identity.userId },
         });
         const rerank = scope === "embedding" ? null : await completeProviderRerank(store, identity.spaceId, {
           provider_id: target.provider.id,
@@ -303,6 +304,7 @@ export function registerProviderCommandRoutes(
           documents: ["retrieval provider test document", "unrelated document"],
           topN: 1,
           model: firstModelMatching(target.provider, looksLikeRerankModel) ?? defaultRerankModelForProvider(target.provider.provider_type),
+          metering: { subject_user_id: identity.userId },
         });
         const success = (embedding ? embedding.vectors.length > 0 : true) && (rerank ? rerank.scores.length > 0 : true);
         const message = scope === "embedding"
@@ -325,6 +327,7 @@ export function registerProviderCommandRoutes(
         model,
         messages: [{ role: "user", content: "Hi" }],
         max_tokens: 5,
+        metering: { subject_user_id: identity.userId },
       });
       return reply.send({
         success: true,
@@ -485,7 +488,10 @@ export function registerProviderCommandRoutes(
         jsonBody(request),
       );
       return reply.send(
-        await completeProviderChat(resolveProviderCommandStore(config), identity.spaceId, body),
+        await completeProviderChat(resolveProviderCommandStore(config), identity.spaceId, {
+          ...body,
+          metering: { subject_user_id: identity.userId },
+        }),
       );
     } catch (error) {
       if (error instanceof ProviderInvocationError) {
@@ -713,6 +719,12 @@ export function registerProviderCommandRoutes(
         user: string;
         max_tokens?: number;
         task?: string | null;
+        subject_user_id?: string | null;
+        source_resource_type?: string | null;
+        source_resource_id?: string | null;
+        space_system_task?: boolean;
+        meter_subject_type?: string | null;
+        meter_subject_id?: string | null;
       }>("ProviderCompletionInternalRequestSchema", jsonBody(request));
       return reply.send(
         await completeProviderText(resolveProviderCommandStore(config), body.space_id, {
@@ -722,6 +734,14 @@ export function registerProviderCommandRoutes(
           user: body.user,
           max_tokens: body.max_tokens,
           task: body.task,
+          metering: {
+            subject_user_id: body.subject_user_id,
+            source_resource_type: body.source_resource_type,
+            source_resource_id: body.source_resource_id,
+            space_system_task: body.space_system_task,
+            meter_subject_type: body.meter_subject_type,
+            meter_subject_id: body.meter_subject_id,
+          },
         }),
       );
     } catch (error) {

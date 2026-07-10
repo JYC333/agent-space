@@ -1,5 +1,5 @@
 {
-  "id": "65365f62-9909-4569-ba9f-9f981217b2fe",
+  "id": "88e2f077-566a-4dff-8d77-7857550e12dd",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -354,6 +354,13 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'space_shared'"
+        },
+        "access_level": {
+          "name": "access_level",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'full'"
         },
         "owner_user_id": {
           "name": "owner_user_id",
@@ -759,6 +766,18 @@
         "ck_activity_records_status": {
           "name": "ck_activity_records_status",
           "value": "(status)::text = ANY (ARRAY[('raw'::character varying)::text, ('processed'::character varying)::text, ('proposals_generated'::character varying)::text, ('failed'::character varying)::text, ('archived'::character varying)::text])"
+        },
+        "ck_activity_records_visibility": {
+          "name": "ck_activity_records_visibility",
+          "value": "visibility IN ('private', 'space_shared', 'selected_users')"
+        },
+        "ck_activity_records_access_level": {
+          "name": "ck_activity_records_access_level",
+          "value": "access_level IN ('full', 'summary')"
+        },
+        "ck_activity_records_private_owner": {
+          "name": "ck_activity_records_private_owner",
+          "value": "visibility = 'space_shared' OR owner_user_id IS NOT NULL"
         }
       },
       "isRLSEnabled": false
@@ -2920,6 +2939,13 @@
           "type": "varchar(32)",
           "primaryKey": false,
           "notNull": true
+        },
+        "access_level": {
+          "name": "access_level",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'full'"
         }
       },
       "indexes": {
@@ -3108,6 +3134,18 @@
         "ck_agents_status": {
           "name": "ck_agents_status",
           "value": "(status)::text = ANY (ARRAY[('active'::character varying)::text, ('inactive'::character varying)::text, ('archived'::character varying)::text, ('disabled'::character varying)::text])"
+        },
+        "ck_agents_visibility": {
+          "name": "ck_agents_visibility",
+          "value": "visibility IN ('private', 'space_shared', 'selected_users')"
+        },
+        "ck_agents_access_level": {
+          "name": "ck_agents_access_level",
+          "value": "access_level IN ('full', 'summary')"
+        },
+        "ck_agents_private_owner": {
+          "name": "ck_agents_private_owner",
+          "value": "visibility = 'space_shared' OR owner_user_id IS NOT NULL"
         }
       },
       "isRLSEnabled": false
@@ -3715,6 +3753,13 @@
           "notNull": true,
           "default": "'space_shared'"
         },
+        "access_level": {
+          "name": "access_level",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'full'"
+        },
         "owner_user_id": {
           "name": "owner_user_id",
           "type": "varchar(36)",
@@ -3943,9 +3988,17 @@
           "name": "ck_artifacts_trust_level",
           "value": "(trust_level IS NULL) OR ((trust_level)::text = ANY (ARRAY[('high'::character varying)::text, ('medium'::character varying)::text, ('low'::character varying)::text, ('unknown'::character varying)::text]))"
         },
-        "ck_artifacts_workspace_shared_workspace": {
-          "name": "ck_artifacts_workspace_shared_workspace",
-          "value": "((visibility)::text <> 'workspace_shared'::text) OR (workspace_id IS NOT NULL)"
+        "ck_artifacts_visibility": {
+          "name": "ck_artifacts_visibility",
+          "value": "visibility IN ('private', 'space_shared', 'selected_users')"
+        },
+        "ck_artifacts_access_level": {
+          "name": "ck_artifacts_access_level",
+          "value": "access_level IN ('full', 'summary')"
+        },
+        "ck_artifacts_private_owner": {
+          "name": "ck_artifacts_private_owner",
+          "value": "visibility = 'space_shared' OR owner_user_id IS NOT NULL"
         }
       },
       "isRLSEnabled": false
@@ -8463,6 +8516,214 @@
       },
       "isRLSEnabled": false
     },
+    "public.content_access_grants": {
+      "name": "content_access_grants",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar(36)",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "space_id": {
+          "name": "space_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "resource_type": {
+          "name": "resource_type",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "resource_id": {
+          "name": "resource_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "grantee_user_id": {
+          "name": "grantee_user_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "granted_by_user_id": {
+          "name": "granted_by_user_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "access_level": {
+          "name": "access_level",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'full'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "revoked_at": {
+          "name": "revoked_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "revoked_by_user_id": {
+          "name": "revoked_by_user_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "ix_content_access_grants_grantee": {
+          "name": "ix_content_access_grants_grantee",
+          "columns": [
+            {
+              "expression": "space_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "grantee_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "revoked_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ix_content_access_grants_resource": {
+          "name": "ix_content_access_grants_resource",
+          "columns": [
+            {
+              "expression": "space_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "resource_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "resource_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "content_access_grants_space_id_fkey": {
+          "name": "content_access_grants_space_id_fkey",
+          "tableFrom": "content_access_grants",
+          "tableTo": "spaces",
+          "columnsFrom": [
+            "space_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "content_access_grants_grantee_membership_fkey": {
+          "name": "content_access_grants_grantee_membership_fkey",
+          "tableFrom": "content_access_grants",
+          "tableTo": "space_memberships",
+          "columnsFrom": [
+            "space_id",
+            "grantee_user_id"
+          ],
+          "columnsTo": [
+            "space_id",
+            "user_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "content_access_grants_grantor_membership_fkey": {
+          "name": "content_access_grants_grantor_membership_fkey",
+          "tableFrom": "content_access_grants",
+          "tableTo": "space_memberships",
+          "columnsFrom": [
+            "space_id",
+            "granted_by_user_id"
+          ],
+          "columnsTo": [
+            "space_id",
+            "user_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "content_access_grants_revoked_by_user_id_fkey": {
+          "name": "content_access_grants_revoked_by_user_id_fkey",
+          "tableFrom": "content_access_grants",
+          "tableTo": "users",
+          "columnsFrom": [
+            "revoked_by_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "uq_content_access_grants_resource_grantee": {
+          "name": "uq_content_access_grants_resource_grantee",
+          "nullsNotDistinct": false,
+          "columns": [
+            "space_id",
+            "resource_type",
+            "resource_id",
+            "grantee_user_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "ck_content_access_grants_access_level": {
+          "name": "ck_content_access_grants_access_level",
+          "value": "access_level IN ('full', 'summary')"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.evolution_experiences": {
       "name": "evolution_experiences",
       "schema": "",
@@ -12573,6 +12834,26 @@
           "primaryKey": false,
           "notNull": true
         },
+        "owner_user_id": {
+          "name": "owner_user_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "visibility": {
+          "name": "visibility",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'private'"
+        },
+        "access_level": {
+          "name": "access_level",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'full'"
+        },
         "source_item_id": {
           "name": "source_item_id",
           "type": "varchar(36)",
@@ -12860,6 +13141,21 @@
           "method": "btree",
           "with": {}
         },
+        "ix_extracted_evidence_owner_user_id": {
+          "name": "ix_extracted_evidence_owner_user_id",
+          "columns": [
+            {
+              "expression": "owner_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "ix_extracted_evidence_source_item_id": {
           "name": "ix_extracted_evidence_source_item_id",
           "columns": [
@@ -13012,6 +13308,21 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "ix_extracted_evidence_visibility": {
+          "name": "ix_extracted_evidence_visibility",
+          "columns": [
+            {
+              "expression": "visibility",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -13080,6 +13391,19 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
+        "extracted_evidence_owner_user_id_fkey": {
+          "name": "extracted_evidence_owner_user_id_fkey",
+          "tableFrom": "extracted_evidence",
+          "tableTo": "users",
+          "columnsFrom": [
+            "owner_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
         "extracted_evidence_source_item_id_fkey": {
           "name": "extracted_evidence_source_item_id_fkey",
           "tableFrom": "extracted_evidence",
@@ -13135,6 +13459,18 @@
         "ck_extracted_evidence_trust_level": {
           "name": "ck_extracted_evidence_trust_level",
           "value": "(trust_level)::text = ANY (ARRAY[('trusted'::character varying)::text, ('normal'::character varying)::text, ('untrusted'::character varying)::text])"
+        },
+        "ck_extracted_evidence_visibility": {
+          "name": "ck_extracted_evidence_visibility",
+          "value": "visibility IN ('private', 'space_shared', 'selected_users')"
+        },
+        "ck_extracted_evidence_access_level": {
+          "name": "ck_extracted_evidence_access_level",
+          "value": "access_level IN ('full', 'summary')"
+        },
+        "ck_extracted_evidence_private_owner": {
+          "name": "ck_extracted_evidence_private_owner",
+          "value": "visibility = 'space_shared' OR owner_user_id IS NOT NULL"
         }
       },
       "isRLSEnabled": false
@@ -14164,6 +14500,7 @@
         "from_object_type": {
           "name": "from_object_type",
           "type": "retrieval_object_type",
+          "typeSchema": "public",
           "primaryKey": false,
           "notNull": true
         },
@@ -14176,6 +14513,7 @@
         "to_object_type": {
           "name": "to_object_type",
           "type": "retrieval_object_type",
+          "typeSchema": "public",
           "primaryKey": false,
           "notNull": true
         },
@@ -15156,6 +15494,7 @@
         "endpoint_object_type": {
           "name": "endpoint_object_type",
           "type": "retrieval_object_type",
+          "typeSchema": "public",
           "primaryKey": false,
           "notNull": true
         },
@@ -15349,6 +15688,7 @@
         "base_object_type": {
           "name": "base_object_type",
           "type": "retrieval_object_type",
+          "typeSchema": "public",
           "primaryKey": false,
           "notNull": true
         },
@@ -15636,6 +15976,13 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'space_shared'"
+        },
+        "access_level": {
+          "name": "access_level",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'full'"
         },
         "owner_user_id": {
           "name": "owner_user_id",
@@ -15950,7 +16297,15 @@
         },
         "ck_space_objects_visibility": {
           "name": "ck_space_objects_visibility",
-          "value": "(visibility)::text = ANY (ARRAY[('private'::character varying)::text, ('space_shared'::character varying)::text, ('workspace_shared'::character varying)::text, ('restricted'::character varying)::text])"
+          "value": "visibility IN ('private', 'space_shared', 'selected_users')"
+        },
+        "ck_space_objects_access_level": {
+          "name": "ck_space_objects_access_level",
+          "value": "access_level IN ('full', 'summary')"
+        },
+        "ck_space_objects_private_owner": {
+          "name": "ck_space_objects_private_owner",
+          "value": "visibility = 'space_shared' OR owner_user_id IS NOT NULL"
         }
       },
       "isRLSEnabled": false
@@ -16262,12 +16617,6 @@
           "notNull": true,
           "default": "'normal'"
         },
-        "selected_user_ids": {
-          "name": "selected_user_ids",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
         "last_confirmed_at": {
           "name": "last_confirmed_at",
           "type": "timestamp with time zone",
@@ -16303,6 +16652,13 @@
           "type": "varchar(32)",
           "primaryKey": false,
           "notNull": true
+        },
+        "access_level": {
+          "name": "access_level",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'full'"
         },
         "confidence": {
           "name": "confidence",
@@ -16799,6 +17155,22 @@
         "ck_memory_entries_source_trust": {
           "name": "ck_memory_entries_source_trust",
           "value": "(source_trust IS NULL) OR ((source_trust)::text = ANY (ARRAY[('user_confirmed'::character varying)::text, ('internal_system'::character varying)::text, ('trusted_external'::character varying)::text, ('untrusted_external'::character varying)::text, ('agent_inferred'::character varying)::text]))"
+        },
+        "ck_memory_entries_visibility": {
+          "name": "ck_memory_entries_visibility",
+          "value": "visibility IN ('private', 'space_shared', 'selected_users')"
+        },
+        "ck_memory_entries_access_level": {
+          "name": "ck_memory_entries_access_level",
+          "value": "access_level IN ('full', 'summary')"
+        },
+        "ck_memory_entries_private_owner": {
+          "name": "ck_memory_entries_private_owner",
+          "value": "visibility = 'space_shared' OR owner_user_id IS NOT NULL"
+        },
+        "ck_memory_entries_highly_restricted_private": {
+          "name": "ck_memory_entries_highly_restricted_private",
+          "value": "sensitivity_level <> 'highly_restricted' OR visibility = 'private'"
         }
       },
       "isRLSEnabled": false
@@ -23422,6 +23794,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "owner_user_id": {
+          "name": "owner_user_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
         "required_approver_role": {
           "name": "required_approver_role",
           "type": "varchar(64)",
@@ -23434,6 +23812,13 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'space_shared'"
+        },
+        "access_level": {
+          "name": "access_level",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'full'"
         },
         "project_id": {
           "name": "project_id",
@@ -23448,6 +23833,21 @@
           "columns": [
             {
               "expression": "created_by_run_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ix_proposals_owner_user_id": {
+          "name": "ix_proposals_owner_user_id",
+          "columns": [
+            {
+              "expression": "owner_user_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -23619,6 +24019,19 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
+        "proposals_owner_user_id_fkey": {
+          "name": "proposals_owner_user_id_fkey",
+          "tableFrom": "proposals",
+          "tableTo": "users",
+          "columnsFrom": [
+            "owner_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
         "proposals_reviewed_by_fkey": {
           "name": "proposals_reviewed_by_fkey",
           "tableFrom": "proposals",
@@ -23672,6 +24085,18 @@
         "ck_proposals_urgency": {
           "name": "ck_proposals_urgency",
           "value": "(urgency)::text = ANY (ARRAY[('low'::character varying)::text, ('normal'::character varying)::text, ('high'::character varying)::text, ('critical'::character varying)::text])"
+        },
+        "ck_proposals_visibility": {
+          "name": "ck_proposals_visibility",
+          "value": "visibility IN ('private', 'space_shared', 'selected_users')"
+        },
+        "ck_proposals_access_level": {
+          "name": "ck_proposals_access_level",
+          "value": "access_level IN ('full', 'summary')"
+        },
+        "ck_proposals_private_owner": {
+          "name": "ck_proposals_private_owner",
+          "value": "visibility = 'space_shared' OR owner_user_id IS NOT NULL"
         }
       },
       "isRLSEnabled": false
@@ -25758,6 +26183,7 @@
         "object_type": {
           "name": "object_type",
           "type": "retrieval_object_type",
+          "typeSchema": "public",
           "primaryKey": false,
           "notNull": true
         },
@@ -25954,6 +26380,7 @@
         "object_type": {
           "name": "object_type",
           "type": "retrieval_object_type",
+          "typeSchema": "public",
           "primaryKey": false,
           "notNull": true
         },
@@ -26253,6 +26680,7 @@
         "from_object_type": {
           "name": "from_object_type",
           "type": "retrieval_object_type",
+          "typeSchema": "public",
           "primaryKey": false,
           "notNull": true
         },
@@ -26265,6 +26693,7 @@
         "to_object_type": {
           "name": "to_object_type",
           "type": "retrieval_object_type",
+          "typeSchema": "public",
           "primaryKey": false,
           "notNull": true
         },
@@ -26494,6 +26923,7 @@
         "object_type": {
           "name": "object_type",
           "type": "retrieval_object_type",
+          "typeSchema": "public",
           "primaryKey": false,
           "notNull": true
         },
@@ -26697,6 +27127,7 @@
         "object_type": {
           "name": "object_type",
           "type": "retrieval_object_type",
+          "typeSchema": "public",
           "primaryKey": false,
           "notNull": true
         },
@@ -26721,6 +27152,12 @@
         "visibility": {
           "name": "visibility",
           "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "access_level": {
+          "name": "access_level",
+          "type": "varchar(16)",
           "primaryKey": false,
           "notNull": false
         },
@@ -26897,6 +27334,14 @@
         "ck_retrieval_objects_source_connections_array": {
           "name": "ck_retrieval_objects_source_connections_array",
           "value": "jsonb_typeof(source_connection_ids_json) = 'array'::text"
+        },
+        "ck_retrieval_objects_visibility": {
+          "name": "ck_retrieval_objects_visibility",
+          "value": "visibility IS NULL OR visibility IN ('private', 'space_shared', 'selected_users')"
+        },
+        "ck_retrieval_objects_access_level": {
+          "name": "ck_retrieval_objects_access_level",
+          "value": "access_level IS NULL OR access_level IN ('full', 'summary')"
         }
       },
       "isRLSEnabled": false
@@ -28829,12 +29274,25 @@
           "primaryKey": false,
           "notNull": false
         },
+        "owner_user_id": {
+          "name": "owner_user_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
         "visibility": {
           "name": "visibility",
           "type": "varchar(32)",
           "primaryKey": false,
           "notNull": true,
           "default": "'space_shared'"
+        },
+        "access_level": {
+          "name": "access_level",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'full'"
         },
         "has_personal_grant_context": {
           "name": "has_personal_grant_context",
@@ -29040,6 +29498,21 @@
           "method": "btree",
           "with": {}
         },
+        "ix_runs_owner_user_id": {
+          "name": "ix_runs_owner_user_id",
+          "columns": [
+            {
+              "expression": "owner_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "ix_runs_parent_run_id": {
           "name": "ix_runs_parent_run_id",
           "columns": [
@@ -29234,6 +29707,19 @@
         }
       },
       "foreignKeys": {
+        "runs_owner_user_id_fkey": {
+          "name": "runs_owner_user_id_fkey",
+          "tableFrom": "runs",
+          "tableTo": "users",
+          "columnsFrom": [
+            "owner_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
         "fk_runs_project_id_projects": {
           "name": "fk_runs_project_id_projects",
           "tableFrom": "runs",
@@ -29574,6 +30060,18 @@
         "ck_runs_trust_level": {
           "name": "ck_runs_trust_level",
           "value": "(trust_level IS NULL) OR ((trust_level)::text = ANY (ARRAY[('high'::character varying)::text, ('medium'::character varying)::text, ('low'::character varying)::text, ('unknown'::character varying)::text]))"
+        },
+        "ck_runs_visibility": {
+          "name": "ck_runs_visibility",
+          "value": "visibility IN ('private', 'space_shared', 'selected_users')"
+        },
+        "ck_runs_access_level": {
+          "name": "ck_runs_access_level",
+          "value": "access_level IN ('full', 'summary')"
+        },
+        "ck_runs_private_owner": {
+          "name": "ck_runs_private_owner",
+          "value": "visibility = 'space_shared' OR owner_user_id IS NOT NULL"
         }
       },
       "isRLSEnabled": false
@@ -31400,8 +31898,8 @@
       },
       "isRLSEnabled": false
     },
-    "public.source_pointers": {
-      "name": "source_pointers",
+    "public.content_publication_imports": {
+      "name": "content_publication_imports",
       "schema": "",
       "columns": {
         "id": {
@@ -31410,54 +31908,47 @@
           "primaryKey": true,
           "notNull": true
         },
-        "owner_space_id": {
-          "name": "owner_space_id",
+        "publication_id": {
+          "name": "publication_id",
           "type": "varchar(36)",
           "primaryKey": false,
           "notNull": true
         },
-        "source_space_id": {
-          "name": "source_space_id",
+        "target_space_id": {
+          "name": "target_space_id",
           "type": "varchar(36)",
           "primaryKey": false,
           "notNull": true
         },
-        "source_object_type": {
-          "name": "source_object_type",
+        "publication_version": {
+          "name": "publication_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "snapshot_hash": {
+          "name": "snapshot_hash",
           "type": "varchar(64)",
           "primaryKey": false,
           "notNull": true
         },
-        "source_object_id": {
-          "name": "source_object_id",
+        "imported_resource_type": {
+          "name": "imported_resource_type",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "imported_resource_id": {
+          "name": "imported_resource_id",
           "type": "varchar(36)",
           "primaryKey": false,
           "notNull": true
         },
-        "access_mode": {
-          "name": "access_mode",
-          "type": "varchar(32)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "granted_by_user_id": {
-          "name": "granted_by_user_id",
+        "imported_by_user_id": {
+          "name": "imported_by_user_id",
           "type": "varchar(36)",
           "primaryKey": false,
-          "notNull": false
-        },
-        "expires_at": {
-          "name": "expires_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "metadata_json": {
-          "name": "metadata_json",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'{}'::jsonb"
+          "notNull": true
         },
         "created_at": {
           "name": "created_at",
@@ -31467,68 +31958,23 @@
         }
       },
       "indexes": {
-        "ix_source_pointers_expires_at": {
-          "name": "ix_source_pointers_expires_at",
+        "ix_content_publication_imports_resource": {
+          "name": "ix_content_publication_imports_resource",
           "columns": [
             {
-              "expression": "expires_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "ix_source_pointers_granted_by_user_id": {
-          "name": "ix_source_pointers_granted_by_user_id",
-          "columns": [
-            {
-              "expression": "granted_by_user_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "ix_source_pointers_owner_space_id": {
-          "name": "ix_source_pointers_owner_space_id",
-          "columns": [
-            {
-              "expression": "owner_space_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "ix_source_pointers_source": {
-          "name": "ix_source_pointers_source",
-          "columns": [
-            {
-              "expression": "source_space_id",
+              "expression": "target_space_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
             },
             {
-              "expression": "source_object_type",
+              "expression": "imported_resource_type",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
             },
             {
-              "expression": "source_object_id",
+              "expression": "imported_resource_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -31541,38 +31987,53 @@
         }
       },
       "foreignKeys": {
-        "source_pointers_granted_by_user_id_fkey": {
-          "name": "source_pointers_granted_by_user_id_fkey",
-          "tableFrom": "source_pointers",
+        "content_publication_imports_publication_id_fkey": {
+          "name": "content_publication_imports_publication_id_fkey",
+          "tableFrom": "content_publication_imports",
+          "tableTo": "content_publications",
+          "columnsFrom": [
+            "publication_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "content_publication_imports_target_fkey": {
+          "name": "content_publication_imports_target_fkey",
+          "tableFrom": "content_publication_imports",
+          "tableTo": "content_publication_targets",
+          "columnsFrom": [
+            "publication_id",
+            "target_space_id"
+          ],
+          "columnsTo": [
+            "publication_id",
+            "target_space_id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "content_publication_imports_target_space_id_fkey": {
+          "name": "content_publication_imports_target_space_id_fkey",
+          "tableFrom": "content_publication_imports",
+          "tableTo": "spaces",
+          "columnsFrom": [
+            "target_space_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "content_publication_imports_imported_by_user_id_fkey": {
+          "name": "content_publication_imports_imported_by_user_id_fkey",
+          "tableFrom": "content_publication_imports",
           "tableTo": "users",
           "columnsFrom": [
-            "granted_by_user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "source_pointers_owner_space_id_fkey": {
-          "name": "source_pointers_owner_space_id_fkey",
-          "tableFrom": "source_pointers",
-          "tableTo": "spaces",
-          "columnsFrom": [
-            "owner_space_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "source_pointers_source_space_id_fkey": {
-          "name": "source_pointers_source_space_id_fkey",
-          "tableFrom": "source_pointers",
-          "tableTo": "spaces",
-          "columnsFrom": [
-            "source_space_id"
+            "imported_by_user_id"
           ],
           "columnsTo": [
             "id"
@@ -31582,20 +32043,315 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "uq_content_publication_imports_publication_space": {
+          "name": "uq_content_publication_imports_publication_space",
+          "nullsNotDistinct": false,
+          "columns": [
+            "publication_id",
+            "target_space_id"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {
-        "ck_source_pointers_access_mode": {
-          "name": "ck_source_pointers_access_mode",
-          "value": "(access_mode)::text = ANY (ARRAY[('read'::character varying)::text, ('subscribe'::character varying)::text, ('federated'::character varying)::text])"
+        "ck_content_publication_imports_version": {
+          "name": "ck_content_publication_imports_version",
+          "value": "publication_version > 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.content_publication_targets": {
+      "name": "content_publication_targets",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar(36)",
+          "primaryKey": true,
+          "notNull": true
         },
-        "ck_source_pointers_metadata_object": {
-          "name": "ck_source_pointers_metadata_object",
-          "value": "jsonb_typeof(metadata_json) = 'object'::text"
+        "publication_id": {
+          "name": "publication_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
         },
-        "ck_source_pointers_source_object_type": {
-          "name": "ck_source_pointers_source_object_type",
-          "value": "(source_object_type)::text = ANY (ARRAY[('memory_entry'::character varying)::text, ('artifact'::character varying)::text, ('activity_record'::character varying)::text, ('run'::character varying)::text, ('proposal'::character varying)::text, ('knowledge_item'::character varying)::text, ('note'::character varying)::text, ('source'::character varying)::text, ('claim'::character varying)::text, ('project'::character varying)::text, ('workspace'::character varying)::text])"
+        "target_space_id": {
+          "name": "target_space_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "ix_content_publication_targets_space": {
+          "name": "ix_content_publication_targets_space",
+          "columns": [
+            {
+              "expression": "target_space_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "content_publication_targets_publication_id_fkey": {
+          "name": "content_publication_targets_publication_id_fkey",
+          "tableFrom": "content_publication_targets",
+          "tableTo": "content_publications",
+          "columnsFrom": [
+            "publication_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "content_publication_targets_target_space_id_fkey": {
+          "name": "content_publication_targets_target_space_id_fkey",
+          "tableFrom": "content_publication_targets",
+          "tableTo": "spaces",
+          "columnsFrom": [
+            "target_space_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "uq_content_publication_targets_publication_space": {
+          "name": "uq_content_publication_targets_publication_space",
+          "nullsNotDistinct": false,
+          "columns": [
+            "publication_id",
+            "target_space_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.content_publications": {
+      "name": "content_publications",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar(36)",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "source_space_id": {
+          "name": "source_space_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_resource_type": {
+          "name": "source_resource_type",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_resource_id": {
+          "name": "source_resource_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "version": {
+          "name": "version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "snapshot_schema_version": {
+          "name": "snapshot_schema_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "snapshot_json": {
+          "name": "snapshot_json",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "snapshot_hash": {
+          "name": "snapshot_hash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "published_by_user_id": {
+          "name": "published_by_user_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'active'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "revoked_at": {
+          "name": "revoked_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "revoked_by_user_id": {
+          "name": "revoked_by_user_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "ix_content_publications_source": {
+          "name": "ix_content_publications_source",
+          "columns": [
+            {
+              "expression": "source_space_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "source_resource_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "source_resource_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ix_content_publications_status": {
+          "name": "ix_content_publications_status",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "content_publications_source_space_id_fkey": {
+          "name": "content_publications_source_space_id_fkey",
+          "tableFrom": "content_publications",
+          "tableTo": "spaces",
+          "columnsFrom": [
+            "source_space_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "content_publications_published_by_user_id_fkey": {
+          "name": "content_publications_published_by_user_id_fkey",
+          "tableFrom": "content_publications",
+          "tableTo": "users",
+          "columnsFrom": [
+            "published_by_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "content_publications_revoked_by_user_id_fkey": {
+          "name": "content_publications_revoked_by_user_id_fkey",
+          "tableFrom": "content_publications",
+          "tableTo": "users",
+          "columnsFrom": [
+            "revoked_by_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "uq_content_publications_source_version": {
+          "name": "uq_content_publications_source_version",
+          "nullsNotDistinct": false,
+          "columns": [
+            "source_space_id",
+            "source_resource_type",
+            "source_resource_id",
+            "version"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "ck_content_publications_status": {
+          "name": "ck_content_publications_status",
+          "value": "status IN ('active', 'revoked')"
+        },
+        "ck_content_publications_snapshot_object": {
+          "name": "ck_content_publications_snapshot_object",
+          "value": "jsonb_typeof(snapshot_json) = 'object'"
+        },
+        "ck_content_publications_version": {
+          "name": "ck_content_publications_version",
+          "value": "version > 0"
         }
       },
       "isRLSEnabled": false
@@ -32029,6 +32785,13 @@
           "notNull": true,
           "default": "'private'"
         },
+        "access_level": {
+          "name": "access_level",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'full'"
+        },
         "status": {
           "name": "status",
           "type": "varchar(32)",
@@ -32045,6 +32808,12 @@
         },
         "created_by_user_id": {
           "name": "created_by_user_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "owner_user_id": {
+          "name": "owner_user_id",
           "type": "varchar(36)",
           "primaryKey": false,
           "notNull": true
@@ -32171,6 +32940,21 @@
           "method": "btree",
           "with": {}
         },
+        "ix_reader_annotations_owner_user_id": {
+          "name": "ix_reader_annotations_owner_user_id",
+          "columns": [
+            {
+              "expression": "owner_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "ix_reader_annotations_space_visibility": {
           "name": "ix_reader_annotations_space_visibility",
           "columns": [
@@ -32264,6 +33048,19 @@
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
+        },
+        "reader_annotations_owner_user_id_fkey": {
+          "name": "reader_annotations_owner_user_id_fkey",
+          "tableFrom": "reader_annotations",
+          "tableTo": "users",
+          "columnsFrom": [
+            "owner_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -32276,7 +33073,11 @@
         },
         "ck_reader_annotations_visibility": {
           "name": "ck_reader_annotations_visibility",
-          "value": "(visibility)::text = ANY (ARRAY[('private'::character varying)::text, ('space_shared'::character varying)::text])"
+          "value": "visibility IN ('private', 'space_shared', 'selected_users')"
+        },
+        "ck_reader_annotations_access_level": {
+          "name": "ck_reader_annotations_access_level",
+          "value": "access_level IN ('full', 'summary')"
         },
         "ck_reader_annotations_status": {
           "name": "ck_reader_annotations_status",
@@ -32883,6 +33684,13 @@
           "notNull": true,
           "default": "'private'"
         },
+        "access_level": {
+          "name": "access_level",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'full'"
+        },
         "name": {
           "name": "name",
           "type": "varchar(512)",
@@ -33318,7 +34126,11 @@
         },
         "ck_source_connections_visibility": {
           "name": "ck_source_connections_visibility",
-          "value": "(visibility)::text = ANY (ARRAY[('private'::character varying)::text, ('space_discoverable'::character varying)::text])"
+          "value": "visibility IN ('private', 'space_shared', 'selected_users')"
+        },
+        "ck_source_connections_access_level": {
+          "name": "ck_source_connections_access_level",
+          "value": "access_level IN ('full', 'summary')"
         }
       },
       "isRLSEnabled": false
@@ -34249,6 +35061,26 @@
           "primaryKey": false,
           "notNull": true
         },
+        "owner_user_id": {
+          "name": "owner_user_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "visibility": {
+          "name": "visibility",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'private'"
+        },
+        "access_level": {
+          "name": "access_level",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'full'"
+        },
         "connection_id": {
           "name": "connection_id",
           "type": "varchar(36)",
@@ -34551,6 +35383,21 @@
           "method": "btree",
           "with": {}
         },
+        "ix_source_items_owner_user_id": {
+          "name": "ix_source_items_owner_user_id",
+          "columns": [
+            {
+              "expression": "owner_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "ix_source_items_raw_artifact_id": {
           "name": "ix_source_items_raw_artifact_id",
           "columns": [
@@ -34746,6 +35593,21 @@
           "method": "btree",
           "with": {}
         },
+        "ix_source_items_visibility": {
+          "name": "ix_source_items_visibility",
+          "columns": [
+            {
+              "expression": "visibility",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "uq_source_items_active_canonical_uri": {
           "name": "uq_source_items_active_canonical_uri",
           "columns": [
@@ -34857,6 +35719,19 @@
           "onDelete": "set null",
           "onUpdate": "no action"
         },
+        "source_items_owner_user_id_fkey": {
+          "name": "source_items_owner_user_id_fkey",
+          "tableFrom": "source_items",
+          "tableTo": "users",
+          "columnsFrom": [
+            "owner_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
         "source_items_space_id_fkey": {
           "name": "source_items_space_id_fkey",
           "tableFrom": "source_items",
@@ -34886,6 +35761,18 @@
         "ck_source_items_retention_policy": {
           "name": "ck_source_items_retention_policy",
           "value": "(retention_policy)::text = ANY (ARRAY[('metadata_only'::character varying)::text, ('summary_only'::character varying)::text, ('full_text'::character varying)::text, ('full_snapshot'::character varying)::text, ('archived'::character varying)::text])"
+        },
+        "ck_source_items_visibility": {
+          "name": "ck_source_items_visibility",
+          "value": "visibility IN ('private', 'space_shared', 'selected_users')"
+        },
+        "ck_source_items_access_level": {
+          "name": "ck_source_items_access_level",
+          "value": "access_level IN ('full', 'summary')"
+        },
+        "ck_source_items_private_owner": {
+          "name": "ck_source_items_private_owner",
+          "value": "visibility = 'space_shared' OR owner_user_id IS NOT NULL"
         }
       },
       "isRLSEnabled": false
@@ -36135,6 +37022,26 @@
           "primaryKey": false,
           "notNull": true
         },
+        "owner_user_id": {
+          "name": "owner_user_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "visibility": {
+          "name": "visibility",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'private'"
+        },
+        "access_level": {
+          "name": "access_level",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'full'"
+        },
         "source_item_id": {
           "name": "source_item_id",
           "type": "varchar(36)",
@@ -36200,6 +37107,12 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
         }
       },
       "indexes": {
@@ -36238,6 +37151,21 @@
           "columns": [
             {
               "expression": "content_hash",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ix_source_snapshots_owner_user_id": {
+          "name": "ix_source_snapshots_owner_user_id",
+          "columns": [
+            {
+              "expression": "owner_user_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -36313,6 +37241,21 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "ix_source_snapshots_visibility": {
+          "name": "ix_source_snapshots_visibility",
+          "columns": [
+            {
+              "expression": "visibility",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -36335,6 +37278,19 @@
           "tableTo": "source_connections",
           "columnsFrom": [
             "connection_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "source_snapshots_owner_user_id_fkey": {
+          "name": "source_snapshots_owner_user_id_fkey",
+          "tableFrom": "source_snapshots",
+          "tableTo": "users",
+          "columnsFrom": [
+            "owner_user_id"
           ],
           "columnsTo": [
             "id"
@@ -36384,6 +37340,18 @@
         "ck_source_snapshots_trust_level": {
           "name": "ck_source_snapshots_trust_level",
           "value": "(trust_level)::text = ANY (ARRAY[('trusted'::character varying)::text, ('normal'::character varying)::text, ('untrusted'::character varying)::text])"
+        },
+        "ck_source_snapshots_visibility": {
+          "name": "ck_source_snapshots_visibility",
+          "value": "visibility IN ('private', 'space_shared', 'selected_users')"
+        },
+        "ck_source_snapshots_access_level": {
+          "name": "ck_source_snapshots_access_level",
+          "value": "access_level IN ('full', 'summary')"
+        },
+        "ck_source_snapshots_private_owner": {
+          "name": "ck_source_snapshots_private_owner",
+          "value": "visibility = 'space_shared' OR owner_user_id IS NOT NULL"
         }
       },
       "isRLSEnabled": false
@@ -36699,6 +37667,13 @@
           "primaryKey": false,
           "notNull": false
         },
+        "oversight_mode": {
+          "name": "oversight_mode",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'none'"
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -36735,6 +37710,10 @@
         "ck_spaces_type": {
           "name": "ck_spaces_type",
           "value": "(type)::text = ANY (ARRAY[('personal'::character varying)::text, ('household'::character varying)::text, ('team'::character varying)::text])"
+        },
+        "ck_spaces_oversight_mode": {
+          "name": "ck_spaces_oversight_mode",
+          "value": "(oversight_mode)::text = ANY (ARRAY[('none'::character varying)::text, ('summary'::character varying)::text, ('content'::character varying)::text, ('full'::character varying)::text])"
         }
       },
       "isRLSEnabled": false
@@ -37853,12 +38832,25 @@
           "primaryKey": false,
           "notNull": false
         },
+        "owner_user_id": {
+          "name": "owner_user_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
         "visibility": {
           "name": "visibility",
           "type": "varchar(32)",
           "primaryKey": false,
           "notNull": true,
           "default": "'space_shared'"
+        },
+        "access_level": {
+          "name": "access_level",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'full'"
         }
       },
       "indexes": {
@@ -37897,6 +38889,21 @@
           "columns": [
             {
               "expression": "parent_task_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ix_tasks_owner_user_id": {
+          "name": "ix_tasks_owner_user_id",
+          "columns": [
+            {
+              "expression": "owner_user_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -38058,6 +39065,19 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
+        "tasks_owner_user_id_fkey": {
+          "name": "tasks_owner_user_id_fkey",
+          "tableFrom": "tasks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "owner_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
         "tasks_parent_task_id_fkey": {
           "name": "tasks_parent_task_id_fkey",
           "tableFrom": "tasks",
@@ -38170,7 +39190,20 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "ck_tasks_visibility": {
+          "name": "ck_tasks_visibility",
+          "value": "visibility IN ('private', 'space_shared', 'selected_users')"
+        },
+        "ck_tasks_access_level": {
+          "name": "ck_tasks_access_level",
+          "value": "access_level IN ('full', 'summary')"
+        },
+        "ck_tasks_private_owner": {
+          "name": "ck_tasks_private_owner",
+          "value": "visibility = 'space_shared' OR owner_user_id IS NOT NULL"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.validation_recipes": {
@@ -38364,6 +39397,1644 @@
         "ck_validation_recipes_risk_level": {
           "name": "ck_validation_recipes_risk_level",
           "value": "(risk_level)::text = ANY (ARRAY[('low'::character varying)::text, ('medium'::character varying)::text, ('high'::character varying)::text])"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.cli_usage_import_cursors": {
+      "name": "cli_usage_import_cursors",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar(36)",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "instance_id": {
+          "name": "instance_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "space_id": {
+          "name": "space_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "runtime": {
+          "name": "runtime",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "credential_profile_id": {
+          "name": "credential_profile_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "source_fingerprint": {
+          "name": "source_fingerprint",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "cursor_json": {
+          "name": "cursor_json",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "last_scanned_at": {
+          "name": "last_scanned_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "uq_cli_usage_import_cursors_scope": {
+          "name": "uq_cli_usage_import_cursors_scope",
+          "columns": [
+            {
+              "expression": "instance_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "space_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "COALESCE(user_id, '__none__'::character varying)",
+              "asc": true,
+              "isExpression": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "runtime",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "COALESCE(credential_profile_id, '__none__'::character varying)",
+              "asc": true,
+              "isExpression": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "source_fingerprint",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ix_cli_usage_import_cursors_space_runtime": {
+          "name": "ix_cli_usage_import_cursors_space_runtime",
+          "columns": [
+            {
+              "expression": "space_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "runtime",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ix_cli_usage_import_cursors_credential_profile": {
+          "name": "ix_cli_usage_import_cursors_credential_profile",
+          "columns": [
+            {
+              "expression": "credential_profile_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "cli_usage_import_cursors_space_id_fkey": {
+          "name": "cli_usage_import_cursors_space_id_fkey",
+          "tableFrom": "cli_usage_import_cursors",
+          "tableTo": "spaces",
+          "columnsFrom": [
+            "space_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "cli_usage_import_cursors_user_id_fkey": {
+          "name": "cli_usage_import_cursors_user_id_fkey",
+          "tableFrom": "cli_usage_import_cursors",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "cli_usage_import_cursors_credential_profile_id_fkey": {
+          "name": "cli_usage_import_cursors_credential_profile_id_fkey",
+          "tableFrom": "cli_usage_import_cursors",
+          "tableTo": "cli_credential_profiles",
+          "columnsFrom": [
+            "credential_profile_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.instance_identity": {
+      "name": "instance_identity",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar(32)",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "instance_id": {
+          "name": "instance_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "uq_instance_identity_instance_id": {
+          "name": "uq_instance_identity_instance_id",
+          "nullsNotDistinct": false,
+          "columns": [
+            "instance_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "ck_instance_identity_singleton": {
+          "name": "ck_instance_identity_singleton",
+          "value": "(id)::text = 'local'::text"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.model_pricing_rules": {
+      "name": "model_pricing_rules",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar(36)",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "scope_type": {
+          "name": "scope_type",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "space_id": {
+          "name": "space_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "provider_type": {
+          "name": "provider_type",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "provider_id": {
+          "name": "provider_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "model_pattern": {
+          "name": "model_pattern",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "input_usd_per_million": {
+          "name": "input_usd_per_million",
+          "type": "numeric(18, 8)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "output_usd_per_million": {
+          "name": "output_usd_per_million",
+          "type": "numeric(18, 8)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cache_write_usd_per_million": {
+          "name": "cache_write_usd_per_million",
+          "type": "numeric(18, 8)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cache_read_usd_per_million": {
+          "name": "cache_read_usd_per_million",
+          "type": "numeric(18, 8)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reasoning_usd_per_million": {
+          "name": "reasoning_usd_per_million",
+          "type": "numeric(18, 8)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "usage_type_prices_json": {
+          "name": "usage_type_prices_json",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "tier_conditions_json": {
+          "name": "tier_conditions_json",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "priority": {
+          "name": "priority",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "pricing_normalization_version": {
+          "name": "pricing_normalization_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "currency": {
+          "name": "currency",
+          "type": "varchar(8)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'USD'"
+        },
+        "effective_from": {
+          "name": "effective_from",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "effective_until": {
+          "name": "effective_until",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "source": {
+          "name": "source",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "metadata_json": {
+          "name": "metadata_json",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "ix_model_pricing_rules_effective": {
+          "name": "ix_model_pricing_rules_effective",
+          "columns": [
+            {
+              "expression": "effective_from",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "effective_until",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ix_model_pricing_rules_scope": {
+          "name": "ix_model_pricing_rules_scope",
+          "columns": [
+            {
+              "expression": "scope_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "space_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ix_model_pricing_rules_provider_model": {
+          "name": "ix_model_pricing_rules_provider_model",
+          "columns": [
+            {
+              "expression": "provider_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "provider_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "model_pattern",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "priority",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "model_pricing_rules_space_id_fkey": {
+          "name": "model_pricing_rules_space_id_fkey",
+          "tableFrom": "model_pricing_rules",
+          "tableTo": "spaces",
+          "columnsFrom": [
+            "space_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "model_pricing_rules_provider_id_fkey": {
+          "name": "model_pricing_rules_provider_id_fkey",
+          "tableFrom": "model_pricing_rules",
+          "tableTo": "model_providers",
+          "columnsFrom": [
+            "provider_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "ck_model_pricing_rules_scope_type": {
+          "name": "ck_model_pricing_rules_scope_type",
+          "value": "(scope_type)::text = ANY (ARRAY[('system'::character varying)::text, ('instance'::character varying)::text, ('space'::character varying)::text])"
+        },
+        "ck_model_pricing_rules_scope_space": {
+          "name": "ck_model_pricing_rules_scope_space",
+          "value": "((scope_type)::text = 'space'::text AND space_id IS NOT NULL) OR ((scope_type)::text <> 'space'::text AND space_id IS NULL)"
+        },
+        "ck_model_pricing_rules_source": {
+          "name": "ck_model_pricing_rules_source",
+          "value": "(source)::text = ANY (ARRAY[('built_in'::character varying)::text, ('instance_admin'::character varying)::text, ('space_admin'::character varying)::text, ('imported'::character varying)::text])"
+        },
+        "ck_model_pricing_rules_effective_window": {
+          "name": "ck_model_pricing_rules_effective_window",
+          "value": "effective_until IS NULL OR effective_until > effective_from"
+        },
+        "ck_model_pricing_rules_nonnegative_prices": {
+          "name": "ck_model_pricing_rules_nonnegative_prices",
+          "value": "(input_usd_per_million IS NULL OR input_usd_per_million >= 0) AND (output_usd_per_million IS NULL OR output_usd_per_million >= 0) AND (cache_write_usd_per_million IS NULL OR cache_write_usd_per_million >= 0) AND (cache_read_usd_per_million IS NULL OR cache_read_usd_per_million >= 0) AND (reasoning_usd_per_million IS NULL OR reasoning_usd_per_million >= 0)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.token_usage_events": {
+      "name": "token_usage_events",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar(36)",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "instance_id": {
+          "name": "instance_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "reporting_instance_id": {
+          "name": "reporting_instance_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "origin_instance_id": {
+          "name": "origin_instance_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "space_id": {
+          "name": "space_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "owner_user_id": {
+          "name": "owner_user_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "visibility": {
+          "name": "visibility",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "access_level": {
+          "name": "access_level",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "origin_space_id": {
+          "name": "origin_space_id",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "event_type": {
+          "name": "event_type",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_type": {
+          "name": "source_type",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_resource_type": {
+          "name": "source_resource_type",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "source_resource_id": {
+          "name": "source_resource_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "execution_channel": {
+          "name": "execution_channel",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "meter_subject_type": {
+          "name": "meter_subject_type",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "meter_subject_id": {
+          "name": "meter_subject_id",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "subject_user_id": {
+          "name": "subject_user_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "subject_team_id": {
+          "name": "subject_team_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "adapter_type": {
+          "name": "adapter_type",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "runtime_tool_version": {
+          "name": "runtime_tool_version",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "provider_id": {
+          "name": "provider_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "provider_type": {
+          "name": "provider_type",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "provider_name_snapshot": {
+          "name": "provider_name_snapshot",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "vendor": {
+          "name": "vendor",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "model": {
+          "name": "model",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "task": {
+          "name": "task",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "run_id": {
+          "name": "run_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "root_run_id": {
+          "name": "root_run_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "parent_run_id": {
+          "name": "parent_run_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "run_group_id": {
+          "name": "run_group_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "session_id": {
+          "name": "session_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "external_session_id": {
+          "name": "external_session_id",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "session_path": {
+          "name": "session_path",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "session_name": {
+          "name": "session_name",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "agent_id": {
+          "name": "agent_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "trigger_origin": {
+          "name": "trigger_origin",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "occurred_at": {
+          "name": "occurred_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "recorded_at": {
+          "name": "recorded_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "input_tokens": {
+          "name": "input_tokens",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "output_tokens": {
+          "name": "output_tokens",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "total_tokens": {
+          "name": "total_tokens",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cache_creation_input_tokens": {
+          "name": "cache_creation_input_tokens",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "cache_read_input_tokens": {
+          "name": "cache_read_input_tokens",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "reasoning_tokens": {
+          "name": "reasoning_tokens",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "request_count": {
+          "name": "request_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "estimated_cost_usd": {
+          "name": "estimated_cost_usd",
+          "type": "numeric(18, 8)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "usage_schema": {
+          "name": "usage_schema",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "usage_details_json": {
+          "name": "usage_details_json",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "cost_details_json": {
+          "name": "cost_details_json",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "provider_usage_json": {
+          "name": "provider_usage_json",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "usage_normalization_version": {
+          "name": "usage_normalization_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "total_tokens_source": {
+          "name": "total_tokens_source",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "currency": {
+          "name": "currency",
+          "type": "varchar(8)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'USD'"
+        },
+        "pricing_rule_id": {
+          "name": "pricing_rule_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "pricing_tier_name": {
+          "name": "pricing_tier_name",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "dimensions_json": {
+          "name": "dimensions_json",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "usage_accuracy": {
+          "name": "usage_accuracy",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "dedupe_confidence": {
+          "name": "dedupe_confidence",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "import_batch_id": {
+          "name": "import_batch_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "idempotency_key": {
+          "name": "idempotency_key",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "metadata_json": {
+          "name": "metadata_json",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "ix_token_usage_events_space_occurred": {
+          "name": "ix_token_usage_events_space_occurred",
+          "columns": [
+            {
+              "expression": "space_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "occurred_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ix_token_usage_events_instance_occurred": {
+          "name": "ix_token_usage_events_instance_occurred",
+          "columns": [
+            {
+              "expression": "instance_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "occurred_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ix_token_usage_events_provider_model": {
+          "name": "ix_token_usage_events_provider_model",
+          "columns": [
+            {
+              "expression": "space_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "provider_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "model",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "occurred_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ix_token_usage_events_channel_adapter": {
+          "name": "ix_token_usage_events_channel_adapter",
+          "columns": [
+            {
+              "expression": "space_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "execution_channel",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "adapter_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "occurred_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ix_token_usage_events_session": {
+          "name": "ix_token_usage_events_session",
+          "columns": [
+            {
+              "expression": "space_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "session_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "occurred_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ix_token_usage_events_external_session": {
+          "name": "ix_token_usage_events_external_session",
+          "columns": [
+            {
+              "expression": "space_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "external_session_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "occurred_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ix_token_usage_events_run_id": {
+          "name": "ix_token_usage_events_run_id",
+          "columns": [
+            {
+              "expression": "space_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "run_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ix_token_usage_events_owner_occurred": {
+          "name": "ix_token_usage_events_owner_occurred",
+          "columns": [
+            {
+              "expression": "space_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "owner_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "occurred_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ix_token_usage_events_visibility_occurred": {
+          "name": "ix_token_usage_events_visibility_occurred",
+          "columns": [
+            {
+              "expression": "space_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "visibility",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "occurred_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ix_token_usage_events_source_resource": {
+          "name": "ix_token_usage_events_source_resource",
+          "columns": [
+            {
+              "expression": "space_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "source_resource_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "source_resource_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ix_token_usage_events_import_batch_id": {
+          "name": "ix_token_usage_events_import_batch_id",
+          "columns": [
+            {
+              "expression": "import_batch_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "token_usage_events_space_id_fkey": {
+          "name": "token_usage_events_space_id_fkey",
+          "tableFrom": "token_usage_events",
+          "tableTo": "spaces",
+          "columnsFrom": [
+            "space_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "token_usage_events_owner_user_id_fkey": {
+          "name": "token_usage_events_owner_user_id_fkey",
+          "tableFrom": "token_usage_events",
+          "tableTo": "users",
+          "columnsFrom": [
+            "owner_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "token_usage_events_subject_user_id_fkey": {
+          "name": "token_usage_events_subject_user_id_fkey",
+          "tableFrom": "token_usage_events",
+          "tableTo": "users",
+          "columnsFrom": [
+            "subject_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "token_usage_events_provider_id_fkey": {
+          "name": "token_usage_events_provider_id_fkey",
+          "tableFrom": "token_usage_events",
+          "tableTo": "model_providers",
+          "columnsFrom": [
+            "provider_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "token_usage_events_run_id_fkey": {
+          "name": "token_usage_events_run_id_fkey",
+          "tableFrom": "token_usage_events",
+          "tableTo": "runs",
+          "columnsFrom": [
+            "run_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "token_usage_events_root_run_id_fkey": {
+          "name": "token_usage_events_root_run_id_fkey",
+          "tableFrom": "token_usage_events",
+          "tableTo": "runs",
+          "columnsFrom": [
+            "root_run_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "token_usage_events_parent_run_id_fkey": {
+          "name": "token_usage_events_parent_run_id_fkey",
+          "tableFrom": "token_usage_events",
+          "tableTo": "runs",
+          "columnsFrom": [
+            "parent_run_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "token_usage_events_session_id_fkey": {
+          "name": "token_usage_events_session_id_fkey",
+          "tableFrom": "token_usage_events",
+          "tableTo": "sessions",
+          "columnsFrom": [
+            "session_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "token_usage_events_agent_id_fkey": {
+          "name": "token_usage_events_agent_id_fkey",
+          "tableFrom": "token_usage_events",
+          "tableTo": "agents",
+          "columnsFrom": [
+            "agent_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "token_usage_events_project_id_fkey": {
+          "name": "token_usage_events_project_id_fkey",
+          "tableFrom": "token_usage_events",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "project_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "token_usage_events_workspace_id_fkey": {
+          "name": "token_usage_events_workspace_id_fkey",
+          "tableFrom": "token_usage_events",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "token_usage_events_import_batch_id_fkey": {
+          "name": "token_usage_events_import_batch_id_fkey",
+          "tableFrom": "token_usage_events",
+          "tableTo": "usage_import_batches",
+          "columnsFrom": [
+            "import_batch_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "token_usage_events_pricing_rule_id_fkey": {
+          "name": "token_usage_events_pricing_rule_id_fkey",
+          "tableFrom": "token_usage_events",
+          "tableTo": "model_pricing_rules",
+          "columnsFrom": [
+            "pricing_rule_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "uq_token_usage_events_space_idempotency": {
+          "name": "uq_token_usage_events_space_idempotency",
+          "nullsNotDistinct": false,
+          "columns": [
+            "space_id",
+            "idempotency_key"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "ck_token_usage_events_source_type": {
+          "name": "ck_token_usage_events_source_type",
+          "value": "(source_type)::text = ANY (ARRAY[('local_run'::character varying)::text, ('provider_proxy'::character varying)::text, ('cli_history_import'::character varying)::text, ('cross_instance_import'::character varying)::text, ('manual_import'::character varying)::text])"
+        },
+        "ck_token_usage_events_event_type": {
+          "name": "ck_token_usage_events_event_type",
+          "value": "(event_type)::text = ANY (ARRAY[('llm.generation'::character varying)::text, ('llm.embedding'::character varying)::text, ('llm.rerank'::character varying)::text, ('cli.history_usage'::character varying)::text, ('usage.adjustment'::character varying)::text])"
+        },
+        "ck_token_usage_events_execution_channel": {
+          "name": "ck_token_usage_events_execution_channel",
+          "value": "(execution_channel)::text = ANY (ARRAY[('managed_api'::character varying)::text, ('provider_proxy'::character varying)::text, ('local_cli_transcript'::character varying)::text, ('manual_import'::character varying)::text, ('cross_instance_import'::character varying)::text, ('unknown'::character varying)::text])"
+        },
+        "ck_token_usage_events_total_tokens_source": {
+          "name": "ck_token_usage_events_total_tokens_source",
+          "value": "(total_tokens_source)::text = ANY (ARRAY[('provider_total'::character varying)::text, ('sum_of_buckets'::character varying)::text, ('estimated'::character varying)::text, ('unknown'::character varying)::text])"
+        },
+        "ck_token_usage_events_usage_accuracy": {
+          "name": "ck_token_usage_events_usage_accuracy",
+          "value": "(usage_accuracy)::text = ANY (ARRAY[('provider_reported'::character varying)::text, ('proxy_observed'::character varying)::text, ('transcript_lower_bound'::character varying)::text, ('estimated'::character varying)::text, ('quota_snapshot'::character varying)::text, ('unknown'::character varying)::text])"
+        },
+        "ck_token_usage_events_dedupe_confidence": {
+          "name": "ck_token_usage_events_dedupe_confidence",
+          "value": "(dedupe_confidence)::text = ANY (ARRAY[('high'::character varying)::text, ('medium'::character varying)::text, ('low'::character varying)::text])"
+        },
+        "ck_token_usage_events_visibility": {
+          "name": "ck_token_usage_events_visibility",
+          "value": "visibility IN ('private', 'space_shared', 'selected_users')"
+        },
+        "ck_token_usage_events_access_level": {
+          "name": "ck_token_usage_events_access_level",
+          "value": "access_level IN ('full', 'summary')"
+        },
+        "ck_token_usage_events_source_resource": {
+          "name": "ck_token_usage_events_source_resource",
+          "value": "(source_resource_type IS NULL) = (source_resource_id IS NULL)"
+        },
+        "ck_token_usage_events_private_owner": {
+          "name": "ck_token_usage_events_private_owner",
+          "value": "visibility <> 'private' OR owner_user_id IS NOT NULL"
+        },
+        "ck_token_usage_events_nonnegative_counts": {
+          "name": "ck_token_usage_events_nonnegative_counts",
+          "value": "input_tokens >= 0 AND output_tokens >= 0 AND cache_creation_input_tokens >= 0 AND cache_read_input_tokens >= 0 AND reasoning_tokens >= 0 AND request_count >= 0 AND (total_tokens IS NULL OR total_tokens >= 0)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.usage_import_batches": {
+      "name": "usage_import_batches",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar(36)",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "instance_id": {
+          "name": "instance_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "target_space_id": {
+          "name": "target_space_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "owner_user_id": {
+          "name": "owner_user_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_type": {
+          "name": "source_type",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_kind": {
+          "name": "source_kind",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "source_fingerprint": {
+          "name": "source_fingerprint",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "preview_summary_json": {
+          "name": "preview_summary_json",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "import_summary_json": {
+          "name": "import_summary_json",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "error_json": {
+          "name": "error_json",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "ix_usage_import_batches_instance_id": {
+          "name": "ix_usage_import_batches_instance_id",
+          "columns": [
+            {
+              "expression": "instance_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ix_usage_import_batches_target_space_id": {
+          "name": "ix_usage_import_batches_target_space_id",
+          "columns": [
+            {
+              "expression": "target_space_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ix_usage_import_batches_owner_user_id": {
+          "name": "ix_usage_import_batches_owner_user_id",
+          "columns": [
+            {
+              "expression": "owner_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "usage_import_batches_target_space_id_fkey": {
+          "name": "usage_import_batches_target_space_id_fkey",
+          "tableFrom": "usage_import_batches",
+          "tableTo": "spaces",
+          "columnsFrom": [
+            "target_space_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "usage_import_batches_owner_user_id_fkey": {
+          "name": "usage_import_batches_owner_user_id_fkey",
+          "tableFrom": "usage_import_batches",
+          "tableTo": "users",
+          "columnsFrom": [
+            "owner_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "ck_usage_import_batches_source_type": {
+          "name": "ck_usage_import_batches_source_type",
+          "value": "(source_type)::text = ANY (ARRAY[('claude_code_history'::character varying)::text, ('codex_cli_history'::character varying)::text, ('cross_instance_bundle'::character varying)::text, ('manual_usage_csv'::character varying)::text])"
+        },
+        "ck_usage_import_batches_source_kind": {
+          "name": "ck_usage_import_batches_source_kind",
+          "value": "(source_kind)::text = ANY (ARRAY[('managed_profile'::character varying)::text, ('uploaded_archive'::character varying)::text, ('server_path'::character varying)::text, ('scanner_manifest'::character varying)::text, ('remote_bundle'::character varying)::text])"
+        },
+        "ck_usage_import_batches_status": {
+          "name": "ck_usage_import_batches_status",
+          "value": "(status)::text = ANY (ARRAY[('previewed'::character varying)::text, ('importing'::character varying)::text, ('completed'::character varying)::text, ('failed'::character varying)::text, ('cancelled'::character varying)::text])"
         }
       },
       "isRLSEnabled": false
@@ -39536,6 +42207,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "owner_user_id": {
+          "name": "owner_user_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
         "slug": {
           "name": "slug",
           "type": "varchar(256)",
@@ -39565,6 +42242,13 @@
           "type": "varchar(32)",
           "primaryKey": false,
           "notNull": true
+        },
+        "access_level": {
+          "name": "access_level",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'full'"
         },
         "protected": {
           "name": "protected",
@@ -39626,6 +42310,21 @@
           "method": "btree",
           "with": {}
         },
+        "ix_workspaces_owner_user_id": {
+          "name": "ix_workspaces_owner_user_id",
+          "columns": [
+            {
+              "expression": "owner_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "ix_workspaces_space_id": {
           "name": "ix_workspaces_space_id",
           "columns": [
@@ -39671,6 +42370,19 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
+        "workspaces_owner_user_id_fkey": {
+          "name": "workspaces_owner_user_id_fkey",
+          "tableFrom": "workspaces",
+          "tableTo": "users",
+          "columnsFrom": [
+            "owner_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
         "workspaces_space_id_fkey": {
           "name": "workspaces_space_id_fkey",
           "tableFrom": "workspaces",
@@ -39708,13 +42420,36 @@
         },
         "ck_workspaces_visibility": {
           "name": "ck_workspaces_visibility",
-          "value": "(visibility)::text = ANY (ARRAY['private'::text, 'space_shared'::text, 'workspace_shared'::text, 'restricted'::text])"
+          "value": "visibility IN ('private', 'space_shared', 'selected_users')"
+        },
+        "ck_workspaces_access_level": {
+          "name": "ck_workspaces_access_level",
+          "value": "access_level IN ('full', 'summary')"
+        },
+        "ck_workspaces_private_owner": {
+          "name": "ck_workspaces_private_owner",
+          "value": "visibility = 'space_shared' OR owner_user_id IS NOT NULL"
         }
       },
       "isRLSEnabled": false
     }
   },
-  "enums": {},
+  "enums": {
+    "public.retrieval_object_type": {
+      "name": "retrieval_object_type",
+      "schema": "public",
+      "values": [
+        "knowledge_item",
+        "note",
+        "source",
+        "claim",
+        "memory_entry",
+        "project_public_summary",
+        "source_item",
+        "extracted_evidence"
+      ]
+    }
+  },
   "schemas": {},
   "sequences": {},
   "roles": {},

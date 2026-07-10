@@ -22,6 +22,13 @@ import { runCustomSourceHandlerScanJob } from "./customSources/customSourceScanW
 import { RECIPE_SCAN_JOB_IMPLEMENTATION, runSourceRecipeScanJob } from "./sourceRecipes/recipeScanWorker";
 import { insertProposalRow } from "../proposals/reviewPackets";
 import {
+  contentOwnerFilterSql,
+  contentReadSql,
+  contentVisibilityFilterSql,
+} from "../access/contentAccessSql";
+import { contentDecisionFromDb } from "../access/contentAccessQuery";
+import { inheritContentAccessGrants } from "../access/contentAccessInheritance";
+import {
   buildSummary,
   connectionOut,
   connectorOut,
@@ -77,7 +84,7 @@ import {
   materializeProjectSourceItemLinks,
   recomputeProjectSourceBindingLinks,
 } from "./evidenceProjectLinker";
-import { sourceItemReadableClause } from "./sourceItemAccess";
+import { sourceItemConnectionGateClause, sourceItemReadableClause } from "./sourceItemAccess";
 
 const EVIDENCE_LINK_TYPES = new Set([
   "supports",
@@ -88,7 +95,7 @@ const EVIDENCE_LINK_TYPES = new Set([
   "used_in_context",
 ]);
 const EVIDENCE_STATUSES = new Set(["candidate", "active", "rejected", "archived"]);
-const SOURCE_CONNECTION_VISIBILITIES = new Set(["private", "space_discoverable"]);
+const SOURCE_CONNECTION_VISIBILITIES = new Set(["private", "space_shared"]);
 const SOURCE_CONNECTION_SUBSCRIPTION_STATUSES = new Set(["subscribed", "pending", "dismissed", "muted"]);
 const SOURCE_ITEM_LIBRARY_STATUSES = new Set(["open", "new", "triaged", "selected", "ignored", "archived"]);
 const SOURCE_ITEM_READ_STATUSES = new Set(["unread", "skimmed", "read", "discussed"]);
@@ -118,21 +125,12 @@ function sourceConnectionVisibility(body: Record<string, unknown>, connectorKey:
   const requested = optionalString(body.visibility);
   if (requested) {
     if (!SOURCE_CONNECTION_VISIBILITIES.has(requested)) {
-      throw new HttpError(422, "visibility must be one of: private, space_discoverable");
+      throw new HttpError(422, "visibility must be one of: private, space_shared");
     }
     return requested;
   }
   if (optionalString(body.credential_id) || connectorKey === "custom_source") return "private";
-  return "space_discoverable";
-}
-
-function optionalSourceConnectionVisibility(value: unknown): string | null {
-  const requested = optionalString(value);
-  if (!requested) return null;
-  if (!SOURCE_CONNECTION_VISIBILITIES.has(requested)) {
-    throw new HttpError(422, "visibility must be one of: private, space_discoverable");
-  }
-  return requested;
+  return "space_shared";
 }
 
 function isManualUrlItem(item: SourceItemRow): boolean {
@@ -225,14 +223,14 @@ export class PgSourcesRepository {
     } else if (view === "pending") {
       clauses.push("scus.status = 'pending'");
     } else if (view === "owned") {
-      clauses.push("sc.owner_user_id = $2");
+      clauses.push(contentOwnerFilterSql("source_connection", "sc", "$2"));
     } else if (view === "available") {
-      clauses.push("sc.visibility = 'space_discoverable'");
-      clauses.push("sc.owner_user_id <> $2");
+      clauses.push(contentVisibilityFilterSql("sc", ["space_shared"]));
+      clauses.push(`NOT (${contentOwnerFilterSql("source_connection", "sc", "$2")})`);
       clauses.push("(scus.status IS NULL OR scus.status IN ('pending', 'dismissed'))");
     } else if (view === "manageable") {
       clauses.push(`(
-        sc.owner_user_id = $2
+        ${contentOwnerFilterSql("source_connection", "sc", "$2")}
         OR EXISTS (
           SELECT 1 FROM space_memberships sm
            WHERE sm.space_id = sc.space_id
@@ -244,6 +242,7 @@ export class PgSourcesRepository {
     } else {
       throw new HttpError(422, "view must be one of: subscribed, pending, owned, available, manageable");
     }
+    if (view !== "manageable") clauses.push(contentReadSql("source_connection", "sc", "$2"));
     const where = `WHERE ${clauses.join(" AND ")}`;
     const join = `LEFT JOIN source_connection_user_subscriptions scus
                     ON scus.space_id = sc.space_id
@@ -353,6 +352,9 @@ export class PgSourcesRepository {
   async updateConnection(identity: SpaceUserIdentity, connectionId: string, body: Record<string, unknown>) {
     const existing = await this.getConnectionRow(identity, connectionId);
     if (!existing) throw new HttpError(404, "Source connection not found");
+    if (body.visibility !== undefined || body.access_level !== undefined || body.grants !== undefined) {
+      throw new HttpError(422, "Use the content-access API to update Source permissions");
+    }
     if (Object.hasOwn(body, "credential_id") && body.credential_id != null) {
       if (existing.handler_kind !== "generated_custom") {
         throw new HttpError(422, "credential_id can only be set on a Custom Source connection");
@@ -370,9 +372,6 @@ export class PgSourcesRepository {
     const now = new Date().toISOString();
     const requestedStatus = optionalString(body.status) ?? existing.status;
     const requestedFrequency = optionalString(body.fetch_frequency) ?? existing.fetch_frequency;
-    const requestedVisibility = Object.hasOwn(body, "visibility")
-      ? optionalSourceConnectionVisibility(body.visibility)
-      : null;
     const schedule = resolveRequestedSourceSchedule({
       body,
       status: requestedStatus,
@@ -387,17 +386,16 @@ export class PgSourcesRepository {
          name = COALESCE($3, name),
          status = COALESCE($4::varchar(32), status),
          credential_id = CASE WHEN $5::boolean THEN $6 ELSE credential_id END,
-         visibility = COALESCE($7::varchar(32), visibility),
-         fetch_frequency = COALESCE($8, fetch_frequency),
-         capture_policy = COALESCE($9, capture_policy),
-         trust_level = COALESCE($10, trust_level),
-         topic_hints_json = CASE WHEN $11::boolean THEN $12::jsonb ELSE topic_hints_json END,
-         consent_json = CASE WHEN $13::boolean THEN $14::jsonb ELSE consent_json END,
-         policy_json = CASE WHEN $15::boolean THEN $16::jsonb ELSE policy_json END,
-         config_json = CASE WHEN $17::boolean THEN $18::jsonb ELSE config_json END,
-         schedule_rule_json = $19::jsonb,
-         deleted_at = CASE WHEN $4::varchar(32) = 'archived' THEN $20::timestamptz ELSE deleted_at END,
-         updated_at = $20
+         fetch_frequency = COALESCE($7, fetch_frequency),
+         capture_policy = COALESCE($8, capture_policy),
+         trust_level = COALESCE($9, trust_level),
+         topic_hints_json = CASE WHEN $10::boolean THEN $11::jsonb ELSE topic_hints_json END,
+         consent_json = CASE WHEN $12::boolean THEN $13::jsonb ELSE consent_json END,
+         policy_json = CASE WHEN $14::boolean THEN $15::jsonb ELSE policy_json END,
+         config_json = CASE WHEN $16::boolean THEN $17::jsonb ELSE config_json END,
+         schedule_rule_json = $18::jsonb,
+         deleted_at = CASE WHEN $4::varchar(32) = 'archived' THEN $19::timestamptz ELSE deleted_at END,
+         updated_at = $19
        WHERE space_id = $1 AND id = $2
        RETURNING ${CONNECTION_COLUMNS}`,
       [
@@ -407,7 +405,6 @@ export class PgSourcesRepository {
         optionalString(body.status),
         Object.hasOwn(body, "credential_id"),
         optionalString(body.credential_id),
-        requestedVisibility,
         optionalString(body.fetch_frequency),
         governance.capturePolicy,
         governance.trustLevel,
@@ -646,11 +643,13 @@ export class PgSourcesRepository {
         `INSERT INTO source_items (
            id, space_id, connection_id, item_type, title, source_uri, canonical_uri,
            source_domain, created_by_user_id, content_state, retention_policy,
-           metadata_json, first_seen_at, last_seen_at, created_at, updated_at
+           metadata_json, first_seen_at, last_seen_at, created_at, updated_at,
+           owner_user_id, visibility, access_level
          ) VALUES (
            $1, $2, $3, 'external_url', $4, $5, $6,
            $7, $8, $9, $10,
-           $11::jsonb, $12, $12, $12, $12
+           $11::jsonb, $12, $12, $12, $12,
+           $13, $14, $15
          ) RETURNING ${ITEM_COLUMNS}`,
         [
           randomUUID(),
@@ -665,9 +664,22 @@ export class PgSourcesRepository {
           retention,
           JSON.stringify({ created_by: "manual_url" }),
           now,
+          connection?.owner_user_id ?? identity.userId,
+          connection?.visibility ?? "private",
+          connection?.access_level ?? "full",
         ],
       );
       row = inserted.rows[0]!;
+      if (connection?.visibility === "selected_users") {
+        await inheritContentAccessGrants(this.db, {
+          spaceId: identity.spaceId,
+          sourceResourceType: "source_connection",
+          sourceResourceId: connection.id,
+          targetResourceType: "source_item",
+          targetResourceId: row.id,
+          inheritedAt: now,
+        });
+      }
     }
     if (body.queue_content === true) {
       await this.createJob({ identity, connectionId: row.connection_id, sourceItemId: row.id, jobType: "manual_url", metadata: { url: canonical } });
@@ -828,8 +840,12 @@ export class PgSourcesRepository {
     if (filters.connectionId && !(await this.getConnectionRow(identity, filters.connectionId))) {
       throw new HttpError(404, "Source connection not found");
     }
-    const params: unknown[] = [identity.spaceId];
-    const clauses = ["space_id = $1", "deleted_at IS NULL"];
+    const params: unknown[] = [identity.spaceId, identity.userId];
+    const clauses = [
+      "space_id = $1",
+      "deleted_at IS NULL",
+      contentReadSql("extracted_evidence", "extracted_evidence", "$2"),
+    ];
     const add = (value: unknown) => {
       params.push(value);
       return `$${params.length}`;
@@ -921,21 +937,26 @@ export class PgSourcesRepository {
     const now = new Date().toISOString();
     const result = await this.db.query<EvidenceRow>(
       `INSERT INTO extracted_evidence (
-         id, space_id, source_item_id, source_object_type, source_object_id,
+         id, space_id, owner_user_id, visibility, access_level,
+         source_item_id, source_object_type, source_object_id,
          evidence_type, title, content_excerpt, content_hash, artifact_id,
          source_uri, source_title, source_author, occurred_at, trust_level,
          extraction_method, confidence, status, metadata_json, created_by_user_id,
          created_at, updated_at
        ) VALUES (
          $1, $2, $3, $4, $5,
-         $6, $7, $8, $9, $10,
-         $11, $12, $13, $14::timestamptz, $15,
-         $16, $17::float, $18, $19::jsonb, $20,
-         $21, $21
+         $6, $7, $8,
+         $9, $10, $11, $12, $13,
+         $14, $15, $16, $17::timestamptz, $18,
+         $19, $20::float, $21, $22::jsonb, $23,
+         $24, $24
        ) RETURNING ${EVIDENCE_COLUMNS}`,
       [
         randomUUID(),
         identity.spaceId,
+        item?.owner_user_id ?? identity.userId,
+        item?.visibility ?? "private",
+        item?.access_level ?? "full",
         sourceItemId,
         optionalString(body.source_object_type) ?? item?.source_object_type ?? null,
         optionalString(body.source_object_id) ?? item?.source_object_id ?? null,
@@ -958,6 +979,16 @@ export class PgSourcesRepository {
       ],
     );
     const row = result.rows[0]!;
+    if (item?.visibility === "selected_users") {
+      await inheritContentAccessGrants(this.db, {
+        spaceId: identity.spaceId,
+        sourceResourceType: "source_item",
+        sourceResourceId: item.id,
+        targetResourceType: "extracted_evidence",
+        targetResourceId: row.id,
+        inheritedAt: now,
+      });
+    }
     await this.reindexEvidenceForRetrieval(identity.spaceId, row.id, "source_evidence_create");
     return evidenceOut(row);
   }
@@ -1288,7 +1319,8 @@ export class PgSourcesRepository {
       "psil.status = 'active'",
       "psb.status = 'active'",
       "si.deleted_at IS NULL",
-      `(psb.delivery_scope = 'project_members' OR ${sourceItemReadableClause("si", "$2", false)})`,
+      contentReadSql("source_item", "si", "$2"),
+      `(psb.delivery_scope = 'project_members' OR ${sourceItemConnectionGateClause("si", "$2", false)})`,
     ];
     const add = (value: unknown) => {
       params.push(value);
@@ -1393,18 +1425,7 @@ export class PgSourcesRepository {
     const clauses = [
       "sc.space_id = $1",
       "sc.deleted_at IS NULL",
-      `(
-        sc.owner_user_id = $2
-        OR sc.visibility = 'space_discoverable'
-        OR scus.status IS NOT NULL
-        OR EXISTS (
-          SELECT 1 FROM space_memberships sm
-           WHERE sm.space_id = sc.space_id
-             AND sm.user_id = $2
-             AND sm.status = 'active'
-             AND sm.role IN ('owner', 'admin')
-        )
-      )`,
+      contentReadSql("source_connection", "sc", "$2"),
     ];
     if (filters.connectionId) {
       params.push(filters.connectionId);
@@ -1665,6 +1686,7 @@ export class PgSourcesRepository {
             WHERE ee.space_id = $1
               AND ee.id::text = ANY($2::text[])
               AND ee.deleted_at IS NULL
+              AND ${contentReadSql("extracted_evidence", "ee", "$3")}
               AND (
                 ee.source_item_id IS NULL
                 OR ${sourceItemReadableClause("si", "$3", false)}
@@ -1840,19 +1862,7 @@ export class PgSourcesRepository {
   }
 
   private async canViewConnectionMetadata(identity: SpaceUserIdentity, connection: SourceConnectionRow): Promise<boolean> {
-    if (connection.owner_user_id === identity.userId) return true;
-    if (connection.subscription_status) return true;
-    if (connection.visibility === "space_discoverable") return true;
-    const result = await this.db.query<{ role: string }>(
-      `SELECT role
-         FROM space_memberships
-        WHERE space_id = $1
-          AND user_id = $2
-          AND status = 'active'
-        LIMIT 1`,
-      [identity.spaceId, identity.userId],
-    );
-    return result.rows[0]?.role === "owner" || result.rows[0]?.role === "admin";
+    return (await contentDecisionFromDb(this.db, identity, "source_connection", connection.id)) !== "deny";
   }
 
   private resolveProjectSourceDeliveryScope(
@@ -1865,7 +1875,7 @@ export class PgSourcesRepository {
       throw new HttpError(422, "delivery_scope must be project_members or source_subscribers");
     }
     const restrictedSource =
-      connection.visibility !== "space_discoverable" ||
+      connection.visibility !== "space_shared" ||
       Boolean(connection.credential_id) ||
       connection.handler_kind === "generated_custom" ||
       connection.connector_type === "custom" ||
@@ -1999,7 +2009,7 @@ export class PgSourcesRepository {
     connection: SourceConnectionRow,
     now: string,
   ): Promise<void> {
-    if (connection.visibility !== "space_discoverable" || connection.credential_id) return;
+    if (connection.visibility !== "space_shared" || connection.credential_id) return;
     const space = await this.db.query<{ type: string }>(
       `SELECT type FROM spaces WHERE id = $1 LIMIT 1`,
       [identity.spaceId],
@@ -2141,6 +2151,7 @@ export class PgSourcesRepository {
         WHERE ee.space_id = $1
           AND ee.id = $2
           AND ee.deleted_at IS NULL
+          AND ${contentReadSql("extracted_evidence", "ee", "$3")}
           AND (
             ee.source_item_id IS NULL
             OR ${sourceItemReadableClause("si", "$3", false)}

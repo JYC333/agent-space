@@ -16,9 +16,10 @@ interface SelectProps {
   size?: 'sm' | 'md'
   dropUp?: boolean
   disabled?: boolean
+  ariaLabel?: string
 }
 
-export function Select({ options, value, onChange, className, size = 'md', dropUp = false, disabled = false }: SelectProps) {
+export function Select({ options, value, onChange, className, size = 'md', dropUp = false, disabled = false, ariaLabel }: SelectProps) {
   const [open, setOpen] = useState(false)
   const triggerRef = useRef<HTMLDivElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -77,6 +78,7 @@ export function Select({ options, value, onChange, className, size = 'md', dropU
         type="button"
         disabled={disabled}
         onClick={() => setOpen(o => !o)}
+        aria-label={ariaLabel}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? listboxId : undefined}

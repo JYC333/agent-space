@@ -70,6 +70,7 @@ export class ProviderQueryRewriter implements QueryRewriter {
         max_tokens: DEFAULT_QUERY_REWRITE_MAX_TOKENS,
         task: RETRIEVAL_QUERY_REWRITE_TASK,
         egressPolicy: this.egressPolicy,
+        metering: { subject_user_id: viewerUserId },
       });
     } catch {
       return null;

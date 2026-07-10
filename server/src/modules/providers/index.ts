@@ -67,11 +67,14 @@ export {
 } from "./cli/loginAdapters";
 export { __setMountinfoReaderForTests, resolveHostPath } from "./cli/hostPath";
 export {
+  readClaudeUsageImportEvents,
   readClaudeTokenUsage,
   unsupportedTokenUsage,
+  type CliUsageImportEvent,
+  type CliUsageImportScan,
   type TokenUsage,
 } from "./cli/usageReader";
-export { readCodexTokenUsage } from "./cli/codexUsageReader";
+export { readCodexTokenUsage, readCodexUsageImportEvents } from "./cli/codexUsageReader";
 export {
   __setProbeFactoryForTests,
   parseQuota,

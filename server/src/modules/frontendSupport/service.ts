@@ -4,16 +4,16 @@ import {
   ACTIVE_RUN_STATUSES,
   DONE_TASK_STATUSES,
   REVIEW_TASK_STATUSES,
-  artifactVisibleSql,
+  artifactReadSql,
   boundedQueryInt,
   iso,
   isoOrNull,
   numeric,
   proposalVisibleSelect,
-  proposalVisibleSql,
-  runVisibleSql,
+  proposalReadSql,
+  runReadSql,
   suggestedActions,
-  taskVisibleSql,
+  taskReadSql,
 } from "./frontendSupportReadModel";
 import type {
   HomeActiveTaskItem,
@@ -183,7 +183,7 @@ export class PgFrontendSupportService {
       `${proposalVisibleSelect()}
         WHERE sm.user_id = $1
           AND p.status = 'pending'
-          AND ${proposalVisibleSql("$1")}
+          AND ${proposalReadSql("$1")}
         ORDER BY CASE
              WHEN p.urgency = 'critical' THEN 4
              WHEN p.urgency = 'high' THEN 3
@@ -239,7 +239,7 @@ export class PgFrontendSupportService {
          FROM runs r
          LEFT JOIN task_runs tr ON tr.run_id = r.id AND tr.space_id = r.space_id AND tr.role = 'primary'
         WHERE r.space_id = $1
-          AND ${runVisibleSql("$2")}
+          AND ${runReadSql("$2")}
           ${activeFilter}
         ORDER BY r.created_at DESC, r.id DESC
         LIMIT $3`,
@@ -273,7 +273,7 @@ export class PgFrontendSupportService {
           AND run_for_instructed.space_id = p.space_id
         WHERE p.space_id = $1
           AND p.status = 'pending'
-          AND ${proposalVisibleSql("$2")}`,
+          AND ${proposalReadSql("$2")}`,
       params,
     );
     const rows = limit === 0
@@ -312,7 +312,7 @@ export class PgFrontendSupportService {
               AND run_for_instructed.space_id = p.space_id
             WHERE p.space_id = $1
               AND p.status = 'pending'
-              AND ${proposalVisibleSql("$2")}
+              AND ${proposalReadSql("$2")}
             ORDER BY p.created_at DESC, p.id DESC
             LIMIT $3`,
           [...params, limit],
@@ -357,7 +357,7 @@ export class PgFrontendSupportService {
               a.created_at, a.visibility
          FROM artifacts a
         WHERE a.space_id = $1
-          AND ${artifactVisibleSql("$2")}
+          AND ${artifactReadSql("$2")}
         ORDER BY a.created_at DESC, a.id DESC
         LIMIT $3`,
       [identity.spaceId, identity.userId, limit],
@@ -379,7 +379,7 @@ export class PgFrontendSupportService {
          FROM tasks t
         WHERE t.space_id = $1
           AND t.deleted_at IS NULL
-          AND ${taskVisibleSql("$2")}
+          AND ${taskReadSql("$2")}
         GROUP BY t.status`,
       [identity.spaceId, identity.userId],
     );
@@ -421,7 +421,7 @@ export class PgFrontendSupportService {
         WHERE t.space_id = $1
           AND t.deleted_at IS NULL
           AND t.status <> ALL($3::text[])
-          AND ${taskVisibleSql("$2")}
+          AND ${taskReadSql("$2")}
         ORDER BY t.due_at ASC NULLS LAST, t.updated_at DESC, t.id DESC
         LIMIT $4`,
       [identity.spaceId, identity.userId, DONE_TASK_STATUSES, limit],
@@ -620,12 +620,12 @@ export class PgFrontendSupportService {
       `SELECT s.id AS space_id,
               s.name,
               s.type,
-              count(DISTINCT p.id) FILTER (WHERE p.status = 'pending' AND ${proposalVisibleSql("$1")})::text AS pending_proposals_count,
+              count(DISTINCT p.id) FILTER (WHERE p.status = 'pending' AND ${proposalReadSql("$1")})::text AS pending_proposals_count,
               count(DISTINCT t.id) FILTER (WHERE t.deleted_at IS NULL AND t.assigned_user_id = $1)::text AS assigned_tasks_count,
               count(DISTINCT r.id) FILTER (
                 WHERE r.status = 'failed'
                   AND r.created_at >= now() - interval '7 days'
-                  AND ${runVisibleSql("$1")}
+                  AND ${runReadSql("$1")}
               )::text AS recent_failed_runs_count
          FROM space_memberships sm
          JOIN spaces s ON s.id = sm.space_id
@@ -668,7 +668,7 @@ export class PgFrontendSupportService {
            WHERE sm.user_id = $1
              AND sm.status = 'active'
              AND p.status = 'pending'
-             AND ${proposalVisibleSql("$1")}) AS pending_proposals_count,
+             AND ${proposalReadSql("$1")}) AS pending_proposals_count,
          (SELECT count(t.id)::text
             FROM tasks t
             JOIN space_memberships sm ON sm.space_id = t.space_id
@@ -702,7 +702,7 @@ export class PgFrontendSupportService {
            ON sm.space_id = r.space_id
           AND sm.user_id = $1
           AND sm.status = 'active'
-        WHERE ${runVisibleSql("$1")}
+        WHERE ${runReadSql("$1")}
         ORDER BY r.created_at DESC, r.id DESC
         LIMIT $2`,
       [userId, limit],

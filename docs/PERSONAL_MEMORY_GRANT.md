@@ -141,8 +141,7 @@ Current implementation:
 - `proposal_approvals` supports explicit `egress_granting_user` approval rows.
 - Only the granting user may record that approval.
 - Approval rejects payloads marked `raw_private_memory_included = true`.
-- `SourcePointer.metadata_json` rejects grant-derived/personal-memory marker keys
-  recursively.
+- Publication adapters do not accept grant-derived personal-memory context.
 
 Not implemented yet:
 
@@ -205,11 +204,11 @@ These invariants are enforced at code level and covered by tests. They must neve
 
 1. **No grant, no cross-space private memory.** A shared-space run without a valid grant cannot read personal-space private memory.
 2. **User grants only their own memory.** `granting_user_id` is server-assigned from the authenticated user; a user cannot grant another user's memory.
-3. **SourcePointer does not grant access.** A SourcePointer to personal memory does not allow shared-space run access.
+3. **Publication does not replace grants.** A published copy does not authorize a shared-space run to read the source personal memory.
 4. **Highly restricted memories excluded.** `sensitivity_level = highly_restricted` memories are never readable through a grant.
 5. **Grant is run-scoped.** A grant for Run A cannot be reused by Run B.
 6. **One-time lifecycle.** `expired`, `revoked`, and `used` grants cannot be reused.
-7. **No raw personal memory in shared targets.** Personal memory summaries used as runtime context are not written into team memory, shared artifacts, public artifacts, or SourcePointer metadata without explicit proposal + approval.
+7. **No raw personal memory in shared targets.** Personal memory summaries used as runtime context are not written into team memory, shared artifacts, or publication snapshots without explicit approved content creation.
 8. **Space admin cannot substitute for granting user.** Only `granting_user_id` may record `egress_granting_user` approval.
 9. **Payload flags are not proof of approval.** Approval metadata in proposal payloads is never treated as a valid approval gate.
 10. **Egress guard fails closed.** Unknown target spaces are treated as non-personal and trigger BLOCK.
@@ -246,7 +245,7 @@ See `docs/FUTURE_ROADMAP.md` for deferred items including:
 ## See Also
 
 - `docs/SPACE_MODEL.md` — space types and private memory definition
-- `docs/SOURCE_POINTER.md` — SourcePointer metadata model
+- `docs/CONTENT_PUBLICATIONS.md` — independent targeted snapshot transfer
 - `docs/POLICY_AND_PRIVACY_BOUNDARIES.md` — policy enforcement inventory
 - `docs/FUTURE_ROADMAP.md` — future work
 - `server/src/modules/personalMemoryGrants/` — API implementation

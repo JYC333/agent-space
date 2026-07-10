@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { Pool } from "pg";
 import {
@@ -16,7 +17,7 @@ import { withDbTransaction } from "../src/modules/routeUtils/common";
 
 // Real-PostgreSQL coverage for Memory maintenance. The unit and route tests use
 // FakeDb rows; this applies the committed baseline migration to a throwaway DB
-// and locks the SQL-facing behavior that fakes cannot catch: jsonb visibility
+// and locks the SQL-facing behavior that fakes cannot catch: grant visibility
 // gates, stricter maintenance exclusions, artifact/proposal FKs, access logs,
 // and transaction rollback.
 
@@ -67,6 +68,14 @@ beforeEach(async () => {
      VALUES ($1, 'Maintenance Space', 'household', $2, now(), now())`,
     [SPACE, VIEWER],
   );
+  for (const id of [VIEWER, OTHER]) {
+    await pool.query(
+      `INSERT INTO space_memberships
+         (id, space_id, user_id, role, status, created_at, updated_at)
+       VALUES ($1, $2, $3, 'member', 'active', now(), now())`,
+      [randomUUID(), SPACE, id],
+    );
+  }
 });
 
 interface InsertMemoryInput {
@@ -75,8 +84,8 @@ interface InsertMemoryInput {
   content?: string;
   status?: string;
   visibility?: string;
+  access_level?: string;
   sensitivity_level?: string;
-  selected_user_ids?: string[] | null;
   owner_user_id?: string | null;
   scope_type?: string;
   supersedes_memory_id?: string | null;
@@ -93,8 +102,8 @@ async function insertMemory(input: InsertMemoryInput): Promise<void> {
     content: input.content ?? "Readable content long enough for maintenance checks.",
     status: input.status ?? "active",
     visibility: input.visibility ?? "private",
+    access_level: input.access_level ?? "full",
     sensitivity_level: input.sensitivity_level ?? "normal",
-    selected_user_ids: input.selected_user_ids ?? null,
     confidence: 1,
     importance: 0.5,
     version: 1,
@@ -110,11 +119,11 @@ async function insertMemory(input: InsertMemoryInput): Promise<void> {
   };
   const names = Object.keys(row);
   const placeholders = names.map((name, index) =>
-    name === "selected_user_ids" || name === "tags" ? `$${index + 1}::jsonb` : `$${index + 1}`,
+    name === "tags" ? `$${index + 1}::jsonb` : `$${index + 1}`,
   );
   const values = names.map((name) => {
     const value = row[name];
-    return name === "selected_user_ids" || name === "tags" ? JSON.stringify(value) : value;
+    return name === "tags" ? JSON.stringify(value) : value;
   });
   await pool!.query(
     `INSERT INTO memory_entries (${names.join(", ")})
@@ -136,29 +145,35 @@ async function scan(overrides: Partial<Parameters<MemoryMaintenanceService["scan
 }
 
 describe("Memory maintenance scan (real Postgres)", () => {
-  it("respects selected_users and restricted visibility over migrated jsonb rows", async () => {
+  it("respects selected-user grants and space-shared visibility", async () => {
     if (!available || !pool) return;
     await insertMemory({
       id: "selected-visible",
       owner_user_id: OTHER,
       visibility: "selected_users",
-      selected_user_ids: [VIEWER],
       title: "Shared maintenance title",
     });
     await insertMemory({
-      id: "restricted-visible",
+      id: "shared-visible",
       owner_user_id: OTHER,
-      visibility: "restricted",
-      selected_user_ids: [VIEWER],
+      visibility: "space_shared",
       title: "Shared maintenance title",
     });
     await insertMemory({
-      id: "restricted-hidden",
+      id: "selected-hidden",
       owner_user_id: OTHER,
-      visibility: "restricted",
-      selected_user_ids: [OTHER],
+      visibility: "selected_users",
       title: "Shared maintenance title",
     });
+    await pool.query(
+      `INSERT INTO content_access_grants
+         (id, space_id, resource_type, resource_id, grantee_user_id, granted_by_user_id,
+          access_level, created_at, updated_at)
+       VALUES
+         ($1, $2, 'memory', 'selected-visible', $3, $4, 'full', now(), now()),
+         ($5, $2, 'memory', 'selected-hidden', $4, $4, 'full', now(), now())`,
+      [randomUUID(), SPACE, VIEWER, OTHER, randomUUID()],
+    );
 
     const result = await scan();
     const duplicate = result.report.findings.find((finding) => finding.kind === "duplicate");
@@ -167,10 +182,10 @@ describe("Memory maintenance scan (real Postgres)", () => {
     expect(result.report.candidates_examined).toBe(2);
     expect(result.report.scanned).toBe(2);
     expect(duplicate?.objects.map((object) => object.object_id).sort()).toEqual([
-      "restricted-visible",
       "selected-visible",
+      "shared-visible",
     ]);
-    expect(JSON.stringify(result.report)).not.toContain("restricted-hidden");
+    expect(JSON.stringify(result.report)).not.toContain("selected-hidden");
   });
 
   it("uses owner summary_only full content for thin checks without putting content in the report", async () => {
@@ -178,7 +193,8 @@ describe("Memory maintenance scan (real Postgres)", () => {
     await insertMemory({
       id: "summary-owner",
       owner_user_id: VIEWER,
-      visibility: "summary_only",
+      visibility: "space_shared",
+      access_level: "summary",
       title: null,
       content: "tiny",
     });
@@ -192,7 +208,7 @@ describe("Memory maintenance scan (real Postgres)", () => {
       }),
     ]);
     expect(result.report.access_safety).toMatchObject({
-      summary_only_full_content_used: true,
+      summary_access_full_content_used: true,
       raw_content_included: false,
       snippets_included: false,
     });

@@ -25,7 +25,7 @@ artifact's production context remains unchanged.
   - `GET /api/v1/artifacts/{artifact_id}`
   - `GET /api/v1/artifacts/{artifact_id}/export`
 - Artifact reads are scoped by space identity and artifact visibility.
-- `workspace_shared` artifacts require `artifacts.workspace_id`. Non-owner
+- workspace-scoped `space_shared` artifacts require `artifacts.workspace_id`. Non-owner
   list/read/export access must provide matching workspace context and pass the
   Project-inherited workspace ACL: personal-space workspaces are readable inside
   the personal space; shared-space workspaces are readable through linked

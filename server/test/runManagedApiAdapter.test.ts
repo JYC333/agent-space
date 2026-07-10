@@ -14,6 +14,7 @@ import {
   type ProviderCommandStore,
   type ProviderHttpClient,
 } from "../src/modules/providers";
+import { resolveTestUsageAttribution } from "./support/usageAttribution";
 
 vi.mock("../src/db/pool", () => ({
   getDbPool: vi.fn(),
@@ -138,8 +139,14 @@ describe("executeManagedApiNoToolAdapter", () => {
         prompt: "Say hello",
         mode: "live",
         instruction: "Be concise.",
+        session_id: null,
+        parent_run_id: null,
+        root_run_id: null,
+        run_group_id: null,
+        agent_id: "agent-1",
         project_id: null,
         workspace_id: null,
+        trigger_origin: "manual",
         capability_id: null,
         context_snapshot_id: null,
         max_tokens: 64,
@@ -1402,6 +1409,7 @@ describe("executeManagedApiNoToolAdapter", () => {
 
 function emptyCredentialStore(calls: string[]): ProviderCommandStore {
   return {
+    resolveUsageAttribution: resolveTestUsageAttribution,
     async getInvocationTarget(_spaceId: string, providerId?: string | null) {
       calls.push(`target:${providerId}`);
       return {
@@ -1567,7 +1575,7 @@ class DomainRetrievalToolFakePool implements Queryable {
         owner_user_id: "user-1",
         scope_type: "personal",
         workspace_id: null,
-        selected_user_ids: [],
+        access_level: "full",
         project_id: null,
         title: "Coffee preferences",
         content: "Prefers oat milk for coffee.",

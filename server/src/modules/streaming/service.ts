@@ -5,7 +5,7 @@ import { errorEnvelope, sendErrorEnvelope } from "../../gateway/errorEnvelope";
 import { REQUEST_ID_HEADER, resolveRequestId } from "../../gateway/requestContext";
 import { resolveIdentity } from "../routeUtils/common";
 import { PgRunRepository, type RunEventPage } from "../runs/repository";
-import { canReadRun, runEventToOut } from "../runs/runReadModel";
+import { runEventToOut } from "../runs/runReadModel";
 
 /** Runtime string kept in lockstep with `EventType.RunEventAppended`. */
 export const RUN_EVENT_APPENDED_TYPE = "run.event_appended";
@@ -63,7 +63,7 @@ type PageFetchResult =
       message: string;
     };
 
-type StreamingRunRepository = Pick<PgRunRepository, "getRun" | "listRunEventsPage">;
+type StreamingRunRepository = Pick<PgRunRepository, "getVisibleRun" | "listRunEventsPage">;
 type StreamingRunRepositoryFactory = (config: ServerConfig) => StreamingRunRepository;
 
 let repositoryFactoryOverride: StreamingRunRepositoryFactory | null = null;
@@ -186,8 +186,8 @@ export async function streamRunEvents(
   if (!identity) return reply;
 
   const repository = repositoryFactoryOverride?.(config) ?? PgRunRepository.fromConfig(config);
-  const run = await repository.getRun(identity.spaceId, runId);
-  if (!run || !canReadRun(run, identity.userId)) {
+  const run = await repository.getVisibleRun(identity.spaceId, identity.userId, runId);
+  if (!run) {
     return sendErrorEnvelope(
       reply,
       404,

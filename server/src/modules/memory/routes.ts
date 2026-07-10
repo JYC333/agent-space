@@ -58,13 +58,19 @@ import {
 } from "./proposalRepository";
 import { canReadMemory } from "./memoryReadAuth";
 import { accessibleProjectIds } from "./projectAccess";
+import { memorySensitivityReadSql } from "./memorySensitivitySql";
+import { contentResourceDefinition } from "../access/contentAccessRegistry";
+import { contentAccessLevelSql, contentReadSql } from "../access/contentAccessSql";
+import { resolveOversightLevel } from "../access/oversightResolver";
+
+const MEMORY_DEFINITION = contentResourceDefinition("memory")!;
 
 /**
  * server memory model.
  *
  * The server serves read routes (`GET /memory`, `GET /memory/{id}`,
- * `POST /memory/search`) from the DB with the `can_read_memory` visibility rules
- * + summary-only redaction (see `memoryReadAuth.ts`). It also owns public memory
+ * `POST /memory/search`) through canonical content access plus Memory-specific
+ * sensitivity and summary redaction. It also owns public memory
  * proposal creation (`POST`/`PATCH`/`DELETE /memory`): those routes INSERT
  * pending `proposals` rows only and never mutate active `memory_entries`.
  */
@@ -96,8 +102,8 @@ interface MemoryAccessLogJoinedRow extends MemoryRow {
 
 const MEMORY_ACCESS_LOG_MEMORY_COLUMNS = `m.id, m.space_id, m.subject_user_id,
   m.owner_user_id, m.workspace_id, m.scope_type, m.namespace, m.memory_type,
-  m.title, NULL::text AS content, m.status, m.visibility, m.sensitivity_level,
-  m.selected_user_ids, m.last_confirmed_at, m.confidence, m.importance,
+  m.title, NULL::text AS content, m.status, m.visibility, m.access_level, m.sensitivity_level,
+  m.last_confirmed_at, m.confidence, m.importance,
   m.source_id, m.created_by, m.created_at, m.updated_at, m.deleted_at,
   m.version, m.tags, m.memory_layer, m.source_trust,
   m.created_from_proposal_id, m.root_memory_id, m.supersedes_memory_id,
@@ -882,6 +888,10 @@ async function loadVisibleMemoryAccessLogs(
     values.push(input.projectId);
     where.push(`m.project_id = $${values.length}`);
   }
+  values.push(input.userId);
+  const userExpr = `$${values.length}`;
+  where.push(contentReadSql("memory", "m", userExpr));
+  where.push(memorySensitivityReadSql("m", userExpr));
   const overfetchLimit = Math.min((input.offset + input.limit + 1) * 5, 5000);
   values.push(overfetchLimit);
 
@@ -896,7 +906,8 @@ async function loadVisibleMemoryAccessLogs(
         l.access_type AS log_access_type,
         l.reason AS log_reason,
         l.accessed_at AS log_accessed_at,
-        ${MEMORY_ACCESS_LOG_MEMORY_COLUMNS}
+        ${MEMORY_ACCESS_LOG_MEMORY_COLUMNS},
+        ${contentAccessLevelSql({ definition: MEMORY_DEFINITION, alias: "m", userExpr })} AS effective_access_level
        FROM memory_access_logs l
        JOIN memory_entries m
          ON m.id = l.memory_id
@@ -907,11 +918,13 @@ async function loadVisibleMemoryAccessLogs(
     values,
   );
 
+  const oversightLevel = await resolveOversightLevel(db, input.spaceId, input.userId);
   const readableRows = result.rows.filter((row) =>
     canReadMemory(row, {
       spaceId: input.spaceId,
       userId: input.userId,
       workspaceId: input.workspaceId ?? null,
+      oversightLevel,
     }),
   );
   const accessibleProjects = await accessibleProjectIds(

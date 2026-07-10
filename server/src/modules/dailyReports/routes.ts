@@ -9,6 +9,7 @@ import {
   resolveIdentity,
   sendRouteError,
 } from "../routeUtils/common";
+import { contentOwnerFilterSql, contentReadSql } from "../access/contentAccessSql";
 import { DailyCaptureReportService } from "./service";
 import { PgDailyReportSettingsRepository } from "./repository";
 
@@ -92,12 +93,13 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       const limit = Math.min(Number(query(request).limit ?? 10), 50);
       const db = dbPool(context.config);
       const result = await db.query(
-        `SELECT id, run_id, title, content, metadata_json, created_at
-           FROM artifacts
-          WHERE space_id = $1
-            AND owner_user_id = $2
-            AND artifact_type = 'daily_capture_report'
-          ORDER BY created_at DESC
+        `SELECT a.id, a.run_id, a.title, a.content, a.metadata_json, a.created_at
+           FROM artifacts a
+          WHERE a.space_id = $1
+            AND ${contentReadSql("artifact", "a", "$2")}
+            AND ${contentOwnerFilterSql("artifact", "a", "$2")}
+            AND a.artifact_type = 'daily_capture_report'
+          ORDER BY a.created_at DESC
           LIMIT $3`,
         [identity.spaceId, identity.userId, limit],
       );

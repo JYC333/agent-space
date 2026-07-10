@@ -73,6 +73,9 @@ export const evidenceLinks = pgTable("evidence_links", {
 export const extractedEvidence = pgTable("extracted_evidence", {
 	id: varchar({ length: 36 }).primaryKey().notNull(),
 	spaceId: varchar("space_id", { length: 36 }).notNull(),
+	ownerUserId: varchar("owner_user_id", { length: 36 }),
+	visibility: varchar({ length: 32 }).default('private').notNull(),
+	accessLevel: varchar("access_level", { length: 16 }).default('full').notNull(),
 	sourceItemId: varchar("source_item_id", { length: 36 }),
 	extractionJobId: varchar("extraction_job_id", { length: 36 }),
 	sourceSnapshotId: varchar("source_snapshot_id", { length: 36 }),
@@ -108,6 +111,7 @@ export const extractedEvidence = pgTable("extracted_evidence", {
 	index("ix_extracted_evidence_evidence_type").using("btree", table.evidenceType.asc().nullsLast()),
 	index("ix_extracted_evidence_extraction_job_id").using("btree", table.extractionJobId.asc().nullsLast()),
 	index("ix_extracted_evidence_occurred_at").using("btree", table.occurredAt.asc().nullsLast()),
+	index("ix_extracted_evidence_owner_user_id").using("btree", table.ownerUserId.asc().nullsLast()),
 	index("ix_extracted_evidence_source_item_id").using("btree", table.sourceItemId.asc().nullsLast()),
 	index("ix_extracted_evidence_source_object").using("btree", table.spaceId.asc().nullsLast(), table.sourceObjectType.asc().nullsLast(), table.sourceObjectId.asc().nullsLast()),
 	index("ix_extracted_evidence_source_object_id").using("btree", table.sourceObjectId.asc().nullsLast()),
@@ -117,6 +121,7 @@ export const extractedEvidence = pgTable("extracted_evidence", {
 	index("ix_extracted_evidence_space_status").using("btree", table.spaceId.asc().nullsLast(), table.status.asc().nullsLast()),
 	index("ix_extracted_evidence_status").using("btree", table.status.asc().nullsLast()),
 	index("ix_extracted_evidence_trust_level").using("btree", table.trustLevel.asc().nullsLast()),
+	index("ix_extracted_evidence_visibility").using("btree", table.visibility.asc().nullsLast()),
 	foreignKey({
 			columns: [table.artifactId],
 			foreignColumns: [artifacts.id],
@@ -143,6 +148,11 @@ export const extractedEvidence = pgTable("extracted_evidence", {
 			name: "extracted_evidence_extraction_job_id_fkey"
 		}),
 	foreignKey({
+			columns: [table.ownerUserId],
+			foreignColumns: [users.id],
+			name: "extracted_evidence_owner_user_id_fkey"
+		}),
+	foreignKey({
 			columns: [table.sourceItemId],
 			foreignColumns: [sourceItems.id],
 			name: "extracted_evidence_source_item_id_fkey"
@@ -160,6 +170,9 @@ export const extractedEvidence = pgTable("extracted_evidence", {
 	check("ck_extracted_evidence_evidence_type", sql`(evidence_type)::text = ANY (ARRAY[('document'::character varying)::text, ('excerpt'::character varying)::text, ('event'::character varying)::text, ('log'::character varying)::text, ('artifact'::character varying)::text, ('claim'::character varying)::text, ('summary'::character varying)::text])`),
 	check("ck_extracted_evidence_status", sql`(status)::text = ANY (ARRAY[('candidate'::character varying)::text, ('active'::character varying)::text, ('rejected'::character varying)::text, ('archived'::character varying)::text])`),
 	check("ck_extracted_evidence_trust_level", sql`(trust_level)::text = ANY (ARRAY[('trusted'::character varying)::text, ('normal'::character varying)::text, ('untrusted'::character varying)::text])`),
+	check("ck_extracted_evidence_visibility", sql`visibility IN ('private', 'space_shared', 'selected_users')`),
+	check("ck_extracted_evidence_access_level", sql`access_level IN ('full', 'summary')`),
+	check("ck_extracted_evidence_private_owner", sql`visibility = 'space_shared' OR owner_user_id IS NOT NULL`),
 ]);
 
 export const knowledgeItems = pgTable("knowledge_items", {
@@ -244,6 +257,7 @@ export const spaceObjects = pgTable("space_objects", {
 	summary: text(),
 	status: varchar({ length: 32 }).notNull(),
 	visibility: varchar({ length: 32 }).default('space_shared').notNull(),
+	accessLevel: varchar("access_level", { length: 16 }).default('full').notNull(),
 	ownerUserId: varchar("owner_user_id", { length: 36 }),
 	primaryProjectId: varchar("primary_project_id", { length: 36 }),
 	workspaceId: varchar("workspace_id", { length: 36 }),
@@ -308,7 +322,9 @@ export const spaceObjects = pgTable("space_objects", {
     WHEN 'claim'::text THEN ((status)::text = ANY (ARRAY[('active'::character varying)::text, ('disputed'::character varying)::text, ('superseded'::character varying)::text, ('rejected'::character varying)::text, ('archived'::character varying)::text]))
     ELSE true
 END`),
-	check("ck_space_objects_visibility", sql`(visibility)::text = ANY (ARRAY[('private'::character varying)::text, ('space_shared'::character varying)::text, ('workspace_shared'::character varying)::text, ('restricted'::character varying)::text])`),
+	check("ck_space_objects_visibility", sql`visibility IN ('private', 'space_shared', 'selected_users')`),
+	check("ck_space_objects_access_level", sql`access_level IN ('full', 'summary')`),
+	check("ck_space_objects_private_owner", sql`visibility = 'space_shared' OR owner_user_id IS NOT NULL`),
 ]);
 
 export const spaceObjectKinds = pgTable("space_object_kinds", {

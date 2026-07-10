@@ -1,4 +1,7 @@
-import { completeProviderEmbedding } from "../../providers/invocation/invocation";
+import {
+  completeProviderEmbedding,
+  type ProviderMeteringContext,
+} from "../../providers/invocation/invocation";
 import type { ProviderCommandStore } from "../../providers/commands/store";
 import type { RetrievalEgressPolicy } from "../egress/egressPolicy";
 import { RETRIEVAL_EMBEDDING_TASK } from "./config";
@@ -12,8 +15,9 @@ import type { RetrievalEmbedder } from "./service";
 export class ProviderEmbedder implements RetrievalEmbedder {
   constructor(
     private readonly store: ProviderCommandStore,
-    private readonly providerId: string | null = null,
-    private readonly egressPolicy: RetrievalEgressPolicy | null = null,
+    private readonly providerId: string | null,
+    private readonly egressPolicy: RetrievalEgressPolicy | null,
+    private readonly metering: ProviderMeteringContext,
   ) {}
 
   async embed(
@@ -28,6 +32,7 @@ export class ProviderEmbedder implements RetrievalEmbedder {
       dimensions: opts.dimensions,
       inputType: "document",
       egressPolicy: this.egressPolicy,
+      metering: this.metering,
     });
     return { vectors: result.vectors, model: result.model };
   }

@@ -7,10 +7,14 @@ import type {
 } from "@agent-space/protocol" with { "resolution-mode": "import" };
 import {
   canReadMemory,
-  summaryOnlyRedactContent,
+  shouldRedactMemoryContent,
   type MemoryAuthFields,
 } from "./memoryReadAuth";
 import { accessibleProjectIds, canAccessProject } from "./projectAccess";
+import { contentResourceDefinition } from "../access/contentAccessRegistry";
+import { contentAccessLevelSql, contentReadSql } from "../access/contentAccessSql";
+import { resolveOversightLevel } from "../access/oversightResolver";
+import { memorySensitivityReadSql } from "./memorySensitivitySql";
 
 export interface QueryResult<Row> {
   rows: Row[];
@@ -63,8 +67,8 @@ export class MemoryReadValidationError extends Error {}
 // All columns the read model needs: the MemoryOut wire fields plus the columns
 // canReadMemory inspects.
 export const MEMORY_COLUMNS = `id, space_id, subject_user_id, owner_user_id, workspace_id,
-  scope_type, namespace, memory_type, title, content, status, visibility,
-  sensitivity_level, selected_user_ids, last_confirmed_at, confidence, importance,
+  scope_type, namespace, memory_type, title, content, status, visibility, access_level,
+  sensitivity_level, last_confirmed_at, confidence, importance,
   source_id, created_by, created_at, updated_at, deleted_at, version, tags,
   memory_layer, source_trust, created_from_proposal_id,
   root_memory_id, supersedes_memory_id, project_id`;
@@ -93,6 +97,8 @@ export interface MemoryRow extends MemoryAuthFields {
   supersedes_memory_id: string | null;
   project_id: string | null;
 }
+
+const MEMORY_DEFINITION = contentResourceDefinition("memory")!;
 
 /**
  * server memory **read** model. A scoped SQL query loads candidate rows, then
@@ -147,20 +153,28 @@ export class PgMemoryReadRepository {
       params.push(filters.projectId);
       where.push(`project_id = $${params.length}`);
     }
+    params.push(userId);
+    const userExpr = `$${params.length}`;
+    where.push(contentReadSql("memory", "me", userExpr));
+    where.push(memorySensitivityReadSql("me", userExpr));
     const result = await this.db.query<MemoryRow>(
-      `SELECT ${MEMORY_COLUMNS} FROM memory_entries
+      `SELECT ${MEMORY_COLUMNS},
+              ${contentAccessLevelSql({ definition: MEMORY_DEFINITION, alias: "me", userExpr })} AS effective_access_level
+         FROM memory_entries me
         WHERE ${where.join(" AND ")}
         ORDER BY importance DESC, updated_at DESC`,
       params,
     );
     // System-scope seed memories are hidden unless explicitly opted in.
     const includeSystem = includeSystemScopeFor(filters);
+    const oversightLevel = await resolveOversightLevel(this.db, spaceId, userId);
     const readable = result.rows.filter((row) =>
       canReadMemory(row, {
         userId,
         spaceId,
         workspaceId: filters.workspaceId ?? null,
         includeSystemScope: includeSystem && row.scope_type === "system",
+        oversightLevel,
       }),
     );
     // Project gating: a memory tied to a project is only visible to viewers who
@@ -185,15 +199,20 @@ export class PgMemoryReadRepository {
     workspaceId: string | null,
   ): Promise<MemoryOut | null> {
     const result = await this.db.query<MemoryRow>(
-      `SELECT ${MEMORY_COLUMNS} FROM memory_entries
-        WHERE id = $1 AND space_id = $2 AND deleted_at IS NULL`,
-      [memoryId, spaceId],
+      `SELECT ${MEMORY_COLUMNS},
+              ${contentAccessLevelSql({ definition: MEMORY_DEFINITION, alias: "me", userExpr: "$3" })} AS effective_access_level
+         FROM memory_entries me
+        WHERE id = $1 AND space_id = $2 AND deleted_at IS NULL
+          AND ${contentReadSql("memory", "me", "$3")}
+          AND ${memorySensitivityReadSql("me", "$3")}`,
+      [memoryId, spaceId, userId],
     );
     const row = result.rows[0];
     if (!row) return null;
     const includeSystemScope = row.scope_type === "system";
+    const oversightLevel = await resolveOversightLevel(this.db, spaceId, userId);
     if (
-      !canReadMemory(row, { userId, spaceId, workspaceId, includeSystemScope })
+      !canReadMemory(row, { userId, spaceId, workspaceId, includeSystemScope, oversightLevel })
     ) {
       return null;
     }
@@ -231,8 +250,14 @@ export class PgMemoryReadRepository {
       params.push(filters.memoryType);
       where.push(`memory_type = $${params.length}`);
     }
+    params.push(userId);
+    const userExpr = `$${params.length}`;
+    where.push(contentReadSql("memory", "me", userExpr));
+    where.push(memorySensitivityReadSql("me", userExpr));
     const result = await this.db.query<MemoryRow>(
-      `SELECT ${MEMORY_COLUMNS} FROM memory_entries
+      `SELECT ${MEMORY_COLUMNS},
+              ${contentAccessLevelSql({ definition: MEMORY_DEFINITION, alias: "me", userExpr })} AS effective_access_level
+         FROM memory_entries me
         WHERE ${where.join(" AND ")}
         ORDER BY importance DESC, confidence DESC`,
       params,
@@ -240,12 +265,14 @@ export class PgMemoryReadRepository {
     // System-scope seed memories are hidden from search unless explicitly
     // opted in (an `include_system` flag or an explicit `scope=system` filter).
     const includeSystem = includeSystemScopeFor(filters);
+    const oversightLevel = await resolveOversightLevel(this.db, spaceId, userId);
     const readable = result.rows.filter((row) =>
       canReadMemory(row, {
         userId,
         spaceId,
         workspaceId: filters.workspaceId ?? null,
         includeSystemScope: includeSystem && row.scope_type === "system",
+        oversightLevel,
       }),
     );
     const visible = await this.filterByProjectAccess(readable, spaceId, userId);
@@ -404,7 +431,7 @@ export class PgMemoryReadRepository {
 /** Serialize a memory row to the `MemoryOut` wire shape with summary-only
  * redaction (shared by the read model and the apply accept-result builder). */
 export function serializeMemoryRow(row: MemoryRow, viewerUserId: string): MemoryOut {
-  const redact = summaryOnlyRedactContent(row, viewerUserId);
+  const redact = shouldRedactMemoryContent(row, viewerUserId);
   return {
     id: row.id,
       space_id: row.space_id,
@@ -418,8 +445,8 @@ export function serializeMemoryRow(row: MemoryRow, viewerUserId: string): Memory
       content: redact ? null : row.content,
       status: row.status,
       visibility: row.visibility ?? "private",
+      access_level: row.access_level ?? "full",
       sensitivity_level: row.sensitivity_level ?? "normal",
-      selected_user_ids: normalizeArray(row.selected_user_ids),
       last_confirmed_at: isoOrNull(row.last_confirmed_at),
       confidence: numeric(row.confidence),
       importance: numeric(row.importance),

@@ -12,6 +12,7 @@ export const retrievalObjects = pgTable("retrieval_objects", {
 	workspaceId: varchar("workspace_id", { length: 36 }),
 	ownerUserId: varchar("owner_user_id", { length: 36 }),
 	visibility: varchar({ length: 32 }),
+	accessLevel: varchar("access_level", { length: 16 }),
 	status: varchar({ length: 32 }).notNull(),
 	title: varchar({ length: 512 }).notNull(),
 	slug: varchar({ length: 512 }),
@@ -33,6 +34,8 @@ export const retrievalObjects = pgTable("retrieval_objects", {
 			name: "retrieval_objects_space_id_fkey"
 		}),
 	check("ck_retrieval_objects_source_connections_array", sql`jsonb_typeof(source_connection_ids_json) = 'array'::text`),
+	check("ck_retrieval_objects_visibility", sql`visibility IS NULL OR visibility IN ('private', 'space_shared', 'selected_users')`),
+	check("ck_retrieval_objects_access_level", sql`access_level IS NULL OR access_level IN ('full', 'summary')`),
 ]);
 
 export const retrievalAliases = pgTable("retrieval_aliases", {

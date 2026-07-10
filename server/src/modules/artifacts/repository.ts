@@ -5,7 +5,7 @@ import type { ReadStream } from "node:fs";
 import type { ServerConfig } from "../../config";
 import { getDbPool } from "../../db/pool";
 import type { Queryable } from "../proposals/repository";
-import { artifactVisibleSql } from "../access/visibility";
+import { contentReadSql } from "../access/contentAccessSql";
 
 export interface ArtifactOut {
   id: string;
@@ -22,6 +22,7 @@ export interface ArtifactOut {
   metadata_json: Record<string, unknown> | null;
   has_inline_content: boolean;
   visibility: string;
+  access_level: string;
   owner_user_id: string | null;
   content: string | null;
   created_at: string;
@@ -52,6 +53,7 @@ interface ArtifactRow {
   preview: boolean;
   metadata_json: Record<string, unknown> | null;
   visibility: string;
+  access_level: string;
   owner_user_id: string | null;
   created_at: unknown;
   updated_at: unknown;
@@ -134,15 +136,14 @@ export class PgArtifactRepository {
     userId: string,
     artifactId: string,
     includeContent = false,
-    workspaceId?: string | null,
+    _workspaceId?: string | null,
   ): Promise<ArtifactOut | null> {
     const params: unknown[] = [artifactId, spaceId, userId];
-    const workspaceParam = workspaceId ? `$${params.push(workspaceId)}` : null;
     const result = await this.db.query<ArtifactRow>(
       `${artifactSelectSql()}
         WHERE a.id = $1
           AND a.space_id = $2
-          AND ${artifactVisibleSql({ userExpr: "$3", workspaceMatchExpr: workspaceParam })}`,
+          AND ${contentReadSql("artifact", "a", "$3")}`,
       params,
     );
     const row = result.rows[0];
@@ -212,7 +213,7 @@ function buildWhere(
   const workspaceParam = filters.workspaceId ? add(filters.workspaceId) : null;
   const clauses = [
     `a.space_id = $1`,
-    artifactVisibleSql({ userExpr: "$2", workspaceMatchExpr: workspaceParam }),
+    contentReadSql("artifact", "a", "$2"),
   ];
   if (filters.artifactType) clauses.push(`a.artifact_type = ${add(filters.artifactType)}`);
   if (filters.runId) clauses.push(`a.run_id = ${add(filters.runId)}`);
@@ -224,7 +225,7 @@ function buildWhere(
 function artifactSelectSql(): string {
   return `SELECT a.id, a.space_id, a.run_id, a.proposal_id, a.artifact_type,
                  a.title, a.content, a.storage_ref, a.storage_path, a.mime_type,
-                 a.exportable, a.preview, a.metadata_json, a.visibility,
+                 a.exportable, a.preview, a.metadata_json, a.visibility, a.access_level,
                  a.owner_user_id, a.created_at, a.updated_at, a.project_id, a.workspace_id
             FROM artifacts a`;
 }
@@ -245,6 +246,7 @@ function artifactToOut(row: ArtifactRow, includeContent: boolean): ArtifactOut {
     metadata_json: row.metadata_json,
     has_inline_content: Boolean(row.content),
     visibility: row.visibility,
+    access_level: row.access_level,
     owner_user_id: row.owner_user_id,
     content: includeContent ? row.content : null,
     created_at: dateValue(row.created_at) ?? new Date(0).toISOString(),

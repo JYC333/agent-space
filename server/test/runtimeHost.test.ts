@@ -8,6 +8,8 @@ import {
   type ProviderCommandStore,
   type ProviderHttpClient,
 } from "../src/modules/providers";
+import type { UsageObservation } from "../src/modules/usage";
+import { resolveTestUsageAttribution } from "./support/usageAttribution";
 
 let app: FastifyInstance;
 
@@ -37,7 +39,11 @@ function requestBody(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function fakeStore(calls: string[], providerType = "openai"): ProviderCommandStore {
+function fakeStore(
+  calls: string[],
+  providerType = "openai",
+  usageObservations: UsageObservation[] = [],
+): ProviderCommandStore {
   return {
     async getInvocationTarget(_spaceId: string, providerId?: string | null) {
       calls.push(`target:${providerId}`);
@@ -66,6 +72,10 @@ function fakeStore(calls: string[], providerType = "openai"): ProviderCommandSto
     },
     async recordPoolOutcome(memberId: string, outcome: { kind: string }) {
       calls.push(`outcome:${memberId}:${outcome.kind}`);
+    },
+    resolveUsageAttribution: resolveTestUsageAttribution,
+    async recordUsageObservation(input: UsageObservation) {
+      usageObservations.push(input);
     },
     async getTaskChain(_spaceId: string, task: string) {
       calls.push(`task:${task}`);
@@ -109,7 +119,8 @@ describe("runtime host internal route", () => {
 
   it("executes a provider-backed tool-disabled host turn", async () => {
     const calls: string[] = [];
-    __setProviderCommandStoreForTests(fakeStore(calls));
+    const usageObservations: UsageObservation[] = [];
+    __setProviderCommandStoreForTests(fakeStore(calls, "openai", usageObservations));
     __setProviderHttpClientForTests(fakeHttpClient(calls));
     app = buildServer(config(), { logger: false });
 
@@ -117,7 +128,17 @@ describe("runtime host internal route", () => {
       method: "POST",
       url: "/internal/runtime-host/execute",
       headers: { "x-agent-space-internal-token": "internal-token" },
-      payload: requestBody({ max_tokens: 64 }),
+      payload: requestBody({
+        max_tokens: 64,
+        session_id: "session-1",
+        root_run_id: "root-1",
+        parent_run_id: "parent-1",
+        run_group_id: "group-1",
+        agent_id: "agent-1",
+        project_id: "project-1",
+        workspace_id: "workspace-1",
+        trigger_origin: "manual",
+      }),
     });
 
     expect(res.statusCode).toBe(200);
@@ -145,6 +166,34 @@ describe("runtime host internal route", () => {
       "target:provider-1",
       "fetch:gpt-4o-mini",
       "outcome:member-1:success",
+    ]);
+    expect(usageObservations).toEqual([
+      expect.objectContaining({
+        space_id: "space-1",
+        event_type: "llm.generation",
+        source_type: "local_run",
+        execution_channel: "managed_api",
+        meter_subject_type: "run",
+        meter_subject_id: "run-1",
+        run_id: "run-1",
+        root_run_id: "root-1",
+        parent_run_id: "parent-1",
+        run_group_id: "group-1",
+        session_id: "session-1",
+        agent_id: "agent-1",
+        project_id: "project-1",
+        workspace_id: "workspace-1",
+        trigger_origin: "manual",
+        adapter_type: "ts_agent_host",
+        provider_id: "provider-1",
+        provider_type: "openai",
+        provider_name_snapshot: "Main",
+        model: "gpt-4o-mini",
+        task: "runtime_host",
+        provider_usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+        usage_accuracy: "provider_reported",
+        dimensions: { mode: "live", tool_mode: "disabled" },
+      }),
     ]);
   });
 

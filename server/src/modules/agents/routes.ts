@@ -18,7 +18,7 @@ import {
 import { RunOrchestrationService } from "../runs/orchestrationService";
 import { RunMaterializationService } from "../runs/materializationService";
 import { sharedCliProcessRegistry } from "../runs/processRegistry";
-import { canReadRun, runToOut } from "../runs/runReadModel";
+import { runToOut } from "../runs/runReadModel";
 import { PgCodePatchCollector, PgWorkspaceManager } from "../workspaces";
 import { PgContextSnapshotRepository } from "../memory/contextSnapshotRepository";
 import {
@@ -144,8 +144,8 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     if (!identity) return reply;
     try {
       const repository = PgRunRepository.fromConfig(context.config);
-      const run = await repository.getRun(identity.spaceId, params(request).runId ?? "");
-      if (!run || !canReadRun(run, identity.userId)) {
+      const run = await repository.getVisibleRun(identity.spaceId, identity.userId, params(request).runId ?? "");
+      if (!run) {
         return reply.code(404).send({ detail: "Run not found in this space" });
       }
       return reply.send(runToOut(run));
@@ -185,7 +185,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       const q = routeQuery(request);
       const page = parsePage(q);
       const agentId = params(request).agentId ?? "";
-      const agent = await agentRepository().get(identity.spaceId, agentId);
+      const agent = await agentRepository().getVisible(identity.spaceId, identity.userId, agentId);
       if (!agent) return reply.code(404).send({ detail: "Agent not found" });
       const status = q.status === "all" ? null : q.status ?? "pending";
       const proposalRepository = new PgProposalRepository(dbPool(context.config));
@@ -206,7 +206,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     try {
       const q = routeQuery(request);
       const page = parsePage(q);
-      const agents = await agentRepository().list(identity.spaceId, {
+      const agents = await agentRepository().list(identity.spaceId, identity.userId, {
         createdByUserId: q.created_by_user_id ?? null,
         visibility: q.visibility ?? null,
         status: q.status ?? "active",
@@ -299,7 +299,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     const identity = await resolveIdentity(context, request, reply);
     if (!identity) return reply;
     try {
-      const agent = await agentRepository().get(identity.spaceId, params(request).agentId ?? "");
+      const agent = await agentRepository().getVisible(identity.spaceId, identity.userId, params(request).agentId ?? "");
       if (!agent) return reply.code(404).send({ detail: "Agent not found" });
       return reply.send(agent);
     } catch (error) {
@@ -314,7 +314,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       const body = jsonBody(request);
       const repo = agentRepository();
       const agentId = params(request).agentId ?? "";
-      let agent = await applyAgentIdentityPatch(repo, identity.spaceId, agentId, body);
+      let agent = await applyAgentIdentityPatch(repo, identity.spaceId, identity.userId, agentId, body);
       if (hasConfigPatch(body)) {
         agent = await repo.updateConfig(identity.spaceId, agentId, configPatch(body, identity.userId));
       }

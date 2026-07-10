@@ -3,10 +3,16 @@ import type { MemoryMaintenanceFinding, MemoryMaintenanceReport } from "@agent-s
 };
 import {
   canReadMemory,
-  summaryOnlyRedactContent,
+  shouldRedactMemoryContent,
 } from "./memoryReadAuth";
 import { accessibleProjectIds } from "./projectAccess";
 import { MEMORY_COLUMNS, type MemoryRow, type Queryable } from "./repository";
+import { contentResourceDefinition } from "../access/contentAccessRegistry";
+import { contentAccessLevelSql, contentReadSql } from "../access/contentAccessSql";
+import { resolveOversightLevel } from "../access/oversightResolver";
+import { memorySensitivityReadSql } from "./memorySensitivitySql";
+
+const MEMORY_DEFINITION = contentResourceDefinition("memory")!;
 
 export interface MemoryMaintenanceScanInput {
   spaceId: string;
@@ -53,7 +59,7 @@ export class MemoryMaintenanceService {
     const scanMode = input.scanMode ?? "recent";
     const cursor = scanMode === "full" ? decodeCursor(input.cursor ?? null) : null;
     const { candidates, visible } = await this.loadVisibleWindow(input, cursor, scanMode);
-    const summaryOnlyFullContentUsed = usesSummaryOnlyFullContent(visible);
+    const summaryAccessFullContentUsed = usesSummaryAccessFullContent(visible);
 
     const findings = [
       ...duplicateFindings(visible),
@@ -86,7 +92,7 @@ export class MemoryMaintenanceService {
           snippets_included: false,
           hidden_row_counts_included: false,
           filtered_rows_logged: false,
-          summary_only_full_content_used: summaryOnlyFullContentUsed,
+          summary_access_full_content_used: summaryAccessFullContentUsed,
           cursor_uses_visible_boundary: true,
         },
       },
@@ -96,13 +102,15 @@ export class MemoryMaintenanceService {
 
   private async loadCandidates(
     spaceId: string,
+    userId: string,
     limit: number,
     projectId: string | null,
     cursor: MemoryMaintenanceCursor | null,
   ): Promise<MemoryRow[]> {
     const result = await this.db.query<MemoryRow>(
-      `SELECT ${MEMORY_COLUMNS}
-         FROM memory_entries
+      `SELECT ${MEMORY_COLUMNS},
+              ${contentAccessLevelSql({ definition: MEMORY_DEFINITION, alias: "me", userExpr: "$7" })} AS effective_access_level
+         FROM memory_entries me
         WHERE space_id = $1
           AND deleted_at IS NULL
           AND status = ANY($2::varchar[])
@@ -112,9 +120,11 @@ export class MemoryMaintenanceService {
             OR updated_at < $5::timestamptz
             OR (updated_at = $5::timestamptz AND id < $6::varchar)
           )
+          AND ${contentReadSql("memory", "me", "$7")}
+          AND ${memorySensitivityReadSql("me", "$7")}
         ORDER BY updated_at DESC, id DESC
         LIMIT $3`,
-      [spaceId, ["active", "superseded", "archived"], limit, projectId, cursor?.updatedAt ?? null, cursor?.id ?? null],
+      [spaceId, ["active", "superseded", "archived"], limit, projectId, cursor?.updatedAt ?? null, cursor?.id ?? null, userId],
     );
     return result.rows;
   }
@@ -124,10 +134,11 @@ export class MemoryMaintenanceService {
     initialCursor: MemoryMaintenanceCursor | null,
     scanMode: "recent" | "full",
   ): Promise<{ candidates: MemoryRow[]; visible: VisibleMemory[] }> {
+    const oversightLevel = await resolveOversightLevel(this.db, input.spaceId, input.userId);
     let cursor = initialCursor;
     while (true) {
-      const candidates = await this.loadCandidates(input.spaceId, input.limit, input.projectId ?? null, cursor);
-      const visible = await this.visibleCandidates(input, candidates);
+      const candidates = await this.loadCandidates(input.spaceId, input.userId, input.limit, input.projectId ?? null, cursor);
+      const visible = await this.visibleCandidates(input, candidates, oversightLevel);
       if (scanMode !== "full" || visible.length > 0 || candidates.length < input.limit) {
         return { candidates, visible };
       }
@@ -140,14 +151,19 @@ export class MemoryMaintenanceService {
   private async visibleCandidates(
     input: MemoryMaintenanceScanInput,
     candidates: readonly MemoryRow[],
+    oversightLevel: Parameters<typeof canReadMemory>[1]["oversightLevel"],
   ): Promise<VisibleMemory[]> {
     const readable = candidates.filter((row) => {
       if (isExcludedMaintenanceRow(row)) return false;
       if (input.excludePersonalVisibility) {
         const vis = (row.visibility ?? "private").toLowerCase();
-        if (vis === "private" || vis === "restricted" || vis === "selected_users") return false;
+        if (vis === "private" || vis === "selected_users") return false;
       }
-      return canReadMemory(row, { userId: input.userId, spaceId: input.spaceId });
+      return canReadMemory(row, {
+        userId: input.userId,
+        spaceId: input.spaceId,
+        oversightLevel,
+      });
     });
     const projectAccessible = await accessibleProjectIds(
       this.db,
@@ -159,7 +175,7 @@ export class MemoryMaintenanceService {
       .filter((row) => !row.project_id || projectAccessible.has(row.project_id))
       .map((row) => ({
         row,
-        fullContentReadable: !summaryOnlyRedactContent(row, input.userId),
+        fullContentReadable: !shouldRedactMemoryContent(row, input.userId),
       }));
   }
 }
@@ -334,7 +350,7 @@ function sourcePolicyDriftFindings(memories: VisibleMemory[]): MemoryMaintenance
     findings.push({
       kind: "source_policy_drift",
       objects: [memoryObject(memory.row)],
-      reason: "External-trust memory has no source pointer available for source-policy review.",
+      reason: "External-trust memory has no source reference available for source-policy review.",
       cluster_key: "source_policy:external_without_source",
       cluster_label: "Source policy drift",
       confidence_tier: "low",
@@ -384,12 +400,12 @@ function contradictionFindings(memories: VisibleMemory[]): MemoryMaintenanceFind
   return findings;
 }
 
-function usesSummaryOnlyFullContent(memories: readonly VisibleMemory[]): boolean {
+function usesSummaryAccessFullContent(memories: readonly VisibleMemory[]): boolean {
   return memories.some(
     (memory) =>
       memory.row.status === "active" &&
       memory.fullContentReadable &&
-      (memory.row.visibility ?? "").toLowerCase() === "summary_only",
+      (memory.row.access_level ?? "full").toLowerCase() === "summary",
   );
 }
 
@@ -429,7 +445,6 @@ function memoryObject(row: MemoryRow): { object_type: "memory_entry"; object_id:
 function isExcludedMaintenanceRow(row: MemoryRow): boolean {
   if ((row.sensitivity_level ?? "normal").toLowerCase() === "highly_restricted") return true;
   if ((row.scope_type ?? "").toLowerCase() === "system") return true;
-  if ((row.visibility ?? "private").toLowerCase() === "public_template") return true;
   return false;
 }
 
