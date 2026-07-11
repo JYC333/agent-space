@@ -18,3 +18,9 @@ export {
   normalizeNotificationWebhookUrl,
   type NotificationWebhookPolicy,
 } from "./service";
+export {
+  OperationalAlertService,
+  safelyEmitOperationalAlert,
+  type OperationalAlertInput,
+  type OperationalAlertPort,
+} from "./operationalAlerts";

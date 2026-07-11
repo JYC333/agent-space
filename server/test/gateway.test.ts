@@ -12,15 +12,18 @@ import {
   SERVER_MARKER_VALUE,
   readHeader,
 } from "../src/gateway/requestContext";
+import { __setHealthDatabaseForTests } from "../src/modules/system/service";
 
 let app: FastifyInstance;
 
 afterEach(async () => {
+  __setHealthDatabaseForTests(null);
   await app?.close();
 });
 
 describe("request id on server-owned routes", () => {
   it("preserves an incoming x-request-id on the response", async () => {
+    __setHealthDatabaseForTests({ async query<Row>() { return { rows: [{ healthy: 1 } as Row], rowCount: 1 }; } });
     app = buildServer(loadConfig({}), { logger: false });
     const res = await app.inject({
       method: "GET",
@@ -33,6 +36,7 @@ describe("request id on server-owned routes", () => {
   });
 
   it("generates an x-request-id when the client did not send one", async () => {
+    __setHealthDatabaseForTests({ async query<Row>() { return { rows: [{ healthy: 1 } as Row], rowCount: 1 }; } });
     app = buildServer(loadConfig({}), { logger: false });
     const res = await app.inject({ method: "GET", url: "/health" });
     expect(res.statusCode).toBe(200);

@@ -94,13 +94,18 @@ export default async function setup(project: GlobalSetupProject): Promise<() => 
     };
     project.provide("sharedPostgres", context);
   } catch (error) {
+    if (container && !reuse) await container.stop();
+    container = undefined;
+
+    if (process.env.REQUIRE_TEST_POSTGRES === "true") {
+      throw error;
+    }
+
     const context: SharedPostgresContext = {
       available: false,
       error: error instanceof Error ? error.message : String(error),
     };
     project.provide("sharedPostgres", context);
-    if (container && !reuse) await container.stop();
-    container = undefined;
   }
 
   return async () => {

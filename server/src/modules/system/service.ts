@@ -22,18 +22,36 @@
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import type { ServerConfig } from "../../config";
+import { getDbPool } from "../../db/pool";
+import type { Queryable } from "../routeUtils/common";
 
 export const SERVER_SERVICE_NAME = "server";
 
 const PROTOCOL_PACKAGE = "@agent-space/protocol";
 
 export interface HealthBody {
-  status: "ok";
+  status: "ok" | "error";
   service: string;
+  checks: { database: "ok" | "error" };
 }
 
-export function healthBody(): HealthBody {
-  return { status: "ok", service: SERVER_SERVICE_NAME };
+let healthDatabaseOverride: Queryable | null = null;
+
+export function __setHealthDatabaseForTests(db: Queryable | null): void {
+  healthDatabaseOverride = db;
+}
+
+export async function healthBody(config: ServerConfig): Promise<HealthBody> {
+  if (!config.databaseUrl && !healthDatabaseOverride) {
+    return { status: "error", service: SERVER_SERVICE_NAME, checks: { database: "error" } };
+  }
+  try {
+    const db = healthDatabaseOverride ?? getDbPool(config.databaseUrl!);
+    await db.query("SELECT 1 AS healthy");
+    return { status: "ok", service: SERVER_SERVICE_NAME, checks: { database: "ok" } };
+  } catch {
+    return { status: "error", service: SERVER_SERVICE_NAME, checks: { database: "error" } };
+  }
 }
 
 /**

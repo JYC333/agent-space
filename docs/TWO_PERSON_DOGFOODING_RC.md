@@ -99,9 +99,9 @@ Do not rely on any of these for daily dogfood workflows.
 | Full capability marketplace or install/discovery UX | Not implemented |
 | Self-evolution behavior changes | Disabled (`ENABLE_SYSTEM_EVOLUTION=false`) |
 | Self-evolution execution | Disabled by default |
-| App-container self-deployment | Blocked by deployer allowlist |
+| App-container self-deployment | Blocked by 501 product routes and private deployer socket |
 | Deployment job persistence | 501-gated (`POST /deployments/jobs` → 501) |
-| Arbitrary deployer commands | Blocked; only allowlisted `CoreJobType` + `SelfEvolutionJobType` |
+| Arbitrary deployer commands | Blocked; exactly three argument-free core jobs are allowlisted |
 | Automatic restore | Not implemented; restore is always manual |
 | Cloud/offsite backup sync | Not implemented |
 | Multi-device conflict resolution | Not implemented |
@@ -196,9 +196,9 @@ AGENT_SPACE_HOME/          (default: ~/.aspace/dev/)
   logs/                    Application logs (optional; BACKUP_INCLUDE_LOGS=false by default)
 ```
 
-Backups are stored at `AGENT_SPACE_HOME/backups/` by default. Archives contain `db/`,
-`storage/`, `secrets/`, `config/`, and `workspaces/`. Logs optional. `backups/` and
-`sandboxes/` are always excluded from backup archives.
+Backups are stored at `AGENT_SPACE_HOME/backups/` by default. Normal archives contain `db/`,
+`storage/`, `config/`, and `workspaces/`. Logs optional. `secrets/` uses the separate
+credential archive workflow. `backups/` and `sandboxes/` are always excluded.
 
 ### Allowed runtime adapters for RC
 
@@ -214,8 +214,10 @@ credentials must resolve through the CLI CredentialBroker.
 ### Deployment posture
 
 - `POST /deployments/jobs` returns 501. Deployment job persistence is absent.
-- Deployer `ALLOWED_JOB_TYPES` covers `CoreJobType` (`rebuild_agent_space`,
-  `restart_agent_space`, `health_check`) and `SelfEvolutionJobType`. No arbitrary shell.
+- Deployer `ALLOWED_JOB_TYPES` is exactly `rebuild_agent_space`,
+  `restart_agent_space`, and `health_check`; these jobs accept no request arguments.
+- The deployer socket is private to its privileged sidecar; product and self-evolution paths
+  cannot submit jobs.
 - `ENABLE_SYSTEM_EVOLUTION=false` disables self-evolution by default.
 
 ---
@@ -565,7 +567,7 @@ Expected fields in manifest:
 - `kind: "auto"` or `"manual"`
 - `created_at` — ISO timestamp
 - `source_root` — absolute path of data root at backup time
-- `included_paths` — list: `db/agent_space.dump`, `storage/`, `artifacts/`, `secrets/`, `config/`, `workspaces/`
+- `included_paths` — list: `db/agent_space.dump`, `storage/`, `artifacts/`, `config/`, `workspaces/`; never `secrets/`
 - `excluded_paths` — `backups/`, `sandboxes/`, `cache/`, `db/postgres/` with reason
 - `db_snapshot_method: "pg_dump_custom"`
 - `warnings` — empty list for clean backup
@@ -824,10 +826,11 @@ Backup manifest inspected: <yes / no>
 
 ## Security Notes
 
-- `secrets/provider_keys.key` is included in backup archives. Treat archives as
-  sensitive. Archive permissions: `600` (owner only).
+- `secrets/provider_keys.key` is included only in explicit credential archives. Keep those
+  separate from normal data archives and treat them as sensitive. Archive permissions: `600`.
 - No raw secret values are written to stdout, logs, or `backup_manifest.json`.
-- For offsite storage: `gpg --symmetric <archive.tar.gz>` before transferring.
+- For offsite storage: encrypt data and credential archives separately before transferring;
+  until both exist off-host, local backups protect deletion but not host loss.
 
 ---
 

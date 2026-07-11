@@ -23,6 +23,7 @@ import { PgJobQueueRepository } from "../jobs/repository";
 import { startJobsWorker, type JobsWorkerHandle } from "../jobs/workerRuntime";
 import type { PluginHost } from "../plugins/host";
 import { SourceBackfillExecutionService } from "../sources/sourceBackfillExecutionService";
+import { OperationalAlertService } from "../notifications/operationalAlerts";
 
 export interface BackgroundServicesHandle {
   worker: JobsWorkerHandle | null;
@@ -150,7 +151,19 @@ export function startBackgroundServices(
     });
   }
 
-  const scheduler = startSchedulerRegistry(tasks, log);
+  const operationalAlerts = OperationalAlertService.fromConfig(config);
+  const scheduler = startSchedulerRegistry(tasks, log, async (taskName, error) => {
+    if (!operationalAlerts) return;
+    await operationalAlerts.emitInstance({
+      kind: "scheduler_task_failed",
+      title: `Scheduler task failed: ${taskName}`,
+      message: `Scheduler task ${taskName} raised an exception: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      dedupeKey: `scheduler_task_failed:${taskName}`,
+      payload: { task_name: taskName },
+    });
+  });
   return { worker, scheduler };
 }
 

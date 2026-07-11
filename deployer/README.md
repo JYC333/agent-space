@@ -1,27 +1,24 @@
 # agent-space Deployer
 
-Host-level deployment supervisor. Runs **outside** the main app container and handles
-rebuild/restart requests from the server via a Unix domain socket.
+Privileged deployment supervisor. It runs separately from the main app and is operated
+manually; the current product API does not submit deployment jobs.
 
 ## Why
 
-The server cannot restart itself from inside a Docker container. The deployer runs on the
-host (or in a separate sidecar container with Docker access) and acts on approved deployment
-jobs submitted by the server.
+The deployer sidecar has docker.sock plus a read-write repository mount, which is
+host-equivalent authority. Its Unix socket stays private to the sidecar so app and agent
+runtimes cannot bypass product approval boundaries.
 
 ## Start (as part of Docker Compose — recommended)
 
 ```bash
-# First time: create the shared socket directory on the host
-sudo mkdir -p /var/run/agent-space
-
-# Then bring up the full stack (deployer starts automatically)
+# Bring up the full stack (deployer starts automatically)
 cd /path/to/agent-space
 ops/scripts/start.sh
 ```
 
-The deployer container has Docker socket access and shares `/var/run/agent-space` with the
-server container. The server submits jobs to the socket; the deployer runs the scripts.
+The deployer container has Docker socket access. Its socket is
+`/tmp/agent-space-deployer.sock` inside that container and is not shared with the server.
 
 ## Allowed Job Types
 
@@ -71,5 +68,7 @@ The process must have Docker CLI access (`docker` on PATH, user in `docker` grou
 
 - Socket is owner read/write, group read/write (`0660`). Restrict the group.
 - Only allowlisted job types are executed — no arbitrary shell commands.
-- Every job must come from an approved proposal (enforced by the server before calling).
+- Core jobs accept no request arguments or environment overrides.
+- Current jobs are operator-triggered; there is no product submission path.
+- A future product path must verify human approval and persist audit state before calling.
 - The deployer never reads or writes the database directly.

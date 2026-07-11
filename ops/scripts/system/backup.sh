@@ -3,7 +3,7 @@
 #
 # Produces the same archive format as the in-process BackupService:
 #   db/agent_space.dump   PostgreSQL snapshot (pg_dump custom format)
-#   storage/ artifacts/ config/ secrets/ workspaces/   file data
+#   storage/ artifacts/ config/ workspaces/   non-credential file data
 #   logs/                 only with --include-logs
 #   backup_manifest.json  archive metadata
 #
@@ -101,7 +101,9 @@ require_app_services_stopped() {
 require_app_services_stopped frontend server deployer
 
 STAGING=""
-trap 'local_compose_stop_postgres_if_started "backup"; [[ -z "$STAGING" ]] || rm -rf "$STAGING"' EXIT
+ARCHIVE_TMP=""
+VERIFY_STAGING=""
+trap 'local_compose_stop_postgres_if_started "backup"; [[ -z "$STAGING" ]] || rm -rf "$STAGING"; [[ -z "$VERIFY_STAGING" ]] || rm -rf "$VERIFY_STAGING"; [[ -z "$ARCHIVE_TMP" ]] || rm -f "$ARCHIVE_TMP"' EXIT
 
 if ! local_compose_ensure_postgres_ready "backup" "$PGUSER"; then
   exit 1
@@ -112,6 +114,8 @@ install -d -m 700 "$OUTPUT_DIR"
 
 TIMESTAMP="$(date -u +%Y%m%d-%H%M%S)"
 ARCHIVE_PATH="$OUTPUT_DIR/system-$TIMESTAMP.tar.gz"
+ARCHIVE_TMP="$(mktemp "$OUTPUT_DIR/.system-$TIMESTAMP-XXXXXX.tmp")"
+chmod 600 "$ARCHIVE_TMP"
 
 STAGING="$(mktemp -d -t aspace-system-backup-XXXXXX)"
 
@@ -127,7 +131,7 @@ mkdir -p "$STAGING/db"
 # ── File data (db/postgres, cache, sandboxes, backups are never archived) ──────
 INCLUDED=("db/agent_space.dump (pg_dump_custom)")
 EXCLUDED=()
-for d in storage artifacts config secrets workspaces; do
+for d in storage artifacts config workspaces; do
   if [[ -d "$MODE_ROOT/$d" ]]; then
     cp -a "$MODE_ROOT/$d" "$STAGING/$d"
     INCLUDED+=("$d/")
@@ -151,6 +155,7 @@ EXCLUDED+=(
   "cache/ (ephemeral)"
   "sandboxes/ (ephemeral)"
   "db/postgres/ (live PostgreSQL data)"
+  "secrets/ (credential material; use ops/scripts/system/backup-credentials.sh)"
 )
 
 # ── Version metadata (best-effort; recorded for restore compatibility checks) ──
@@ -223,8 +228,15 @@ PY
 python3 -m json.tool "$STAGING/backup_manifest.json" >/dev/null
 
 # ── Archive ────────────────────────────────────────────────────────────────────
-tar -czf "$ARCHIVE_PATH" -C "$STAGING" .
-chmod 600 "$ARCHIVE_PATH"
+tar -czf "$ARCHIVE_TMP" -C "$STAGING" .
+tar -tzf "$ARCHIVE_TMP" >/dev/null
+VERIFY_STAGING="$(mktemp -d -t aspace-system-backup-verify-XXXXXX)"
+python3 "$SCRIPT_DIR/safe_extract.py" "$ARCHIVE_TMP" "$VERIFY_STAGING" \
+  db storage artifacts config workspaces logs backup_manifest.json
+rm -rf "$VERIFY_STAGING"
+VERIFY_STAGING=""
+ARCHIVE_PATH="$(python3 "$SCRIPT_DIR/atomic_ops.py" publish "$ARCHIVE_TMP" "$ARCHIVE_PATH")"
+ARCHIVE_TMP=""
 
 echo "[backup] done: $ARCHIVE_PATH ($(du -sh "$ARCHIVE_PATH" | cut -f1))"
 echo "[backup] restore with: ops/scripts/system/restore.sh $ARCHIVE_PATH --mode $MODE"

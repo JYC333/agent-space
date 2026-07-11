@@ -1,4 +1,9 @@
 import type { ServerConfig } from "../../config";
+import {
+  OperationalAlertService,
+  safelyEmitOperationalAlert,
+  type OperationalAlertPort,
+} from "../notifications/operationalAlerts";
 import { getDbPool, type PoolClient } from "../../db/pool";
 import { withTransaction } from "../../db/tx";
 import { PgJobQueueRepository } from "../jobs/repository";
@@ -90,10 +95,15 @@ interface AgentPreflightRow {
 }
 
 export class AutomationService {
+  private readonly alerts: OperationalAlertPort | null;
+
   constructor(
     private readonly config: ServerConfig,
     private readonly repo: AutomationRepositoryPort,
-  ) {}
+    alerts?: OperationalAlertPort | null,
+  ) {
+    this.alerts = alerts === undefined ? OperationalAlertService.fromConfig(config) : alerts;
+  }
 
   async create(input: {
     spaceId: string;
@@ -358,6 +368,21 @@ export class AutomationService {
         }
         fired += 1;
       } catch (error) {
+        await safelyEmitOperationalAlert(this.alerts, {
+          kind: "automation_fire_failed",
+          title: `Automation failed: ${auto.name}`,
+          message: `Scheduled automation ${auto.id} failed to fire: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          dedupeKey: `automation_fire_failed:${auto.id}`,
+          spaceId: auto.space_id,
+          userId: auto.owner_user_id,
+          payload: {
+            automation_id: auto.id,
+            automation_name: auto.name,
+            trigger_type: auto.trigger_type,
+          },
+        });
         if (!scheduleWasHandled(error)) {
           await this.repo.advanceSchedule(auto);
         }

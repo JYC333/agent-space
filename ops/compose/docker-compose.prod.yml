@@ -73,7 +73,7 @@ services:
       - ${AGENT_SPACE_MODE_ROOT:-$HOME/.aspace/prod}:/aspace
     user: "1000:989"
     environment:
-      - DEPLOYER_SOCKET=/aspace/run/deployer.sock
+      - DEPLOYER_SOCKET=/tmp/agent-space-deployer.sock
       - REPO_ROOT=/repo
       - AGENT_SPACE_HOME=/aspace
       - AGENT_SPACE_ENV=prod

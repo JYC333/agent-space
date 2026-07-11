@@ -188,6 +188,7 @@ Load only the module docs relevant to your task.
 | [0007](decisions/0007-multi-cli-mvp.md) | Multi-CLI MVP |
 | [0008](decisions/0008-credential-channel-isolation.md) | Credential channel isolation |
 | [0009](decisions/0009-capability-workflow-open-skill-system.md) | Capability, Workflow, and Open Skill framework |
+| [0010](decisions/0010-agent-workbench-product-direction.md) | Personal + small-team Agent Workbench direction, dogfooding checkpoint, dual runtime stance |
 
 ---
 

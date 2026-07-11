@@ -30,13 +30,14 @@ COPY scripts/ ./scripts/
 RUN chmod +x scripts/*.sh
 
 # /repo — repo root mounted by docker-compose.yml (needed by deploy scripts)
-# /aspace/run — shared with server for Unix socket
-ENV DEPLOYER_SOCKET=/aspace/run/deployer.sock
+# The socket stays private to this privileged container. Product runtimes and
+# agent subprocesses must not be able to submit host-equivalent jobs directly.
+ENV DEPLOYER_SOCKET=/tmp/agent-space-deployer.sock
 ENV REPO_ROOT=/repo
 
 # Non-root user matching server (uid 1000) so socket files are accessible to both
 RUN useradd -m -u 1000 deployer && chown -R deployer /deployer
-RUN mkdir -p /aspace/run && chown deployer:deployer /aspace
+RUN mkdir -p /aspace && chown deployer:deployer /aspace
 USER deployer
 
 CMD ["python", "deployer.py"]

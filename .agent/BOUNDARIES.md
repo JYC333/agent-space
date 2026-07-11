@@ -195,13 +195,15 @@ schema adds that table.
 
 ## Deployment Boundaries
 
-**B41** — The main app container does not directly restart or rebuild itself. Host-level deployment actions are handled exclusively by the deployer process (`deployer/deployer.py`) through a Unix domain socket.
+**B41** — The main app container does not directly restart or rebuild itself. The current product deployment routes are fail-closed (`POST /api/v1/deployments/jobs` returns 501), and no production server service submits deployer jobs. The only current deployment triggers are explicit operator execution of the allowlisted scripts or an operator-controlled client inside the privileged deployer container.
 
-**B42** — The deployer Unix socket is never exposed on a public TCP port. Access is controlled by filesystem permissions on the socket file.
+**B42** — The deployer Unix socket is never exposed on TCP and remains private to the privileged deployer container. It must not be placed in `AGENT_SPACE_HOME`, mounted into the server container, or made reachable from an agent runtime or sandbox. Filesystem permissions are defense in depth, not an approval mechanism.
 
-**B43** — The deployer accepts only allowlisted job types (`rebuild_agent_space`, `restart_agent_space`, `health_check`). It never executes arbitrary shell commands. Agent-generated code cannot trigger deployment without a human-approved proposal.
+**B43** — The deployer accepts exactly `rebuild_agent_space`, `restart_agent_space`, and `health_check`; these jobs accept no request arguments. It never accepts arbitrary commands, request-to-environment overrides, self-evolution jobs, code-patch jobs, capability jobs, or caller-selected script paths. The deployer protocol does not validate proposal state. A future product deployment trigger must therefore verify a human-approved proposal in the server authority before submitting one of these jobs and must add durable audit coverage in the same change.
 
-**B44** — The Docker socket (`/var/run/docker.sock`), if present, is not used for deployment control. Deployment goes through the deployer Unix socket. High-risk one-shot Docker sandboxing is not currently implemented in the product path and must not be represented as active isolation.
+**B44** — The deployer container's Docker socket plus read-write repository mount is host-equivalent authority. Nothing on the evolution, `code_patch`, capability, agent-runtime, automation, job, or scheduler path may reach deployer input or invoke its scripts. High-risk one-shot Docker sandboxing is not currently implemented in the product path and must not be represented as active isolation.
+
+**B44A** — An agent-space instance must never be directly exposed to the public internet. The current frontend has no production TLS termination, rate limiting, or general CSRF-token hardening. Any move toward internet exposure must first implement and review those controls and update the security boundary documentation.
 
 ---
 

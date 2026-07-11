@@ -50,7 +50,7 @@ the archive to finish.
 |---|---|
 | `db/agent_space.dump` — PostgreSQL snapshot (`pg_dump` custom format) | Always |
 | `storage/` — artifact files | Always |
-| `secrets/` — encrypted key files | Always |
+| `secrets/` — master key and CLI login state | **Never**; separate credential archive only |
 | `config/` — runtime config | Always |
 | `workspaces/` — workspace metadata | Always |
 | `backups/` — previous archives | **Never** (recursion prevention) |
@@ -58,7 +58,7 @@ the archive to finish.
 | `cache/` — ephemeral cache | **Never** |
 | `logs/` — application logs | Only if `BACKUP_INCLUDE_LOGS=true` |
 
-**PostgreSQL backup:** `BackupService` uses `pg_dump -Fc --no-owner --no-acl` (custom format) for a consistent snapshot. Fails closed if `pg_dump` fails — no partial archive is produced. `db_snapshot_method` in the manifest is `"pg_dump_custom"`. The dump is restored with `pg_restore`. The live `db/postgres` data directory is **never** copied into an archive — the database is only captured logically.
+**PostgreSQL backup:** `BackupService` uses `pg_dump -Fc --no-owner --no-acl` (custom format) for a consistent snapshot. It fails closed if `BACKUP_DATABASE_URL` is unset or `pg_dump` fails — no partial archive is produced. `db_snapshot_method` in the manifest is `"pg_dump_custom"`. The dump is restored with `pg_restore`. The live `db/postgres` data directory is **never** copied into an archive — the database is only captured logically.
 
 **Manifest version metadata:** every manifest records `backup_format`, `app_version`, `git_commit`, `schema_migration_version`, `schema_migration_checksum`, `postgres_server_version`, and `pg_dump_version` (best-effort, `null` when undeterminable). `ops/scripts/system/restore.sh` reads these during preflight and **fails** on an incompatible `backup_format` or a PostgreSQL major-version mismatch unless `--force-incompatible-backup` is supplied — the metadata is never silently ignored.
 
@@ -83,6 +83,12 @@ curl -X POST http://localhost:3000/api/v1/system/backups/manual -H "X-API-Key: <
 ## Backup — Offline: ops/scripts/system/backup.sh
 
 Use `ops/scripts/system/backup.sh` when app services are stopped. It produces the same archive format as `BackupService` (PostgreSQL snapshot + file data + `backup_manifest.json`). PostgreSQL must be running.
+
+Credential state is separate: `ops/scripts/system/backup-credentials.sh` writes a
+credential-only archive and `restore-credentials.sh` restores it explicitly. Normal restore
+never overwrites `secrets/`. Local data and credential archives protect against deletion only,
+not host loss; encrypt both separately with GPG and copy them offsite, with the passphrase
+stored separately, before claiming host-loss protection.
 
 ```bash
 ops/scripts/system/backup.sh --mode dev
@@ -109,7 +115,7 @@ ops/scripts/system/restore.sh ~/.aspace/dev/backups/auto-<timestamp>.tar.gz --mo
 `ops/scripts/system/restore.sh` runs `pg_restore` against the database and restores the file directories; `--force` overwrites existing file data. The live `db/postgres` directory is never touched.
 
 **After restore, verify before resuming writes:**
-1. `curl -s http://localhost:3000/api/v1/server/health` — expected: `{"status": "ok", "service": "server"}`
+1. `curl -s http://localhost:3000/api/v1/server/health` — expected: `{"status":"ok","service":"server","checks":{"database":"ok"}}`
 2. Spaces and users readable.
 3. Memory, artifacts, proposals, and runs readable.
 4. Activity inbox survives.
@@ -140,12 +146,28 @@ Missing workspace paths: `POST /workspaces/scan` marks workspace `stale`, **neve
 
 Operator restores a stale workspace: `PATCH /workspaces/{id}` setting `status=active`.
 
+## Minimal Failure Alerting
+
+- `/health` and `/api/v1/server/health` execute a database probe and return 503 when
+  PostgreSQL is unreachable.
+- A job that reaches `max_attempts`, a scheduled automation fire failure, or a scheduler
+  task exception writes a deduplicated `operational_alert` pointer into Activity Inbox.
+- Job and automation alerts are scoped to their owning space/user. Instance scheduler alerts
+  fan out to an active owner/admin in every space, including shared/team-only instances. Alert persistence is best-effort and never masks the
+  originating failure or changes retry/schedule semantics.
+- These alerts are durable in-product signals, not an external paging guarantee. Operators
+  must still inspect Activity Inbox and logs; webhook paging remains separately configured.
+
 ## Deployment Boundary
 
 - App container does not restart or rebuild itself.
-- Deployment actions route through the host-level deployer via Unix domain socket only (not public TCP).
+- Product deployment routes currently fail closed with 501; deployment is operator-triggered only.
+- The privileged deployer socket is container-private and is not reachable from server or agent runtimes.
 - Deployer `ALLOWED_JOB_TYPES`: `rebuild_agent_space`, `restart_agent_space`, `health_check`. No arbitrary shell.
-- `POST /deployments/jobs` returns 501. Deployment job persistence is not implemented. Operators use manual deployment scripts.
+- Self-evolution/code-patch/capability paths cannot submit deployer jobs. A future product
+  trigger requires server-side human-approval verification and durable audit first.
+- The instance must not be exposed directly to the public internet until TLS termination,
+  rate limiting, and general CSRF-token hardening have been implemented and reviewed.
 
 ## Self-Evolution Default Off
 
@@ -185,7 +207,9 @@ Dogfooding must stop immediately on any of these:
 
 ## Security Notes
 
-- Backup archives include `secrets/provider_keys.key` — treat archives as sensitive material.
+- Normal backup archives exclude `secrets/`; credential archives contain
+  `secrets/provider_keys.key` and CLI login state and are sensitive material.
 - Archive permissions: `600` (owner only). Output directory: `700`.
 - No raw secret values are written to stdout, logs, or manifests.
-- For offsite storage: `gpg --symmetric <archive.tar.gz>` before transferring.
+- For offsite storage: encrypt the data and credential archives separately with
+  `gpg --symmetric`, verify both encrypted streams, and keep the passphrase elsewhere.

@@ -2,7 +2,15 @@
 
 ## What Agent-Space Is
 
-Agent-Space is a **server-authoritative personal/household agent operating system** and **human-agent collaboration server**. It captures inputs, runs agents, produces reviewable artifacts and proposals, and governs what becomes durable memory or action.
+Agent-Space is a **server-authoritative Agent Workbench for individuals, households, and
+small teams**. It carries substantial daily work—research, writing, knowledge synthesis,
+projects, recurring workflows, automation, and code work—through auditable human-agent
+collaboration. It captures inputs, runs agents, produces reviewable artifacts and proposals,
+and governs what becomes durable memory or action.
+
+Personal, household, and small-team use are first-order contexts from the start; collaboration
+is not a later enterprise add-on. Memory and context are foundational substrate for the
+workbench, not the complete product identity. Controlled self-evolution is supporting cast.
 
 It is not:
 - a chat app
@@ -95,13 +103,20 @@ capture / trigger
 ### App runtime must not self-deploy with arbitrary host authority
 
 - The app container does not directly restart or rebuild itself.
-- Deployment actions route through the host-level deployer via Unix domain socket.
-- The deployer accepts only allowlisted job types. No arbitrary shell commands.
+- Product deployment routes return 501 and no production server path calls the deployer.
+- The deployer socket is private to its host-equivalent sidecar and accepts only the three
+  core operator job types. Evolution, code-patch, capability, and agent paths cannot reach it.
+- The instance is not directly exposed to the public internet.
 
 ### External tools are adapters, not product foundations
 
 - Claude Code, Codex, Cursor, LangGraph, OpenAI Agents SDK are runtime adapters.
 - Memory, context, policy, proposals, audit, and workspace governance live in Agent-Space's database, not in vendor CLIs.
+- OpenCode is a third optional CLI runtime alongside Claude Code and Codex CLI, not a
+  universal or preferred execution layer. User-initiated/supervised heavy work may use CLI
+  subscription allowance; managed API work keeps its existing direct adapters. Claude
+  Pro/Max stays on native Claude Code while OpenCode's provider documentation records that
+  Anthropic prohibits using that subscription through OpenCode.
 
 ## Current Enforcement Points
 
@@ -119,7 +134,7 @@ capture / trigger
 | Workspace file read | Route workspace-space check + `PathPolicy` | Active |
 | Workspace file write / code patch | Approved `code_patch` proposal gate + `PathPolicy` | Active |
 | Sandbox path access | Execution workspace boundary, worktree root validation | Active |
-| Deployment / deployer calls | Feature-gated; deployer allowlist only | Active |
+| Deployment / deployer calls | Authenticated 501 stub; operator-only deployer allowlist | Deferred / fail-closed |
 | Self-evolution execution | Disabled by default (`ENABLE_SYSTEM_EVOLUTION=false`) | Active |
 | Future automation trigger | No model yet — reserved | Not built |
 | Future connector sync | No model yet | Not built |

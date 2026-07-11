@@ -430,6 +430,16 @@ throughout.
 - Paths resolving into sandbox roots are rejected.
 - Artifact read checks verify space and visibility before a stored file is resolved.
 
+### Deployment and network exposure
+
+- The deployer has host-equivalent authority because it mounts docker.sock and the
+  repository read-write. Its Unix socket is private to the deployer sidecar and is not an
+  app, agent, evolution, code-patch, capability, automation, job, or scheduler surface.
+- Product deployment routes currently fail closed with 501. A future trigger must verify
+  human approval in the server authority and persist durable audit state before submission.
+- The instance must not be exposed directly to the public internet. Production TLS
+  termination, rate limiting, and general CSRF-token hardening are not implemented.
+
 ---
 
 ## 11. Dogfooding Readiness

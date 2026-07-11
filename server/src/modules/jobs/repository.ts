@@ -50,6 +50,10 @@ export interface JobEventRecord {
 
 export interface JobReclaimResult {
   reclaimed_count: number;
+  exhausted_jobs: Array<Pick<
+    JobRecord,
+    "id" | "space_id" | "user_id" | "job_type" | "attempts" | "max_attempts"
+  >>;
 }
 
 export interface EnqueueJobInput {
@@ -395,7 +399,10 @@ export class PgJobQueueRepository {
     const cutoff = new Date(now.getTime() - stuckAfterSeconds * 1000).toISOString();
     await this.deleteOrphanRunExecutionLocks(cutoff);
 
-    const result = await this.db.query<{ reclaimed_count: string | number }>(
+    const result = await this.db.query<{
+      reclaimed_count: string | number;
+      exhausted_jobs: JobReclaimResult["exhausted_jobs"] | null;
+    }>(
       `WITH retryable AS (
          UPDATE jobs
             SET status = 'pending',
@@ -407,7 +414,7 @@ export class PgJobQueueRepository {
           WHERE status IN ('claimed', 'running')
             AND COALESCE(heartbeat_at, updated_at) < $2::timestamptz
             AND attempts < max_attempts
-          RETURNING id
+          RETURNING id, space_id, user_id, job_type, attempts, max_attempts
        ),
        exhausted_agent_runs AS (
          SELECT payload_json->>'run_id' AS run_id
@@ -430,7 +437,7 @@ export class PgJobQueueRepository {
           WHERE status IN ('claimed', 'running')
             AND COALESCE(heartbeat_at, updated_at) < $2::timestamptz
             AND attempts >= max_attempts
-          RETURNING id
+          RETURNING id, space_id, user_id, job_type, attempts, max_attempts
        ),
        failed_runs AS (
          UPDATE runs
@@ -446,11 +453,25 @@ export class PgJobQueueRepository {
        )
        SELECT
          (SELECT COUNT(*) FROM retryable) + (SELECT COUNT(*) FROM failed)
-           AS reclaimed_count`,
+           AS reclaimed_count,
+         COALESCE(
+           (SELECT jsonb_agg(jsonb_build_object(
+              'id', id,
+              'space_id', space_id,
+              'user_id', user_id,
+              'job_type', job_type,
+              'attempts', attempts,
+              'max_attempts', max_attempts
+            )) FROM failed),
+           '[]'::jsonb
+         ) AS exhausted_jobs`,
       [now.toISOString(), cutoff, TERMINAL_RUN_STATES],
     );
     const count = result.rows[0]?.reclaimed_count ?? 0;
-    return { reclaimed_count: Number(count) };
+    return {
+      reclaimed_count: Number(count),
+      exhausted_jobs: result.rows[0]?.exhausted_jobs ?? [],
+    };
   }
 
   private async deleteOrphanRunExecutionLocks(cutoff: string): Promise<void> {

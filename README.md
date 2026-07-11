@@ -123,9 +123,9 @@ LLM agents can execute arbitrary shell commands. To protect the host:
   present Docker isolation as active protection for high/critical-risk runs.
 
 The **server does not mount the Docker socket** and does not spawn host containers directly.
-Sandbox containers are launched by the host-side **deployer** service, which is the only component
-with `/var/run/docker.sock` mounted. The server talks to the deployer over a Unix socket
-(`/aspace/run/deployer.sock`).
+The privileged **deployer** sidecar has `/var/run/docker.sock` plus a read-write repository
+mount, but its Unix socket is private to that container. The server and agent runtimes cannot
+reach it. One-shot Docker sandbox execution remains unimplemented and fail-closed.
 
 See [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) for the full threat analysis.
 

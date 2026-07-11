@@ -5,14 +5,15 @@ agent-space host deployer — Unix domain socket server.
 Runs on the HOST (outside the main app container) and handles deployment
 requests from the server. The server cannot restart itself; this process can.
 
-Supports both core deployment jobs and self-evolution jobs.
+Only core operator deployment jobs are accepted. Product and self-evolution
+paths do not have access to this socket.
 
 Start:
     python deployer/deployer.py
 
 Or via systemd — see deployer/README.md.
 
-Socket path: $DEPLOYER_SOCKET or /aspace/run/deployer.sock
+Socket path: $DEPLOYER_SOCKET or /tmp/agent-space-deployer.sock
 """
 from __future__ import annotations
 
@@ -32,33 +33,17 @@ log = logging.getLogger("deployer")
 SCRIPT_DIR = Path(__file__).parent / "scripts"
 
 JOB_SCRIPTS: dict[str, Path] = {
-    # Core deployment jobs (CoreJobType in protocol.py)
     "rebuild_agent_space":          SCRIPT_DIR / "rebuild.sh",
     "restart_agent_space":          SCRIPT_DIR / "restart.sh",
     "health_check":                 SCRIPT_DIR / "health_check.sh",
-    # Self-evolution jobs (SelfEvolutionJobType in protocol.py)
-    "init_agent_space_worktree":    SCRIPT_DIR / "init_agent_space_worktree.sh",
-    "create_system_worktree":       SCRIPT_DIR / "create_system_worktree.sh",
-    "collect_system_diff":          SCRIPT_DIR / "collect_system_diff.sh",
-    "run_system_tests":             SCRIPT_DIR / "run_system_tests.sh",
-    "run_test_deploy":              SCRIPT_DIR / "run_test_deploy.sh",
-    "merge_approved_system_patch":  SCRIPT_DIR / "merge_approved_system_patch.sh",
-    "run_prod_deploy":              SCRIPT_DIR / "run_prod_deploy.sh",
-    "cleanup_system_worktree":      SCRIPT_DIR / "cleanup_system_worktree.sh",
 }
 
 
-async def _run_script(script: Path, args: dict, timeout: int = 300) -> tuple[int, str, str]:
-    env = os.environ.copy()
-    for k, v in args.items():
-        if v is not None:
-            env[k] = str(v)
-
+async def _run_script(script: Path, timeout: int = 300) -> tuple[int, str, str]:
     proc = await asyncio.create_subprocess_exec(
         str(script),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        env=env,
     )
     stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     return proc.returncode, stdout.decode(), stderr.decode()
@@ -82,6 +67,12 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
             _write(writer, result)
             return
 
+        if not isinstance(args, dict) or args:
+            result = {"job_id": job_id, "status": "failed",
+                      "error": f"job_type '{job_type}' does not accept request args"}
+            _write(writer, result)
+            return
+
         script = JOB_SCRIPTS[job_type]
         if not script.exists():
             result = {"job_id": job_id, "status": "failed",
@@ -91,7 +82,7 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
 
         started_at = datetime.now(UTC).isoformat()
         try:
-            exit_code, stdout, stderr = await _run_script(script, args)
+            exit_code, stdout, stderr = await _run_script(script)
         except asyncio.TimeoutError:
             result = {"job_id": job_id, "status": "failed", "error": "Script timed out",
                       "started_at": started_at, "completed_at": datetime.now(UTC).isoformat()}
@@ -136,7 +127,7 @@ def _write(writer: asyncio.StreamWriter, obj: dict) -> None:
 async def main() -> None:
     socket_path = os.environ.get(
         "DEPLOYER_SOCKET",
-        "/aspace/run/deployer.sock",
+        "/tmp/agent-space-deployer.sock",
     )
     sock_file = Path(socket_path)
     sock_file.parent.mkdir(parents=True, exist_ok=True)

@@ -2,11 +2,13 @@ import { execFile } from "node:child_process";
 import {
   chmod,
   cp,
+  lstat,
   mkdir,
   mkdtemp,
   open,
   readFile,
   readdir,
+  rename,
   stat,
   unlink,
   writeFile,
@@ -20,12 +22,13 @@ import { type BackupManifest, serializeManifest } from "./manifest";
 
 const execFileAsync = promisify(execFile);
 
-const INCLUDE_DIRS = ["storage", "artifacts", "config", "secrets", "workspaces"] as const;
+export const BACKUP_DATA_DIRS = ["storage", "artifacts", "config", "workspaces"] as const;
 const ALWAYS_EXCLUDED: Record<string, string> = {
   backups: "recursion prevention",
   cache: "ephemeral",
   sandboxes: "ephemeral",
   "db/postgres": "live PostgreSQL data",
+  secrets: "credential material; use ops/scripts/system/backup-credentials.sh",
 };
 const LOCK_STALE_AFTER_MS = 24 * 60 * 60 * 1000;
 
@@ -54,6 +57,11 @@ export class BackupService {
   constructor(private readonly config: ServerConfig) {}
 
   async createBackup(kind: "auto" | "manual"): Promise<string> {
+    if (!this.config.backupDatabaseUrl) {
+      throw new BackupError(
+        "BACKUP_DATABASE_URL is required; refusing to create an archive without a database snapshot",
+      );
+    }
     const backupRoot = resolve(this.config.backupRoot);
     const dataRoot = resolve(this.config.agentSpaceHome);
     await prepareBackupRoot(backupRoot);
@@ -69,6 +77,7 @@ export class BackupService {
       }
 
       const staging = await mkdtemp(join(tmpdir(), "aspace-backup-staging-"));
+      const temporaryArchivePath = `${archivePath}.tmp-${process.pid}`;
       try {
         const { included, excluded, warnings } = await this.stage(dataRoot, staging);
         const versionMetadata = await this.versionMetadata();
@@ -88,12 +97,15 @@ export class BackupService {
         await writeFile(join(staging, "backup_manifest.json"), serializeManifest(manifest), {
           mode: 0o600,
         });
-        await execFileAsync("tar", ["-czf", archivePath, "-C", staging, "."], {
+        await execFileAsync("tar", ["-czf", temporaryArchivePath, "-C", staging, "."], {
           timeout: 600_000,
         });
-        await chmodFile(archivePath, 0o600);
+        await execFileAsync("tar", ["-tzf", temporaryArchivePath], { timeout: 600_000 });
+        await chmodFile(temporaryArchivePath, 0o600);
+        await rename(temporaryArchivePath, archivePath);
         return archivePath;
       } finally {
+        await unlink(temporaryArchivePath).catch(() => undefined);
         await rmDirSafe(staging);
       }
     } finally {
@@ -159,24 +171,19 @@ export class BackupService {
     const excluded: string[] = [];
     const warnings: string[] = [];
 
-    if (this.config.backupDatabaseUrl) {
-      const dbDir = join(staging, "db");
-      await mkdir(dbDir, { recursive: true });
-      const dumpPath = join(dbDir, "agent_space.dump");
-      try {
-        await pgDump(this.config.backupDatabaseUrl, dumpPath);
-        included.push("db/agent_space.dump (pg_dump_custom)");
-      } catch (error) {
-        throw new BackupError(
-          `pg_dump failed; backup aborted: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
-    } else {
-      excluded.push("db/ (BACKUP_DATABASE_URL not configured — skipped)");
-      warnings.push("Database not backed up: BACKUP_DATABASE_URL not set in BackupService");
+    const dbDir = join(staging, "db");
+    await mkdir(dbDir, { recursive: true });
+    const dumpPath = join(dbDir, "agent_space.dump");
+    try {
+      await pgDump(this.config.backupDatabaseUrl!, dumpPath);
+      included.push("db/agent_space.dump (pg_dump_custom)");
+    } catch (error) {
+      throw new BackupError(
+        `pg_dump failed; backup aborted: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
 
-    for (const dirname of INCLUDE_DIRS) {
+    for (const dirname of BACKUP_DATA_DIRS) {
       const source = join(dataRoot, dirname);
       if (!(await pathExists(source))) {
         excluded.push(`${dirname}/ (not found)`);
@@ -187,12 +194,14 @@ export class BackupService {
         dereference: false,
         force: true,
       });
+      await assertSafeBackupTree(join(staging, dirname));
       included.push(`${dirname}/`);
     }
 
     const logsSource = join(dataRoot, "logs");
     if (this.config.backupIncludeLogs && (await pathExists(logsSource))) {
       await cp(logsSource, join(staging, "logs"), { recursive: true, force: true });
+      await assertSafeBackupTree(join(staging, "logs"));
       included.push("logs/");
     } else {
       const reason = !(await pathExists(logsSource))
@@ -237,6 +246,29 @@ export class BackupService {
       postgres_server_version,
       pg_dump_version,
     };
+  }
+}
+
+export async function assertSafeBackupTree(root: string): Promise<void> {
+  const rootStat = await lstat(root);
+  if (rootStat.isSymbolicLink()) {
+    throw new BackupError(`backup source contains a symbolic link: ${root}`);
+  }
+  if (!rootStat.isDirectory()) {
+    throw new BackupError(`backup source is not a directory: ${root}`);
+  }
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    const path = join(root, entry.name);
+    if (entry.isSymbolicLink()) {
+      throw new BackupError(`backup source contains a symbolic link: ${path}`);
+    }
+    if (entry.isDirectory()) {
+      await assertSafeBackupTree(path);
+      continue;
+    }
+    if (!entry.isFile()) {
+      throw new BackupError(`backup source contains an unsupported file type: ${path}`);
+    }
   }
 }
 

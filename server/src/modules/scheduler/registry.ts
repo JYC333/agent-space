@@ -17,6 +17,8 @@ export interface SchedulerHandle {
   stop(): Promise<void>;
 }
 
+export type SchedulerTaskErrorHandler = (taskName: string, error: unknown) => Promise<void>;
+
 export class SchedulerRegistry implements SchedulerHandle {
   private readonly tasks = new Map<string, ScheduledTask>();
   private readonly loops = new Map<string, Promise<void>>();
@@ -26,7 +28,10 @@ export class SchedulerRegistry implements SchedulerHandle {
   private stopPromise: Promise<void> | null = null;
   private startPromise: Promise<void> = Promise.resolve();
 
-  constructor(private readonly log?: SchedulerLogger) {}
+  constructor(
+    private readonly log?: SchedulerLogger,
+    private readonly onTaskError?: SchedulerTaskErrorHandler,
+  ) {}
 
   get started(): Promise<void> {
     return this.startPromise;
@@ -94,6 +99,15 @@ export class SchedulerRegistry implements SchedulerHandle {
       this.log?.error(
         `[scheduler:${task.name}] ${error instanceof Error ? error.message : String(error)}`,
       );
+      try {
+        await this.onTaskError?.(task.name, error);
+      } catch (alertError) {
+        this.log?.error(
+          `[scheduler:${task.name}] alert failed: ${
+            alertError instanceof Error ? alertError.message : String(alertError)
+          }`,
+        );
+      }
     }
   }
 
@@ -127,8 +141,9 @@ export class SchedulerRegistry implements SchedulerHandle {
 export function startSchedulerRegistry(
   tasks: ScheduledTask[],
   log?: SchedulerLogger,
+  onTaskError?: SchedulerTaskErrorHandler,
 ): SchedulerHandle {
-  const registry = new SchedulerRegistry(log);
+  const registry = new SchedulerRegistry(log, onTaskError);
   for (const task of tasks) {
     registry.register(task);
   }

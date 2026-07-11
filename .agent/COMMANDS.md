@@ -106,6 +106,10 @@ PRE_MIGRATION_BACKUP=1 ./ops/scripts/db/migrate.sh --mode dev
 # Full-system restore (database + files) from one archive.
 # Stop frontend, server, and deployer first; postgres must remain running.
 ./ops/scripts/system/restore.sh <archive.tar.gz> [--mode dev|test|prod] [--force] [--force-running]
+
+# Credential material is intentionally separate from normal data archives.
+./ops/scripts/system/backup-credentials.sh [--mode dev|test|prod]
+./ops/scripts/system/restore-credentials.sh <credential-archive.tar.gz> [--mode dev|test|prod] [--force]
 ```
 
 See [docs/BACKUP_AND_RESTORE.md](../docs/BACKUP_AND_RESTORE.md) for the full model.

@@ -13,6 +13,10 @@ a cron schedule. Every automation-origin run goes through the same
 enforce/preflight/policy path as a manual run — this is the roadmap red line for
 Capability 6.
 
+Scheduled fire failures emit a deduplicated, owner-private `operational_alert` Activity
+record so unattended failures appear in Activity Inbox. Alert persistence is best-effort
+and never replaces schedule advancement or the originating failure state.
+
 Source post-processing is not an Automation trigger. Source-level
 summaries, evidence extraction, proposal creation, item marking, and per-source
 cursors are owned by the Sources module.

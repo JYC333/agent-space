@@ -1,7 +1,7 @@
 # Module: Server Status
 
 ## Status
-**PLANNED** — `/health` endpoint exists. Full runtime status model and UI not built.
+**PARTIAL** — `/health` checks PostgreSQL connectivity. Full runtime status model and UI not built.
 
 ## Purpose
 Surface the operational health of the agent-space runtime to the user. Users must be able to see at a glance whether the backend, adapters, capabilities, and external integrations are reachable and functioning. This is not monitoring — it is a user-facing status display integrated into the product shell.
@@ -49,7 +49,10 @@ Response:
 }
 ```
 
-The existing `/health` returns `{"status": "ok", "version": "..."}` — the new endpoint replaces it as the full status surface while keeping `/health` as the minimal liveness probe.
+The existing `/health` and `/api/v1/server/health` return 200 with
+`{"status":"ok","service":"server","checks":{"database":"ok"}}` only after a
+successful `SELECT 1`. They return 503 with `database:"error"` when connectivity fails.
+The planned endpoint expands this minimal readiness probe into the full status surface.
 
 ## UI: RuntimeStatusBar
 

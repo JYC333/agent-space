@@ -15,22 +15,8 @@ CoreJobType = Literal[
     "health_check",          # server /health check
 ]
 
-# ── Self-evolution jobs ───────────────────────────────────────────────────────
-
-SelfEvolutionJobType = Literal[
-    "init_agent_space_worktree",       # clone canonical repo into worktree dir
-    "create_system_worktree",         # create a git worktree for self-evolution
-    "collect_system_diff",            # collect git status/diff from worktree
-    "run_system_tests",               # run allowlisted tests from worktree
-    "run_test_deploy",                # deploy test compose from worktree
-    "merge_approved_system_patch",    # merge approved patch into canonical repo
-    "run_prod_deploy",                # deploy prod compose from canonical repo
-    "cleanup_system_worktree",       # remove a self-evolution worktree
-]
-
-JobType = CoreJobType | SelfEvolutionJobType
+JobType = CoreJobType
 
 ALLOWED_JOB_TYPES: set[str] = {
     *[v for v in CoreJobType.__args__],
-    *[v for v in SelfEvolutionJobType.__args__],
 }

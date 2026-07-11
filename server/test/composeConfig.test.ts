@@ -30,6 +30,13 @@ function composeText(mode: "dev" | "test" | "prod"): string {
   );
 }
 
+function deployerServiceBlock(mode: "dev" | "test" | "prod"): string {
+  const text = composeText(mode);
+  const start = text.indexOf("\n  deployer:");
+  expect(start).toBeGreaterThanOrEqual(0);
+  return text.slice(start);
+}
+
 describe("compose server config", () => {
   it("loads server credentials from .server.env and does not publish the API port", () => {
     for (const mode of ["dev", "test", "prod"] as const) {
@@ -86,6 +93,15 @@ describe("compose server config", () => {
       const block = frontendServiceBlock(mode);
       expect(block).toContain("../../apps/web:/repo/apps/web");
       expect(block).toContain("../../plugins:/repo/plugins:ro");
+    }
+  });
+
+  it("keeps the privileged deployer socket private to the deployer container", () => {
+    for (const mode of ["dev", "test", "prod"] as const) {
+      expect(deployerServiceBlock(mode)).toContain(
+        "DEPLOYER_SOCKET=/tmp/agent-space-deployer.sock",
+      );
+      expect(serverServiceBlock(mode)).not.toContain("deployer.sock");
     }
   });
 });

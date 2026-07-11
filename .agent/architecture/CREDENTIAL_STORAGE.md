@@ -100,7 +100,7 @@ inside the server process and forwards the request to the configured
 The master key is a **local-file symmetric key**, not KMS/HSM-managed. Consequences:
 
 - Whoever can read both `AGENT_SPACE_HOME/secrets/provider_keys.key` and the database can decrypt all
-  keys — keep the `secrets/` directory and DB backups protected; a backup that includes `secrets/`
+  keys — keep credential-only archives separate from normal DB/data backups; combining them
   carries decryptable material.
 - This is appropriate for a single self-hosted instance. Stronger setups (multi-tenant, compliance)
   would move to envelope encryption with a KMS (KMS-wrapped master key, per-space derived subkeys).

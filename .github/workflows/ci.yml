@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            packages/protocol/package-lock.json
+            server/package-lock.json
+            apps/web/package-lock.json
+
+      - name: Install protocol dependencies
+        working-directory: packages/protocol
+        run: npm ci
+
+      - name: Build protocol
+        working-directory: packages/protocol
+        run: npm run build
+
+      - name: Test deployer boundary
+        run: python3 -m unittest discover -s deployer -p 'test_*.py'
+
+      - name: Test backup archive safety
+        run: python3 -m unittest discover -s ops/scripts/system -p 'test_*.py'
+
+      - name: Install server dependencies
+        working-directory: server
+        run: npm ci
+
+      - name: Typecheck server
+        working-directory: server
+        run: npm run typecheck
+
+      - name: Test server
+        working-directory: server
+        env:
+          REQUIRE_TEST_POSTGRES: "true"
+          TESTCONTAINERS_REUSE_ENABLE: "false"
+        run: npm test
+
+      - name: Install web dependencies
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Typecheck web
+        working-directory: apps/web
+        run: npm run typecheck
+
+      - name: Test web
+        working-directory: apps/web
+        run: npm test

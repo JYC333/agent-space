@@ -29,8 +29,13 @@ code and migrations still win over documentation.
 
 ### 1. Dogfooding Stabilization
 
+The product target is the personal + household/small-team Agent Workbench in ADR 0010, not
+a single-user memory product. The rolling 30-day checkpoint requires two real human members,
+three substantial outcomes and one shared-space workflow per week, plus one friction-driven
+fix per week.
+
 **Next work**
-- Collect incidents from real personal/household use.
+- Collect incidents from real personal/household/small-team work.
 - Expand contract tests only where dogfooding exposes real gaps.
 - Rehearse backup and restore on a schedule.
 
@@ -120,7 +125,12 @@ code and migrations still win over documentation.
 
 ### 3. Runtime and Adapter Safety
 
+OpenCode is a third optional CLI runtime alongside Claude Code and Codex CLI. CLI subscription
+allowance and managed APIs remain dual primary resources, but this roadmap defines no
+OpenCode-first Router preference and does not route the managed API path through OpenCode.
+
 **Next work**
+- Implement the planned OpenCode adapter after C1 and run the normal CLI conformance gates.
 - Design the `one_shot_docker` path before allowing critical-risk file execution.
 - Add external webhook/cron trigger integration only behind preflight and policy gates.
 - Decide whether cross-process subprocess termination is needed after more real CLI runs.
@@ -195,6 +205,13 @@ code and migrations still win over documentation.
 - Design external trigger registry after manual/scheduled/internal-event automation behavior is stable.
 - Add run caps, cost guardrails, and user-facing credential allowance UX before broad background execution.
 - Keep automation-origin runs on the same preflight and policy path as manual runs.
+- Decision 1-B (2026-07-11, [orchestration plan](../plans/orchestration-and-self-evolution-plan.md)):
+  the two hardcoded automation fire paths (`knowledge_retrieval_maintenance`,
+  context review cycle in `automations/service.ts`) are frozen — no new
+  hardcoded business fires may be added. Re-evaluate migrating them to system
+  workflow templates (or explicitly retiring them as documented native
+  targets) once versioned workflow graph execution (plan Track B2/B3) is
+  stable. Do not let the freeze silently become permanent.
 
 **Prerequisites**
 - Automation create/update/fire gates, preflight snapshots, and credential behavior remain auditable.
@@ -254,6 +271,20 @@ code and migrations still win over documentation.
 - Run managed dogfood flows against real workspaces before automating more of the loop.
 - Validate RunReflection and proposal payload quality through human review.
 - Define allowed self-evolution surfaces and evaluation gates before enabling capability lifecycle persistence.
+- Phased implementation for planning/routing/verification and the evolution
+  loop lives in [orchestration plan](../plans/orchestration-and-self-evolution-plan.md).
+- Decision 2-B (2026-07-11): the evolvable-asset promotion evaluation gate
+  starts **warn-only**. When an asset type accumulates enough evaluation
+  cases (threshold set in plan Track D2), high/critical-risk promotions for
+  that type must switch to a **hard gate** (missing/failed evaluation blocks
+  apply). Warn-only must not become the permanent state — revisit at each
+  D2 milestone.
+- Decision 3-B (2026-07-11): artifact user-edit/revision tracking is
+  deferred. Proposal reject/request-changes signals are the interim
+  user-correction evidence. Design an artifact revision model (who edited,
+  diff storage, link to producing run) when dogfooding shows repeated manual
+  corrections to run outputs; it is the prerequisite for `user_correction`
+  evolution signals covering direct artifact edits.
 
 **Prerequisites**
 - Run finalization, task evaluation bridge, artifacts, proposals, and source monitoring remain auditable.

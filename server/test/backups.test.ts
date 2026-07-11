@@ -1,9 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BackupPolicyError, enforceBackupPolicy } from "../src/modules/backups/guard";
-import { BackupService } from "../src/modules/backups/service";
+import {
+  BACKUP_DATA_DIRS,
+  BackupError,
+  BackupService,
+  assertSafeBackupTree,
+} from "../src/modules/backups/service";
 import { loadConfig } from "../src/config";
 
 describe("backup policy guard", () => {
@@ -39,6 +44,55 @@ describe("backup policy guard", () => {
 });
 
 describe("BackupService lock handling", () => {
+  it("refuses to create a backup without a database snapshot URL", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aspace-backup-required-db-"));
+    try {
+      const service = new BackupService(loadConfig({
+        AGENT_SPACE_HOME: join(root, "home"),
+        BACKUP_ROOT: join(root, "backups"),
+        BACKUP_DATABASE_URL: "",
+      }));
+      await expect(service.createBackup("manual")).rejects.toThrow(
+        new BackupError(
+          "BACKUP_DATABASE_URL is required; refusing to create an archive without a database snapshot",
+        ),
+      );
+      await expect(pathExists(join(root, "backups"))).resolves.toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps credential material out of normal data archives", () => {
+    expect(BACKUP_DATA_DIRS).toEqual(["storage", "artifacts", "config", "workspaces"]);
+    expect(BACKUP_DATA_DIRS).not.toContain("secrets" as never);
+  });
+
+  it("rejects links that cannot pass safe restore extraction", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aspace-backup-safe-tree-"));
+    try {
+      await writeFile(join(root, "value"), "ok");
+      await symlink("value", join(root, "link"));
+      await expect(assertSafeBackupTree(root)).rejects.toThrow(/symbolic link/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a top-level backup directory that is itself a link", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aspace-backup-safe-root-link-"));
+    try {
+      const target = join(root, "target");
+      const linkedRoot = join(root, "storage");
+      await mkdir(target);
+      await writeFile(join(target, "value"), "ok");
+      await symlink(target, linkedRoot);
+      await expect(assertSafeBackupTree(linkedRoot)).rejects.toThrow(/symbolic link/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("removes stale lock files before pruning", async () => {
     const root = await mkdtemp(join(tmpdir(), "aspace-backup-lock-"));
     try {

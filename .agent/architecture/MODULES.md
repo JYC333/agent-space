@@ -54,7 +54,7 @@ Core modules are `always_on=True`. Optional product routes are still mounted by 
 | `catalog` | capability | `/server/catalog*`, `/capabilities*` | yes | Read-only on-disk catalog. Owns legacy catalog-backed capability/template manifest surfaces. |
 | `capabilities` | capability | `/capability-definitions*`, `/capability-packs*`, `/workflow-templates*`, `/projects/{projectId}/workflow-profiles*`, `/skill-sources*`, `/skill-packages*` | yes | Capability/workflow/open-skill control plane: canonical definitions, packs, workflow templates, imported skill packages, project workflow profiles, and runtime skill bindings. Does not execute native capabilities. |
 | `streaming` | infra | `/runs/{runId}/events/stream` | empty | Run event SSE stream. |
-| `notifications` | infra | `/server/notifications/webhooks/*` | empty | Notification webhook egress policy and dispatch boundary. |
+| `notifications` | infra | `/server/notifications/webhooks/*` | empty | Notification webhook egress policy plus durable operational-alert pointers delivered through Activity Inbox. |
 | `runtimeTools` | infra | `/runtime-tools*` | empty | Controlled runtime CLI installer/status/catalog. |
 | `providers` | infra | `/providers*`, `/credentials/cli*`, `/internal/providers-credentials/*` | yes | Model providers, credential pools, provider invocation, and CLI credential broker/audit. There is no separate credentials route module. |
 | `runtime_tool_bindings` | infra | `/runtime-tool-bindings*` | empty | Runtime tool binding reads. |

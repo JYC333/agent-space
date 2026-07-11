@@ -1,204 +1,68 @@
-# Self-Evolution Deployment
+# Self-Evolution Safety Boundary
 
-## Overview
+## Current Status
 
-agent-space supports a protected self-evolution deployment structure where system code changes are managed through a controlled workflow: sandbox worktrees, diff collection, testing, proposal approval, and git merge.
+Automatic self-evolution deployment is not implemented. `ENABLE_SYSTEM_EVOLUTION` can
+register a manually provisioned `system_core` workspace and enable dry-run evolution
+planning, but it does not grant deployment authority. If the configured workspace is not
+already a Git repository, registration fails closed with an operator-facing warning.
 
-## Directory Structure
+The active code-change path is:
 
-```
-~/.aspace/                    # ASPACE_ROOT: host-side parent (default ~/.aspace), holds mode roots
-├── dev/                     # one mode root; bind-mounted as AGENT_SPACE_HOME=/aspace in containers
-│   ├── .env
-│   ├── config/              # app config (.env, cli-credentials.yaml)
-│   ├── db/postgres/         # PostgreSQL data directory (bind-mounted into postgres container)
-│   ├── db/dumps/            # pg_dump backup files
-│   ├── storage/             # file uploads, exports
-│   ├── logs/                # app + agent run logs
-│   ├── cache/               # quota cache, runtime-homes
-│   ├── runtime/             # transient runtime state
-│   ├── workspaces/          # managed workspace repos (<workspace_id>/repo)
-│   ├── sandboxes/           # per-run agent sandboxes
-│   │   └── system-evolution/
-│   │       └── <run_id>/    # git worktree created by deployer
-│   ├── artifacts/           # run artifacts, diffs, patches, reports
-│   ├── secrets/             # encrypted API keys, credentials
-│   └── run/                 # Unix socket for deployer
-│
-├── test/                    # test mode root (same layout)
-└── prod/                    # prod mode root (same layout)
-```
+1. An agent works in a managed worktree/sandbox.
+2. Changed files are collected into a `code_patch` proposal.
+3. A human reviews and accepts the proposal.
+4. The proposal applier writes the approved patch through `workspace.write_patch`, with a
+   pre-apply snapshot for rollback.
+5. Testing, commit, and deployment remain explicit operator actions.
 
-## Instances
+There is no automatic merge or production-deploy loop.
 
-| Instance | Purpose | Ports | Compose Project |
-|----------|---------|-------|-----------------|
-| dev | Local dev with hot reload | 3000/8000 | agent-space-dev |
-| test | Self-evolution validation | 3100/8100 | agent-space-test |
-| prod | Production deployment | 3000/8000 | agent-space-prod |
+## Privileged Deployer Boundary
 
-## Repository Rules
+The deployer sidecar mounts docker.sock and the canonical repository read-write. Together
+these provide host-equivalent authority. Its Unix socket is
+`/tmp/agent-space-deployer.sock` inside the deployer container and is not shared with the
+server, agent runtimes, sandboxes, or the instance data root.
 
-- The repo must NOT contain real instance data.
-- Keep only code, docs, migrations, compose templates, scripts, and example env templates.
-- Do NOT store real `.env`, db files, uploaded files, memory data, logs, or secrets in git.
+The deployer accepts exactly:
 
-## Container Responsibilities
+- `rebuild_agent_space`
+- `restart_agent_space`
+- `health_check`
 
-### Server Container
+Self-evolution helpers such as worktree creation, test deployment, patch merging, and
+production deployment are not registered deployer jobs. Their script files are operator
+tools only and must not be made reachable from product code.
 
-Owns:
-- Agent runtime adapters
-- Context builder
-- Memory / activity / proposal system
-- Policy checks
-- UI / API
-- File editing inside approved sandbox worktrees only
+The authenticated product deployment routes remain fail-closed (`POST` and detail routes
+return 501). A future product deployment trigger must verify an authorized human-approved
+proposal in the server authority, persist durable job/audit state, and only then submit a
+core allowlisted job.
 
-Server mounts:
-- `${ASPACE_ROOT}/<env>:/aspace` (mode root for that environment)
-- `${ASPACE_ROOT}/<env>/sandboxes:/aspace/sandboxes`
-- `${ASPACE_ROOT}/<env>/run/deployer.sock:/aspace/run/deployer.sock`
+## Required Invariants
 
-Server must NOT mount:
-- `/var/run/docker.sock`
-- Writable `<AGENT_SPACE_HOME>/workspaces` (except via worktree sandbox)
-- Other mode roots (`dev` from `test`, etc.)
-- Host arbitrary paths
+- Agent and server containers never mount docker.sock.
+- Evolution, code-patch, capability, agent, automation, job, and scheduler paths cannot
+  reach deployer input or invoke deployer scripts.
+- The public workspace API cannot create `system_core` workspaces.
+- `ENABLE_SYSTEM_EVOLUTION` remains disabled by default in every mode.
+- High/critical execution never downgrades to an unimplemented sandbox level.
+- The instance is not directly exposed to the public internet. TLS termination, rate
+  limiting, and general CSRF-token hardening are prerequisites for reconsidering that rule.
 
-### Deployer Container
+## Operator Procedure
 
-Owns:
-- system_core git worktree creation
-- Git status / diff collection
-- Approved merge into canonical repo
-- Test docker compose deployment
-- Prod docker compose deployment
-- Health checks
-- Cleanup of system-evolution worktrees
+1. Keep `ENABLE_SYSTEM_EVOLUTION=false` for normal dogfooding.
+2. If dry-run evolution work is intentionally enabled, manually provision the configured
+   system-core Git workspace first.
+3. Review generated diffs and proposals in the product.
+4. Apply only an explicitly accepted proposal.
+5. Run the repository test/CI gates.
+6. Commit and deploy manually using the canonical ops commands.
 
-Deployer mounts:
-- `${REPO_ROOT}:/repo:ro` (the agent-space source repo)
-- `${ASPACE_ROOT}/<env>/sandboxes:/aspace/sandboxes`
-- `${ASPACE_ROOT}/<env>:/aspace` (mode root)
-- `${ASPACE_ROOT}/<env>/run:/aspace/run`
-- `/var/run/docker.sock:/var/run/docker.sock`
+## Stop Conditions
 
-Deployer must NOT:
-- Run Agent logic
-- Call LLMs
-- Write memory
-- Create proposals
-- Accept arbitrary shell commands
-- Expose a public HTTP port
-
-## Deployer Jobs
-
-Communicate through Unix socket only. Accepts structured allowlisted jobs only.
-
-| Job Type | Description |
-|----------|-------------|
-| `create_system_worktree` | Create a git worktree for a system evolution run |
-| `collect_system_diff` | Collect git status/diff from a worktree |
-| `run_system_tests` | Run allowlisted test profiles (backend, frontend, typecheck, lint, build) |
-| `run_test_deploy` | Deploy test compose from a worktree |
-| `merge_approved_system_patch` | Merge approved patch into canonical repo |
-| `run_prod_deploy` | Deploy prod compose from canonical repo |
-| `init_agent_space_worktree` | Clone canonical repo into worktree dir |
-| `cleanup_system_worktree` | Remove a system evolution worktree |
-
-## Self-Evolution Flow
-
-1. **Server creates a system evolution run**
-2. **Server asks deployer to create a worktree**
-   ```
-   deployer: create_system_worktree(RUN_ID=<run_id>)
-   ```
-3. **Server agent edits only** the worktree at `~/.aspace/dev/sandboxes/system-evolution/<run_id>`
-4. **Server asks deployer to collect diff**
-   ```
-   deployer: collect_system_diff(WORKTREE_DIR=<path>)
-   ```
-5. **Server asks deployer to run tests**
-   ```
-   deployer: run_system_tests(WORKTREE_DIR=<path>, TEST_PROFILE=<profile>)
-   ```
-6. **Server creates a `code_patch` proposal** containing: changed files, diff, test logs, build logs, risk level, migration warning, test deployment status
-7. **Optional test deploy**
-   ```
-   deployer: run_test_deploy(WORKTREE_DIR=<path>)
-   ```
-8. **After explicit approval**, server asks deployer to merge
-   ```
-   deployer: merge_approved_system_patch(WORKTREE_DIR=<path>, PROPOSAL_ID=<id>, BRANCH_NAME=<branch>)
-   ```
-9. **Production deploy**
-   ```
-   deployer: run_prod_deploy()
-   ```
-
-## Environment Variables
-
-### Common
-- `AGENT_SPACE_ENV=dev|test|prod`
-- `AGENT_SPACE_HOME=/aspace` (mode root bind-mounted into containers)
-- `SERVER_DATABASE_URL=postgres://...`
-- `FRONTEND_URL=http://localhost:3000`
-- `INSTANCE_ADMIN_EMAIL=<admin email>`
-
-### Self-Evolution
-- `ENABLE_SYSTEM_EVOLUTION=true`
-- `SYSTEM_CORE_OWNER_EMAIL=<developer email>` (falls back to `INSTANCE_ADMIN_EMAIL`)
-- `SYSTEM_CORE_BASE_BRANCH=master`
-
-## System-Core Workspace Policy
-
-- Registered from env/config only — not creatable through normal Add Workspace UI
-- Registered into the developer's personal space with:
-  - `workspace_type = system_core`
-  - `protected = true`
-  - `system_managed = true`
-  - `registered_from = env`
-- Even inside personal space, system_core uses system_core policy
-- Personal space ownership does NOT bypass system_core policy
-
-## Path Rules
-
-- Backend Agent can write only the current run worktree
-- Backend cannot write canonical repo
-- Backend cannot access docker.sock
-- Deployer can access canonical repo and docker.sock
-- Worktrees must live outside the repo
-- Never create sandboxes inside the repo
-
-## High-Risk Changes
-
-Mark proposal as high risk if it touches:
-- auth
-- policy
-- permissions
-- secrets
-- sandbox manager
-- deployer socket / API
-- `docker-compose.prod.yml`
-- migrations
-- production deploy scripts
-
-High-risk proposals:
-- May generate diff and test deploy
-- Should NOT auto-promote to production in MVP
-- Require manual review
-
-## Starting the System
-
-```bash
-./ops/scripts/start.sh --dev    # dev environment (hot reload)
-./ops/scripts/start.sh --test   # test environment (isolated)
-./ops/scripts/start.sh --prod   # prod environment
-```
-
-Or with Docker Compose directly:
-
-```bash
-docker compose -p agent-space-dev -f ops/compose/docker-compose.dev.yml --env-file ~/.aspace/dev/.env up
-```
+Stop immediately if any product or agent path can reach the deployer socket, if the deployer
+accepts a non-core job type, if a code change bypasses proposal acceptance, or if deployment
+occurs without a separate operator action.

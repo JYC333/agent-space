@@ -1,10 +1,20 @@
 # Current Focus
 
-The system is ready for first personal dogfooding. The next work should validate the real
-product loop: capture → activity → proposal/review → memory/task → continue working. Fix
-only concrete friction discovered during use.
+The system is ready for personal + household/small-team dogfooding as an Agent Workbench.
+The next work should validate real substantial work loops: capture/trigger → context → agent
+execution → artifact/proposal/task → human or shared-space handoff → continued work. Fix only
+concrete friction discovered during use.
 
 ## Dogfooding Focus
+
+The accepted product/runtime/dogfooding direction is ADR 0010. The rolling checkpoint is:
+30 consecutive real-use days, at least two human members active across the period, three
+substantial outcomes and one shared-space workflow per week, and at least one friction-driven
+fix per week, reviewed monthly.
+
+Runtime target: implement the planned OpenCode adapter as the third CLI runtime after C1.
+Keep Claude Code, Codex CLI, OpenCode, and managed API adapters as independent peer paths;
+ADR 0010 defines no OpenCode-first Router preference.
 
 The server is now the only app backend. Current ownership and deferred surfaces
 live in [../architecture/SERVER_OWNERSHIP.md](../architecture/SERVER_OWNERSHIP.md).
@@ -24,7 +34,9 @@ consolidation.
 
 ## Priorities
 
-- Use the system with real captures, activities, proposals, runs, and memory/task outputs.
+- Use the system with real research, writing, project, automation, and code work that produces
+  durable outcomes for personal and shared spaces.
+- Exercise private-versus-shared context and real household/small-team handoffs from the start.
 - Collect real friction from the product loop and fix concrete blockers as discovered.
 - Keep `server/src/gateway/routeRegistry.ts`, `server/src/modules/`, and
   `.agent/architecture/MODULES.md` synchronized.

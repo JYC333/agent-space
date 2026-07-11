@@ -109,6 +109,39 @@ describe("JobHandlerRegistry", () => {
 });
 
 describe("JobWorker", () => {
+  it("alerts when stuck-job reclaim exhausts max attempts", async () => {
+    const alerts = { emit: vi.fn(async () => undefined) };
+    const queue = {
+      async reclaimStuckJobs() {
+        return {
+          reclaimed_count: 2,
+          exhausted_jobs: [{
+            id: "job-stuck",
+            space_id: "space-1",
+            user_id: "user-1",
+            job_type: "agent_run",
+            attempts: 3,
+            max_attempts: 3,
+          }],
+        };
+      },
+    };
+    const worker = new JobWorker(
+      queue as never,
+      new JobHandlerRegistry(),
+      "worker-1",
+      [],
+      undefined,
+      alerts,
+    );
+    await expect(worker.reclaimStuckJobs()).resolves.toBe(2);
+    expect(alerts.emit).toHaveBeenCalledTimes(1);
+    expect(alerts.emit).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "job_exhausted",
+      dedupeKey: "job_exhausted:job-stuck",
+    }));
+  });
+
   it("fails unknown job types without starting the job", async () => {
     const events: string[] = [];
     const queue = {
@@ -141,11 +174,17 @@ describe("JobWorker", () => {
       },
     };
     const registry = new JobHandlerRegistry();
-    const worker = new JobWorker(queue as never, registry, "worker-1", []);
+    const alerts = { emit: vi.fn(async () => undefined) };
+    const worker = new JobWorker(queue as never, registry, "worker-1", [], undefined, alerts);
     const result = await worker.processOne();
     expect(result.status).toBe("failed");
     expect(events.some((event) => event.startsWith("fail:job-1"))).toBe(true);
     expect(events.some((event) => event.startsWith("start:"))).toBe(false);
+    expect(alerts.emit).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "job_exhausted",
+      dedupeKey: "job_exhausted:job-1",
+      spaceId: "space-1",
+    }));
   });
 
   it("does not dispatch a handler when startJob loses ownership", async () => {
@@ -271,6 +310,20 @@ describe("PgJobQueueRepository", () => {
 });
 
 describe("SchedulerRegistry", () => {
+  it("reports task exceptions to the operational alert hook", async () => {
+    const onTaskError = vi.fn(async () => undefined);
+    const registry = new SchedulerRegistry({ warn: vi.fn(), error: vi.fn() }, onTaskError);
+    registry.register({
+      name: "broken-task",
+      intervalSeconds: 60,
+      run: async () => { throw new Error("scheduler boom"); },
+      awaitRunOnStart: true,
+    });
+    await registry.start();
+    expect(onTaskError).toHaveBeenCalledWith("broken-task", expect.any(Error));
+    await registry.stop();
+  });
+
   it("validates task names, duplicate names, and run-on-start options", () => {
     const registry = new SchedulerRegistry();
     expect(() =>
@@ -714,11 +767,18 @@ describe("AutomationService policy preflight", () => {
       },
     });
     const repo = new FakeAutomationRepository(due, "member", [due]);
-    const service = new AutomationService(config, repo);
+    const alerts = { emit: vi.fn(async () => undefined) };
+    const service = new AutomationService(config, repo, alerts);
 
     await expect(service.scanAndFire()).resolves.toBe(0);
     expect(repo.advanceScheduleCalls).toBe(1);
     expect(repo.createAutomationRunCalls).toBe(0);
+    expect(alerts.emit).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "automation_fire_failed",
+      dedupeKey: `automation_fire_failed:${due.id}`,
+      spaceId: due.space_id,
+      userId: due.owner_user_id,
+    }));
   });
 
   it("advances due maintenance automations once when scan execution fails", async () => {

@@ -8,7 +8,7 @@
 #   2. Refuse active app services unless --force-running is supplied.
 #   3. Restore the database from db/agent_space.dump via pg_restore
 #      (terminate connections, drop, create, restore).
-#   4. Restore file data (config/ secrets/ storage/ artifacts/ workspaces/, and
+#   4. Restore non-credential file data (config/ storage/ artifacts/ workspaces/, and
 #      logs/ if present) into $ASPACE_ROOT/<mode>/.
 #
 # The live PostgreSQL data directory (db/postgres) is never overwritten — the
@@ -109,16 +109,12 @@ echo "[restore] archive: $ARCHIVE"
 echo "[restore] mode:    $MODE"
 echo "[restore] target:  $MODE_ROOT"
 
-# ── Verify archive integrity ───────────────────────────────────────────────────
-if ! tar -tzf "$ARCHIVE" > /dev/null 2>&1; then
-  preflight_error "archive failed integrity check: $ARCHIVE"
-fi
-
-# ── Extract to staging ─────────────────────────────────────────────────────────
+# ── Safely extract to staging ──────────────────────────────────────────────────
 STAGING="$(mktemp -d -t aspace-system-restore-XXXXXX)"
 trap 'local_compose_stop_postgres_if_started "restore"; rm -rf "$STAGING"' EXIT
-if ! tar -xzf "$ARCHIVE" -C "$STAGING"; then
-  preflight_error "archive extraction failed: $ARCHIVE"
+if ! python3 "$SCRIPT_DIR/safe_extract.py" "$ARCHIVE" "$STAGING" \
+  db storage artifacts config workspaces logs backup_manifest.json; then
+  preflight_error "archive failed safe extraction: $ARCHIVE"
 fi
 
 if [[ ! -f "$STAGING/backup_manifest.json" ]]; then
@@ -145,7 +141,7 @@ if ! install -d -m 700 "$MODE_ROOT"; then
 fi
 
 FILE_DIRS=()
-for d in config secrets storage artifacts workspaces logs; do
+for d in config storage artifacts workspaces logs; do
   [[ -d "$STAGING/$d" ]] || continue
   FILE_DIRS+=("$d")
   if [[ -e "$MODE_ROOT/$d" && "$FORCE" != "true" ]]; then
@@ -253,7 +249,7 @@ for d in "${FILE_DIRS[@]}"; do
   cp -a "$STAGING/$d" "$MODE_ROOT/$d"
 done
 
-for d in config secrets; do
+for d in config; do
   [[ -d "$MODE_ROOT/$d" ]] && chmod 700 "$MODE_ROOT/$d"
 done
 

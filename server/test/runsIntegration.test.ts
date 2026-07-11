@@ -729,14 +729,39 @@ describe("runs repositories against real PostgreSQL", () => {
     if (!available) return ctx.skip();
     const jobs = new PgJobQueueRepository(pool!);
     const old = new Date(Date.now() - 3600_000).toISOString();
-    await seedJob({
+    const retryableId = await seedJob({
       job_type: "agent_run",
       status: "running",
       claimed_by: "dead-worker",
       heartbeat_at: old,
     });
+    const exhaustedId = await seedJob({
+      job_type: "memory_consolidation",
+      status: "running",
+      attempts: 3,
+      claimed_by: "dead-worker",
+      heartbeat_at: old,
+    });
 
     const result = await jobs.reclaimStuckJobs(600);
-    expect(result.reclaimed_count).toBeGreaterThanOrEqual(1);
+    expect(result.reclaimed_count).toBeGreaterThanOrEqual(2);
+    expect(result.exhausted_jobs).toEqual([
+      expect.objectContaining({
+        id: exhaustedId,
+        space_id: "space-1",
+        job_type: "memory_consolidation",
+        attempts: 3,
+        max_attempts: 3,
+      }),
+    ]);
+
+    const rows = await pool!.query<{ id: string; status: string }>(
+      "SELECT id, status FROM jobs WHERE id = ANY($1::text[]) ORDER BY id",
+      [[retryableId, exhaustedId]],
+    );
+    expect(Object.fromEntries(rows.rows.map((row) => [row.id, row.status]))).toEqual({
+      [retryableId]: "pending",
+      [exhaustedId]: "failed",
+    });
   });
 });

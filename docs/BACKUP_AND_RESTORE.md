@@ -51,7 +51,8 @@ The bundled PostgreSQL containers have stable names per mode:
 |---|---|---|
 | `$ASPACE_ROOT/<mode>/db/postgres` | Live PostgreSQL data directory (bind-mounted into the postgres container) | **No** — never archived. The database is captured logically via `pg_dump`. |
 | `$ASPACE_ROOT/<mode>/db/dumps` | `pg_dump` custom-format dump files written by `ops/scripts/db/dump.sh` | Operator-managed; not part of the system archive |
-| `storage/`, `artifacts/`, `config/`, `secrets/`, `workspaces/` | File data | Yes |
+| `storage/`, `artifacts/`, `config/`, `workspaces/` | Non-credential file data | Yes |
+| `secrets/` | Credential master key and CLI login state | **No** — separate credential archive only |
 | `logs/` | Application logs | Optional (`BACKUP_INCLUDE_LOGS=true`) |
 | `backups/`, `cache/`, `sandboxes/` | Archives / ephemeral | No |
 
@@ -81,14 +82,16 @@ The server reads these on startup and registers its backup tick with the server 
 | `storage/` | Artifact storage files |
 | `artifacts/` | Artifact storage root |
 | `config/` | Runtime configuration (no secret values) |
-| `secrets/` | Encrypted key files (AES key for provider keys, CLI credentials) |
 | `workspaces/` | Workspace metadata directories |
 | `logs/` | Only when `BACKUP_INCLUDE_LOGS=true` |
 | `backup_manifest.json` | Archive metadata (see below) |
 
 `backups/`, `cache/`, `sandboxes/`, and the live `db/postgres` directory are never included.
 
-**Secrets:** `secrets/` holds encrypted key files. Raw secret values are never written to stdout, logs, or the manifest. Archive permissions are `600`; the output directory is `700`.
+**Credential separation:** normal archives never contain `secrets/`. Use
+`ops/scripts/system/backup-credentials.sh` for an explicit credential-only archive and
+`restore-credentials.sh` to restore it separately. This prevents one ordinary data archive
+from containing both the encrypted provider-key database rows and their decryption key.
 
 ### Archive naming
 
@@ -124,9 +127,9 @@ No raw secret values appear in the manifest. PostgreSQL is the server database.
 
 ### PostgreSQL consistency
 
-`BackupService` runs `pg_dump -Fc --no-owner --no-acl` for a consistent custom-format database snapshot using PostgreSQL MVCC — the server does not need to be stopped. The dump is restored with `pg_restore`. **If `pg_dump` fails, the backup fails closed**: no partial archive is produced.
+`BackupService` runs `pg_dump -Fc --no-owner --no-acl` for a consistent custom-format database snapshot using PostgreSQL MVCC — the server does not need to be stopped. The dump is restored with `pg_restore`. **If `BACKUP_DATABASE_URL` is unset or `pg_dump` fails, the backup fails closed**: no archive is produced.
 
-Full-system backup also copies file data (`storage/`, `artifacts/`, `config/`, `secrets/`, `workspaces/`). The database dump and file copies are not one cross-resource transaction, so restore verification should check restored `artifacts.storage_path` rows against files under `storage/artifacts/`. Use `ops/scripts/system/verify-restore.sh` after restore.
+Full-system backup also copies non-credential file data (`storage/`, `artifacts/`, `config/`, `workspaces/`). The database dump and file copies are not one cross-resource transaction, so restore verification should check restored `artifacts.storage_path` rows against files under `storage/artifacts/`. Use `ops/scripts/system/verify-restore.sh` after restore.
 
 ### pg_dump client version (must match the server)
 
@@ -174,6 +177,43 @@ ops/scripts/system/backup.sh --mode dev --output /mnt/backups
 
 This runs `pg_dump` inside the postgres container, copies the file data, writes a `backup_manifest.json` with the same schema as `BackupService` (including `backup_interval_hours` and `backup_retention_count`, read from `BACKUP_INTERVAL_HOURS` / `BACKUP_RETENTION_COUNT` in the mode `.env`, defaulting to `24` / `7`), and produces `system-<timestamp>.tar.gz`. It starts PostgreSQL automatically if needed and stops it afterward only if backup started it. By default, `ops/scripts/system/backup.sh` refuses to run while `frontend`, `server`, or `deployer` are active because file data can change during the backup. Use `BackupService` or `POST /api/v1/system/backups/manual` for online backup while the server is running.
 
+## Separate credential backup
+
+Credential state is deliberately excluded from every normal data archive. With app services
+stopped, create and restore it explicitly:
+
+```bash
+ops/scripts/system/backup-credentials.sh --mode dev
+# output: ~/.aspace/dev/credential-backups/credentials-<timestamp>.tar.gz
+
+ops/scripts/system/restore-credentials.sh \
+  ~/.aspace/dev/credential-backups/credentials-<timestamp>.tar.gz \
+  --mode dev --force
+```
+
+The credential archive contains only `secrets/` plus a
+`credential_backup_manifest.json`. It is mode `0600`, but it is not encrypted by default.
+Normal data restore never overwrites `secrets/`; restore the credential archive as a separate
+operator decision before starting the app.
+
+### Manual encrypted offsite copy (required for host-loss protection)
+
+Local archives protect against accidental deletion, not disk or host loss. After producing a
+normal data archive and a credential archive, encrypt and transfer them as two separate files:
+
+```bash
+gpg --symmetric --cipher-algo AES256 ~/.aspace/dev/backups/<data-archive>.tar.gz
+gpg --symmetric --cipher-algo AES256 ~/.aspace/dev/credential-backups/<credential-archive>.tar.gz
+
+# Verify the encrypted copies before transfer.
+gpg --decrypt ~/.aspace/dev/backups/<data-archive>.tar.gz.gpg | tar -tzf - >/dev/null
+gpg --decrypt ~/.aspace/dev/credential-backups/<credential-archive>.tar.gz.gpg | tar -tzf - >/dev/null
+```
+
+Copy both `.gpg` files to offsite storage, keep the passphrase in a different password manager
+or physical location, and do not place the unencrypted data and credential archives together
+off-host. Periodically rehearse decrypting both and restoring into the test mode.
+
 ---
 
 ## Restore (full-system, single command)
@@ -197,7 +237,7 @@ ops/scripts/start.sh --dev
 ops/scripts/system/verify-restore.sh --mode dev
 ```
 
-`restore.sh` extracts the archive to a temporary staging directory before any destructive database operation. It validates `backup_manifest.json`, verifies `db/agent_space.dump`, checks file-directory overwrite preconditions, refuses to continue while `frontend`, `server`, or `deployer` are running, then runs `pg_restore` (terminate connections → drop → create → restore) against the maintenance database and restores the file directories into `$ASPACE_ROOT/<mode>/`. `--force` is required to overwrite existing file directories. The live `db/postgres` directory is never touched — the database is rebuilt logically.
+`restore.sh` extracts the archive to a temporary staging directory before any destructive database operation. It validates `backup_manifest.json`, verifies `db/agent_space.dump`, checks file-directory overwrite preconditions, refuses to continue while `frontend`, `server`, or `deployer` are running, then runs `pg_restore` (terminate connections → drop → create → restore) against the maintenance database and restores the non-credential file directories into `$ASPACE_ROOT/<mode>/`. `--force` is required to overwrite existing file directories. It never restores or overwrites `secrets/`; use `restore-credentials.sh` explicitly. The live `db/postgres` directory is never touched — the database is rebuilt logically.
 
 During preflight, `restore.sh` reads the manifest **version metadata** (`backup_format`,
 `app_version`, `git_commit`, `schema_migration_version`, `schema_migration_checksum`, `postgres_server_version`, `pg_dump_version`),
@@ -261,10 +301,8 @@ curl -s "http://localhost:3000/api/v1/runs/<run_id>/steps?space_id=personal"   #
 
 ## Security considerations
 
-- **Full-system archives intentionally include `secrets/`** (e.g. `provider_keys.key`,
-  CLI credentials) and `config/`. This is by design — a restore must rebuild a working
-  instance — so every backup archive is a **high-sensitivity file** and must be handled
-  like the secrets it contains.
+- Normal data archives exclude `secrets/`. Credential archives contain the master key and
+  CLI login state and must be handled as high-sensitivity material.
 - Archive permissions are set to `600` (owner only) and the output directory to `700`.
   **`chmod 600` is necessary but is not encryption** — it only restricts other local
   users; it does nothing once the file leaves the machine.
@@ -285,7 +323,7 @@ curl -s "http://localhost:3000/api/v1/runs/<run_id>/steps?space_id=personal"   #
 | `BackupService` fails closed when `pg_dump` raises — no partial archive | Fix the underlying database/connection error before retrying |
 | Database dump and file copy are not one cross-resource transaction | Keep normal writers quiescent for offline backup, and run `ops/scripts/system/verify-restore.sh` after restore |
 | `workspaces/` captures directory structure, not external mount contents | Document external dependencies separately |
-| No cloud backup or offsite replication | Manual GPG + offsite upload if required |
+| Local archives are lost with the host | Manually encrypt and store both data and credential archives offsite; until that exists backups protect deletion only |
 
 ---
 

@@ -13,7 +13,6 @@ import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ServerConfig } from "../../config";
 import { getDbPool, type Pool } from "../../db/pool";
-import { DeployerSocketClient } from "../deployment/client";
 
 const execFileAsync = promisify(execFile);
 
@@ -180,19 +179,9 @@ export async function registerSystemCoreWorkspace(
     const workspaceDir = resolve(config.workspaceRoot, spaceId, "agent-space");
 
     if (!(await isGitRepo(workspaceDir))) {
-      log.info(`[system_core] repo not found at ${workspaceDir} — requesting deployer init`);
-      const deployer = new DeployerSocketClient(config);
-      const result = await deployer.submit("init_agent_space_worktree", {
-        WORKSPACE_DIR: workspaceDir,
-      });
-      if (result.status !== "succeeded") {
-        log.warn(`[system_core] deployer init failed: ${result.error ?? result.status} — skipping`);
-        return;
-      }
-    }
-
-    if (!(await isGitRepo(workspaceDir))) {
-      log.warn(`[system_core] ${workspaceDir} is still not a valid git repo after init — skipping`);
+      log.warn(
+        `[system_core] ${workspaceDir} is not a git repo — provision it manually before enabling system evolution`,
+      );
       return;
     }
 

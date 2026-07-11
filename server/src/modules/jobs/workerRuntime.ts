@@ -13,6 +13,7 @@ import { registerSessionCondenseHandler } from "../sessions/condenseJob";
 import { registerRetrievalEmbeddingHandler } from "../retrieval/embedding/job";
 import type { PluginHost } from "../plugins/host";
 import { PgRunRepository } from "../runs/repository";
+import { OperationalAlertService } from "../notifications/operationalAlerts";
 
 const POLL_INTERVAL_MS = 1_000;
 const RECLAIM_INTERVAL_MS = 120_000;
@@ -65,7 +66,14 @@ export function startJobsWorker(
   }
 
   const workerId = `ts-job-worker:${randomUUID()}`;
-  const worker = new JobWorker(queue, registry, workerId, claimableJobTypes);
+  const worker = new JobWorker(
+    queue,
+    registry,
+    workerId,
+    claimableJobTypes,
+    undefined,
+    OperationalAlertService.fromConfig(config),
+  );
 
   let stopped = false;
   let lastReclaim = 0;

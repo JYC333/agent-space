@@ -5,6 +5,10 @@ import {
 } from "./handlerRegistry";
 import type { JobQueuePort } from "./queuePort";
 import type { JobRecord } from "./repository";
+import {
+  safelyEmitOperationalAlert,
+  type OperationalAlertPort,
+} from "../notifications/operationalAlerts";
 
 export type JobProcessResult =
   | { status: "idle" }
@@ -20,6 +24,7 @@ export class JobWorker {
     private readonly workerId: string,
     private readonly claimableJobTypes: readonly string[],
     private readonly heartbeatIntervalMs: number = HANDLER_HEARTBEAT_INTERVAL_MS,
+    private readonly alerts?: OperationalAlertPort | null,
   ) {}
 
   async processOne(): Promise<JobProcessResult> {
@@ -32,8 +37,9 @@ export class JobWorker {
     const handler = this.registry.get(job.job_type);
     if (!handler) {
       const message = `No handler for job type: ${job.job_type}`;
-      await this.queue.failJob(job.id, message, this.workerId);
+      const status = await this.queue.failJob(job.id, message, this.workerId);
       await this.safeAppendEvent(job.id, "error", message);
+      if (status === "failed") await this.alertExhausted(job, message);
       return { status: "failed", job_id: job.id, error: message };
     }
 
@@ -76,8 +82,9 @@ export class JobWorker {
       return { status: "completed", job_id: job.id };
     } catch (error) {
       const message = errorMessage(error);
-      await this.queue.failJob(job.id, message, this.workerId);
+      const status = await this.queue.failJob(job.id, message, this.workerId);
       await this.safeAppendEvent(job.id, "error", `Job failed: ${message}`);
+      if (status === "failed") await this.alertExhausted(job, message);
       return { status: "failed", job_id: job.id, error: message };
     } finally {
       if (heartbeatTimer) clearInterval(heartbeatTimer);
@@ -94,6 +101,9 @@ export class JobWorker {
 
   async reclaimStuckJobs(stuckAfterSeconds = 600): Promise<number> {
     const result = await this.queue.reclaimStuckJobs(stuckAfterSeconds);
+    for (const job of result.exhausted_jobs ?? []) {
+      await this.alertExhausted(job, "job stuck and retry attempts exhausted");
+    }
     return result.reclaimed_count;
   }
 
@@ -113,6 +123,26 @@ export class JobWorker {
     } catch {
       return;
     }
+  }
+
+  private async alertExhausted(
+    job: Pick<JobRecord, "id" | "space_id" | "user_id" | "job_type" | "attempts" | "max_attempts">,
+    message: string,
+  ): Promise<void> {
+    await safelyEmitOperationalAlert(this.alerts, {
+      kind: "job_exhausted",
+      title: `Job failed permanently: ${job.job_type}`,
+      message: `Job ${job.id} reached max_attempts (${job.max_attempts}): ${message}`,
+      dedupeKey: `job_exhausted:${job.id}`,
+      spaceId: job.space_id,
+      userId: job.user_id,
+      payload: {
+        job_id: job.id,
+        job_type: job.job_type,
+        attempts: job.attempts,
+        max_attempts: job.max_attempts,
+      },
+    });
   }
 }
 
@@ -138,4 +168,3 @@ function errorMessage(error: unknown): string {
 export type AgentRunJobHandler = (
   job: JobEnvelopeForHandler,
 ) => Promise<JobHandlerResult>;
-
