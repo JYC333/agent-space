@@ -93,9 +93,10 @@ export class ChatContextCandidateCollector {
     // source never fire on the chat path (the request carries no such fields),
     // so only the DB-backed space-scoped selectors run. `project_public_summary`
     // is the sanitized space-public discovery layer (not concrete project
-    // memory), so it can fire here to let the assistant surface cross-project
-    // inspiration.
-    if (allowed.has("memory")) {
+    // memory). Ordinary chat may use it for cross-project inspiration;
+    // Project Chat restricts it to the requested Project and suppresses the
+    // other space-wide selectors above.
+    if (!request.project_id&&allowed.has("memory")) {
       const rows = await this.repo.selectMemories(
         request.space_id,
         request.user_id,
@@ -109,7 +110,7 @@ export class ChatContextCandidateCollector {
         "approved_memory",
       );
     }
-    if (allowed.has("knowledge_item")) {
+    if (!request.project_id&&allowed.has("knowledge_item")) {
       const rows = await this.repo.selectKnowledgeItems(
         request.space_id,
         request.user_id,
@@ -124,11 +125,11 @@ export class ChatContextCandidateCollector {
         "knowledge_item",
       );
     }
-    if (allowed.has("source")) {
+    if (!request.project_id&&allowed.has("source")) {
       const rows = await this.repo.selectSources(request.space_id, maxItems);
       pushItems(items, await promptGate("source", rows), "source", 0.6, "source");
     }
-    if (allowed.has("activity_record")) {
+    if (!request.project_id&&allowed.has("activity_record")) {
       const rows = await this.repo.selectActivityRecords(
         request.space_id,
         request.user_id,
@@ -147,6 +148,7 @@ export class ChatContextCandidateCollector {
         request.space_id,
         message,
         maxItems,
+        request.project_id??null,
       );
       pushItems(
         items,

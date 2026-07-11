@@ -129,6 +129,7 @@ CREATE TABLE public.proposals (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
     created_by_run_id character varying(36),
+    action_idempotency_key character varying(256),
     proposal_type character varying(64) NOT NULL,
     status character varying(32) NOT NULL,
     risk_level character varying(32) NOT NULL,

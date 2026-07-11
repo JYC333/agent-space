@@ -2,14 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Send, Loader2, Sparkles, AlertTriangle } from 'lucide-react'
 import { toast } from 'sonner'
 import { SpaceLink as Link } from '../../core/spaceNav'
-import { agentsApi, sessionsApi } from '../../api/client'
-import type { AgentOut, Message } from '../../types/api'
+import { agentsApi, proposalsApi, sessionsApi } from '../../api/client'
+import type { AgentOut, ChatActionPreview, Message } from '../../types/api'
 import { Button } from '../../components/ui/button'
 import { Textarea } from '../../components/ui/textarea'
 import { EmptyState } from '../../components/ui/empty-state'
 import { errMsg } from '../../lib/utils'
 
-interface ChatMessage { id?: string; role: string; content: string; error?: boolean }
+interface ChatMessage { id?: string; role: string; content: string; error?: boolean; actionPreviews?: ChatActionPreview[] }
 
 /**
  * Synchronous chat surface for the space's Personal Assistant. Each turn calls
@@ -22,11 +22,13 @@ export default function ChatPanel({
   initialDraft,
   initialSessionId,
   onSessionChange,
+  projectId,
 }: {
   agent: AgentOut
   initialDraft?: string | null
   initialSessionId?: string | null
   onSessionChange?: (sessionId: string) => void
+  projectId?: string
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [sessionId, setSessionId] = useState<string | undefined>(initialSessionId ?? undefined)
@@ -53,10 +55,12 @@ export default function ChatPanel({
     let cancelled = false
     setLoadingHistory(true)
     sessionsApi.messages(id)
-      .then((rows: Message[]) => {
+      .then(async (rows: Message[]) => {
+        if (cancelled) return
+        const history = await Promise.all(rows.map(async m => ({ id: m.id, role: m.role, content: m.content, actionPreviews: await refreshActionPreviews(Array.isArray(m.metadata_json?.action_previews) ? m.metadata_json.action_previews as ChatActionPreview[] : undefined) })))
         if (cancelled) return
         setSessionId(id)
-        setMessages(rows.map(m => ({ id: m.id, role: m.role, content: m.content })))
+        setMessages(history)
       })
       .catch(e => {
         if (!cancelled) toast.error(errMsg(e))
@@ -74,16 +78,16 @@ export default function ChatPanel({
     setMessages(m => [...m, { role: 'user', content: message }])
     setSending(true)
     try {
-      const res = await agentsApi.chat(agent.id, { message, session_id: sessionId }, { spaceId: agent.space_id })
+      const res = await agentsApi.chat(agent.id, { message, session_id: sessionId, ...(projectId ? { project_id: projectId } : {}) }, { spaceId: agent.space_id })
       setSessionId(res.session_id)
       if (res.ok) {
         onSessionChange?.(res.session_id)
-        setMessages(m => [...m, { role: 'assistant', content: res.reply ?? '' }])
+        setMessages(m => [...m, { role: 'assistant', content: res.reply ?? '', actionPreviews: res.action_previews }])
       } else {
         const note = res.error_code === 'model_provider_required'
           ? 'No model provider is configured for this space yet. Add one to enable chat.'
           : (res.error ?? 'The assistant could not complete this turn.')
-        setMessages(m => [...m, { role: 'assistant', content: note, error: true }])
+        setMessages(m => [...m, { role: 'assistant', content: note, error: true, actionPreviews: res.action_previews }])
       }
     } catch (e) {
       toast.error(errMsg(e))
@@ -91,7 +95,7 @@ export default function ChatPanel({
     } finally {
       setSending(false)
     }
-  }, [agent.id, agent.space_id, loadingHistory, onSessionChange, sessionId, sending])
+  }, [agent.id, agent.space_id, loadingHistory, onSessionChange, projectId, sessionId, sending])
 
   // Auto-send a draft carried from Home's assistant entry (the user already hit "Open").
   useEffect(() => {
@@ -147,6 +151,7 @@ export default function ChatPanel({
                     </span>
                   )}
                   {m.content}
+                  {m.actionPreviews?.length ? <div className="mt-2 space-y-2">{m.actionPreviews.map((preview,index) => <ActionPreviewCard key={`${preview.action_id}:${preview.proposal_id ?? index}`} preview={preview} />)}</div> : null}
                   {m.error && providerMissing && m.content.includes('model provider') && (
                     <div className="mt-1.5">
                       <Link to="/providers" className="text-[12px] underline text-accent-foreground">Configure a provider →</Link>
@@ -186,4 +191,30 @@ export default function ChatPanel({
       </form>
     </div>
   )
+}
+
+async function refreshActionPreviews(previews?: ChatActionPreview[]) {
+  if (!previews) return undefined
+  return Promise.all(previews.map(async preview => {
+    if (!preview.proposal_id) return preview
+    try {
+      const proposal = await proposalsApi.get(preview.proposal_id)
+      const status: ChatActionPreview['status'] = proposal.status === 'pending'
+        ? 'proposed'
+        : proposal.status === 'accepted'
+          ? 'completed'
+          : 'failed'
+      return { ...preview, status }
+    } catch {
+      return preview
+    }
+  }))
+}
+
+function ActionPreviewCard({ preview }: { preview: ChatActionPreview }) {
+  return <div className="rounded-md border border-border bg-background p-3 text-foreground">
+    <div className="flex items-center justify-between gap-2"><span className="text-xs font-medium">{preview.title ?? preview.proposal_type ?? preview.action_id}</span><span className="text-[10px] uppercase text-muted-foreground">{preview.status.replace('_', ' ')}</span></div>
+    {preview.summary && <p className="mt-1 text-xs text-muted-foreground">{preview.summary}</p>}
+    <div className="mt-2 flex gap-3 text-[11px]">{preview.risk_level && <span>{preview.risk_level} risk</span>}{preview.proposal_id && <Link className="text-accent-foreground hover:underline" to={`/proposals/${preview.proposal_id}`}>Review proposal</Link>}</div>
+  </div>
 }

@@ -233,7 +233,7 @@ describe("engine + registry default", () => {
     ).decision;
     const egressDenied = computeDecision(
       registry,
-      req("project_public_summary.brief", {
+      req("project.summary.brief", {
         space_id: "s1",
         context: {
           domain: "project_public_summary",

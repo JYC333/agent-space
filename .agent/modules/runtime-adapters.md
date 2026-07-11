@@ -233,7 +233,7 @@ installed when implemented:
   are `retrieval.search` / `retrieval.brief`; Memory and Project public-summary
   tools are exposed only by explicit domain opt-in as
   `memory.retrieval.search`, `memory.retrieval.brief`,
-  `project_public_summary.search`, and `project_public_summary.brief`. Each tool
+  `project.summary.search`, and `project.summary.brief`. Each tool
   call passes a policy-gateway action before search/brief execution; preflight
   modes append explicit retrieval evidence before the model turn rather than
   silently injecting ContextBuilder state. The provider invocation layer maps the

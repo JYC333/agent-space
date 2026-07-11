@@ -21,7 +21,7 @@ export function registerSourcePresetRoutes(app: FastifyInstance, context: Module
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
     try {
-      const gate = await enforceSources(context, identity, "source.connection_manage", "source_connection");
+      const gate = await enforceSources(context, identity, "source.connection.manage", "source_connection");
       if (gate.blocked) return reply.code(403).send(gate.reply403);
       return reply.send(await service().previewArxiv(identity, jsonBody(request)));
     } catch (error) {
@@ -33,7 +33,7 @@ export function registerSourcePresetRoutes(app: FastifyInstance, context: Module
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
     try {
-      const gate = await enforceSources(context, identity, "source.connection_manage", "source_connection");
+      const gate = await enforceSources(context, identity, "source.connection.manage", "source_connection");
       if (gate.blocked) return reply.code(403).send(gate.reply403);
       return reply.code(201).send(await service().createArxiv(identity, jsonBody(request)));
     } catch (error) {

@@ -184,7 +184,7 @@ module, frontend page, and migrations:
 ## Documentation
 
 - [Documentation Index](docs/README.md)
-- [Architecture](docs/ARCHITECTURE.md)
+- [Architecture](.agent/ARCHITECTURE.md)
 - [Backup and Restore](docs/BACKUP_AND_RESTORE.md)
 - [Threat Model](docs/THREAT_MODEL.md)
 

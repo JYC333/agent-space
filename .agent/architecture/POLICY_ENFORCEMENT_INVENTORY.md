@@ -35,6 +35,33 @@ vocabulary only and fail closed until wired.
 
 Direct use of `PolicyEngine` or hard-invariant helpers outside documented non-mutating simulations is a boundary violation detected by `server/test/boundaries.test.ts`.
 
+### System actions and agent tools
+
+`SYSTEM_ACTION_REGISTRY` maps each invokable application capability to a
+canonical `PolicyActionId`; see [SYSTEM_ACTIONS.md](SYSTEM_ACTIONS.md).
+`SystemActionGateway` rejects unknown actions, actors, visibility surfaces,
+schemas, and missing idempotency before executor dispatch. `AgentToolGateway`
+then requires registry agent visibility, run/profile exposure, and a call-time
+policy adapter. An action with no canonical adapter is denied.
+
+Managed retrieval actions continue through their retrieval policy adapter;
+delegation uses `run.spawn_child` / `runtime.execute`. Generic managed source
+actions (`source.connection.propose_create`, `project.source.propose_bind`,
+`source.backfill.propose_start`) force a PolicyDecisionRecord and can create
+only proposals. Project and plan associations are revalidated inside their
+application services. Best-effort action RunEvents record the decision id and
+safe result summary; their persistence failure does not block or roll back an
+action. Fail-closed record modes apply to PolicyGateway decision-record
+persistence, which occurs before the action is allowed to proceed.
+
+Human-managed `policy.action_grant.create` / `revoke` gates control advance
+approval grants. Grant resolution never replaces `proposal.apply`: a matching
+active, scoped, unexpired, non-exhausted grant causes the normal agent proposal
+to be accepted through `ProposalApplyService`, which reruns policy and domain
+authorization transactionally. Payload/action/type/Project/resource mismatch
+leaves the proposal pending. Grant-management and proposal-apply actions are
+not agent-visible.
+
 **Non-mutating simulation exceptions (no PolicyDecisionRecord):** preflight simulation may call pure decision helpers only — it must not persist `PolicyDecisionRecord` and must not perform the action. Current simulation call sites live in runs and automations services.
 
 **Hard invariant guard** (`server/src/modules/policy/decisionCore.ts`) runs before PolicyEngine and enforces non-overridable security/privacy invariants.
@@ -190,12 +217,12 @@ permission manifest that routes risk and enables unknown-action fail-closed beha
   `workspace.write_patch`, `artifact.persist`, `proposal.create`, `proposal.apply`,
   `agent.config_update`, `workspace.read`, `runtime_skill.render`,
   `automation.create`, `automation.update`, `automation.fire`,
-  `source.connection_manage`, `source.item_create`, `source.item_update`,
+  `source.connection.manage`, `source.item_create`, `source.item_update`,
   `evidence.create`, `evidence.update`, `evidence.link`,
-  `project_source.configure`, `context.select_evidence`,
+  `project.source.bind`, `context.select_evidence`,
   `retrieval.search`, `retrieval.brief`, `memory.retrieval.search`,
-  `memory.retrieval.brief`, `project_public_summary.search`,
-  `project_public_summary.brief`.
+  `memory.retrieval.brief`, `project.summary.search`,
+  `project.summary.brief`.
 - **WIRED_VIA_PROPOSAL** (25): `lifecycle_status=WIRED_VIA_PROPOSAL` — enforced exclusively via the `proposal.apply`
   gate (`PolicyGateway.enforceProposalApply()`).
   Actions: `memory.create`, `memory.update`, `memory.archive`, `policy.change`,
@@ -221,7 +248,7 @@ permission manifest that routes risk and enables unknown-action fail-closed beha
   `policy.change`, `skill.import`, `skill.convert`, `capability.enable`, `capability.disable`,
   `capability.update`, `runtime_skill.binding_update`, `automation.create`, `automation.fire`,
   `automation.update`, `retrieval.search`, `retrieval.brief`, `memory.retrieval.search`, `memory.retrieval.brief`,
-  `project_public_summary.search`, `project_public_summary.brief`.
+  `project.summary.search`, `project.summary.brief`.
   Dynamic escalation to `FAIL_CLOSED` also occurs for:
   - `trigger_origin="automation"` + `audit_required=True` on the action — **regardless of ALLOW/DENY/REQUIRE_APPROVAL**.
   - CRITICAL risk level + `audit_required=True` on the action — **regardless of ALLOW/DENY/REQUIRE_APPROVAL**.
@@ -260,7 +287,7 @@ fail closed via `unknown_policy_action` DENY if ever passed to `PolicyEngine` or
 | `automation.fire` | `server/src/modules/automations/service.ts` | **Uses server `enforce()`**. Runtime preflight and policy preflight simulation rerun. `membership_role`, `agent_id`, `trigger_origin="automation"` in `context`. Creates a queued Run, an `agent_run` job, and an AutomationRun record; scheduled fire advances the schedule in the same transaction as the Run/Job/AutomationRun writes. **fail_closed**. |
 | `retrieval.search` / `retrieval.brief` | `server/src/modules/retrieval/tool/service.ts` | Uses `enforce()` before managed-run Knowledge search/brief execution. Domain must be enabled, an instructed-user viewer must exist, and audit is pointer-only. **fail_closed**. |
 | `memory.retrieval.search` / `memory.retrieval.brief` | `server/src/modules/retrieval/tool/service.ts`, `server/src/modules/runs/managedRetrievalTools.ts` | Uses `enforce()` before explicitly opted-in managed-run Memory retrieval. Disabled-domain calls are denied/audited before returning a model-visible domain-not-enabled tool result. **fail_closed**. |
-| `project_public_summary.search` / `project_public_summary.brief` | `server/src/modules/retrieval/tool/service.ts`, `server/src/modules/runs/managedRetrievalTools.ts` | Uses `enforce()` before explicitly opted-in Project public-summary retrieval. Disabled-domain calls are denied/audited before returning a model-visible domain-not-enabled tool result. **fail_closed**. |
+| `project.summary.search` / `project.summary.brief` | `server/src/modules/retrieval/tool/service.ts`, `server/src/modules/runs/managedRetrievalTools.ts` | Uses `enforce()` before explicitly opted-in Project public-summary retrieval. Disabled-domain calls are denied/audited before returning a model-visible domain-not-enabled tool result. **fail_closed**. |
 
 ### Non-PolicyGateway revalidation guards
 

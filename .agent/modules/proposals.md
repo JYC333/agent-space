@@ -116,7 +116,9 @@ proposal mutations fail-closed instead of silently no-oping.
 - `ProposalApplyService` is the only normal durable write path
 - Target modules own proposal business mutations; `proposals` owns the registry and approval/apply orchestration
 - `provenance_links` are required for accepted memory and policy changes
-- Agents generate Proposals; humans approve
+- Agents generate Proposals; humans approve explicitly or in advance through
+  a scoped, expiring, use-limited ActionApprovalGrant. Both modes retain the
+  Proposal and approval audit record.
 - `code_patch` rollback requires a non-expired `available` snapshot; once used, status becomes `rolled_back` and cannot be reused
 - Snapshot retention (days + max count) is configurable per-workspace and per-space; builtin defaults are 7 days / 20 snapshots
 

@@ -11,6 +11,7 @@ import {
   dbPool,
   HttpError,
   jsonBody,
+  requiredString,
   optionalString,
   parsePage,
   params,
@@ -35,11 +36,182 @@ import { projectRetrievalRegistry } from "./retrievalAdapter";
 import { ProjectCorpusRepository } from "./corpusRepository";
 import { ProjectPublicSummaryGenerator } from "./publicSummaryGenerator";
 import { PgProjectRepository } from "./repository";
+import { ProjectSourceBindingService } from "./projectSourceBindingService";
+import { ProjectSourceProposalService } from "./projectSourceProposalService";
+import { enforceSources } from "../sources/enforceSources";
+import { ProjectOperationService } from "./projectOperationService";
 
 export function registerRoutes(app: FastifyInstance, context: ModuleContext): void {
   const repository = () => PgProjectRepository.fromConfig(context.config);
   const corpusRepository = () => new ProjectCorpusRepository(dbPool(context.config));
   const summaryGenerator = () => ProjectPublicSummaryGenerator.fromConfig(context.config);
+  const sourceBindings = () => new ProjectSourceBindingService(dbPool(context.config));
+  const sourceProposals = () => new ProjectSourceProposalService(dbPool(context.config), context.config);
+  const operations = () => new ProjectOperationService(dbPool(context.config));
+
+  app.get("/api/v1/projects/:projectId/operations", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const p = params(request);
+      return reply.send(await operations().list(identity, requiredString(p.projectId, "project_id")));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.post("/api/v1/projects/:projectId/operations", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const p = params(request);
+      const gate = await enforceSources(context, identity, "project.operation.manage", "project_operation");
+      if (gate.blocked) return reply.code(403).send(gate.reply403);
+      return reply.code(201).send(await operations().create(identity, requiredString(p.projectId, "project_id"), jsonBody(request)));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.get("/api/v1/projects/:projectId/operations/:operationId", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const p = params(request);
+      return reply.send(await operations().get(identity, requiredString(p.projectId, "project_id"), requiredString(p.operationId, "operation_id")));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.post("/api/v1/projects/:projectId/operations/:operationId/cancel", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const p = params(request);
+      const gate = await enforceSources(context, identity, "project.operation.manage", "project_operation", p.operationId);
+      if (gate.blocked) return reply.code(403).send(gate.reply403);
+      return reply.send(await operations().cancel(identity, requiredString(p.projectId, "project_id"), requiredString(p.operationId, "operation_id")));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.get("/api/v1/projects/:projectId/sources/bindings", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const p = params(request);
+      const q = query(request);
+      return reply.send(await sourceBindings().listBindings(identity, { projectId: requiredString(p.projectId, "project_id"), sourceConnectionId: optionalString(q.source_connection_id) }));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.get("/api/v1/projects/:projectId/sources/health", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const p = params(request);
+      return reply.send(await sourceBindings().health(identity, requiredString(p.projectId, "project_id")));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.post("/api/v1/projects/:projectId/sources/bindings", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const gate = await enforceSources(context, identity, "project.source.bind", "project_source");
+      if (gate.blocked) return reply.code(403).send(gate.reply403);
+      const p = params(request);
+      return reply.code(201).send(await sourceBindings().createBinding(identity, { ...jsonBody(request), project_id: requiredString(p.projectId, "project_id") }));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.post("/api/v1/projects/:projectId/sources/propose-bind", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const gate = await enforceSources(context, identity, "project.source.bind", "project_source");
+      if (gate.blocked) return reply.code(403).send(gate.reply403);
+      const p = params(request);
+      return reply.code(201).send(await sourceProposals().proposeBind(identity, requiredString(p.projectId, "project_id"), jsonBody(request)));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.post("/api/v1/projects/:projectId/sources/propose-setup", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const sourceGate = await enforceSources(context, identity, "source.connection.manage", "source_connection");
+      if (sourceGate.blocked) return reply.code(403).send(sourceGate.reply403);
+      const projectGate = await enforceSources(context, identity, "project.source.bind", "project_source");
+      if (projectGate.blocked) return reply.code(403).send(projectGate.reply403);
+      const p = params(request);
+      return reply.code(201).send(await sourceProposals().proposeSourceSetup(identity, requiredString(p.projectId, "project_id"), jsonBody(request)));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.patch("/api/v1/projects/:projectId/sources/bindings/:bindingId", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const gate = await enforceSources(context, identity, "project.source.bind", "project_source");
+      if (gate.blocked) return reply.code(403).send(gate.reply403);
+      const p = params(request);
+      return reply.send(await sourceBindings().updateBinding(identity, requiredString(p.bindingId, "binding_id"), jsonBody(request), requiredString(p.projectId, "project_id")));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.delete("/api/v1/projects/:projectId/sources/bindings/:bindingId", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const gate = await enforceSources(context, identity, "project.source.bind", "project_source");
+      if (gate.blocked) return reply.code(403).send(gate.reply403);
+      const p = params(request);
+      return reply.send(await sourceBindings().deleteBinding(identity, requiredString(p.bindingId, "binding_id"), requiredString(p.projectId, "project_id")));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.post("/api/v1/projects/:projectId/sources/bindings/:bindingId/backfill", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const gate = await enforceSources(context, identity, "project.source.bind", "project_source");
+      if (gate.blocked) return reply.code(403).send(gate.reply403);
+      const p = params(request);
+      return reply.send(await sourceBindings().backfillBinding(identity, requiredString(p.bindingId, "binding_id"), requiredString(p.projectId, "project_id")));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.post("/api/v1/projects/:projectId/sources/bindings/:bindingId/propose-backfill", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const gate = await enforceSources(context, identity, "source.backfill.plan", "source_backfill_plan");
+      if (gate.blocked) return reply.code(403).send(gate.reply403);
+      const p = params(request);
+      return reply.code(201).send(await sourceProposals().proposeBackfill(identity, requiredString(p.projectId, "project_id"), requiredString(p.bindingId, "binding_id"), jsonBody(request)));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
 
   app.get("/api/v1/projects", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);

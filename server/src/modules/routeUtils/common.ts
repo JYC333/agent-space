@@ -209,6 +209,34 @@ export async function withDbTransaction<T>(
   }
 }
 
+/**
+ * Same transaction semantics as `withDbTransaction`, but for application
+ * services that are constructed with a `Queryable` that may already be a
+ * transaction client (nested inside a caller's transaction). Opens a real
+ * transaction only when `db` is a connectable `Pool`; otherwise runs `fn`
+ * directly against the given client so nested calls join the existing
+ * transaction instead of starting a new one.
+ */
+export async function withQueryableTransaction<T>(
+  db: Queryable,
+  fn: (db: Queryable) => Promise<T>,
+): Promise<T> {
+  const pool = db as Queryable & { connect?: () => Promise<PoolClient> };
+  if (!pool.connect) return fn(db);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await fn(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export function page<T>(
   items: T[],
   total: number,

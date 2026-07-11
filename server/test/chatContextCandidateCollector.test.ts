@@ -77,6 +77,7 @@ function filterRows(
   if (table === "space_memberships") {
     return rows.filter((row) => row.user_id === params[1] && row.status === "active");
   }
+  if(table==="project_public_summaries"&&typeof params[1]==="string"&&!String(params[1]).startsWith("%"))return rows.filter(row=>row.project_id===params[1]);
   return rows;
 }
 
@@ -200,6 +201,13 @@ describe("ChatContextCandidateCollector", () => {
       reason: "project_public_summary",
     });
     expect(result.allowed_sources).toContain("project_public_summary");
+  });
+
+  it("keeps Project Chat candidates within the requested Project",async()=>{
+    const db=new FakeDb({policy:[{context_policy_json:{}}],memory_entries:[memoryRow({})],knowledge_items:[{id:"k1",title:"K",content:"knowledge"}],project_public_summaries:[{project_id:"project-1",title:"One",summary_text:"One summary"},{project_id:"project-2",title:"Two",summary_text:"Two summary"}]});
+    const result=await collector(db).fetchCandidates({...request,project_id:"project-1"});
+    expect(result.items.map(item=>item.item_id)).toEqual(["project-1"]);
+    expect(result.items.map(item=>item.item_type)).toEqual(["project_public_summary"]);
   });
 
   it("honors the context_policy_json sources allow-list and caps", async () => {

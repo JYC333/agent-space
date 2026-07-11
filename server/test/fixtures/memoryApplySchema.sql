@@ -72,6 +72,7 @@ CREATE TABLE public.provenance_links (
 CREATE TABLE public.proposals (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
+    action_idempotency_key character varying(256),
     proposal_type character varying(64) NOT NULL,
     status character varying(32) NOT NULL,
     payload_json jsonb NOT NULL,

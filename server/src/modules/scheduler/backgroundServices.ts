@@ -22,6 +22,7 @@ import { withDbTransaction } from "../routeUtils/common";
 import { PgJobQueueRepository } from "../jobs/repository";
 import { startJobsWorker, type JobsWorkerHandle } from "../jobs/workerRuntime";
 import type { PluginHost } from "../plugins/host";
+import { SourceBackfillExecutionService } from "../sources/sourceBackfillExecutionService";
 
 export interface BackgroundServicesHandle {
   worker: JobsWorkerHandle | null;
@@ -101,6 +102,7 @@ export function startBackgroundServices(
         if (enqueued > 0) log?.info(`[scheduler] source enqueued ${enqueued} source scan job(s)`);
         const processed = await processPendingSourceJobs(config, log);
         if (processed > 0) log?.info(`[scheduler] source processed ${processed} extraction job(s)`);
+        await reconcileSourceBackfills(getDbPool(config.databaseUrl!));
         const customDb = getDbPool(config.databaseUrl!);
         const reclaimed = await reclaimStuckCustomSourceHandlerRuns(customDb);
         if (reclaimed > 0) log?.warn(`[scheduler] custom source reclaimed ${reclaimed} stuck run(s)`);
@@ -150,6 +152,11 @@ export function startBackgroundServices(
 
   const scheduler = startSchedulerRegistry(tasks, log);
   return { worker, scheduler };
+}
+
+async function reconcileSourceBackfills(db: ReturnType<typeof getDbPool>):Promise<void>{
+  const plans=await db.query<{id:string;space_id:string}>(`SELECT id,space_id FROM source_backfill_plans WHERE status IN ('approved','running') OR (status='paused' AND next_eligible_at<=now()) ORDER BY updated_at LIMIT 25`);
+  for(const plan of plans.rows){await db.query(`UPDATE source_backfill_plans SET status='approved',next_eligible_at=NULL,updated_at=now() WHERE id=$1 AND space_id=$2 AND status='paused' AND next_eligible_at<=now()`,[plan.id,plan.space_id]);await new SourceBackfillExecutionService(db).reconcile(plan.space_id,plan.id);}
 }
 
 export async function pruneMemoryAccessLogs(config: ServerConfig): Promise<number> {

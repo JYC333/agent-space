@@ -60,8 +60,10 @@ for jobs, rules, and troubleshooting.
 - `SourceSnapshot` records backed by artifacts.
 - `ExtractedEvidence` candidate citable evidence.
 - `EvidenceLink` relevance and context-selection links.
-- Project-scoped `ProjectSourceBinding` routing and materialized
-  `ProjectSourceItemLink` collection rows.
+- The producer side of the Projects routing hook. Project-owned
+  `ProjectSourceBinding` and `ProjectSourceItemLink` rows are managed by the
+  Projects module; Sources only hands newly materialized items/evidence to the
+  hook.
 - Sources reader annotations and comments.
 - Per-user source item read state (`source_item_user_states`), used by Library
   and the reader.
@@ -83,6 +85,25 @@ for jobs, rules, and troubleshooting.
 - Credential storage.
 
 ## Current Implementation
+
+### History import / backfill
+
+Sources owns durable `source_backfill_plans`, ordered segments, and quota
+buckets. Preview is deterministic and non-durable; creating a plan is
+idempotent per space. Starting a plan is proposal-gated, and segment execution
+reuses ordinary `extraction_jobs`, so existing item/evidence dedupe and the
+Projects routing hook remain the only materialization path. Quota exhaustion
+pauses a plan until `next_eligible_at`; the Sources scheduler reconciles
+completed extraction jobs and resumes eligible plans. Project-initiated plans
+may link to a ProjectOperation for product-level progress.
+
+The Source Detail `History import` tab consumes these read models: it previews
+date windows and quota without writing, creates an idempotent draft, shows
+segment/item rollups and `next_eligible_at`, and offers propose-start and
+owner/admin pause/resume controls. Raw extraction-job and segment diagnostics
+remain an Advanced concern. Start remains proposal-gated:
+`source_backfill_start` -> `ProposalApplyService` -> internal
+`source.backfill.start`; agents can invoke only the proposal-producing action.
 
 Built-in source connections are seeded for RSS, Atom, web page, and arXiv
 connectors. The extraction worker scans feeds and pages, creates candidate
@@ -108,7 +129,7 @@ sorted by `submittedDate` descending, so daily scans behave like an arXiv
 new-papers stream with normal Sources dedupe. Use one source for multiple
 categories when they share the same schedule, capture policy, and project
 binding; create separate sources only when those controls need to differ. Both
-POST endpoints enforce the same `source.connection_manage` policy action as
+POST endpoints enforce the same `source.connection.manage` policy action as
 `POST /api/v1/sources/connections`. No credentials are accepted in v1.
 
 arXiv-specific parsing lives in `connectors/arxiv.ts` (query URL building, Atom
@@ -157,9 +178,9 @@ another academic plugin route; its Project Sources section feeds the Project
 Corpus and the core Graph `academic_citation_v1` project lens when source
 items/evidence/object links are materialized.
 Source health is exposed as read models instead of raw run tables:
-`/sources/source-health` reports source-level health for visible connections,
-and `/sources/project-source-health` reports project-binding health for the
-Project Sources surface.
+`/sources/source-health` reports source-level health for visible connections.
+Project binding health is Project-owned at
+`/projects/{projectId}/sources/health`.
 
 Scheduled source connections use frequency-specific rules rather than a raw
 "next run" picker. Hourly schedules choose a minute, daily schedules choose
@@ -242,14 +263,19 @@ Reader header. Re-extraction uses the existing `queue_content` item action and
 `extract_text` job path; it creates a new extracted source snapshot/artifact and
 updates `source_items.extracted_artifact_id`.
 
-Projects consume Sources through direct `project_source_bindings`,
+Projects consume Sources through Project-owned `project_source_bindings`,
 `project_source_item_links`, project filters, evidence links, and the
 Project-owned `project_corpus_items` read model.
 `ProjectSourceBinding.project_id` is required and does not depend on
-`project_workspaces`. Project Sources pages can bind existing sources, create or
-save URLs into a project collection through an already-bound source, run scans,
+`project_workspaces`. Project writers directly bind existing active Sources;
+agent-initiated bindings remain proposal-first. Project Sources pages can create
+or save URLs into a project collection through an already-bound source, run scans,
 backfill existing source items/evidence, and inspect source health. Projects do
 not own raw source connections.
+
+Removing a Project binding disconnects it from normal Project reads and UI. The
+row is retained as an internal archive for operation/backfill/proposal history;
+re-adding the same Source restores that archived binding.
 
 An `SourceItem` keeps one primary `connection_id`, but deduped items may have
 `SourceSnapshot` rows from multiple source connections. Project filters and
@@ -262,8 +288,8 @@ the raw item.
 
 When a source item matches an active `project_source_bindings` row for a
 project, materialization writes an active `project_source_item_links` row. The
-same linker then auto-creates active `context_candidate` `evidence_links`
-targeting that project (`evidenceProjectLinker.ts`). Item links are idempotent
+Projects-owned `ProjectSourceRoutingService` then creates active
+`context_candidate` `evidence_links` targeting that project. Item links are idempotent
 through `uq_project_source_item_links_binding_item`; evidence links remain
 idempotent through `uq_evidence_links_active_dedupe` and are what run-context
 evidence selection reads for project-bound agent runs.
@@ -281,14 +307,24 @@ For deduped items, auto-linking also considers `SourceSnapshot.connection_id`
 rows for the same item, not only `SourceItem.connection_id`.
 
 Binding a source to a project can also backfill historical extracted evidence.
-`POST /api/v1/sources/project-source-bindings` accepts
+`POST /api/v1/projects/{projectId}/sources/bindings` accepts
 `backfill_history=true`, and
-`POST /api/v1/sources/project-source-bindings/:bindingId/backfill` reruns the
+`POST /api/v1/projects/{projectId}/sources/bindings/{bindingId}/backfill` reruns the
 same idempotent materialization later. Backfill does not duplicate source items,
 evidence, or corpus entries; it inserts/reactivates missing active project item
 links, creates missing project `context_candidate` evidence links, and refreshes
 the Project corpus read model for existing `ExtractedEvidence` rows whose parent
 item or same-item source snapshot belongs to the bound source.
+
+Remote history import is distinct from this local rematerialization. The
+Project binding `propose-backfill` route creates a `ProjectOperation`, a
+Sources-owned history-import plan, and its start proposal in one transaction.
+Project-scoped idempotency keys are locked before operation creation; safe
+retries reuse the original operation/plan/proposal, while cross-Project or
+different-parameter reuse fails closed.
+After approval, quota-controlled segments reuse ordinary `extraction_jobs` and
+the existing routing hook, so no Project-specific ingestion path or duplicate
+raw source item is introduced.
 
 After a scan materializes new items, the scan paths emit a best-effort
 `source_post_processing_event` job (`postProcessing/eventEmitter.ts`). Sources

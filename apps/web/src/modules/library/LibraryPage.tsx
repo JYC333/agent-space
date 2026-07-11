@@ -6,7 +6,7 @@ import { SpaceLink as Link } from '../../core/spaceNav'
 import { sourcesApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
 import { errMsg } from '../../lib/utils'
-import type { SourceConnection, SourceItem, SourcePostProcessingBriefingDaySummary } from '../../types/api'
+import type { ExtractionJob, SourceConnection, SourceItem, SourcePostProcessingBriefingDaySummary } from '../../types/api'
 import { Card } from '../../components/ui/card'
 import { Badge, StatusBadge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'
@@ -134,16 +134,24 @@ function SourceItemCard({
   item,
   connectionName,
   busy,
+  extractionStatus,
   onAction,
 }: {
   item: SourceItem
   connectionName: string | null
   busy: string | null
+  extractionStatus: ExtractionJob['status'] | null
   onAction: (item: SourceItem, action: string) => void
 }) {
   const textExtractionReason = textExtractionDisabledReason(item)
   const textExtractionLabel = textExtractionActionLabel(item)
   const itemBusy = busy?.startsWith(`item:${item.id}`) ?? false
+  const extractionInProgress = extractionStatus === 'pending' || extractionStatus === 'running'
+  const extractionLabel = extractionStatus === 'pending'
+    ? 'Queued'
+    : extractionStatus === 'running'
+      ? 'Extracting…'
+      : textExtractionLabel
   return (
     <Card className="p-4 space-y-3">
       <div className="flex items-start justify-between gap-4">
@@ -161,6 +169,7 @@ function SourceItemCard({
       <div className="flex flex-wrap gap-1.5">
         <Badge variant="outline">{item.item_type}</Badge>
         <Badge variant="muted">{item.content_state}</Badge>
+        {extractionStatus && <StatusBadge status={extractionStatus === 'pending' ? 'queued' : extractionStatus} />}
         <Badge variant="muted">{item.read_status}</Badge>
         {connectionName && <Badge variant="muted">{connectionName}</Badge>}
         {item.source_domain && <Badge variant="muted">{item.source_domain}</Badge>}
@@ -177,13 +186,13 @@ function SourceItemCard({
           type="button"
           size="sm"
           variant="outline"
-          aria-label={`${textExtractionLabel} ${item.title}`}
-          disabled={itemBusy || textExtractionReason !== null}
+          aria-label={`${extractionLabel} ${item.title}`}
+          disabled={itemBusy || extractionInProgress || textExtractionReason !== null}
           title={textExtractionReason ?? undefined}
           onClick={() => onAction(item, 'queue_content')}
         >
           {item.content_state === 'content_saved' ? <RefreshCw className="size-3.5" /> : <FileText className="size-3.5" />}
-          {textExtractionLabel}
+          {extractionLabel}
         </Button>
         <Button type="button" size="sm" variant="ghost" disabled={itemBusy} onClick={() => onAction(item, 'mark_selected')}>
           <CheckCircle2 className="size-3.5" />
@@ -245,6 +254,7 @@ function LibraryItemsRoute({ libraryType }: { libraryType?: LibraryItemTypeFilte
   const [connectionFilter, setConnectionFilter] = useState('')
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
+  const [extractionStatuses, setExtractionStatuses] = useState<Record<string, ExtractionJob['status']>>({})
 
   const connectionNameById = useMemo(
     () => new Map(connections.map(connection => [connection.id, connection.name])),
@@ -310,26 +320,40 @@ function LibraryItemsRoute({ libraryType }: { libraryType?: LibraryItemTypeFilte
 
   async function itemAction(item: SourceItem, action: string) {
     setBusy(`item:${item.id}:${action}`)
+    if (action === 'queue_content') {
+      setExtractionStatuses(current => ({ ...current, [item.id]: 'pending' }))
+    }
     try {
-      await sourcesApi.itemAction(item.id, action)
+      const updatedItem = await sourcesApi.itemAction(item.id, action)
       if (action === 'queue_content') {
-        await runQueuedItemJob(item.id, 'extract_text', 'Text extraction')
+        setSourceItems(current => current.map(currentItem => currentItem.id === item.id ? updatedItem : currentItem))
+        const result = await runQueuedItemJob(item.id, 'extract_text', 'Text extraction', () => {
+          setExtractionStatuses(current => ({ ...current, [item.id]: 'running' }))
+        })
+        if (result) setExtractionStatuses(current => ({ ...current, [item.id]: result.status }))
       }
       await load()
     } catch (e) {
+      if (action === 'queue_content') {
+        setExtractionStatuses(current => {
+          const { [item.id]: _discarded, ...rest } = current
+          return rest
+        })
+      }
       toast.error(errMsg(e))
     } finally {
       setBusy(null)
     }
   }
 
-  async function runQueuedItemJob(itemId: string, jobType: string, label: string) {
-    const result = await runPendingItemJob(itemId, jobType)
+  async function runQueuedItemJob(itemId: string, jobType: string, label: string, onJobStarted?: () => void) {
+    const result = await runPendingItemJob(itemId, jobType, onJobStarted)
     if (!result) {
       toast.success(`${label} queued`)
-      return
+      return null
     }
     toast.success(`${label} ${result.status}`)
+    return result
   }
 
   const firstLoad = loading && sourceItems.length === 0
@@ -394,6 +418,7 @@ function LibraryItemsRoute({ libraryType }: { libraryType?: LibraryItemTypeFilte
               item={item}
               connectionName={item.connection_id ? connectionNameById.get(item.connection_id) ?? null : null}
               busy={busy}
+              extractionStatus={extractionStatuses[item.id] ?? null}
               onAction={itemAction}
             />
           ))}

@@ -3,7 +3,7 @@ import type { Queryable } from "../routeUtils/common";
 import {
   syncProjectCorpusEvidenceForSourceItem,
   syncProjectCorpusForSourceItem,
-} from "../projects/corpusRepository";
+} from "./corpusRepository";
 import { materializeAcademicPaperFromSourceItem } from "../academic/paperMaterializer";
 
 type ProjectSourceBindingFilterRow = {
@@ -40,6 +40,26 @@ export type ProjectSourceBackfillResult = {
   archived_links: number;
   evidence_links: number;
 };
+
+/**
+ * The single producer-to-consumer seam used by Sources. Projects owns all
+ * binding, link, evidence-routing, and corpus synchronization writes.
+ */
+export class ProjectSourceRoutingService {
+  constructor(private readonly db: Queryable) {}
+
+  routeMaterializedItem(input: { spaceId: string; sourceItemId: string; bindingId?: string | null; archiveNonMatching?: boolean }) {
+    return materializeProjectSourceItemLinks(this.db, input);
+  }
+
+  routeEvidence(input: { spaceId: string; sourceItemId: string }, options: { materializeSourceItemLinks?: boolean } = {}) {
+    return linkEvidenceToBoundProjects(this.db, input, options);
+  }
+
+  recomputeBinding(input: { spaceId: string; bindingId: string }) {
+    return recomputeProjectSourceBindingLinks(this.db, input);
+  }
+}
 
 function stringList(value: unknown): string[] {
   return Array.isArray(value)
@@ -197,7 +217,7 @@ export async function materializeProjectSourceItemLinks(
          source_item_id, status, matched_at, match_reason, created_at, updated_at
        ) VALUES (
          $1, $2, $3, $4::varchar, $5,
-         $6, 'active', $7, 'project_source_binding:' || $4::varchar, $7, $7
+         $6, 'active', $7, 'project_source_binding:' || $8::text, $9, $10
        )
        ON CONFLICT (space_id, project_id, project_source_binding_id, source_item_id)
        DO UPDATE SET status = 'active',
@@ -213,6 +233,9 @@ export async function materializeProjectSourceItemLinks(
         binding.id,
         binding.source_connection_id,
         input.sourceItemId,
+        now,
+        binding.id,
+        now,
         now,
       ],
     );

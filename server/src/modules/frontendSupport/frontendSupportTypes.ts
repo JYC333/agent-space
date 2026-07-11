@@ -1,4 +1,5 @@
 export interface HomeSummaryOut {
+  operations_in_progress:Array<{id:string;project_id:string;project_name:string;kind:string;title:string;status:string;progress_json:Record<string,unknown>;updated_at:string}>;
   recent_runs: HomeRunSummaryItem[];
   active_runs: HomeRunSummaryItem[];
   pending_proposals: {

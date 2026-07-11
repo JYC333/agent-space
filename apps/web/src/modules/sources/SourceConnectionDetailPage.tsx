@@ -39,6 +39,9 @@ import type {
   SourcePostProcessingTriggerType,
   SourceRecipeDryRunResult,
   SourceRecipeVersion,
+  SourceBackfillPlan,
+  SourceBackfillPreview,
+  ExtractionJob,
 } from '../../types/api'
 import {
   emptyScheduleFormValue,
@@ -63,7 +66,7 @@ const POST_PROCESSING_ACTIONS: Array<{ key: keyof SourcePostProcessingActions; l
   { key: 'mark_items', label: 'Mark relevance' },
 ]
 
-type SourceDetailTab = 'overview' | 'plan' | 'preview' | 'post-processing' | 'advanced'
+type SourceDetailTab = 'overview' | 'plan' | 'preview' | 'activity' | 'history' | 'post-processing' | 'advanced'
 
 type PostProcessingOperation = {
   kind: 'run' | 'drain'
@@ -164,7 +167,7 @@ function linesToCriteria(value: string): string[] {
 
 export default function SourceConnectionDetailPage() {
   const { connectionId = '' } = useParams()
-  const { activeSpaceId } = useSpace()
+  const { activeSpaceId,userId,spaces } = useSpace()
   const [connection, setConnection] = useState<SourceConnection | null>(null)
   const [summary, setSummary] = useState<CustomSourceHandlerSummary | null>(null)
   const [handlerVersions, setHandlerVersions] = useState<CustomSourceHandlerVersion[]>([])
@@ -174,6 +177,8 @@ export default function SourceConnectionDetailPage() {
   const [postProcessingRules, setPostProcessingRules] = useState<SourcePostProcessingRule[]>([])
   const [postProcessingRuns, setPostProcessingRuns] = useState<SourcePostProcessingRun[]>([])
   const [postProcessingBacklog, setPostProcessingBacklog] = useState<SourcePostProcessingBacklog | null>(null)
+  const [backfillPlans, setBackfillPlans] = useState<SourceBackfillPlan[]>([])
+  const [scanJobs, setScanJobs] = useState<ExtractionJob[]>([])
   const [fixtureHtml, setFixtureHtml] = useState(DEFAULT_FIXTURE)
   const [scheduleFrequency, setScheduleFrequency] = useState<SourceConnection['fetch_frequency']>('manual')
   const [scheduleForm, setScheduleForm] = useState<ScheduleFormValue>(() => emptyScheduleFormValue())
@@ -213,6 +218,7 @@ export default function SourceConnectionDetailPage() {
       setPostProcessingRules([])
       setPostProcessingRuns([])
       setPostProcessingBacklog(null)
+      setScanJobs([])
       setLoading(false)
       return
     }
@@ -222,17 +228,21 @@ export default function SourceConnectionDetailPage() {
       setConnection(row)
       setScheduleFrequency(row.fetch_frequency)
       setScheduleForm(scheduleFormValueFromConnection(row))
-      const [ruleRows, backlog, agentRows, projectPage] = await Promise.all([
+      const [ruleRows, backlog, agentRows, projectPage, historyPlans, jobPage] = await Promise.all([
         sourcesApi.postProcessingRules(connectionId),
         sourcesApi.postProcessingBacklog(connectionId),
         agentsApi.list({ status: 'active,disabled,inactive' }),
         projectsApi.list({ status: 'active' }),
+        sourcesApi.backfillPlans ? sourcesApi.backfillPlans(connectionId) : Promise.resolve([]),
+        sourcesApi.jobs({ connection_id: connectionId, job_type: 'connection_scan', limit: 20 }),
       ])
       setPostProcessingRules(ruleRows)
       setPostProcessingRuns([])
       setPostProcessingBacklog(backlog)
       setAgents(agentRows.filter(agent => agent.agent_kind !== 'system_assistant'))
       setProjects(projectPage.items)
+      setBackfillPlans(historyPlans)
+      setScanJobs(jobPage.items)
 
       if (row.handler_kind === 'generated_custom') {
         const [handlerSummary, versionPage] = await Promise.all([
@@ -263,6 +273,7 @@ export default function SourceConnectionDetailPage() {
         setPostProcessingRules([])
         setPostProcessingRuns([])
         setPostProcessingBacklog(null)
+        setScanJobs([])
       }
     } finally {
       setLoading(false)
@@ -591,6 +602,9 @@ export default function SourceConnectionDetailPage() {
       </div>
     )
   }
+  const activeRole=spaces.find(space=>space.id===activeSpaceId)?.role
+  const canManageHistory=connection.owner_user_id===userId||activeRole==='owner'||activeRole==='admin'
+  const supportsHistory=connection.connector_key==='arxiv'||connection.config_json?.preset_id==='arxiv'
 
   return (
     <div className="p-6 space-y-6">
@@ -629,6 +643,8 @@ export default function SourceConnectionDetailPage() {
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="plan">Plan</TabsTrigger>
           <TabsTrigger value="preview">Preview</TabsTrigger>
+          <TabsTrigger value="activity">Scan activity</TabsTrigger>
+          {supportsHistory&&<TabsTrigger value="history">History import</TabsTrigger>}
           <TabsTrigger value="post-processing">Post-processing</TabsTrigger>
           <TabsTrigger value="advanced">Advanced</TabsTrigger>
         </TabsList>
@@ -657,6 +673,21 @@ export default function SourceConnectionDetailPage() {
         <TabsContent value="preview" className="space-y-4">
           <PreviewPanel connection={connection} recipePreview={latestRecipePreview} latestHandlerDraft={latestDraft} />
         </TabsContent>
+
+        <TabsContent value="activity" className="space-y-4">
+          <ScanActivityPanel jobs={scanJobs} />
+        </TabsContent>
+
+        {supportsHistory&&<TabsContent value="history" className="space-y-4">
+          <HistoryImportPanel
+            connectionId={connection.id}
+            plans={backfillPlans}
+            busy={busy}
+            onBusy={setBusy}
+            onPlansChange={setBackfillPlans}
+            canManage={canManageHistory}
+          />
+        </TabsContent>}
 
         <TabsContent value="post-processing" className="space-y-4">
           <PostProcessingPanel
@@ -696,6 +727,97 @@ export default function SourceConnectionDetailPage() {
       </Tabs>
     </div>
   )
+}
+
+function ScanActivityPanel({ jobs }: { jobs: ExtractionJob[] }) {
+  return (
+    <Card className="p-4 space-y-3">
+      <div>
+        <CardTitle>Scan activity</CardTitle>
+        <p className="mt-1 text-sm text-muted-foreground">The 20 most recent scans for this source.</p>
+      </div>
+      {jobs.length === 0 ? <p className="text-sm text-muted-foreground">No scans have run for this source yet.</p> : (
+        <div className="space-y-2">
+          {jobs.map(job => (
+            <div key={job.id} className="rounded-md border p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <StatusBadge status={job.status} />
+                  <span className="text-sm font-medium">{job.job_type.replace(/_/g, ' ')}</span>
+                </div>
+                <span className="text-xs text-muted-foreground">{fmt(job.completed_at ?? job.started_at ?? job.created_at)}</span>
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground">
+                Seen {job.items_seen ?? 0} · new {job.items_created ?? 0} · updated {job.items_updated ?? 0}
+              </p>
+              {job.error_message && <p className="mt-2 text-sm text-destructive">{job.error_message}</p>}
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  )
+}
+
+function HistoryImportPanel({ connectionId, plans, busy, onBusy, onPlansChange,canManage }: {
+  connectionId: string
+  plans: SourceBackfillPlan[]
+  busy: string | null
+  onBusy: (value: string | null) => void
+  onPlansChange: React.Dispatch<React.SetStateAction<SourceBackfillPlan[]>>
+  canManage:boolean
+}) {
+  const [from, setFrom] = useState('')
+  const [to, setTo] = useState('')
+  const [windowSize, setWindowSize] = useState('30')
+  const [maxItems, setMaxItems] = useState('100')
+  const [quota, setQuota] = useState('10')
+  const [preview, setPreview] = useState<SourceBackfillPreview | null>(null)
+  const valid=Number.isInteger(Number(windowSize))&&Number(windowSize)>=1&&Number(windowSize)<=365&&Number.isInteger(Number(maxItems))&&Number(maxItems)>=1&&Number(maxItems)<=10000&&Number.isInteger(Number(quota))&&Number(quota)>=1&&Number(quota)<=1000
+  const request = () => ({
+    strategy: { window_unit: 'date_window' as const, from: from || undefined, to: to || undefined, window_size: Number(windowSize), max_items: Number(maxItems), direction: 'backward' as const },
+    quota_policy: { window: 'minute' as const, limit_count: Number(quota) },
+  })
+  async function runPreview() {
+    onBusy('history:preview')
+    try { setPreview(await sourcesApi.previewBackfill(connectionId, request())) } catch (error) { toast.error(errMsg(error)) } finally { onBusy(null) }
+  }
+  async function createPlan() {
+    onBusy('history:create')
+    try {
+      const plan = await sourcesApi.createBackfillPlan(connectionId, { ...request(), idempotency_key: crypto.randomUUID() })
+      onPlansChange(current => [plan, ...current.filter(item => item.id !== plan.id)])
+      toast.success('History import draft created')
+    } catch (error) { toast.error(errMsg(error)) } finally { onBusy(null) }
+  }
+  async function act(plan: SourceBackfillPlan, action: 'propose' | 'pause' | 'resume') {
+    onBusy(`history:${action}:${plan.id}`)
+    try {
+      if (action === 'propose') await sourcesApi.proposeBackfillStart(connectionId, plan.id)
+      else await (action === 'pause' ? sourcesApi.pauseBackfill(connectionId, plan.id) : sourcesApi.resumeBackfill(connectionId, plan.id))
+      const refreshed = await sourcesApi.backfillPlan(connectionId, plan.id)
+      onPlansChange(current => current.map(item => item.id === plan.id ? refreshed : item))
+      toast.success(action === 'propose' ? 'Start proposal sent to Review' : `Import ${action}d`)
+    } catch (error) { toast.error(errMsg(error)) } finally { onBusy(null) }
+  }
+  return <div className="space-y-4">
+    <Card className="p-4 space-y-4">
+      <div><CardTitle>Plan a bounded history import</CardTitle><p className="text-sm text-muted-foreground mt-1">Preview the date windows and quota before creating a durable draft.</p></div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        {([['From', from, setFrom, 'date',undefined,undefined], ['To', to, setTo, 'date',undefined,undefined], ['Window days', windowSize, setWindowSize, 'number',1,365], ['Max items', maxItems, setMaxItems, 'number',1,10000], ['Jobs / minute', quota, setQuota, 'number',1,1000]] as const).map(([label,value,setValue,type,min,max]) => <label key={label} className="space-y-1"><span className="text-xs font-medium">{label}</span><input className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" type={type} min={min} max={max} value={value} onChange={event => setValue(event.target.value)} /></label>)}
+      </div>
+      {preview && <p className="text-sm"><strong>{preview.segments.length}</strong> segments · quota {preview.quota_policy.limit_count}/{preview.quota_policy.window}</p>}
+      {!canManage&&<p className="text-xs text-muted-foreground">Only the Source owner or a Space administrator can create or manage history imports.</p>}
+      <div className="flex gap-2"><Button variant="outline" disabled={Boolean(busy)||!valid} onClick={() => void runPreview()}>Preview</Button>{canManage&&<Button disabled={Boolean(busy) || !preview||!valid} onClick={() => void createPlan()}>Create draft plan</Button>}</div>
+    </Card>
+    <Card className="p-4 space-y-3">
+      <CardTitle>Import plans</CardTitle>
+      {plans.length === 0 ? <p className="text-sm text-muted-foreground">No history imports yet.</p> : plans.map(plan => <div key={plan.id} className="rounded-md border p-3 flex flex-wrap items-center justify-between gap-3">
+        <div><div className="flex gap-2 items-center"><StatusBadge status={plan.status} /><span className="text-sm font-medium">{plan.segments_completed}/{plan.segments_total} segments</span></div><p className="text-xs text-muted-foreground mt-1">{plan.items_ingested} items{plan.next_eligible_at ? ` · paused until ${fmt(plan.next_eligible_at)}` : ''}</p></div>
+        {canManage&&<div className="flex gap-2">{plan.status === 'draft' && <Button size="sm" onClick={() => void act(plan, 'propose')} disabled={Boolean(busy)}>Propose start</Button>}{(['approved','running'] as string[]).includes(plan.status) && <Button size="sm" variant="outline" onClick={() => void act(plan, 'pause')} disabled={Boolean(busy)}>Pause</Button>}{plan.status === 'paused' && <Button size="sm" onClick={() => void act(plan, 'resume')} disabled={Boolean(busy)}>Resume</Button>}</div>}
+      </div>)}
+    </Card>
+  </div>
 }
 
 function OverviewPanel(props: {

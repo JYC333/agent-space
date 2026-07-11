@@ -127,7 +127,7 @@ export function RetrievalToolDomainControls({
               Project summaries
             </span>
             <span className="block text-xs text-muted-foreground">
-              Enables project_public_summary.search and project_public_summary.brief over approved public summaries.
+              Enables project.summary.search and project.summary.brief over approved public summaries.
             </span>
           </span>
         </label>

@@ -242,6 +242,7 @@ export class PgChatCandidateRepository {
     spaceId: string,
     message: string,
     limit: number,
+    projectId:string|null=null,
   ): Promise<CandidateRow[]> {
     const where = [
       `ps.space_id = $1`,
@@ -250,6 +251,7 @@ export class PgChatCandidateRepository {
       `p.deleted_at IS NULL`,
     ];
     const params: unknown[] = [spaceId];
+    if(projectId){params.push(projectId);where.push(`ps.project_id = $${params.length}`);}
     if (message) {
       params.push(`%${message.slice(0, 40)}%`);
       const p = `$${params.length}`;

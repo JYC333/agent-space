@@ -26,6 +26,7 @@ import type {
   ProposalApprovalOut,
   ProposalOut,
 } from "@agent-space/protocol" with { "resolution-mode": "import" };
+import { ActionApprovalGrantService } from "../policy/actionApprovalGrantService";
 
 export class ProposalApplyHttpError extends Error {
   constructor(
@@ -52,6 +53,7 @@ interface ApplyProposalRow {
   workspace_id: string | null;
   visibility: string | null;
   created_by_user_id: string | null;
+  created_by_agent_id: string | null;
   created_by_run_id: string | null;
   project_id: string | null;
   title: string | null;
@@ -172,6 +174,64 @@ export class PgProposalApplyService {
     }
   }
 
+  async acceptAgentProposalIfGranted(
+    proposalId: string,
+    action: { actionId: string; projectId?: string | null; resourceKind?: string | null; resourceId?: string | null },
+  ): Promise<ProposalAcceptOut | null> {
+    const client = await this.connect();
+    try {
+      await client.query("BEGIN");
+      const proposal = await this.getProposalForUpdate(client, proposalId);
+      if (!proposal || proposal.status !== "pending" || proposal.preview || !proposal.created_by_agent_id) {
+        await client.query("ROLLBACK");
+        return null;
+      }
+      const { SYSTEM_ACTION_REGISTRY } = await import("@agent-space/protocol");
+      const definition = SYSTEM_ACTION_REGISTRY.find((item) => item.id === action.actionId);
+      const payloadActionId = proposal.payload_json?.action_id;
+      if (
+        !definition
+        || !definition.grantable
+        || !definition.proposal_type
+        || payloadActionId !== action.actionId
+        || definition.proposal_type !== proposal.proposal_type
+        || (action.projectId != null && action.projectId !== proposal.project_id)
+      ) {
+        await client.query("ROLLBACK");
+        return null;
+      }
+      const grant = await new ActionApprovalGrantService(client).consumeMatching({
+        spaceId: proposal.space_id,
+        agentId: proposal.created_by_agent_id,
+        actionId: action.actionId,
+        projectId: action.projectId ?? proposal.project_id,
+        resourceKind: action.resourceKind,
+        resourceId: action.resourceId,
+      });
+      if (!grant) { await client.query("ROLLBACK"); return null; }
+      const grantId = String(grant.id);
+      const grantingUserId = String(grant.granted_by_user_id);
+      await this.enforceApplyPolicy(client, proposal, grantingUserId);
+      const result = await this.registry.apply({ config: this.config, db: client, proposal: {
+        id: proposal.id, space_id: proposal.space_id, proposal_type: proposal.proposal_type,
+        title: proposal.title, payload_json: proposal.payload_json, workspace_id: proposal.workspace_id,
+        visibility: proposal.visibility, created_by_user_id: proposal.created_by_user_id,
+        created_by_run_id: proposal.created_by_run_id, project_id: proposal.project_id,
+      }, userId: grantingUserId });
+      await client.query(
+        `INSERT INTO proposal_approvals (id, proposal_id, approval_type, approver_user_id, action_grant_id, status, metadata_json, created_at)
+         VALUES ($1,$2,'action_grant',$3,$4,'approved',$5::jsonb,$6)`,
+        [randomUUID(), proposal.id, grantingUserId, grantId, JSON.stringify({ approval_source: `action_grant:${grantId}`, action_id: action.actionId }), new Date().toISOString()],
+      );
+      await this.markProposalAccepted(client, proposal, grantingUserId, result.proposalPayloadPatch);
+      const accepted = await new PgProposalRepository(client).getVisible(proposal.space_id, grantingUserId, proposal.id);
+      if (!accepted) throw new Error("accepted proposal is not visible after grant apply");
+      await client.query("COMMIT");
+      return { proposal: accepted, result_type: result.result_type, result: result.result };
+    } catch (error) { await client.query("ROLLBACK").catch(() => undefined); throw error; }
+    finally { client.release(); }
+  }
+
   async reject(
     proposalId: string,
     identity: { spaceId: string; userId: string },
@@ -204,6 +264,8 @@ export class PgProposalApplyService {
       }
       await releaseRejectedCustomSourceHandlerVersion(client, proposalId, identity.spaceId);
       await releaseRejectedSourceRecipeVersion(client, proposalId, identity.spaceId);
+      await releaseRejectedSourceConnectionDraft(client, proposal);
+      await releaseRejectedSourceBackfillPlan(client, proposal);
       const out = await new PgProposalRepository(client).getVisible(
         identity.spaceId,
         identity.userId,
@@ -406,7 +468,7 @@ export class PgProposalApplyService {
   ): Promise<ApplyProposalRow | null> {
     const result = await client.query<ApplyProposalRow>(
       `SELECT id, space_id, proposal_type, status, risk_level, preview,
-              payload_json, workspace_id, created_by_user_id, created_by_run_id,
+              payload_json, workspace_id, created_by_user_id, created_by_agent_id, created_by_run_id,
               visibility, project_id, title, required_approver_role
          FROM proposals
         WHERE id = $1
@@ -558,6 +620,21 @@ export class PgProposalApplyService {
       throw new ProposalApplyHttpError(403, "egress review deadline has passed");
     }
   }
+}
+
+async function releaseRejectedSourceConnectionDraft(client: PoolClient, proposal: ApplyProposalRow): Promise<void> {
+  if (proposal.proposal_type !== "source_connection_create") return;
+  const connectionId = stringValue(proposal.payload_json?.source_connection_id);
+  if (!connectionId) return;
+  await client.query(`UPDATE source_connections SET status='archived', updated_at=$3 WHERE id=$1 AND space_id=$2 AND status='paused'`, [connectionId, proposal.space_id, new Date().toISOString()]);
+  await client.query(`UPDATE proposals SET status='superseded',updated_at=$3 WHERE space_id=$1 AND status='pending' AND payload_json->>'depends_on_proposal_id'=$2`,[proposal.space_id,proposal.id,new Date().toISOString()]);
+}
+
+async function releaseRejectedSourceBackfillPlan(client: PoolClient,proposal:ApplyProposalRow):Promise<void>{
+  if(proposal.proposal_type!=="source_backfill_start")return;
+  const planId=stringValue(proposal.payload_json?.source_backfill_plan_id);
+  if(!planId)return;
+  await client.query(`UPDATE source_backfill_plans SET status='draft',proposal_id=NULL,updated_at=$3 WHERE id=$1 AND space_id=$2 AND proposal_id=$4 AND status='proposed'`,[planId,proposal.space_id,new Date().toISOString(),proposal.id]);
 }
 
 async function releaseRejectedCustomSourceHandlerVersion(

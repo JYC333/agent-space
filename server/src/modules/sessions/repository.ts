@@ -55,6 +55,7 @@ export interface CondenseSessionOptions {
 
 export interface CreateSessionInput {
   workspaceId?: string | null;
+  projectId?:string|null;
   title?: string | null;
   metadata?: Record<string, unknown> | null;
 }
@@ -82,6 +83,7 @@ interface SessionRow {
   space_id: string;
   user_id: string;
   workspace_id: string | null;
+  project_id:string|null;
   title: string | null;
   status: string;
   created_at: unknown;
@@ -252,14 +254,15 @@ export class PgSessionRepository {
     const now = new Date().toISOString();
     const result = await this.db.query<SessionRow>(
       `INSERT INTO sessions
-         (id, space_id, user_id, workspace_id, title, status, metadata_json, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, 'active', $6::jsonb, $7, $7)
-       RETURNING id, space_id, user_id, workspace_id, title, status, created_at, updated_at`,
+         (id, space_id, user_id, workspace_id, project_id,title, status, metadata_json, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5,$6, 'active', $7::jsonb, $8, $8)
+       RETURNING id, space_id, user_id, workspace_id,project_id, title, status, created_at, updated_at`,
       [
         randomUUID(),
         spaceId,
         userId,
         input.workspaceId ?? null,
+        input.projectId??null,
         input.title ?? null,
         jsonParam(input.metadata),
         now,
@@ -643,6 +646,7 @@ function sessionSelectSql(): string {
                  s.space_id,
                  s.user_id,
                  s.workspace_id,
+                 s.project_id,
                  s.title,
                  s.status,
                  s.created_at,
@@ -656,6 +660,7 @@ function sessionToOut(row: SessionRow): SessionOut {
     space_id: row.space_id,
     user_id: row.user_id,
     workspace_id: row.workspace_id,
+    project_id:row.project_id,
     title: row.title,
     status: row.status,
     created_at: dateValue(row.created_at) ?? new Date(0).toISOString(),

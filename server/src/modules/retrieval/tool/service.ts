@@ -66,6 +66,7 @@ export interface RetrievalToolServiceOptions {
 }
 
 export class RetrievalToolService {
+  private lastPolicyDecisionRecordId: string | null = null;
   private readonly databaseUrl: string | null;
   private readonly surface: string;
   private readonly domain: string;
@@ -86,8 +87,9 @@ export class RetrievalToolService {
   async toolSearch(
     actor: RetrievalToolActor,
     params: RetrievalToolSearchParams,
+    policyAlreadyEnforced = false,
   ): Promise<RetrievalSearchResponse> {
-    await this.enforcePolicy(actor, this.searchAction, params);
+    if (!policyAlreadyEnforced) await this.enforcePolicy(actor, this.searchAction, params);
     const response = await this.search.search({
       spaceId: actor.spaceId,
       viewerUserId: actor.instructedByUserId, // non-bypassable: the run's user
@@ -106,8 +108,9 @@ export class RetrievalToolService {
   async toolBrief(
     actor: RetrievalToolActor,
     params: RetrievalToolSearchParams,
+    policyAlreadyEnforced = false,
   ): Promise<RetrievalBriefResponse> {
-    await this.enforcePolicy(actor, this.briefAction, params);
+    if (!policyAlreadyEnforced) await this.enforcePolicy(actor, this.briefAction, params);
     const response = await this.search.buildBrief({
       spaceId: actor.spaceId,
       viewerUserId: actor.instructedByUserId, // non-bypassable: the run's user
@@ -127,7 +130,7 @@ export class RetrievalToolService {
     action: RetrievalToolPolicyAction,
     params: RetrievalToolSearchParams,
   ): Promise<void> {
-    await enforceRetrievalToolCallPolicy({
+    const decision = await enforceRetrievalToolCallPolicy({
       databaseUrl: this.databaseUrl,
       actor,
       action,
@@ -140,5 +143,12 @@ export class RetrievalToolService {
       includeTrace: params.includeTrace,
       surface: this.surface,
     });
+    this.lastPolicyDecisionRecordId = decision.policy_decision_record_id;
+  }
+
+  consumePolicyDecisionRecordId(): string | null {
+    const value = this.lastPolicyDecisionRecordId;
+    this.lastPolicyDecisionRecordId = null;
+    return value;
   }
 }

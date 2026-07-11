@@ -22,7 +22,7 @@ import { arxivHtmlUrl, arxivPdfUrl, parseArxivFeed, parseArxivReference } from "
 import { acquireArxivRequestSlot } from "./connectors/arxivThrottle";
 import { fetchSource, type SourceFetchResult } from "./sourceFetch";
 import { normalizeUrl, sourceDomain } from "./sourceRepositoryMappers";
-import { linkEvidenceToBoundProjects, materializeProjectSourceItemLinks } from "./evidenceProjectLinker";
+import { projectSourceRoutingHook } from "../projects/projectSourceRoutingRegistry";
 import {
   emitSourcePostProcessingDeepAnalysisEvent,
   emitSourcePostProcessingEvent,
@@ -278,8 +278,9 @@ export class SourceExtractionWorker {
     if (cursor.etag) headers["If-None-Match"] = cursor.etag;
     if (cursor.last_modified) headers["If-Modified-Since"] = cursor.last_modified;
 
+    const endpointUrl = backfillEndpointUrl(connection.endpoint_url, connection.connector_key, job.metadata_json);
     if (connection.connector_key === "arxiv") await acquireArxivRequestSlot();
-    const response = await fetchSource(connection.endpoint_url, {
+    const response = await fetchSource(endpointUrl, {
       headers,
       maxDownloadBytes: await this.maxDownloadBytes(job.space_id),
     });
@@ -418,7 +419,7 @@ export class SourceExtractionWorker {
     raw: string,
     capturedAt: string,
   ): Promise<{ seen: number; created: number; updated: number; cursor: ScanCursor }> {
-    const papers = parseArxivFeed(raw).slice(0, 100);
+    const papers = parseArxivFeed(raw).slice(0, backfillMaxItems(job.metadata_json));
     let created = 0;
     let updated = 0;
     let lastGuid: string | undefined;
@@ -497,15 +498,19 @@ export class SourceExtractionWorker {
         WHERE space_id = $1
           AND deleted_at IS NULL
           AND (
-            ($2::text IS NOT NULL AND canonical_uri = $2)
-            OR ($3::text IS NOT NULL AND connection_id = $4 AND source_external_id = $3)
-            OR ($5::text IS NOT NULL AND connection_id = $4 AND content_hash = $5)
+            ($2::text IS NOT NULL AND canonical_uri = $3::text)
+            OR ($4::varchar IS NOT NULL AND connection_id = $5::varchar AND source_external_id = $6::varchar)
+            OR ($7::varchar IS NOT NULL AND connection_id = $8::varchar AND content_hash = $9::varchar)
           )
         LIMIT 1`,
       [
         input.job.space_id,
         input.canonicalUri,
+        input.canonicalUri,
         input.sourceExternalId,
+        input.connection.id,
+        input.sourceExternalId,
+        input.contentHash,
         input.connection.id,
         input.contentHash,
       ],
@@ -633,11 +638,11 @@ export class SourceExtractionWorker {
       metadata,
       capturedAt: now,
     });
-    await materializeProjectSourceItemLinks(this.db, {
+    await projectSourceRoutingHook().routeMaterializedItem(this.db, {
       spaceId: input.job.space_id,
       sourceItemId: itemId,
     });
-    await linkEvidenceToBoundProjects(
+    await projectSourceRoutingHook().routeEvidence(
       this.db,
       { spaceId: input.job.space_id, sourceItemId: itemId },
       { materializeSourceItemLinks: false },
@@ -752,17 +757,18 @@ export class SourceExtractionWorker {
          extraction_method, trust_level, confidence, status, metadata_json, created_at, updated_at,
          owner_user_id, visibility, access_level
        ) VALUES (
-         $1, $2, $3, 'source_item', $3,
-         $4, $5, 'document', $6, $7,
-         $8, $9, $10, $11,
-         $13, 'normal', 0.7, 'candidate', '{}'::jsonb, $12, $12,
-         (SELECT owner_user_id FROM source_items WHERE space_id = $2 AND id = $3),
-         (SELECT visibility FROM source_items WHERE space_id = $2 AND id = $3),
-         (SELECT access_level FROM source_items WHERE space_id = $2 AND id = $3)
+         $1, $2, $3, 'source_item', $4,
+         $5, $6, 'document', $7, $8,
+         $9, $10, $11, $12,
+         $13, 'normal', 0.7, 'candidate', '{}'::jsonb, $14, $15,
+         (SELECT owner_user_id FROM source_items WHERE space_id = $16::varchar AND id = $17::varchar),
+         (SELECT visibility FROM source_items WHERE space_id = $18::varchar AND id = $19::varchar),
+         (SELECT access_level FROM source_items WHERE space_id = $20::varchar AND id = $21::varchar)
       )`,
       [
         evidenceId,
         job.space_id,
+        item.id,
         item.id,
         job.id,
         sourceSnapshotId,
@@ -772,8 +778,15 @@ export class SourceExtractionWorker {
         artifactId,
         item.source_uri,
         item.title,
-        now,
         evidenceExtractionMethod,
+        now,
+        now,
+        job.space_id,
+        item.id,
+        job.space_id,
+        item.id,
+        job.space_id,
+        item.id,
       ],
     );
     if (item.visibility === "selected_users") await inheritContentAccessGrants(this.db, {
@@ -784,7 +797,7 @@ export class SourceExtractionWorker {
       targetResourceId: evidenceId,
       inheritedAt: now,
     });
-    await linkEvidenceToBoundProjects(this.db, {
+    await projectSourceRoutingHook().routeEvidence(this.db, {
       spaceId: job.space_id,
       sourceItemId: item.id,
     });
@@ -1275,18 +1288,18 @@ export class SourceExtractionWorker {
        ) VALUES (
          $1, $2, $3, $4, $5, $6,
          $7, $8, $9, $10, $11::jsonb,
-         $12, $12, $12,
+         $12, $13, $14,
          COALESCE(
-           (SELECT owner_user_id FROM source_items WHERE space_id = $2 AND id = $3),
-           (SELECT owner_user_id FROM source_connections WHERE space_id = $2 AND id = $4)
+           (SELECT owner_user_id FROM source_items WHERE space_id = $15::varchar AND id = $16::varchar),
+           (SELECT owner_user_id FROM source_connections WHERE space_id = $17::varchar AND id = $18::varchar)
          ),
          COALESCE(
-           (SELECT visibility FROM source_items WHERE space_id = $2 AND id = $3),
-           (SELECT visibility FROM source_connections WHERE space_id = $2 AND id = $4)
+           (SELECT visibility FROM source_items WHERE space_id = $19::varchar AND id = $20::varchar),
+           (SELECT visibility FROM source_connections WHERE space_id = $21::varchar AND id = $22::varchar)
          ),
          COALESCE(
-           (SELECT access_level FROM source_items WHERE space_id = $2 AND id = $3),
-           (SELECT access_level FROM source_connections WHERE space_id = $2 AND id = $4)
+           (SELECT access_level FROM source_items WHERE space_id = $23::varchar AND id = $24::varchar),
+           (SELECT access_level FROM source_connections WHERE space_id = $25::varchar AND id = $26::varchar)
          )
        )`,
       [
@@ -1302,6 +1315,20 @@ export class SourceExtractionWorker {
         input.trustLevel,
         JSON.stringify(input.metadata),
         input.capturedAt,
+        input.capturedAt,
+        input.capturedAt,
+        input.spaceId,
+        input.sourceItemId,
+        input.spaceId,
+        input.connectionId,
+        input.spaceId,
+        input.sourceItemId,
+        input.spaceId,
+        input.connectionId,
+        input.spaceId,
+        input.sourceItemId,
+        input.spaceId,
+        input.connectionId,
       ],
     );
     if (input.sourceVisibility === "selected_users") await inheritContentAccessGrants(this.db, {
@@ -1388,10 +1415,10 @@ export class SourceExtractionWorker {
        ) VALUES (
          $1, $2, 'source_reader_document', $3, $4, $5, 'application/json',
          true, $6::jsonb, 'reader_document_json', false, $7::jsonb,
-         $8, $8,
-         (SELECT visibility FROM source_items WHERE space_id = $2 AND id = $9),
-         (SELECT access_level FROM source_items WHERE space_id = $2 AND id = $9),
-         (SELECT owner_user_id FROM source_items WHERE space_id = $2 AND id = $9),
+         $8, $9,
+         (SELECT visibility FROM source_items WHERE space_id = $10::varchar AND id = $11::varchar),
+         (SELECT access_level FROM source_items WHERE space_id = $12::varchar AND id = $13::varchar),
+         (SELECT owner_user_id FROM source_items WHERE space_id = $14::varchar AND id = $15::varchar),
          'medium'
        )`,
       [
@@ -1411,6 +1438,12 @@ export class SourceExtractionWorker {
           ...extraMetadata,
         }),
         now,
+        now,
+        spaceId,
+        sourceItemId,
+        spaceId,
+        sourceItemId,
+        spaceId,
         sourceItemId,
       ],
     );
@@ -1451,10 +1484,10 @@ export class SourceExtractionWorker {
        ) VALUES (
          $1, $2, 'source_raw_snapshot', $3, NULL, $4, $5,
          false, $6::jsonb, $7, false,
-         $8, $8,
-         (SELECT visibility FROM source_items WHERE space_id = $2 AND id = $9),
-         (SELECT access_level FROM source_items WHERE space_id = $2 AND id = $9),
-         (SELECT owner_user_id FROM source_items WHERE space_id = $2 AND id = $9),
+         $8, $9,
+         (SELECT visibility FROM source_items WHERE space_id = $10::varchar AND id = $11::varchar),
+         (SELECT access_level FROM source_items WHERE space_id = $12::varchar AND id = $13::varchar),
+         (SELECT owner_user_id FROM source_items WHERE space_id = $14::varchar AND id = $15::varchar),
          'medium'
        )`,
       [
@@ -1466,6 +1499,12 @@ export class SourceExtractionWorker {
         JSON.stringify([format]),
         format,
         now,
+        now,
+        spaceId,
+        sourceItemId,
+        spaceId,
+        sourceItemId,
+        spaceId,
         sourceItemId,
       ],
     );
@@ -1526,6 +1565,19 @@ export class SourceExtractionWorker {
     });
   }
 }
+
+export function backfillEndpointUrl(endpoint:string,connectorKey:string,metadata:unknown):string{
+  const record=metadata&&typeof metadata==="object"&&!Array.isArray(metadata)?metadata as Record<string,unknown>:{};
+  const window=record.window&&typeof record.window==="object"&&!Array.isArray(record.window)?record.window as Record<string,unknown>:null;
+  if(!window)return endpoint;const url=new URL(endpoint);
+  if(connectorKey==="arxiv"&&typeof window.from==="string"&&typeof window.to==="string"){
+    const fmt=(value:string)=>new Date(value).toISOString().replace(/\D/g,"").slice(0,12);
+    const range=`submittedDate:[${fmt(window.from)} TO ${fmt(window.to)}]`;const current=url.searchParams.get("search_query");url.searchParams.set("search_query",current?`(${current}) AND ${range}`:range);url.searchParams.set("max_results",String(Math.min(100,Math.max(1,Number(window.max_items??100)))));
+  }else if(typeof window.cursor==="number"){url.searchParams.set("start",String(window.cursor*100));url.searchParams.set("max_results",String(window.max_items??100));}
+  return url.toString();
+}
+
+function backfillMaxItems(metadata:unknown):number{const record=metadata&&typeof metadata==="object"&&!Array.isArray(metadata)?metadata as Record<string,unknown>:{};const window=record.window&&typeof record.window==="object"&&!Array.isArray(record.window)?record.window as Record<string,unknown>:{};const value=Number(window.max_items??100);return Number.isInteger(value)?Math.min(100,Math.max(1,value)):100;}
 
 function sha256(value: string | Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");

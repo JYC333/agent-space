@@ -20,7 +20,7 @@ vi.mock('sonner', () => ({
 }))
 
 vi.mock('../../../contexts/SpaceContext', () => ({
-  useSpace: () => ({ activeSpaceId: 'space-1', activeSpaceName: 'Space One' }),
+  useSpace: () => ({ activeSpaceId: 'space-1', activeSpaceName: 'Space One',userId:'user-1',spaces:[{id:'space-1',role:'owner'}] }),
 }))
 
 vi.mock('../../../core/spaceNav', () => ({
@@ -54,6 +54,13 @@ vi.mock('../../../api/client', () => ({
     runPostProcessingRule: vi.fn(),
     drainPostProcessingRule: vi.fn(),
     postProcessingDecisionAction: vi.fn(),
+    backfillPlans: vi.fn(),
+    previewBackfill: vi.fn(),
+    createBackfillPlan: vi.fn(),
+    backfillPlan: vi.fn(),
+    proposeBackfillStart: vi.fn(),
+    pauseBackfill: vi.fn(),
+    resumeBackfill: vi.fn(),
   },
   agentsApi: {
     list: vi.fn(),
@@ -80,7 +87,7 @@ const baseConnection = {
   topic_hints_json: null,
   consent_json: {},
   policy_json: {},
-  config_json: {},
+  config_json: {preset_id:'arxiv'},
   last_checked_at: null,
   next_check_at: null,
   repair_status: 'ok',
@@ -179,6 +186,8 @@ function setupCommonMocks() {
   vi.mocked(sourcesApi.postProcessingConnectionDecisions).mockResolvedValue(page([]))
   vi.mocked(agentsApi.list).mockResolvedValue([])
   vi.mocked(projectsApi.list).mockResolvedValue(page([]))
+  vi.mocked(sourcesApi.backfillPlans).mockResolvedValue([])
+  vi.mocked(sourcesApi.previewBackfill).mockResolvedValue({strategy:{window_unit:'date_window',from:null,to:null,window_size:30,max_items:100,direction:'backward'},segments:[{from:'2026-01-01',to:'2026-02-01',max_items:100}],quota_policy:{window:'minute',limit_count:10}})
   vi.mocked(sourcesApi.createPostProcessingRule).mockResolvedValue({
     id: 'rule-1',
     space_id: 'space-1',
@@ -405,6 +414,8 @@ describe('SourceConnectionDetailPage', () => {
     expect(await screen.findByText('Recipe Feed')).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: 'Plan' })).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: 'Preview' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Scan activity' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'History import' })).toBeInTheDocument()
     expect(screen.queryByRole('tab', { name: 'Items' })).not.toBeInTheDocument()
     expect(screen.queryByRole('tab', { name: 'Evidence' })).not.toBeInTheDocument()
     expect(screen.queryByRole('tab', { name: 'Runs' })).not.toBeInTheDocument()
@@ -419,16 +430,60 @@ describe('SourceConnectionDetailPage', () => {
     expect(screen.getByText('Sample Output')).toBeInTheDocument()
     expect(screen.getByText('Release item')).toBeInTheDocument()
 
+    await user.click(screen.getByRole('tab', { name: 'History import' }))
+    await user.click(screen.getByRole('button',{name:'Preview'}))
+    await waitFor(()=>expect(sourcesApi.previewBackfill).toHaveBeenCalledWith('conn-1',expect.objectContaining({strategy:expect.objectContaining({window_unit:'date_window',max_items:100})})))
+    expect(screen.getByText((_,element)=>element?.tagName==='P'&&element.textContent?.includes('1 segments')===true)).toBeInTheDocument()
+
     await user.click(screen.getByRole('tab', { name: 'Advanced' }))
     expect(screen.getByText('Recipe Versions')).toBeInTheDocument()
 
     await waitFor(() => {
       expect(sourcesApi.items).not.toHaveBeenCalled()
       expect(sourcesApi.evidence).not.toHaveBeenCalled()
-      expect(sourcesApi.jobs).not.toHaveBeenCalled()
+      expect(sourcesApi.jobs).toHaveBeenCalledWith({ connection_id: 'conn-1', job_type: 'connection_scan', limit: 20 })
       expect(sourcesApi.sourceRuns).not.toHaveBeenCalled()
       expect(sourcesApi.postProcessingRuns).not.toHaveBeenCalled()
     })
+  })
+
+  it('shows recent scan status and errors on the source activity tab', async () => {
+    const user = userEvent.setup()
+    vi.mocked(sourcesApi.getConnection).mockResolvedValue({
+      ...baseConnection,
+      handler_kind: 'recipe',
+      active_handler_version_id: null,
+      active_recipe_version_id: 'recipe-version-1',
+    } as SourceConnection)
+    vi.mocked(sourcesApi.sourceRecipeVersions).mockResolvedValue(page([recipeVersion as SourceRecipeVersion]))
+    vi.mocked(sourcesApi.jobs).mockResolvedValue(page([{
+      id: 'scan-job-1',
+      space_id: 'space-1',
+      connection_id: 'conn-1',
+      source_item_id: null,
+      source_snapshot_id: null,
+      source_object_type: null,
+      source_object_id: null,
+      job_type: 'connection_scan',
+      status: 'failed',
+      started_at: '2026-07-02T10:00:00.000Z',
+      completed_at: '2026-07-02T10:01:00.000Z',
+      items_seen: 4,
+      items_created: 1,
+      items_updated: 2,
+      error_code: 'upstream_unavailable',
+      error_message: 'The feed did not respond.',
+      metadata_json: null,
+      created_at: '2026-07-02T10:00:00.000Z',
+    }] as ExtractionJob[]))
+
+    renderPage()
+
+    await screen.findByText('Recipe Feed')
+    await user.click(screen.getByRole('tab', { name: 'Scan activity' }))
+    expect(screen.getByText('connection scan')).toBeInTheDocument()
+    expect(screen.getByText('Seen 4 · new 1 · updated 2')).toBeInTheDocument()
+    expect(screen.getByText('The feed did not respond.')).toBeInTheDocument()
   })
 
   it('keeps generated handler internals behind Advanced', async () => {

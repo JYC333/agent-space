@@ -269,8 +269,38 @@ describe("SourceExtractionWorker connection_scan", () => {
     await expect(new SourceExtractionWorker(db, config()).runPendingJob("job-1", "space-1"))
       .resolves.toMatchObject({ status: "succeeded" });
 
+    const dedupeLookup = db.calls.find(call => call.sql.includes("canonical_uri = $3::text"));
+    expect(dedupeLookup?.params.slice(0, 9)).toEqual([
+      "space-1",
+      "https://example.test/item-1",
+      "https://example.test/item-1",
+      "guid-1",
+      "conn-1",
+      "guid-1",
+      expect.any(String),
+      "conn-1",
+      expect.any(String),
+    ]);
     expect(db.calls.some(call => call.sql.includes("INSERT INTO source_items"))).toBe(true);
-    expect(db.calls.some(call => call.sql.includes("INSERT INTO source_snapshots"))).toBe(true);
+    const snapshotInsert = db.calls.find(call => call.sql.includes("INSERT INTO source_snapshots"));
+    expect(snapshotInsert?.sql).toContain("space_id = $15::varchar");
+    expect(snapshotInsert?.params.slice(11, 26)).toEqual([
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+      "space-1",
+      expect.any(String),
+      "space-1",
+      "conn-1",
+      "space-1",
+      expect.any(String),
+      "space-1",
+      "conn-1",
+      "space-1",
+      expect.any(String),
+      "space-1",
+      "conn-1",
+    ]);
     expect(db.calls.some(call => call.sql.includes("INSERT INTO extracted_evidence"))).toBe(false);
     const connectionUpdate = db.calls.find(call => call.sql.includes("UPDATE source_connections"));
     expect(JSON.parse(String(connectionUpdate?.params[2])).scan_cursor).toEqual({
@@ -393,6 +423,16 @@ describe("SourceExtractionWorker connection_scan", () => {
     const artifactInsert = db.calls.find((call) => call.sql.includes("INSERT INTO artifacts"));
     expect(artifactInsert?.sql).toContain("'source_reader_document'");
     expect(artifactInsert?.params).toContain(JSON.stringify(["json"]));
+    const evidenceInsert = db.calls.find(call => call.sql.includes("INSERT INTO extracted_evidence"));
+    expect(evidenceInsert?.sql).toContain("space_id = $16::varchar");
+    expect(evidenceInsert?.params.slice(15, 21)).toEqual([
+      "space-1",
+      expect.any(String),
+      "space-1",
+      expect.any(String),
+      "space-1",
+      expect.any(String),
+    ]);
   });
 
   it("queues extract_text when an existing shallow feed item is upgraded to full-text capture", async () => {

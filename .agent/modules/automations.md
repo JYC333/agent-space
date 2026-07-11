@@ -57,7 +57,7 @@ deltas and does not own per-source cursors.
 ## Related Files
 
 - `server/src/modules/automations/`
-- `server/src/modules/sources/evidenceProjectLinker.ts`
+- `server/src/modules/projects/projectSourceRoutingService.ts`
 - `server/src/modules/runs/finalizationService.ts`
 - `server/src/modules/scheduler/`
 - `apps/web/src/modules/automations/AutomationsPage.tsx`

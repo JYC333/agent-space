@@ -29,6 +29,8 @@ import {
 } from "../routeUtils/common";
 import { PgProposalRepository } from "../proposals/repository";
 import { PgAgentChatRepository, PgAgentRepository } from "./repository";
+import { loadProjectChatActionPreviews } from "./projectChatActionPreviews";
+import { assertProjectReadable } from "../projects/access";
 import {
   ChatContextCandidateCollector,
   ChatContextError,
@@ -60,6 +62,8 @@ import {
 } from "./agentRouteInputs";
 
 const MAX_MESSAGE_CHARS = 8000;
+const PROJECT_CHAT_ACTIONS=["source.connection.propose_create","project.source.propose_bind","source.backfill.propose_start"] as const;
+export function projectChatCapabilities(toolPermissions:Record<string,unknown>|undefined){const allowed=Array.isArray(toolPermissions?.allowed_tools)?new Set(toolPermissions.allowed_tools.filter((item):item is string=>typeof item==="string")):new Set<string>();return PROJECT_CHAT_ACTIONS.filter(action=>allowed.has(action));}
 
 interface AgentChatServices {
   agents: Pick<PgAgentChatRepository, "getAgentForChat">;
@@ -541,6 +545,8 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
         message: rawMessage,
       });
       const services = agentChatServices(context);
+      let projectContextPreamble:string|null=null;
+      if(req.project_id){const database=dbPool(context.config);await assertProjectReadable(database,identity.spaceId,req.project_id,identity.userId);const project=await database.query<{name:string;description:string|null;current_focus:string|null}>(`SELECT name,description,current_focus FROM projects WHERE id=$1 AND space_id=$2 AND deleted_at IS NULL`,[req.project_id,identity.spaceId]);const row=project.rows[0];if(!row)return reply.code(404).send({detail:"Project not found"});projectContextPreamble=[`Project: ${row.name}`,row.description?`Description: ${row.description}`:null,row.current_focus?`Current focus: ${row.current_focus}`:null].filter(Boolean).join("\n");}
       const agent = await services.agents.getAgentForChat(identity.spaceId, agentId);
       if (!agent) {
         return reply
@@ -557,8 +563,10 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
         ? await services.sessions.getSession(identity.spaceId, identity.userId, req.session_id)
         : await services.sessions.createSession(identity.spaceId, identity.userId, {
             title: `${agent.name || "Assistant"} chat`,
+            projectId:req.project_id,
           });
       if (!session) return reply.code(404).send({ detail: "session not found in this space" });
+      if((session.project_id??null)!==(req.project_id??null))return reply.code(409).send({detail:"session belongs to a different Project context"});
 
       const userMessage = await services.sessions.addMessage(
         identity.spaceId,
@@ -576,6 +584,9 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
         sessionId: session.id,
         message: rawMessage,
         currentMessage: userMessage,
+        projectId:req.project_id,
+        projectContextPreamble,
+        projectActionCapabilities:projectChatCapabilities(agent.tool_permissions_json),
       });
 
       const result = await services.orchestration.executeRun({
@@ -586,7 +597,9 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       });
       const run = await services.runs.getChatRunResult(identity.spaceId, prepared.run_id);
       const outcome = chatOutcome(run, result);
+      const actionPreviews=req.project_id?await loadProjectChatActionPreviews(dbPool(context.config),identity.spaceId,prepared.run_id):[];
       if (!outcome.ok) {
+        if(req.project_id)await services.sessions.addMessage(identity.spaceId,identity.userId,session.id,{role:"assistant",content:outcome.error,metadata:{run_id:prepared.run_id,action_previews:actionPreviews}});
         return reply.send(
           protocol.ChatTurnResultSchema.parse({
             session_id: session.id,
@@ -594,6 +607,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
             ok: false,
             error: outcome.error,
             error_code: outcome.errorCode,
+            ...(req.project_id?{action_previews:actionPreviews}:{}),
           }),
         );
       }
@@ -606,7 +620,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
         {
           role: "assistant",
           content: replyText,
-          metadata: { run_id: prepared.run_id },
+          metadata: { run_id: prepared.run_id,...(req.project_id?{action_previews:actionPreviews}:{}) },
         },
       );
       if (!assistantMessage) {
@@ -637,6 +651,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
           run_id: prepared.run_id,
           ok: true,
           reply: replyText,
+          ...(req.project_id?{action_previews:actionPreviews}:{}),
         }),
       );
     } catch (error) {
@@ -708,6 +723,9 @@ async function prepareChatRun(
     sessionId: string;
     message: string;
     currentMessage: MessageOut;
+    projectId?:string|null;
+    projectContextPreamble?:string|null;
+    projectActionCapabilities?:string[];
   },
 ): Promise<PreparedChatRun> {
   const [candidates, recentMessages, sessionSummary] = await Promise.all([
@@ -717,6 +735,7 @@ async function prepareChatRun(
       user_id: input.userId,
       session_id: input.sessionId,
       message: input.message,
+      project_id:input.projectId,
     }),
     services.sessions.listRecentMessagesForContext(
       input.spaceId,
@@ -735,7 +754,9 @@ async function prepareChatRun(
     summary: sessionSummary,
   });
   const bundle = buildChatContext(candidates);
-  const contextPreamble = renderContextPreamble(bundle.items);
+  const retrievedPreamble = renderContextPreamble(bundle.items);
+  const contextPreamble=[input.projectContextPreamble,retrievedPreamble].filter(Boolean).join("\n\n");
+  const projectTokenEstimate=Math.ceil((input.projectContextPreamble?.length??0)/4);
   const composedPrompt = composeChatPrompt(
     contextPreamble,
     renderConversationWindow(conversationWindow),
@@ -749,6 +770,8 @@ async function prepareChatRun(
     run_type: "agent",
     trigger_origin: "manual",
     session_id: input.sessionId,
+    project_id:input.projectId??null,
+    capabilities_json:input.projectId?input.projectActionCapabilities:undefined,
     prompt: composedPrompt,
     model_override_json: {
       messages: conversationWindowToMessages(conversationWindow),
@@ -764,7 +787,7 @@ async function prepareChatRun(
       runId: created.id,
       userId: input.userId,
       agentId: created.agent_id ?? input.agentId,
-      tokenEstimate: bundle.token_count + conversationWindow.token_count,
+      tokenEstimate: bundle.token_count + conversationWindow.token_count+projectTokenEstimate,
       // Mirrors the ContextRequest persisted by the legacy prepare-run path
       // (request defaults, not policy-resolved).
       requestJson: {
@@ -773,7 +796,7 @@ async function prepareChatRun(
         agent_version_id: input.agentVersionId ?? null,
         session_id: input.sessionId,
         workspace_id: null,
-        project_id: null,
+        project_id: input.projectId??null,
         run_id: created.id,
         user_message_id: input.currentMessage.id,
         user_message: input.message,
@@ -783,12 +806,13 @@ async function prepareChatRun(
         conversation_window: conversationWindow.trace,
       },
       retrievalTraceJson: {
+        project_context:input.projectId?{project_id:input.projectId,included:Boolean(input.projectContextPreamble)}:null,
         chat_context: bundle.retrieval_trace,
         conversation_window: conversationWindow.trace,
       },
       tokenBudgetJson: {
         chat_context: {
-          token_count: bundle.token_count,
+          token_count: bundle.token_count+projectTokenEstimate,
           max_tokens: candidates.max_tokens,
           max_items: candidates.max_items,
           truncated: bundle.truncated,

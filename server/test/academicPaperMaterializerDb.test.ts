@@ -6,21 +6,12 @@ import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testconta
 import { migrate } from "../src/db/migrator";
 import { materializeAcademicPaperFromSourceItem } from "../src/modules/academic/paperMaterializer";
 import { syncProjectCorpusForSourceItem } from "../src/modules/projects/corpusRepository";
+import { materializeProjectSourceItemLinks } from "../src/modules/projects/projectSourceRoutingService";
 import { GraphProjectionRepository } from "../src/modules/graph/projectionRepository";
 
 // Real-Postgres coverage for Academic Research arXiv paper materialization:
 // arXiv source items materialize into academic_paper_v1 objects (deduped by
 // arxiv_id/doi), become visible in Project Corpus, and are graph-visible.
-//
-// These tests call `materializeAcademicPaperFromSourceItem` and
-// `syncProjectCorpusForSourceItem` directly rather than going through
-// `materializeProjectSourceItemLinks` end-to-end: the latter's
-// `project_source_item_links` upsert (pre-existing code, unrelated to this
-// change) hits a "inconsistent types deduced for parameter $4" error against
-// this sandbox's pg18 testcontainer image — reproduced identically on a
-// clean checkout of this file's dependencies, so it is an environment/driver
-// issue, not a regression from this change. `project_source_item_links` rows
-// are seeded directly here to isolate the code this phase actually adds.
 
 const MIGRATIONS_DIR = join(process.cwd(), "migrations");
 const SPACE = "11111111-1111-4111-8111-111111111111";
@@ -118,17 +109,6 @@ async function seedBinding(profileKey: string | null): Promise<string> {
   return id;
 }
 
-async function seedProjectSourceItemLink(bindingId: string, sourceItemId: string): Promise<void> {
-  const now = new Date().toISOString();
-  await pool!.query(
-    `INSERT INTO project_source_item_links (
-       id, space_id, project_id, project_source_binding_id, source_connection_id,
-       source_item_id, status, matched_at, match_reason, created_at, updated_at
-     ) VALUES ($1,$2,$3,$4,$5,$6,'active',$7,'test_seed',$7,$7)`,
-    [randomUUID(), SPACE, PROJECT, bindingId, CONNECTION, sourceItemId, now],
-  );
-}
-
 async function seedArxivItem(arxivId: string, doi: string | null = null): Promise<string> {
   const itemId = randomUUID();
   const now = new Date().toISOString();
@@ -167,18 +147,16 @@ async function seedArxivItem(arxivId: string, doi: string | null = null): Promis
 describe("Academic paper materialization from arXiv source items (real Postgres)", () => {
   it("materializes a paper object and syncs into Project Corpus + graph", async () => {
     if (!available) return;
-    const bindingId = await seedBinding("academic_paper_v1");
+    await seedBinding("academic_paper_v1");
     const itemId = await seedArxivItem("2401.00001", "10.1000/example");
-    await seedProjectSourceItemLink(bindingId, itemId);
-
-    const result = await materializeAcademicPaperFromSourceItem(pool!, { spaceId: SPACE, sourceItemId: itemId });
-    expect(result).toMatchObject({ created: true });
-    const objectId = result!.objectId;
+    const routeResult = await materializeProjectSourceItemLinks(pool!, { spaceId: SPACE, sourceItemId: itemId });
+    expect(routeResult).toMatchObject({ created: 1, reactivated: 0, archived: 0 });
 
     const item = await pool!.query<{ source_object_id: string; source_object_type: string }>(
       `SELECT source_object_id, source_object_type FROM source_items WHERE id = $1`,
       [itemId],
     );
+    const objectId = item.rows[0]!.source_object_id;
     expect(item.rows[0]!.source_object_id).toBe(objectId);
     expect(item.rows[0]!.source_object_type).toBe("source");
 

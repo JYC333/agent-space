@@ -239,6 +239,7 @@ describe('LibraryPage', () => {
         limit: 1,
       })
       expect(sourcesApi.runJob).toHaveBeenCalledWith('extract-job-1')
+      expect(screen.getByText('succeeded')).toBeInTheDocument()
     })
   })
 

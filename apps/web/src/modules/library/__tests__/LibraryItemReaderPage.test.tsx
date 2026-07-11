@@ -242,6 +242,7 @@ beforeEach(() => {
   mockedApi.getDocument.mockResolvedValue(docPayload)
   mockedApi.listAnnotations.mockResolvedValue({ items: [makeAnnotation()] })
   mockedApi.listThreads.mockResolvedValue({ items: [] })
+  mockedSourcesApi.jobs.mockResolvedValue({ items: [], total: 0, limit: 1, offset: 0 })
 })
 
 describe('LibraryItemReaderPage', () => {
@@ -325,8 +326,7 @@ describe('LibraryItemReaderPage', () => {
       .mockResolvedValueOnce(docPayload)
       .mockResolvedValueOnce(updatedDoc)
     mockedSourcesApi.itemAction.mockResolvedValue({} as never)
-    mockedSourcesApi.jobs.mockResolvedValue({
-      items: [{
+    const pendingJob = {
         id: 'extract-job-1',
         space_id: 'space-1',
         connection_id: null,
@@ -345,11 +345,13 @@ describe('LibraryItemReaderPage', () => {
         completed_at: null,
         created_at: '2026-07-01T00:00:00.000Z',
         metadata_json: null,
-      }],
-      total: 1,
+      }
+    mockedSourcesApi.jobs.mockImplementation(async params => ({
+      items: params?.status === 'pending' ? [pendingJob] : [],
+      total: params?.status === 'pending' ? 1 : 0,
       limit: 1,
       offset: 0,
-    })
+    }))
     mockedSourcesApi.runJob.mockResolvedValue({ status: 'succeeded' } as never)
     await renderPage()
 
@@ -366,6 +368,62 @@ describe('LibraryItemReaderPage', () => {
       expect(mockedSourcesApi.runJob).toHaveBeenCalledWith('extract-job-1')
       expect(screen.getByTestId('reader-content')).toHaveTextContent('Fresh structured text.')
     })
+  })
+
+  it('shows the recorded extraction failure on the reader page', async () => {
+    mockedApi.getDocument.mockResolvedValue({ ...docPayload, content_state: 'extraction_failed' })
+    mockedSourcesApi.jobs.mockResolvedValue({
+      items: [{
+        id: 'extract-job-failed',
+        space_id: 'space-1',
+        connection_id: 'conn-1',
+        source_item_id: 'item-1',
+        source_snapshot_id: null,
+        source_object_type: null,
+        source_object_id: null,
+        job_type: 'extract_text',
+        status: 'failed',
+        started_at: '2026-07-02T10:00:00.000Z',
+        completed_at: '2026-07-02T10:01:00.000Z',
+        items_seen: null,
+        items_created: null,
+        items_updated: null,
+        error_code: '502',
+        error_message: 'The source page rejected the request.',
+        metadata_json: null,
+        created_at: '2026-07-02T10:00:00.000Z',
+      }],
+      total: 1,
+      limit: 1,
+      offset: 0,
+    })
+
+    await renderPage()
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Text extraction failed')
+    expect(screen.getByRole('alert')).toHaveTextContent('The source page rejected the request.')
+    expect(mockedSourcesApi.jobs).toHaveBeenCalledWith({
+      source_item_id: 'item-1',
+      job_type: 'extract_text',
+      limit: 1,
+    })
+  })
+
+  it('hides an older failed extraction when the latest extraction succeeded', async () => {
+    mockedApi.getDocument.mockResolvedValue({ ...docPayload, content_state: 'content_saved' })
+    mockedSourcesApi.jobs.mockResolvedValue({
+      items: [{
+        id: 'extract-job-succeeded', space_id: 'space-1', connection_id: 'conn-1', source_item_id: 'item-1',
+        source_snapshot_id: null, source_object_type: null, source_object_id: null, job_type: 'extract_text', status: 'succeeded',
+        started_at: '2026-07-02T10:00:00.000Z', completed_at: '2026-07-02T10:01:00.000Z',
+        items_seen: null, items_created: null, items_updated: null, error_code: null, error_message: null,
+        metadata_json: null, created_at: '2026-07-02T10:00:00.000Z',
+      }], total: 1, limit: 1, offset: 0,
+    })
+
+    await renderPage()
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
   it('keeps the selection when annotation creation fails', async () => {

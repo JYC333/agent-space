@@ -165,7 +165,7 @@ The implemented settings API keeps that ownership split explicit:
   product policy.
 - `PUT /api/v1/sources/custom-source-settings/space` updates only the space
   product policy. It requires an active owner/admin membership and records the
-  `source.custom_source_settings_update` policy action with resource type
+  `source.custom.settings_update` policy action with resource type
   `custom_source_settings`.
 - `GET /api/v1/sources/custom-source-settings/instance` returns only the
   instance runner/sandbox read model and requires instance-admin authority.

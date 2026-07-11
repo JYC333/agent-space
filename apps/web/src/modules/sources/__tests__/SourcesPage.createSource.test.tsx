@@ -5,7 +5,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import SourcesPage from '../SourcesPage'
 import SourcePresetsPage from '../sourcePresets/SourcePresetsPage'
 import { scheduleRuleFromForm } from '../sourcePageModel'
-import { sourcesApi } from '../../../api/client'
+import { projectsApi, sourcesApi } from '../../../api/client'
 import type { ExtractionJob, SourceConnection, SourceRecipeDefinition, SourceRecipeVersion } from '../../../types/api'
 
 vi.mock('sonner', () => ({
@@ -23,6 +23,7 @@ vi.mock('../../../core/spaceNav', () => ({
 }))
 
 vi.mock('../../../api/client', () => ({
+  projectsApi:{proposeSourceSetup:vi.fn()},
   sourcesApi: {
     connectors: vi.fn(),
     connections: vi.fn(),
@@ -435,28 +436,16 @@ describe('SourcesPage Create Source', () => {
   }, 10_000)
 
   it('creates an arXiv source and binds it when opened from a project preset workflow', async () => {
-    vi.mocked(sourcesApi.createArxivSourcePreset).mockResolvedValue({
+    vi.mocked(projectsApi.proposeSourceSetup).mockResolvedValue({
+      operation:{id:'operation-1'} as never,
+      source_proposal:{id:'proposal-1'} as never,
+      binding_proposal:{id:'proposal-2'} as never,
+      connection_draft:{
       ...recipeSourceConnection(),
       id: 'arxiv-conn-1',
       name: 'AI agent papers',
       handler_kind: 'built_in',
-    })
-    vi.mocked(sourcesApi.createProjectSourceBinding).mockResolvedValue({
-      id: 'binding-1',
-      space_id: 'space-1',
-      project_id: 'project-1',
-      source_connection_id: 'arxiv-conn-1',
-      binding_key: 'default',
-      status: 'active',
-      priority: 0,
-      delivery_scope: 'project_members',
-      collection_notifications_enabled: true,
-      filters_json: {},
-      routing_policy_json: {},
-      extraction_policy_json: { profile_key: 'academic_paper_v1' },
-      created_by_user_id: 'user-1',
-      created_at: '2026-07-01T00:00:00.000Z',
-      updated_at: '2026-07-01T00:00:00.000Z',
+      },
     })
 
     renderPage('/spaces/space-1/sources/source-presets?project_id=project-1&preset=arxiv')
@@ -470,18 +459,14 @@ describe('SourcesPage Create Source', () => {
     fireEvent.click(screen.getByRole('button', { name: /create source/i }))
 
     await waitFor(() => {
-      expect(sourcesApi.createArxivSourcePreset).toHaveBeenCalledWith(expect.objectContaining({
+      expect(projectsApi.proposeSourceSetup).toHaveBeenCalledWith('project-1',expect.objectContaining({
+        preset_id:'arxiv',
         mode: 'recent_by_category',
         categories: ['cs.AI'],
         name: 'AI agent papers',
+        binding:expect.objectContaining({binding_key:'default',backfill_history:true}),
       }))
-      expect(sourcesApi.createProjectSourceBinding).toHaveBeenCalledWith({
-        project_id: 'project-1',
-        source_connection_id: 'arxiv-conn-1',
-        binding_key: 'default',
-        backfill_history: true,
-        extraction_policy: { profile_key: 'academic_paper_v1' },
-      })
+      expect(sourcesApi.createArxivSourcePreset).not.toHaveBeenCalled()
     })
   }, 10_000)
 

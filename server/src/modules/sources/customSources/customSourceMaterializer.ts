@@ -9,7 +9,7 @@ import type { ServerConfig } from "../../../config";
 import type { Queryable } from "../../routeUtils/common";
 import { inheritContentAccessGrants } from "../../access/contentAccessInheritance";
 import { sha256, sourceDomain } from "../sourceRepositoryMappers";
-import { linkEvidenceToBoundProjects, materializeProjectSourceItemLinks } from "../evidenceProjectLinker";
+import { projectSourceRoutingHook } from "../../projects/projectSourceRoutingRegistry";
 import { reindexSourceItemAndEvidenceForRetrieval } from "../retrievalIndexing";
 import {
   validateCustomSourceHandlerOutput,
@@ -160,7 +160,7 @@ export class CustomSourceMaterializationService {
         const { itemId, created } = await this.upsertItem(run, item, retentionPolicy, descriptor);
         if (created) itemsCreated++;
         else itemsUpdated++;
-        await materializeProjectSourceItemLinks(this.db, {
+        await projectSourceRoutingHook().routeMaterializedItem(this.db, {
           spaceId: run.spaceId,
           sourceItemId: itemId,
         });
@@ -174,7 +174,7 @@ export class CustomSourceMaterializationService {
           evidenceCreated++;
         }
         if (item.evidence.length > 0) {
-          await linkEvidenceToBoundProjects(this.db, {
+          await projectSourceRoutingHook().routeEvidence(this.db, {
             spaceId: run.spaceId,
             sourceItemId: itemId,
           });

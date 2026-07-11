@@ -104,31 +104,31 @@ registry `default_decision`. Not full RBAC/ABAC — they express intent and defa
 | `workspace.read` | workspace | low | allow | workspaces routes via `enforce()` |
 | `runtime_skill.render` | runtime_skill_binding | medium | require_approval | context module via `enforce()` |
 | `agent.config_update` | agent | high | allow (audit_required) | agents routes/repository before config proposal creation |
-| `source.connection_manage` | source_connection | medium | allow (audit_required) | sources routes via `enforce()` |
+| `source.connection.manage` | source_connection | medium | allow (audit_required) | sources routes via `enforce()` |
 | `source.item_create` | source_item | low | allow (audit_required) | sources routes via `enforce()` |
 | `source.item_update` | source_item | low | allow (audit_required) | sources routes via `enforce()` |
 | `evidence.create` | evidence | low | allow (audit_required) | sources routes via `enforce()` |
 | `evidence.update` | evidence | low | allow (audit_required) | sources routes via `enforce()` |
 | `evidence.link` | evidence | low | allow (audit_required) | sources routes via `enforce()` |
-| `project_source.configure` | project_source | medium | allow (audit_required) | sources routes via `enforce()` |
-| `source.custom_source_create` | source_connection | medium | allow (audit_required) | sources routes via `enforce()` |
-| `source.custom_source_generate` | source_connection | medium | allow (audit_required) | sources routes via `enforce()` |
-| `source.custom_source_test` | source_connection | low | allow (audit_required) | sources routes via `enforce()` |
-| `source.custom_source_activate` | source_connection | medium | allow (audit_required) | sources routes via `enforce()` |
-| `source.custom_source_repair` | source_connection | medium | allow (audit_required) | sources custom source routes via `enforce()` |
-| `source.custom_source_rollback` | source_connection | medium | allow (audit_required) | sources custom source routes via `enforce()` |
-| `source.custom_source_credential_create` | custom_source_credential | high | allow (audit_required) | sources custom source routes via `enforce()` |
-| `source.source_recipe_create` | source_connection | medium | allow (audit_required) | source recipe routes via `enforce()` |
-| `source.source_recipe_activate` | source_connection | medium | allow (audit_required) | source recipe routes via `enforce()` |
-| `source.source_recipe_dry_run` | source_connection | low | allow (audit_required) | source recipe routes via `enforce()` |
-| `source.custom_source_settings_update` | custom_source_settings | medium | allow (audit_required) | sources settings routes via `enforce()` |
+| `project.source.bind` | project_source | medium | allow (audit_required) | projects routes via `enforce()` |
+| `source.custom.create` | source_connection | medium | allow (audit_required) | sources routes via `enforce()` |
+| `source.custom.generate` | source_connection | medium | allow (audit_required) | sources routes via `enforce()` |
+| `source.custom.test` | source_connection | low | allow (audit_required) | sources routes via `enforce()` |
+| `source.custom.activate` | source_connection | medium | allow (audit_required) | sources routes via `enforce()` |
+| `source.custom.repair` | source_connection | medium | allow (audit_required) | sources custom source routes via `enforce()` |
+| `source.custom.rollback` | source_connection | medium | allow (audit_required) | sources custom source routes via `enforce()` |
+| `source.custom.credential_create` | custom_source_credential | high | allow (audit_required) | sources custom source routes via `enforce()` |
+| `source.recipe.create` | source_connection | medium | allow (audit_required) | source recipe routes via `enforce()` |
+| `source.recipe.activate` | source_connection | medium | allow (audit_required) | source recipe routes via `enforce()` |
+| `source.recipe.dry_run` | source_connection | low | allow (audit_required) | source recipe routes via `enforce()` |
+| `source.custom.settings_update` | custom_source_settings | medium | allow (audit_required) | sources settings routes via `enforce()` |
 | `context.select_evidence` | evidence | low | allow | context module via `enforce()` |
 | `retrieval.search` | retrieval_tool | low | deny (allow only by rule) | managed retrieval tools via `enforce()` |
 | `retrieval.brief` | retrieval_tool | low | deny (allow only by rule) | managed retrieval tools via `enforce()` |
 | `memory.retrieval.search` | retrieval_tool | low | deny (allow only by rule) | managed retrieval tools via `enforce()` |
 | `memory.retrieval.brief` | retrieval_tool | low | deny (allow only by rule) | managed retrieval tools via `enforce()` |
-| `project_public_summary.search` | retrieval_tool | low | deny (allow only by rule) | managed retrieval tools via `enforce()` |
-| `project_public_summary.brief` | retrieval_tool | low | deny (allow only by rule) | managed retrieval tools via `enforce()` |
+| `project.summary.search` | retrieval_tool | low | deny (allow only by rule) | managed retrieval tools via `enforce()` |
+| `project.summary.brief` | retrieval_tool | low | deny (allow only by rule) | managed retrieval tools via `enforce()` |
 | `memory.create` | memory | medium | require_approval | via `proposal.apply` |
 | `memory.update` | memory | medium | require_approval | via `proposal.apply` |
 | `memory.archive` | memory | medium | require_approval | via `proposal.apply` |
@@ -314,8 +314,8 @@ preflight.
 | `retrieval.brief` | `server/src/modules/retrieval/tool/service.ts` via `enforce()` | Before managed-run Knowledge Context Brief execution |
 | `memory.retrieval.search` | `server/src/modules/retrieval/tool/service.ts` + `server/src/modules/runs/managedRetrievalTools.ts` via `enforce()` | Before explicitly opted-in managed-run Memory search execution; disabled-domain calls are denied/audited |
 | `memory.retrieval.brief` | `server/src/modules/retrieval/tool/service.ts` + `server/src/modules/runs/managedRetrievalTools.ts` via `enforce()` | Before explicitly opted-in managed-run Memory Context Brief execution; disabled-domain calls are denied/audited |
-| `project_public_summary.search` | `server/src/modules/retrieval/tool/service.ts` + `server/src/modules/runs/managedRetrievalTools.ts` via `enforce()` | Before explicitly opted-in managed-run Project public-summary search execution; disabled-domain calls are denied/audited |
-| `project_public_summary.brief` | `server/src/modules/retrieval/tool/service.ts` + `server/src/modules/runs/managedRetrievalTools.ts` via `enforce()` | Before explicitly opted-in managed-run Project public-summary Context Brief execution; disabled-domain calls are denied/audited |
+| `project.summary.search` | `server/src/modules/retrieval/tool/service.ts` + `server/src/modules/systemActions/agentToolGateway.ts` via `enforce()` | Before explicitly opted-in managed-run Project public-summary search execution; disabled-domain calls are denied/audited |
+| `project.summary.brief` | `server/src/modules/retrieval/tool/service.ts` + `server/src/modules/systemActions/agentToolGateway.ts` via `enforce()` | Before explicitly opted-in managed-run Project public-summary Context Brief execution; disabled-domain calls are denied/audited |
 
 **runtime.execute context fields**: Rule-relevant fields (`agent_status`, `agent_tool_permissions`,
 `tool_name`, `adapter_type`, `trigger_origin`, `risk_level`, etc.) are passed in

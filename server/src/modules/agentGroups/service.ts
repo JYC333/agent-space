@@ -437,6 +437,41 @@ export class AgentGroupRunService {
     );
   }
 
+  async spawnChildRunAuthorized(
+    identity: AgentGroupIdentity,
+    input: SpawnChildRunInput,
+    policy: EnforceResult,
+  ) {
+    assertIdentitySpace(identity, input.space_id);
+    if (input.manager_user_id !== identity.userId) throw new HttpError(403, "manager_user_id must match the authenticated user");
+    return withDbTransaction(this.pool, async (client) =>
+      this.spawnChildRunInTransaction(this.repos(client), identity, input, policy),
+    );
+  }
+
+  async preflightSpawnChildRunPolicy(
+    identity: AgentGroupIdentity,
+    input: SpawnChildRunInput,
+  ): Promise<EnforceResult> {
+    assertIdentitySpace(identity, input.space_id);
+    if (input.manager_user_id !== identity.userId) {
+      throw new HttpError(403, "manager_user_id must match the authenticated user");
+    }
+    return withDbTransaction(this.pool, async (client) => {
+      const repos = this.repos(client);
+      const group = await repos.groups.lockGroup(input.space_id, input.group_id);
+      if (!group || group.manager_user_id !== identity.userId) throw new HttpError(404, "Agent group not found in this space");
+      if (group.status !== "active") throw new HttpError(409, `Agent group is not active (current status: ${group.status})`);
+      if (!group.root_run_id || input.root_run_id !== group.root_run_id) throw new HttpError(409, "root_run_id must match the agent group root run");
+      const parentRun = await repos.runs.getVisibleRun(input.space_id, identity.userId, input.parent_run_id);
+      if (!parentRun || parentRun.run_group_id !== group.id) throw new HttpError(404, "Parent run not found in this agent group");
+      if (parentRun.agent_id !== input.requesting_agent_id) throw new HttpError(403, "requesting_agent_id must match the parent run agent");
+      if ((parentRun.root_run_id ?? parentRun.id) !== group.root_run_id) throw new HttpError(409, "Parent run does not belong to the group root lineage");
+      await assertAgentsExist(repos.groups, input.space_id, identity.userId, [input.requesting_agent_id, input.target_agent_id]);
+      return this.enforceSpawnPolicy(repos.groups, group, parentRun, input);
+    });
+  }
+
   async getTimeline(identity: AgentGroupIdentity, groupId: string, page: {
     limit: number;
     offset: number;
@@ -539,6 +574,7 @@ export class AgentGroupRunService {
     },
     identity: AgentGroupIdentity,
     input: SpawnChildRunInput,
+    preflightPolicy?: EnforceResult,
   ): Promise<{
     delegation: RunDelegationRecord;
     child_run_id: string | null;
@@ -593,6 +629,14 @@ export class AgentGroupRunService {
       }
     }
 
+    // Policy preflight is deliberately before every domain write. The
+    // delegation/message rows below are the authorized (or denied-evidence)
+    // execution phase and reuse this durable decision.
+    const policy = preflightPolicy ?? await this.enforceSpawnPolicy(repos.groups, group, parentRun, input);
+    if (policy.status === "error") {
+      throw new HttpError(503, policy.message ?? "Policy audit failed for child run delegation");
+    }
+
     const requestMessageId = input.request_message_id ?? (await repos.groups.createMessage({
       space_id: input.space_id,
       group_id: input.group_id,
@@ -636,10 +680,6 @@ export class AgentGroupRunService {
       },
     });
 
-    const policy = await this.enforceSpawnPolicy(repos.groups, group, parentRun, input, delegation);
-    if (policy.status === "error") {
-      throw new HttpError(503, policy.message ?? "Policy audit failed for child run delegation");
-    }
     if (policy.status !== "allow") {
       const denied = await repos.groups.updateDelegationAfterPolicy({
         space_id: input.space_id,
@@ -732,7 +772,6 @@ export class AgentGroupRunService {
     group: AgentRunGroupRecord,
     parentRun: RunRecord,
     input: SpawnChildRunInput,
-    delegation: RunDelegationRecord,
   ): Promise<EnforceResult> {
     const registry = await loadActionRegistry();
     const [requestingMember, targetMember, depth, fanoutCount, concurrencyCount] =
@@ -799,7 +838,7 @@ export class AgentGroupRunService {
       },
       metadata_json: {
         group_id: input.group_id,
-        delegation_id: delegation.id,
+        delegation_id: null,
         parent_run_id: input.parent_run_id,
         root_run_id: input.root_run_id,
         requesting_agent_id: input.requesting_agent_id,

@@ -45,8 +45,9 @@ source pipeline, subscription model, data model, and API.
 
 - Source connection configuration, scan schedules, or post-processing rules
   (`modules/sources.md`).
-- Project source bindings, project source item links, source health, and the
-  `/sources/project-items` read model (`modules/sources.md`).
+- Project-owned source bindings, project source item links, and binding health
+  (`architecture/PROJECTS.md`), plus the Project collection query currently
+  served at `/sources/project-items`.
 - Source recommendation/subscription decisions (`modules/sources.md`).
 - Activity Inbox notification lifecycle (`modules/activity-inbox.md`).
 - Sources reader annotation storage/APIs; Library composes the shared reader UI
@@ -71,7 +72,7 @@ source_connection_user_subscriptions (subscribed + library_enabled)
 ```
 
 `GET /api/v1/sources/items` is Library-only. Project collection views use
-`project_source_item_links` through `GET /api/v1/sources/project-items` and do
+`project_source_item_links` through the Project Sources collection read model and do
 not imply that the current user follows the underlying source.
 
 Activity Inbox points into Library through daily aggregate rows with

@@ -9,8 +9,8 @@ export type RetrievalToolPolicyAction =
   | "retrieval.brief"
   | "memory.retrieval.search"
   | "memory.retrieval.brief"
-  | "project_public_summary.search"
-  | "project_public_summary.brief"
+  | "project.summary.search"
+  | "project.summary.brief"
   | "source.retrieval.search"
   | "source.retrieval.brief";
 
@@ -39,8 +39,8 @@ export interface RetrievalToolPolicyInput {
 
 export async function enforceRetrievalToolCallPolicy(
   input: RetrievalToolPolicyInput,
-): Promise<void> {
-  if (!input.databaseUrl) return;
+): Promise<{ policy_decision_record_id: string | null }> {
+  if (!input.databaseUrl) return { policy_decision_record_id: null };
   const registry = await loadActionRegistry();
   const actorId = input.actor.agentId ?? input.actor.runId ?? input.actor.instructedByUserId;
   const result = await enforce(
@@ -85,4 +85,5 @@ export async function enforceRetrievalToolCallPolicy(
   if (result.status !== "allow") {
     throw new Error(result.message ?? "Retrieval tool policy denied the call.");
   }
+  return { policy_decision_record_id: result.policy_decision_record_id ?? null };
 }

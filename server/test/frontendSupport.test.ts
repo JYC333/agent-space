@@ -105,6 +105,7 @@ describe("frontend-support read models", () => {
 
 function emptyHomeSummary() {
   return {
+    operations_in_progress: [],
     recent_runs: [],
     active_runs: [],
     pending_proposals: { count: 0, items: [] },

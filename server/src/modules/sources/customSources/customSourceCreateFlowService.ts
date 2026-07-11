@@ -16,7 +16,7 @@ import {
   type Queryable,
   type SpaceUserIdentity,
 } from "../../routeUtils/common";
-import { PgSourcesRepository } from "../repository";
+import { SourceConnectionService } from "../sourceConnectionService";
 import {
   HANDLER_RUN_COLUMNS,
   HANDLER_VERSION_COLUMNS,
@@ -84,8 +84,8 @@ export class CustomSourceCreateFlowService {
 
     const config = objectValue(body.config);
     return withDbTransaction(this.pool, async (client) => {
-      const sourcesRepo = new PgSourcesRepository(client, this.config);
-      const connection = await sourcesRepo.createConnection(identity, {
+      const connections = new SourceConnectionService(client, this.config);
+      const connection = await connections.createConnection(identity, {
         connector_key: "custom_source",
         name: requiredString(body.name, "name"),
         endpoint_url: endpointUrl,

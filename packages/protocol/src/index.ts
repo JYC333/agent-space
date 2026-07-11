@@ -66,6 +66,9 @@ export * from "./agentGroupRuns.js";
 // Policy enforcement contracts
 export * from "./policy.js";
 
+// Registry-driven System Action contracts
+export * from "./systemActions.js";
+
 // Proposal review contracts
 export * from "./proposals.js";
 

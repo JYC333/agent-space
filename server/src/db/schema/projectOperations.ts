@@ -1,0 +1,66 @@
+import { pgTable, index, unique, check, foreignKey, varchar, text, integer, jsonb, timestamp, type PgTableExtraConfigValue } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { spaces } from "./spaces";
+import { projects } from "./projects";
+import { users } from "./auth";
+import { runs } from "./runs";
+import { artifacts } from "./artifacts";
+
+export const projectOperations = pgTable("project_operations", {
+	id: varchar({ length: 36 }).primaryKey().notNull(),
+	spaceId: varchar("space_id", { length: 36 }).notNull(),
+	projectId: varchar("project_id", { length: 36 }).notNull(),
+	kind: varchar({ length: 32 }).notNull(),
+	title: varchar({ length: 256 }).notNull(),
+	intentText: text("intent_text"),
+	status: varchar({ length: 32 }).notNull(),
+	createdByUserId: varchar("created_by_user_id", { length: 36 }),
+	initiatingRunId: varchar("initiating_run_id", { length: 36 }),
+	planArtifactId: varchar("plan_artifact_id", { length: 36 }),
+	progressJson: jsonb("progress_json").default({}).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).notNull(),
+}, (t): PgTableExtraConfigValue[] => [
+	index("ix_project_operations_project_status").on(t.projectId, t.status),
+	foreignKey({ columns: [t.projectId, t.spaceId], foreignColumns: [projects.id, projects.spaceId], name: "project_operations_project_fkey" }),
+	foreignKey({ columns: [t.spaceId], foreignColumns: [spaces.id], name: "project_operations_space_fkey" }),
+	foreignKey({ columns: [t.createdByUserId], foreignColumns: [users.id], name: "project_operations_user_fkey" }),
+	foreignKey({ columns: [t.initiatingRunId, t.spaceId], foreignColumns: [runs.id, runs.spaceId], name: "project_operations_run_fkey" }),
+	// Single-column FK, matching every other artifact reference in the schema:
+	// `artifacts` has no composite (id, space_id) unique constraint to satisfy
+	// a composite FK. Cross-space integrity for this pointer is a service-level
+	// check, same as the other artifact references below.
+	foreignKey({ columns: [t.planArtifactId], foreignColumns: [artifacts.id], name: "project_operations_artifact_fkey" }),
+	unique("uq_project_operations_space_id_id").on(t.id, t.spaceId),
+	check("ck_project_operations_kind", sql`kind IN ('source_setup','source_backfill','research','custom')`),
+	check("ck_project_operations_status", sql`status IN ('draft','active','waiting_review','completed','failed','cancelled')`),
+]);
+
+export const projectOperationSteps = pgTable("project_operation_steps", {
+	id: varchar({ length: 36 }).primaryKey().notNull(),
+	operationId: varchar("operation_id", { length: 36 }).notNull(),
+	spaceId: varchar("space_id", { length: 36 }).notNull(),
+	seq: integer().notNull(),
+	title: varchar({ length: 256 }).notNull(),
+	status: varchar({ length: 16 }).notNull(),
+	detailJson: jsonb("detail_json").default({}).notNull(),
+}, (t): PgTableExtraConfigValue[] => [
+	foreignKey({ columns: [t.operationId, t.spaceId], foreignColumns: [projectOperations.id, projectOperations.spaceId], name: "project_operation_steps_operation_fkey" }).onDelete("cascade"),
+	unique("uq_project_operation_steps_seq").on(t.operationId, t.seq),
+	check("ck_project_operation_steps_status", sql`status IN ('pending','active','blocked','done','skipped')`),
+]);
+
+export const projectOperationLinks = pgTable("project_operation_links", {
+	id: varchar({ length: 36 }).primaryKey().notNull(),
+	operationId: varchar("operation_id", { length: 36 }).notNull(),
+	spaceId: varchar("space_id", { length: 36 }).notNull(),
+	targetType: varchar("target_type", { length: 32 }).notNull(),
+	targetId: varchar("target_id", { length: 256 }).notNull(),
+	role: varchar({ length: 64 }).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).notNull(),
+}, (t): PgTableExtraConfigValue[] => [
+	index("ix_project_operation_links_target").on(t.spaceId, t.targetType, t.targetId),
+	foreignKey({ columns: [t.operationId, t.spaceId], foreignColumns: [projectOperations.id, projectOperations.spaceId], name: "project_operation_links_operation_fkey" }).onDelete("cascade"),
+	unique("uq_project_operation_links_target").on(t.operationId, t.targetType, t.targetId),
+	check("ck_project_operation_links_target_type", sql`target_type IN ('run','job','proposal','artifact','source_backfill_plan','project_source_binding','corpus_sync')`),
+]);

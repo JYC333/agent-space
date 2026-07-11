@@ -168,8 +168,9 @@ with `project_id = NULL` are unaffected.
 | `project_source_item_links` | `project_id` (required; materialized Source item collection rows for project source bindings) |
 | `project_corpus_items` | `project_id` (required; project-owned corpus/read model over object, source item, and evidence links) |
 
-`project_source_bindings` and `project_source_item_links` remain Sources-owned
-routing/read-model records, not Project-owned source records.
+`project_source_bindings` and `project_source_item_links` are Project-owned
+consumption configuration/read-model records, authored in
+`server/src/db/schema/projectSources.ts` and served by the Projects module.
 `source_connections` stay space-scoped under Sources. The binding is the
 project boundary: the same source connection can be bound to multiple projects
 because the uniqueness constraint includes `(space_id, project_id,
@@ -217,6 +218,16 @@ Space scoping is enforced via the `space_id` query parameter resolved by `get_id
 | POST | `/projects/{id}/corpus` | Upsert a project corpus entry for an object, source item, or evidence target; requires project writer |
 | PATCH | `/projects/{id}/corpus/{corpus_item_id}` | Update project-level corpus lifecycle, triage, read status, role, relevance, confidence, reason, or metadata; requires project writer |
 | POST | `/projects/{id}/corpus/backfill-source-items` | Recompute project corpus rows from current project source item links, evidence links, source-object pointers, and source post-processing decisions; requires project writer |
+| GET / POST | `/projects/{id}/sources/bindings` | List or create Project-owned source bindings |
+| POST | `/projects/{id}/sources/propose-bind` | Agent-only proposal path for `project_source_bind`; Project writers use direct binding creation |
+| PATCH / DELETE | `/projects/{id}/sources/bindings/{bindingId}` | Update or disconnect a Project binding; removal is internally archived for audit and omitted from normal binding reads |
+| POST | `/projects/{id}/sources/bindings/{bindingId}/backfill` | Idempotently rematerialize already-collected source items into the Project |
+| POST | `/projects/{id}/sources/bindings/{bindingId}/propose-backfill` | Create an operation, history-import plan, and start proposal |
+| POST | `/projects/{id}/sources/propose-setup` | Idempotently create one Project operation, paused Source draft, activation proposal, and dependent binding proposal |
+| GET | `/projects/{id}/sources/health` | Read binding-level collection health |
+| GET / POST | `/projects/{id}/operations` | List or create product-level Project operations |
+| GET | `/projects/{id}/operations/{operationId}` | Read operation steps, links, and projected progress |
+| POST | `/projects/{id}/operations/{operationId}/cancel` | Cancel a non-terminal grouping record |
 | GET | `/projects/public-summaries` | List approved high-level project summaries in the current space |
 | POST | `/projects/public-summaries/search` | Search only `project_public_summary` retrieval objects |
 | GET | `/projects/{id}/public-summary` | Read the approved high-level public summary for a project |
@@ -291,6 +302,11 @@ space.
   Sources surface. Project Sources supports binding sources, backfill, scan,
   pause/remove, health, and the materialized project item collection. Global
   Sources remains the source-level management surface.
+- Project Chat at `/projects/{id}/chat` reuses the normal agent chat/session
+  and managed Run pipeline. Sessions and Runs carry validated `project_id`;
+  reusing a session under another Project is rejected. Managed Project Chat
+  exposes proposal-only source actions and stores structured action previews
+  on assistant-message metadata for inline cards and canonical Review links.
 - Project creation lets the user choose a Project preset. Project Detail uses
   the chosen preset to render the corresponding project shell. Academic Research
   projects show a research workbench and direct literature/corpus/citation graph
@@ -330,3 +346,12 @@ space.
 - Project public summaries are not a substitute for project memory ACL; they are
   a sanitized discovery layer.
 - Research, paper, author, citation, or literature tables are not part of Project.
+# Project operations
+
+`project_operations` is a Projects-owned grouping/read model over canonical
+Runs, Jobs, Proposals, Artifacts, source bindings, and history-import plans.
+It never executes or blocks those objects. Ordered optional steps provide a
+product progress view; status and `progress_json` are projected from validated,
+same-space links when an operation is read. Public routes live under
+`/api/v1/projects/{projectId}/operations`; cancellation changes only the
+operation grouping record and never cancels linked execution objects.

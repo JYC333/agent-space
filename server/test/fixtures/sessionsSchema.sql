@@ -12,6 +12,7 @@ CREATE TABLE public.sessions (
     user_id character varying(36),
     agent_id character varying(36),
     workspace_id character varying(36),
+    project_id character varying(36),
     title character varying(512),
     status character varying(32) NOT NULL,
     metadata_json jsonb,

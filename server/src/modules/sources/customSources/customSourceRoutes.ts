@@ -30,7 +30,7 @@ export function registerCustomSourceRoutes(app: FastifyInstance, context: Module
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
     try {
-      const gate = await enforceSources(context, identity, "source.custom_source_create", "source_connection");
+      const gate = await enforceSources(context, identity, "source.custom.create", "source_connection");
       if (gate.blocked) return reply.code(403).send(gate.reply403);
       return reply.code(201).send(await customSourceCreateFlow().createDraft(identity, jsonBody(request)));
     } catch (error) {
@@ -43,7 +43,7 @@ export function registerCustomSourceRoutes(app: FastifyInstance, context: Module
     if (!identity) return reply;
     try {
       const connectionId = params(request).connectionId ?? "";
-      const gate = await enforceSources(context, identity, "source.custom_source_generate", "source_connection", connectionId);
+      const gate = await enforceSources(context, identity, "source.custom.generate", "source_connection", connectionId);
       if (gate.blocked) return reply.code(403).send(gate.reply403);
       return reply
         .code(201)
@@ -58,7 +58,7 @@ export function registerCustomSourceRoutes(app: FastifyInstance, context: Module
     if (!identity) return reply;
     try {
       const connectionId = params(request).connectionId ?? "";
-      const gate = await enforceSources(context, identity, "source.custom_source_test", "source_connection", connectionId);
+      const gate = await enforceSources(context, identity, "source.custom.test", "source_connection", connectionId);
       if (gate.blocked) return reply.code(403).send(gate.reply403);
       return reply.send(await customSourceCreateFlow().testHandler(identity, connectionId, jsonBody(request)));
     } catch (error) {
@@ -71,7 +71,7 @@ export function registerCustomSourceRoutes(app: FastifyInstance, context: Module
     if (!identity) return reply;
     try {
       const connectionId = params(request).connectionId ?? "";
-      const gate = await enforceSources(context, identity, "source.custom_source_activate", "source_connection", connectionId);
+      const gate = await enforceSources(context, identity, "source.custom.activate", "source_connection", connectionId);
       if (gate.blocked) return reply.code(403).send(gate.reply403);
       return reply.send(await customSourceCreateFlow().activateHandler(identity, connectionId, jsonBody(request)));
     } catch (error) {
@@ -84,7 +84,7 @@ export function registerCustomSourceRoutes(app: FastifyInstance, context: Module
     if (!identity) return reply;
     try {
       const connectionId = params(request).connectionId ?? "";
-      const gate = await enforceSources(context, identity, "source.custom_source_repair", "source_connection", connectionId);
+      const gate = await enforceSources(context, identity, "source.custom.repair", "source_connection", connectionId);
       if (gate.blocked) return reply.code(403).send(gate.reply403);
       return reply.send(await customSourceRepair().repairHandler(identity, connectionId, jsonBody(request)));
     } catch (error) {
@@ -97,7 +97,7 @@ export function registerCustomSourceRoutes(app: FastifyInstance, context: Module
     if (!identity) return reply;
     try {
       const connectionId = params(request).connectionId ?? "";
-      const gate = await enforceSources(context, identity, "source.custom_source_rollback", "source_connection", connectionId);
+      const gate = await enforceSources(context, identity, "source.custom.rollback", "source_connection", connectionId);
       if (gate.blocked) return reply.code(403).send(gate.reply403);
       return reply.send(await customSourceRepair().rollbackHandler(identity, connectionId, jsonBody(request)));
     } catch (error) {
@@ -109,7 +109,7 @@ export function registerCustomSourceRoutes(app: FastifyInstance, context: Module
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
     try {
-      const gate = await enforceSources(context, identity, "source.custom_source_credential_create", "custom_source_credential");
+      const gate = await enforceSources(context, identity, "source.custom.credential_create", "custom_source_credential");
       if (gate.blocked) return reply.code(403).send(gate.reply403);
       const protocol = await loadProtocol();
       const payload = protocol.CustomSourceCredentialCreateSchema.parse(jsonBody(request));
@@ -173,7 +173,7 @@ export function registerCustomSourceRoutes(app: FastifyInstance, context: Module
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
     try {
-      const gate = await enforceSources(context, identity, "source.custom_source_settings_update", "custom_source_settings");
+      const gate = await enforceSources(context, identity, "source.custom.settings_update", "custom_source_settings");
       if (gate.blocked) return reply.code(403).send(gate.reply403);
       const protocol = await loadProtocol();
       const payload = protocol.CustomSourceSpacePolicyUpdateSchema.parse(jsonBody(request));

@@ -2,7 +2,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ArrowLeft, CheckCircle2, Library, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
-import { sourcesApi } from '../../../api/client'
+import { projectsApi, sourcesApi } from '../../../api/client'
 import { Badge } from '../../../components/ui/badge'
 import { Button } from '../../../components/ui/button'
 import { Card, CardHeader, CardTitle } from '../../../components/ui/card'
@@ -160,27 +160,18 @@ export default function SourcePresetsPage() {
   async function createArxivSource() {
     setBusy('arxiv:create')
     try {
-      const row = await sourcesApi.createArxivSourcePreset({
+      const request = {
         ...arxivRequestBase(),
         name: arxivName.trim() || undefined,
         fetch_frequency: arxivFetchFrequency as 'manual' | 'hourly' | 'daily' | 'weekly',
         schedule_rule: scheduleRuleFromForm(arxivFetchFrequency, arxivSchedule),
         capture_policy: arxivCapturePolicy,
-      })
+      }
+      if(projectId){const setup=await projectsApi.proposeSourceSetup(projectId,{idempotency_key:crypto.randomUUID(),preset_id:'arxiv',...request,binding:{binding_key:'default',backfill_history:true,extraction_policy:{profile_key:'academic_paper_v1'}}});setCreatedConnection(setup.connection_draft);toast.success(`Source setup sent to Review: ${setup.connection_draft.name}`);setArxivName('');setArxivSchedule(emptyScheduleFormValue());if(arxivMode==='search')setArxivQuery('');setArxivPreview(null);resetArxivPostProcessingPreset();return}
+      const row = await sourcesApi.createArxivSourcePreset(request)
       setCreatedConnection(row)
       await createPostProcessingPreset(row)
-      if (projectId) {
-        await sourcesApi.createProjectSourceBinding({
-          project_id: projectId,
-          source_connection_id: row.id,
-          binding_key: 'default',
-          backfill_history: true,
-          extraction_policy: { profile_key: 'academic_paper_v1' },
-        })
-        toast.success(`arXiv source created and added to project: ${row.name}`)
-      } else {
-        toast.success(`arXiv source created: ${row.name}`)
-      }
+      toast.success(`arXiv source created: ${row.name}`)
       setArxivName('')
       setArxivSchedule(emptyScheduleFormValue())
       if (arxivMode === 'search') setArxivQuery('')

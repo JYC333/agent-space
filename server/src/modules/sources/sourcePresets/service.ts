@@ -18,7 +18,7 @@ import {
 import { acquireArxivRequestSlot } from "../connectors/arxivThrottle";
 import { PgCustomSourceHandlerRepository } from "../customSources/customSourceHandlerRepository";
 import { fetchSource } from "../sourceFetch";
-import { PgSourcesRepository } from "../repository";
+import { SourceConnectionService } from "../sourceConnectionService";
 import { ARXIV_CATEGORY_GROUPS, ARXIV_CATEGORY_ID_SET } from "./arxivCategoryTaxonomy";
 
 export interface SourcePresetCategoryOption {
@@ -216,6 +216,11 @@ export class SourcePresetService {
 
   /** Creates an active built-in arXiv source connection. */
   async createArxiv(identity: SpaceUserIdentity, body: Record<string, unknown>) {
+    return new SourceConnectionService(this.db, this.config).createConnection(identity, arxivConnectionDraft(body));
+  }
+}
+
+export function arxivConnectionDraft(body:Record<string,unknown>){
     const queryConfig = normalizeArxivQueryConfig(body, { maxResults: ARXIV_CREATE_DEFAULT_MAX_RESULTS });
     const fetchFrequency = optionalString(body.fetch_frequency) ?? "weekly";
     if (!FETCH_FREQUENCIES.has(fetchFrequency)) {
@@ -225,7 +230,7 @@ export class SourcePresetService {
       (queryConfig.mode === "recent_by_category"
         ? `arXiv new: ${queryConfig.categories.join(" + ")}`
         : `arXiv: ${queryConfig.search_query}`);
-    return new PgSourcesRepository(this.db, this.config).createConnection(identity, {
+    return {
       connector_key: "arxiv",
       name: name.slice(0, 200),
       endpoint_url: buildArxivQueryUrl(queryConfig),
@@ -234,6 +239,5 @@ export class SourcePresetService {
       schedule_rule: body.schedule_rule,
       capture_policy: optionalString(body.capture_policy) ?? "extract_text",
       config: { preset_id: "arxiv", ...queryConfig },
-    });
-  }
+    };
 }

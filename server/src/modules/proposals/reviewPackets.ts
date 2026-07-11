@@ -52,6 +52,7 @@ export interface InsertProposalRowInput {
   projectId?: string | null;
   createdAt?: string;
   requiredApproverRole?: string | null;
+  actionIdempotencyKey?:string|null;
 }
 
 export async function insertProposalRow(db: Queryable, input: InsertProposalRowInput): Promise<ProposalRow> {
@@ -63,13 +64,13 @@ export async function insertProposalRow(db: Queryable, input: InsertProposalRowI
        urgency, preview, title, summary, payload_json, review_deadline,
        expires_at, created_at, updated_at, reviewed_at, reviewed_by,
        workspace_id, rationale, created_by_agent_id, created_by_user_id, owner_user_id,
-       required_approver_role, visibility, project_id, access_level
+       required_approver_role, visibility, project_id, access_level, action_idempotency_key
      ) VALUES (
        $1, $2, $3, $4, $5, $6,
        $7, $8, $9, $10, $11::jsonb, NULL,
        NULL, $12, $12, NULL, NULL,
        $13, $14, $18, $15, $15,
-       $19, $16, $17, $20
+       $19, $16, $17, $20, $21
      )
      RETURNING id, space_id, created_by_user_id, workspace_id,
                created_by_run_id, proposal_type, status, risk_level, urgency,
@@ -99,6 +100,7 @@ export async function insertProposalRow(db: Queryable, input: InsertProposalRowI
       input.createdByAgentId ?? null,
       input.requiredApproverRole ?? null,
       input.accessLevel ?? "full",
+      input.actionIdempotencyKey??null,
     ],
   );
   return result.rows[0]!;

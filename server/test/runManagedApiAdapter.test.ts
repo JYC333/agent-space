@@ -830,16 +830,16 @@ describe("executeManagedApiNoToolAdapter", () => {
       "retrieval.brief",
       "memory.retrieval.search",
       "memory.retrieval.brief",
-      "project_public_summary.search",
-      "project_public_summary.brief",
+      "project.summary.search",
+      "project.summary.brief",
     ]);
     expect(first.tools?.map((tool) => tool.name)).toEqual([
       "retrieval.search",
       "retrieval.brief",
       "memory.retrieval.search",
       "memory.retrieval.brief",
-      "project_public_summary.search",
-      "project_public_summary.brief",
+      "project.summary.search",
+      "project.summary.brief",
     ]);
   });
 
@@ -1061,7 +1061,7 @@ describe("executeManagedApiNoToolAdapter", () => {
             tool_calls: [
               {
                 id: "project-call-1",
-                name: "project_public_summary.brief",
+                name: "project.summary.brief",
                 arguments_json: JSON.stringify({
                   query: "Cross Project Discovery",
                   mode: "exact",
@@ -1091,10 +1091,10 @@ describe("executeManagedApiNoToolAdapter", () => {
       { executeRuntimeHost: executor },
     );
 
-    const toolPayload = toolPayloadFromRequest(calls[1], "project_public_summary.brief");
+    const toolPayload = toolPayloadFromRequest(calls[1], "project.summary.brief");
     expect(toolPayload).toMatchObject({
       ok: true,
-      tool: "project_public_summary.brief",
+      tool: "project.summary.brief",
       total: 1,
       items: [
         {
@@ -1105,7 +1105,7 @@ describe("executeManagedApiNoToolAdapter", () => {
       ],
     });
     expect(pool.auditWrites).toHaveLength(1);
-    expect(pool.auditWrites[0]?.[4]).toBe("project_public_summary.brief");
+    expect(pool.auditWrites[0]?.[4]).toBe("project.summary.brief");
     expect(pool.auditWrites[0]?.[7]).toBe("allow");
     const artifact = artifactFromResult(result);
     expect(artifact.metadata_json).toMatchObject({
@@ -1125,7 +1125,7 @@ describe("executeManagedApiNoToolAdapter", () => {
       output_json: {
         retrieval_tool_calls: [
           {
-            tool_name: "project_public_summary.brief",
+            tool_name: "project.summary.brief",
             domain: "project_public_summary",
             ok: true,
             result_count: 1,

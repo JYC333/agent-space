@@ -6,7 +6,7 @@
 
 **RunStep** — coarse execution steps within a run. Provides the replay spine for failure diagnosis without reading raw adapter logs.
 
-**RunEvent** — structured append-only harness evidence records within a run. Finer-grained than RunStep but coarser than raw adapter logs. Each RunEvent captures one significant phase (context compilation, runtime selection, sandbox creation, adapter invocation/completion, artifact ingestion, patch collection, validation, proposal creation, evaluation, finalization). Used by run finalization as the primary structured evidence source.
+**RunEvent** — structured append-only harness evidence records within a run. Finer-grained than RunStep but coarser than raw adapter logs. Each RunEvent captures one significant phase (context compilation, runtime selection, sandbox creation, adapter invocation/completion, governed action invocation/completion, artifact ingestion, patch collection, validation, proposal creation, evaluation, finalization). Used by run finalization as the primary structured evidence source.
 
 **RunFinalization** — canonical post-run record created by `PostRunFinalizationService` after a Run reaches a terminal state. Idempotent per `(run_id, finalizer_version)`. Records run evaluation outcome, task evaluation bridge result, and skipped reasons. Append-only.
 
@@ -69,6 +69,8 @@ RunEvent records the structured phase-level evidence spine of a run:
 | `delegation_queued` | Child run created and queued for dispatch |
 | `delegation_started` | Delegated child run started and the group delegation moved to running |
 | `delegation_completed` | Delegated child run reached a terminal state and the group delegation result was projected |
+| `action_invoked` | AgentToolGateway began a registry action call after exposure checks |
+| `action_completed` | Registry action call returned a success or model-visible failed tool result |
 
 RunEvent statuses: `pending`, `running`, `succeeded`, `failed`, `skipped`, `warning`, `cancelled`.
 
@@ -79,6 +81,31 @@ RunEvent statuses: `pending`, `running`, `succeeded`, `failed`, `skipped`, `warn
 **Best-effort writes:** `safe_append_run_event()` wraps all instrumentation points in a savepoint. A RunEvent write failure must not poison Run terminal-state commits, artifact persistence, proposal creation, or evaluation creation.
 
 **Never stored in RunEvent metadata:** raw credentials, stdout/stderr content, full rendered context text, full patch body, raw private memory text, complete file contents.
+
+### Registry actions and Project Chat
+
+Managed model tools dispatch through `AgentToolGateway` and
+`SystemActionGateway`; see [SYSTEM_ACTIONS.md](SYSTEM_ACTIONS.md). Registry
+visibility, run/profile capability exposure, and call-time PolicyGateway
+enforcement are separate gates. Side-effecting calls use the canonical tool
+call id as their idempotency key. Best-effort `action_invoked` /
+`action_completed` RunEvents carry safe summaries and PolicyDecisionRecord ids;
+their persistence failure does not block or roll back the action. Required
+PolicyDecisionRecord persistence remains the fail-closed audit boundary.
+
+Project Chat reuses the same session -> managed Run -> orchestration pipeline.
+The session and Run persist the validated `project_id`; the prepared prompt
+includes bounded Project name/description/focus context, and the run capability
+set enables only proposal-producing source actions. Generated proposals are
+returned as structured `action_previews` and persisted in assistant-message
+metadata. A failed run also persists and returns any proposals already created
+before failure. This preview is a pointer/read model, not proof of approval or
+an alternate apply path.
+
+Project Chat candidate collection suppresses the ordinary space-wide memory,
+Knowledge, Source, and Activity selectors. It may include only the requested
+Project's approved public summary in addition to the separately ACL-validated
+bounded Project preamble.
 
 RunStep error/metadata is filtered by `server/src/modules/runs/evidenceRedaction.ts` before persisting. Raw credential values are never stored in RunStep rows.
 

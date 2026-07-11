@@ -5,7 +5,7 @@ import { AlertTriangle, ArrowLeft, BookOpen, FileText, Layers3, Link2, Network, 
 import { toast } from 'sonner'
 import { projectPresetsApi, projectsApi, sourcesApi } from '../../api/client'
 import { errMsg } from '../../lib/utils'
-import type { Project, ProjectCorpusItem, ProjectSourceBinding, ProjectSourceItem, SourceConnection, SourceHealth } from '../../types/api'
+import type { Project, ProjectCorpusItem, ProjectSourceBinding, ProjectSourceItem, SourceBackfillPlan, SourceConnection, SourceHealth } from '../../types/api'
 import { Button } from '../../components/ui/button'
 import { Card } from '../../components/ui/card'
 import { Badge, StatusBadge } from '../../components/ui/badge'
@@ -93,7 +93,7 @@ function AddProjectSourceDialog({
   onAdded: () => void
 }) {
   const options = connections
-    .filter(connection => !bindings.some(binding => binding.source_connection_id === connection.id && binding.binding_key === 'default'))
+    .filter(connection => !bindings.some(binding => binding.source_connection_id === connection.id && binding.binding_key === 'default' && binding.status !== 'archived'))
     .map(connection => ({ value: connection.id, label: connection.name }))
   const [connectionId, setConnectionId] = useState('')
   const [deliveryScope, setDeliveryScope] = useState<'project_members' | 'source_subscribers'>('project_members')
@@ -111,14 +111,12 @@ function AddProjectSourceDialog({
     if (!connectionId) return
     setSaving(true)
     try {
-      const binding = await sourcesApi.createProjectSourceBinding({
-        project_id: projectId,
+      await projectsApi.createSourceBinding(projectId, {
         source_connection_id: connectionId,
         delivery_scope: deliveryScope,
         backfill_history: backfill,
       })
-      const added = binding.backfill_result?.created_links ?? 0
-      toast.success(added > 0 ? `Source added; ${added} project items linked` : 'Source added')
+      toast.success('Source added to this project')
       onAdded()
       onOpenChange(false)
     } catch (error) {
@@ -184,6 +182,7 @@ export default function ProjectSourcesPage() {
   const [projectPresetKey, setProjectPresetKey] = useState<string | null>(null)
   const [connections, setConnections] = useState<SourceConnection[]>([])
   const [bindings, setBindings] = useState<ProjectSourceBinding[]>([])
+  const [backfillPlans,setBackfillPlans]=useState<SourceBackfillPlan[]>([])
   const [health, setHealth] = useState<SourceHealth[]>([])
   const [items, setItems] = useState<ProjectSourceItem[]>([])
   const [corpusItems, setCorpusItems] = useState<ProjectCorpusItem[]>([])
@@ -193,6 +192,7 @@ export default function ProjectSourcesPage() {
   const [query, setQuery] = useState('')
   const [loading, setLoading] = useState(true)
   const [addOpen, setAddOpen] = useState(false)
+  const [bindingToRemove, setBindingToRemove] = useState<ProjectSourceBinding | null>(null)
   const [busyBindingId, setBusyBindingId] = useState<string | null>(null)
   const [syncingCorpus, setSyncingCorpus] = useState(false)
   const [busyCorpusItemId, setBusyCorpusItemId] = useState<string | null>(null)
@@ -214,8 +214,8 @@ export default function ProjectSourcesPage() {
         projectsApi.get(projectId),
         projectPresetsApi.getProjectPreset(projectId).catch(() => ({ preset_key: null })),
         sourcesApi.connections({ limit: 200 }),
-        sourcesApi.projectSourceBindings({ project_id: projectId }),
-        sourcesApi.projectSourceHealth(projectId),
+        projectsApi.sourceBindings(projectId),
+        projectsApi.sourceHealth(projectId),
         sourcesApi.projectItems({
           project_id: projectId,
           source_connection_id: sourceFilter || undefined,
@@ -233,6 +233,8 @@ export default function ProjectSourcesPage() {
       setProjectPresetKey(projectPresetSelection.preset_key ?? presetKeyFromProject(projectRow))
       setConnections(connectionPage.items)
       setBindings(bindingRows)
+      const plans=(await Promise.all([...new Set(bindingRows.map(binding=>binding.source_connection_id))].map(connectionId=>sourcesApi.backfillPlans(connectionId).catch(()=>[] as SourceBackfillPlan[])))).flat()
+      setBackfillPlans(plans.filter(plan=>bindingRows.some(binding=>binding.id===plan.project_source_binding_id)))
       setHealth(healthRows)
       setItems(itemPage.items)
       setCorpusItems(corpusPage.items)
@@ -263,8 +265,8 @@ export default function ProjectSourcesPage() {
   async function backfill(binding: ProjectSourceBinding) {
     setBusyBindingId(binding.id)
     try {
-      const result = await sourcesApi.backfillProjectSourceBinding(binding.id)
-      toast.success(`Backfilled ${result.created_links} new project items`)
+      await projectsApi.proposeBindingBackfill(projectId,binding.id,{idempotency_key:crypto.randomUUID(),title:`Import history: ${connectionById[binding.source_connection_id]?.name??binding.source_connection_id}`,strategy:{window_unit:'date_window',window_size:30,max_items:100,direction:'backward'},quota_policy:{window:'minute',limit_count:10}})
+      toast.success('History import proposal sent to Review')
       await load()
     } catch (error) {
       toast.error(errMsg(error))
@@ -289,7 +291,7 @@ export default function ProjectSourcesPage() {
   async function togglePause(binding: ProjectSourceBinding) {
     setBusyBindingId(binding.id)
     try {
-      await sourcesApi.updateProjectSourceBinding(binding.id, {
+      await (projectsApi.updateSourceBinding ?? sourcesApi.updateProjectSourceBinding)(projectId, binding.id, {
         status: binding.status === 'paused' ? 'active' : 'paused',
       })
       await load()
@@ -300,12 +302,14 @@ export default function ProjectSourcesPage() {
     }
   }
 
-  async function remove(binding: ProjectSourceBinding) {
-    if (!confirm('Remove this source from the project?')) return
+  async function confirmRemove() {
+    const binding = bindingToRemove
+    if (!binding) return
     setBusyBindingId(binding.id)
     try {
-      await sourcesApi.deleteProjectSourceBinding(binding.id)
+      await (projectsApi.deleteSourceBinding ?? sourcesApi.deleteProjectSourceBinding)(projectId, binding.id)
       toast.success('Source removed from project')
+      setBindingToRemove(null)
       await load()
     } catch (error) {
       toast.error(errMsg(error))
@@ -395,6 +399,7 @@ export default function ProjectSourcesPage() {
               </Link>
             </Button>
           )}
+          {projectId && <Button variant="secondary" className="gap-1.5 shrink-0" asChild><Link to={`/sources/source-presets?project_id=${projectId}`}><Plus className="size-4" />Create source for project</Link></Button>}
           <Button className="gap-1.5 shrink-0" onClick={() => setAddOpen(true)} disabled={!projectId}>
             <Plus className="size-4" />
             Add source
@@ -452,12 +457,15 @@ export default function ProjectSourcesPage() {
             const connection = connectionById[binding.source_connection_id]
             const rowHealth = healthByBindingId[binding.id]
             const busy = busyBindingId === binding.id
+            const plan=backfillPlans.find(candidate=>candidate.project_source_binding_id===binding.id)
             return (
               <Card key={binding.id} className="p-4">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                  <div className="min-w-0">
+                  <div className="min-w-0 xl:flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <p className="font-medium">{connection?.name ?? binding.source_connection_id}</p>
+                      <Link className="font-medium hover:underline" to={`/sources/connections/${binding.source_connection_id}`}>
+                        {connection?.name ?? binding.source_connection_id}
+                      </Link>
                       <StatusBadge status={rowHealth?.status ?? binding.status} />
                       <Badge variant="outline">{binding.delivery_scope.replace('_', ' ')}</Badge>
                     </div>
@@ -467,20 +475,22 @@ export default function ProjectSourcesPage() {
                         Last success {fmt(rowHealth.last_success_at)} · next run {fmt(rowHealth.next_run_at)}
                       </p>
                     )}
+                    {(['attention', 'failing'] as string[]).includes(rowHealth?.status ?? '') && rowHealth?.last_error && <p className="mt-1 text-xs text-destructive">Latest scan error: {rowHealth.last_error}</p>}
+                    {plan&&<p className="mt-2 text-xs text-muted-foreground">History import: {plan.status} · {plan.segments_completed}/{plan.segments_total} segments · {plan.items_ingested} items{plan.next_eligible_at?` · paused until ${fmt(plan.next_eligible_at)}`:''}</p>}
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <Button size="sm" variant="outline" className="gap-1.5" disabled={busy} onClick={() => runScan(binding)}>
                       <Play className="size-3.5" />
                       Run scan
                     </Button>
-                    <Button size="sm" variant="outline" className="gap-1.5" disabled={busy || binding.status !== 'active'} onClick={() => backfill(binding)}>
+                    {(connection?.connector_key==='arxiv'||connection?.config_json?.preset_id==='arxiv')&&<Button size="sm" variant="outline" className="gap-1.5" disabled={busy || binding.status !== 'active' || Boolean(plan&&['draft','proposed','approved','running','paused'].includes(plan.status))} onClick={() => backfill(binding)}>
                       <RefreshCw className="size-3.5" />
-                      Backfill
-                    </Button>
+                      {plan&&['draft','proposed','approved','running','paused'].includes(plan.status)?'Import in progress':'Import history'}
+                    </Button>}
                     <Button size="sm" variant="secondary" disabled={busy} onClick={() => togglePause(binding)}>
                       {binding.status === 'paused' ? 'Resume' : 'Pause'}
                     </Button>
-                    <Button size="sm" variant="ghost" className="gap-1.5 text-destructive" disabled={busy} onClick={() => remove(binding)}>
+                    <Button size="sm" variant="ghost" className="gap-1.5 text-destructive" disabled={busy} onClick={() => setBindingToRemove(binding)}>
                       <Trash2 className="size-3.5" />
                       Remove
                     </Button>
@@ -516,7 +526,7 @@ export default function ProjectSourcesPage() {
             return (
               <Card key={row.id} className="p-4">
                 <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
-                  <div className="min-w-0">
+                  <div className="min-w-0 xl:flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="font-medium truncate">{corpusTitle(row)}</p>
                       <Badge variant="outline">{row.object ? row.object.object_type ?? 'object' : row.evidence ? 'evidence' : 'source item'}</Badge>
@@ -530,7 +540,7 @@ export default function ProjectSourcesPage() {
                       {row.source_item?.source_domain && <Badge variant="muted">{row.source_item.source_domain}</Badge>}
                     </div>
                   </div>
-                  <div className="grid w-full gap-2 sm:grid-cols-2 xl:w-[19rem]">
+                  <div className="grid w-full gap-2 sm:grid-cols-2 xl:w-[19rem] xl:shrink-0">
                     <Select
                       value={row.triage_status}
                       disabled={busy}
@@ -642,6 +652,22 @@ export default function ProjectSourcesPage() {
         bindings={bindings}
         onAdded={load}
       />
+      <Dialog open={Boolean(bindingToRemove)} onOpenChange={open => { if (!open && !busyBindingId) setBindingToRemove(null) }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Remove source from project?</DialogTitle>
+            <DialogDescription>
+              This stops this Project from consuming the source. The Source itself stays available and can be added back later.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" disabled={Boolean(busyBindingId)} onClick={() => setBindingToRemove(null)}>Cancel</Button>
+            <Button variant="destructive" disabled={Boolean(busyBindingId)} onClick={() => void confirmRemove()}>
+              {busyBindingId ? 'Removing...' : 'Remove source'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

@@ -940,6 +940,7 @@ export interface SourceConnection {
   id: string
   space_id: string
   connector_id: string
+  connector_key?:string|null
   owner_user_id: string
   credential_id: string | null
   visibility: ContentVisibility
@@ -1575,6 +1576,65 @@ export interface SourceHealth {
   consecutive_failures: number
 }
 
+export interface SourceBackfillStrategy {
+  window_unit: 'date_window' | 'page_cursor' | 'id_cursor'
+  from: string | null
+  to: string | null
+  window_size: number
+  max_items: number
+  direction: 'backward' | 'forward'
+}
+
+export interface SourceBackfillQuotaPolicy {
+  window: 'minute' | 'hour' | 'day'
+  limit_count: number
+}
+
+export interface SourceBackfillSegment {
+  id: string
+  seq: number
+  window_json: Record<string, unknown>
+  status: 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped'
+  items_ingested: number
+}
+
+export interface SourceBackfillPreview {
+  strategy: SourceBackfillStrategy
+  segments: Array<Record<string, unknown>>
+  quota_policy: SourceBackfillQuotaPolicy
+}
+
+export interface SourceBackfillPlan {
+  id: string
+  source_connection_id: string
+  project_source_binding_id: string | null
+  project_operation_id: string | null
+  proposal_id: string | null
+  strategy_json: SourceBackfillStrategy
+  quota_policy_json: SourceBackfillQuotaPolicy
+  status: 'draft' | 'proposed' | 'approved' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled'
+  segments_total: number
+  segments_completed: number
+  segments_failed: number
+  items_ingested: number
+  next_eligible_at: string | null
+  created_at: string
+  updated_at: string
+  segments?: SourceBackfillSegment[]
+}
+
+export interface ProjectOperation {
+  id: string
+  project_id: string
+  kind: 'source_setup' | 'source_backfill' | 'research' | 'custom'
+  title: string
+  status: 'draft' | 'active' | 'waiting_review' | 'completed' | 'failed' | 'cancelled'
+  progress_json: { total?: number; completed?: number; failed?: number; pending?: number }
+  created_at: string
+  updated_at: string
+  links?: Array<{ target_type: string; target_id: string; role: string }>
+}
+
 export interface ProjectSourceSummary {
   project_id: string
   bound_source_count: number
@@ -2101,6 +2161,7 @@ export interface Session {
   title: string | null
   status: SessionStatus
   workspace_id: string | null
+  project_id:string|null
   created_at: string
   updated_at: string
 }
@@ -2124,6 +2185,18 @@ export interface ChatTurnOut {
   reply?: string | null
   error?: string | null
   error_code?: string | null
+  action_previews?: ChatActionPreview[]
+}
+
+export interface ChatActionPreview {
+  action_id: string
+  status: 'proposed' | 'auto_applied' | 'completed' | 'failed'
+  proposal_id?: string | null
+  proposal_type?: string | null
+  title?: string | null
+  summary?: string | null
+  risk_level?: string | null
+  scope?: Record<string, unknown> | null
 }
 
 /** Product task board item (`TaskOut`). */
@@ -4367,6 +4440,7 @@ export interface HomeSourceSummarySection {
 }
 
 export interface HomeSummaryOut {
+  operations_in_progress: Array<{id:string;project_id:string;project_name:string;kind:string;title:string;status:string;progress_json:Record<string,unknown>;updated_at:string}>
   recent_runs: HomeRunSummaryItem[]
   active_runs: HomeRunSummaryItem[]
   pending_proposals: HomePendingProposalsSection

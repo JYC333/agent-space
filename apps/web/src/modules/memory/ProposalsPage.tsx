@@ -32,6 +32,22 @@ const RISK_VARIANT: Record<string, 'default' | 'secondary' | 'muted' | 'destruct
   critical: 'destructive',
 }
 
+function SourceActionReviewDetails({ proposal }: { proposal: Proposal }) {
+  if (!['source_recipe_activation','source_backfill_start','project_source_bind','source_connection_create'].includes(proposal.proposal_type)) return null
+  let payload: Record<string, unknown> = {}
+  try { const parsed=JSON.parse(proposal.proposed_content);if(parsed&&typeof parsed==='object')payload=parsed as Record<string,unknown> } catch { /* older proposals may use prose */ }
+  const strategy=(payload.strategy_json ?? payload.strategy) as Record<string,unknown>|undefined
+  const quota=(payload.quota_policy_json ?? payload.quota_policy) as Record<string,unknown>|undefined
+  const fields: Array<[string,unknown]> = proposal.proposal_type==='source_backfill_start'
+    ? [['Scope',payload.source_connection_id],['Window',strategy?.window_unit],['From',strategy?.from],['To',strategy?.to],['Maximum items',strategy?.max_items],['Quota',quota ? `${quota.limit_count ?? '?'} / ${quota.window ?? 'window'}` : null]]
+    : proposal.proposal_type==='project_source_bind'
+      ? [['Project',payload.project_id],['Source',payload.source_connection_id],['Delivery',payload.delivery_scope],['Backfill existing',payload.backfill_history]]
+      : [['Source',payload.source_connection_id ?? payload.name],['Endpoint',payload.endpoint_url],['Schedule',payload.fetch_frequency],['Capture policy',payload.capture_policy]]
+  const shown=fields.filter(([,value])=>value!==undefined&&value!==null&&value!=='')
+  if(!shown.length)return null
+  return <div className="mb-3 grid gap-2 rounded-md border bg-muted/30 p-3 sm:grid-cols-2">{shown.map(([label,value])=><div key={label}><p className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</p><p className="text-xs break-all">{String(value)}</p></div>)}</div>
+}
+
 export default function ProposalsPage() {
   const { activeSpaceId, activeSpaceName, userId } = useSpace()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -290,6 +306,7 @@ export default function ProposalsPage() {
               compact
               onApprove={() => approveEgress(p)}
             />
+            <SourceActionReviewDetails proposal={p} />
             <p className="text-sm mb-2">{p.proposed_content}</p>
             <p className="text-xs text-muted-foreground italic">Rationale: {p.rationale}</p>
             <p className="text-xs text-muted-foreground mt-2">

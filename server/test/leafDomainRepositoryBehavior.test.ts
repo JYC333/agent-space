@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { PgActivityConsolidationRepository } from "../src/modules/activity/consolidationRepository";
 import { PgActivityRepository } from "../src/modules/activity/repository";
 import { PgSourcesRepository } from "../src/modules/sources/repository";
+import { ProjectSourceBindingService } from "../src/modules/projects/projectSourceBindingService";
 import { PgKnowledgeRepository } from "../src/modules/knowledge/repository";
 import type { ServerConfig } from "../src/config";
 import type { SpaceUserIdentity, Queryable } from "../src/modules/routeUtils/common";
@@ -629,14 +630,15 @@ describe("Leaf domain repository behavior", () => {
       throw new Error("no DB call expected");
     });
 
-    await expect(new PgSourcesRepository(db, sourcesConfig()).createProjectSourceBinding(identity, {
+    expect(() => new ProjectSourceBindingService(db).createBinding(identity, {
       source_connection_id: "conn-1",
-    })).rejects.toMatchObject({ statusCode: 422, message: "project_id is required" });
+    })).toThrow(expect.objectContaining({ statusCode: 422, message: "project_id is required" }));
   });
 
   it("creates project source bindings after project writer validation", async () => {
     let insertParams: readonly unknown[] | null = null;
     const db = new FakeDb((sql, params) => {
+      if (sql.includes("FROM project_source_bindings") && sql.includes("binding_key")) return [];
       if (sql.includes("AS effective_access_level")) return [{ effective_access_level: "full" }];
       if (sql.includes("FROM source_connections")) return [sourceConnectionRow()];
       if (sql.includes("FROM projects")) return [{ id: "project-1", owner_user_id: "user-1" }];
@@ -647,7 +649,7 @@ describe("Leaf domain repository behavior", () => {
       throw new Error(`unexpected SQL: ${sql}`);
     });
 
-    const out = await new PgSourcesRepository(db, sourcesConfig()).createProjectSourceBinding(identity, {
+    const out = await new ProjectSourceBindingService(db).createBinding(identity, {
       project_id: "project-1",
       source_connection_id: "conn-1",
     });
@@ -661,10 +663,35 @@ describe("Leaf domain repository behavior", () => {
     expect(insertParams?.[3]).toBe("conn-1");
   });
 
+  it("restores an archived project source binding instead of creating a duplicate", async () => {
+    const calls: string[] = [];
+    const archived = { ...projectSourceBindingRow(["binding-1", "space-1", "project-1", "conn-1", "default"]), status: "archived" };
+    const db = new FakeDb((sql, params) => {
+      calls.push(sql);
+      if (sql.includes("AS effective_access_level")) return [{ effective_access_level: "full" }];
+      if (sql.includes("FROM source_connections")) return [sourceConnectionRow()];
+      if (sql.includes("FROM projects")) return [{ id: "project-1", owner_user_id: "user-1" }];
+      if (sql.includes("FROM project_source_bindings") && sql.includes("binding_key")) return [archived];
+      if (sql.includes("UPDATE project_source_bindings") && sql.includes("SET status = 'active'")) {
+        return [{ ...archived, status: "active", updated_at: String(params[8]) }];
+      }
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+
+    const out = await new ProjectSourceBindingService(db).createBinding(identity, {
+      project_id: "project-1",
+      source_connection_id: "conn-1",
+    });
+
+    expect(out).toMatchObject({ id: "binding-1", status: "active" });
+    expect(calls.some(sql => sql.includes("INSERT INTO project_source_bindings"))).toBe(false);
+  });
+
   it("backfills historical evidence when requested during project source binding creation", async () => {
     let bindingId: string | null = null;
     let backfillParams: readonly unknown[] | null = null;
     const db = new FakeDb((sql, params) => {
+      if (sql.includes("FROM project_source_bindings") && sql.includes("binding_key")) return [];
       if (sql.includes("AS effective_access_level")) return [{ effective_access_level: "full" }];
       if (sql.includes("SELECT DISTINCT si.id")) {
         backfillParams = params;
@@ -683,7 +710,7 @@ describe("Leaf domain repository behavior", () => {
       throw new Error(`unexpected SQL: ${sql}`);
     });
 
-    const out = await new PgSourcesRepository(db, sourcesConfig()).createProjectSourceBinding(identity, {
+    const out = await new ProjectSourceBindingService(db).createBinding(identity, {
       project_id: "project-1",
       source_connection_id: "conn-1",
       backfill_history: true,
@@ -715,7 +742,7 @@ describe("Leaf domain repository behavior", () => {
       throw new Error(`unexpected SQL: ${sql}`);
     });
 
-    const out = await new PgSourcesRepository(db, sourcesConfig()).backfillProjectSourceBinding(identity, "binding-1");
+    const out = await new ProjectSourceBindingService(db).backfillBinding(identity, "binding-1");
 
     expect(out).toMatchObject({
       binding_id: "binding-1",

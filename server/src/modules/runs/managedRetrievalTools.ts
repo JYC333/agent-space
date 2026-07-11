@@ -112,8 +112,8 @@ const MEMORY_TOOL_SPEC: RetrievalToolDomainSpec = {
 const PROJECT_TOOL_SPEC: RetrievalToolDomainSpec = {
   domain: "project_public_summary",
   registry: projectRetrievalRegistry,
-  searchTool: "project_public_summary.search",
-  briefTool: "project_public_summary.brief",
+  searchTool: "project.summary.search",
+  briefTool: "project.summary.brief",
   searchDescription: "Search approved Project public summaries under the instructing user's read access. Requires explicit Project summary tool opt-in.",
   briefDescription: "Build a cited Project public-summary Context Brief under the instructing user's read access. Requires explicit Project summary tool opt-in.",
   objectTypes: PROJECT_RETRIEVAL_TOOL_OBJECT_TYPES,
@@ -244,6 +244,12 @@ export async function executeWithRetrievalTools(
   request: RuntimeHostExecuteRequest,
   execute: RuntimeHostExecutor,
   binding: ResolvedRetrievalToolBinding,
+  extensions: {
+    toolDefinitions?: CanonicalToolDefinition[];
+    toolBindings?: RuntimeHostExecuteRequest["tool_bindings"];
+    dispatch?: (call: CanonicalToolCall) => Promise<{ modelResult: unknown; summary: Record<string, unknown>; artifact?: unknown; suspend?: RuntimeHostExecuteResponse }>;
+    onActionEvent?: (eventType: "action_invoked" | "action_completed", call: CanonicalToolCall, metadata?: Record<string, unknown>) => Promise<void>;
+  } = {},
 ): Promise<RuntimeHostExecuteResponse> {
   const actor = {
     spaceId: run.space_id,
@@ -256,7 +262,7 @@ export async function executeWithRetrievalTools(
   const toolSummaries: Array<Record<string, unknown>> = [];
   let lastResponse: RuntimeHostExecuteResponse | null = null;
 
-  await applyRetrievalPreflight(binding, actor, run, request, messages, toolSummaries, artifacts);
+  await applyRetrievalPreflight(binding, actor, run, request, messages, toolSummaries, artifacts, extensions.dispatch);
 
   if (isRetrievalPreflightMode(binding.toolMode)) {
     const response = await execute(config, {
@@ -273,8 +279,8 @@ export async function executeWithRetrievalTools(
       ...request,
       messages: cloneMessages(messages),
       tool_mode: "authorized_bindings",
-      tool_bindings: binding.toolBindings,
-      tools: binding.toolDefinitions,
+      tool_bindings: [...binding.toolBindings, ...(extensions.toolBindings ?? [])],
+      tools: [...binding.toolDefinitions, ...(extensions.toolDefinitions ?? [])],
     });
     lastResponse = response;
     // The run's provider cannot perform tool calls (e.g. ollama). Rather than
@@ -308,9 +314,14 @@ export async function executeWithRetrievalTools(
       tool_calls: toolCalls,
     });
     for (const call of toolCalls) {
-      const result = await runRetrievalToolCall(call, binding, actor, run);
+      const result = extensions.dispatch
+        ? await extensions.dispatch(call)
+        : await runRetrievalToolCall(call, binding, actor, run);
       toolSummaries.push(result.summary);
-      if (result.artifact) artifacts.push(result.artifact);
+      if ("artifact" in result && result.artifact) artifacts.push(result.artifact);
+      if ("suspend" in result && result.suspend) {
+        return responseWithRetrievalToolMetadata(result.suspend, toolSummaries, artifacts);
+      }
       messages.push({
         role: "tool",
         content: JSON.stringify(result.modelResult),
@@ -345,6 +356,7 @@ async function applyRetrievalPreflight(
   messages: CanonicalMessage[],
   toolSummaries: Array<Record<string, unknown>>,
   artifacts: unknown[],
+  dispatch?: (call: CanonicalToolCall) => Promise<{ modelResult: unknown; summary: Record<string, unknown>; artifact?: unknown; suspend?: RuntimeHostExecuteResponse }>,
 ): Promise<void> {
   if (!isRetrievalPreflightMode(binding.toolMode)) return;
   const query = preflightQuery(request, messages);
@@ -361,7 +373,7 @@ async function applyRetrievalPreflight(
       include_trace: false,
     }),
   };
-  const result = await runRetrievalToolCall(call, binding, actor, run);
+  const result = dispatch ? await dispatch(call) : await runRetrievalToolCall(call, binding, actor, run);
   toolSummaries.push({ ...result.summary, preflight: true });
   if (result.artifact) artifacts.push(result.artifact);
   messages.push({
@@ -438,7 +450,7 @@ function toolBindingsForSpecs(specs: readonly RetrievalToolDomainSpec[]): Runtim
   })));
 }
 
-async function runRetrievalToolCall(
+export async function runRetrievalToolCall(
   call: CanonicalToolCall,
   binding: ResolvedRetrievalToolBinding,
   actor: {
@@ -448,6 +460,7 @@ async function runRetrievalToolCall(
     runId?: string | null;
   },
   run: RunRecord,
+  policyAlreadyEnforced = false,
 ): Promise<{
   modelResult: unknown;
   summary: Record<string, unknown>;
@@ -494,7 +507,7 @@ async function runRetrievalToolCall(
       objectTypes: params.objectTypes ?? (spec.domain === "knowledge" ? undefined : [...spec.objectTypes]),
     };
     if (call.name === spec.searchTool) {
-      const response = await service.toolSearch(actor, searchParams);
+      const response = await service.toolSearch(actor, searchParams, policyAlreadyEnforced);
       return {
         modelResult: modelResultForSearch(call.name, response),
         summary: {
@@ -503,12 +516,13 @@ async function runRetrievalToolCall(
           ok: true,
           result_count: response.items.length,
           mode: params.mode ?? null,
+          policy_decision_record_id: consumePolicyDecisionRecordId(service),
         },
         artifact: null,
       };
     }
     if (call.name === spec.briefTool) {
-      const response = await service.toolBrief(actor, searchParams);
+      const response = await service.toolBrief(actor, searchParams, policyAlreadyEnforced);
       const artifact = buildRetrievalBriefArtifactSpec({
         spaceId: run.space_id,
         ownerUserId: actor.instructedByUserId,
@@ -535,6 +549,7 @@ async function runRetrievalToolCall(
           result_count: response.items.length,
           synthesized: response.brief.synthesized,
           mode: params.mode ?? null,
+          policy_decision_record_id: consumePolicyDecisionRecordId(service),
         },
         artifact,
       };
@@ -555,6 +570,19 @@ async function runRetrievalToolCall(
       artifact: null,
     };
   }
+}
+
+export function validateRetrievalToolInput(actionId: string, input: unknown): void {
+  const spec = toolSpecForName(actionId);
+  if (!spec) throw new Error("Unknown retrieval tool.");
+  parseRetrievalToolArguments(JSON.stringify(input), spec);
+}
+
+function consumePolicyDecisionRecordId(service: RetrievalToolService): string | null {
+  const candidate = service as RetrievalToolService & { consumePolicyDecisionRecordId?: () => string | null };
+  return typeof candidate.consumePolicyDecisionRecordId === "function"
+    ? candidate.consumePolicyDecisionRecordId()
+    : null;
 }
 
 function parseRetrievalToolArguments(
@@ -747,8 +775,8 @@ function addDomainsFromCapabilities(domains: Set<RetrievalToolDomain>, value: un
   if (
     capabilities.has("project_public_summary.retrieval_tools") ||
     capabilities.has("project_public_summary.retrieval.tools") ||
-    capabilities.has("project_public_summary.search") ||
-    capabilities.has("project_public_summary.brief")
+    capabilities.has("project.summary.search") ||
+    capabilities.has("project.summary.brief")
   ) {
     domains.add("project_public_summary");
   }

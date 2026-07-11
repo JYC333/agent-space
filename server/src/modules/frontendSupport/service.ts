@@ -63,6 +63,7 @@ export class PgFrontendSupportService {
       runtimeStatus,
       modelProviderStatus,
       sourceSummary,
+      operationsInProgress,
     ] = await Promise.all([
       this.listHomeRuns(identity, recentRunsLimit, false),
       this.listHomeRuns(identity, 10, true),
@@ -76,6 +77,7 @@ export class PgFrontendSupportService {
       this.runtimeStatus(identity.spaceId),
       this.modelProviderStatus(identity.spaceId),
       this.sourceSummary(identity.spaceId),
+      this.operationsInProgress(identity),
     ]);
 
     return {
@@ -96,8 +98,11 @@ export class PgFrontendSupportService {
         missingModelProvider: modelProviderStatus.missing_model_provider_config,
       }),
       source_summary: sourceSummary,
+      operations_in_progress:operationsInProgress,
     };
   }
+
+  private async operationsInProgress(identity:SpaceUserIdentity){const result=await this.db.query<any>(`SELECT po.id,po.project_id,p.name AS project_name,po.kind,po.title,po.status,po.progress_json,po.updated_at FROM project_operations po JOIN projects p ON p.id=po.project_id AND p.space_id=po.space_id AND p.deleted_at IS NULL WHERE po.space_id=$1 AND po.status IN ('draft','active','waiting_review') AND (p.owner_user_id=$2 OR EXISTS(SELECT 1 FROM spaces s WHERE s.id=$1 AND s.type='personal') OR EXISTS(SELECT 1 FROM project_members pm WHERE pm.space_id=$1 AND pm.project_id=p.id AND pm.user_id=$2 AND pm.status='active')) ORDER BY po.updated_at DESC LIMIT 10`,[identity.spaceId,identity.userId]);return result.rows.map(row=>({...row,progress_json:row.progress_json&&typeof row.progress_json==='object'?row.progress_json:{},updated_at:iso(row.updated_at)}));}
 
   async meSummary(userId: string, query: QueryParams): Promise<MeSummaryOut> {
     const recentRunsLimit = boundedQueryInt(query.recent_runs_limit, 10, 1, 50);

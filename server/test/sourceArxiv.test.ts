@@ -248,25 +248,24 @@ describe("SourcePresetService", () => {
   it("createArxiv creates a built-in arxiv source connection with defaults", async () => {
     const db = new PresetDb();
 
-    await new SourcePresetService(db, config()).createArxiv(identity, {
+    const result = await new SourcePresetService(db, config()).createArxiv(identity, {
       search_query: 'cat:cs.AI AND all:"agent"',
       schedule_rule: { frequency: "weekly", weekday: 1, hour: 9, minute: 0 },
     });
 
     const connectorLookup = db.calls.find((call) => call.sql.includes("FROM source_connectors"));
     expect(connectorLookup?.params[0]).toBe("arxiv");
-    const insert = db.calls.find((call) => call.sql.includes("INSERT INTO source_connections"));
-    expect(insert?.params[6]).toBe('arXiv: cat:cs.AI AND all:"agent"');
-    expect(String(insert?.params[7])).toContain("https://export.arxiv.org/api/query?");
-    expect(insert?.params[8]).toBe("weekly");
-    expect(insert?.params[9]).toBe("extract_text");
-    expect(JSON.parse(String(insert?.params[12]))).toMatchObject({
+    expect(result.name).toBe('arXiv: cat:cs.AI AND all:"agent"');
+    expect(result.endpoint_url).toContain("https://export.arxiv.org/api/query?");
+    expect(result.fetch_frequency).toBe("weekly");
+    expect(result.capture_policy).toBe("extract_text");
+    expect(result.consent_json).toMatchObject({
       allow_external_model_egress: true,
     });
-    expect(JSON.parse(String(insert?.params[13]))).toMatchObject({
+    expect(result.policy_json).toMatchObject({
       source_egress_class: "external_provider_allowed",
     });
-    expect(JSON.parse(String(insert?.params[14]))).toEqual({
+    expect(result.config_json).toEqual({
       preset_id: "arxiv",
       mode: "search",
       categories: [],
@@ -275,23 +274,22 @@ describe("SourcePresetService", () => {
       sort_by: "lastUpdatedDate",
       sort_order: "descending",
     });
-    expect(JSON.parse(String(insert?.params[15]))).toEqual({ frequency: "weekly", weekday: 1, hour: 9, minute: 0 });
+    expect(result.schedule_rule_json).toEqual({ frequency: "weekly", weekday: 1, hour: 9, minute: 0 });
   });
 
   it("createArxiv creates a recent category source without a search keyword", async () => {
     const db = new PresetDb();
 
-    await new SourcePresetService(db, config()).createArxiv(identity, {
+    const result = await new SourcePresetService(db, config()).createArxiv(identity, {
       mode: "recent_by_category",
       categories: ["cs.LG"],
       schedule_rule: { frequency: "weekly", weekday: 1, hour: 9, minute: 0 },
     });
 
-    const insert = db.calls.find((call) => call.sql.includes("INSERT INTO source_connections"));
-    expect(insert?.params[6]).toBe("arXiv new: cs.LG");
-    expect(new URL(String(insert?.params[7])).searchParams.get("search_query")).toBe("cat:cs.LG");
-    expect(new URL(String(insert?.params[7])).searchParams.get("sortBy")).toBe("submittedDate");
-    expect(JSON.parse(String(insert?.params[14]))).toEqual({
+    expect(result.name).toBe("arXiv new: cs.LG");
+    expect(new URL(String(result.endpoint_url)).searchParams.get("search_query")).toBe("cat:cs.LG");
+    expect(new URL(String(result.endpoint_url)).searchParams.get("sortBy")).toBe("submittedDate");
+    expect(result.config_json).toEqual({
       preset_id: "arxiv",
       mode: "recent_by_category",
       categories: ["cs.LG"],
@@ -305,16 +303,15 @@ describe("SourcePresetService", () => {
   it("createArxiv creates one recent source for multiple categories", async () => {
     const db = new PresetDb();
 
-    await new SourcePresetService(db, config()).createArxiv(identity, {
+    const result = await new SourcePresetService(db, config()).createArxiv(identity, {
       mode: "recent_by_category",
       categories: ["cs.LG", "stat.ml"],
       schedule_rule: { frequency: "weekly", weekday: 1, hour: 9, minute: 0 },
     });
 
-    const insert = db.calls.find((call) => call.sql.includes("INSERT INTO source_connections"));
-    expect(insert?.params[6]).toBe("arXiv new: cs.LG + stat.ML");
-    expect(new URL(String(insert?.params[7])).searchParams.get("search_query")).toBe("cat:cs.LG OR cat:stat.ML");
-    expect(JSON.parse(String(insert?.params[14]))).toEqual({
+    expect(result.name).toBe("arXiv new: cs.LG + stat.ML");
+    expect(new URL(String(result.endpoint_url)).searchParams.get("search_query")).toBe("cat:cs.LG OR cat:stat.ML");
+    expect(result.config_json).toEqual({
       preset_id: "arxiv",
       mode: "recent_by_category",
       categories: ["cs.LG", "stat.ML"],
@@ -436,8 +433,10 @@ describe("SourceExtractionWorker arXiv HTML-first extraction", () => {
     const artifactInserts = db.calls.filter((call) => call.sql.includes("INSERT INTO artifacts"));
     expect(artifactInserts).toHaveLength(2);
     expect(artifactInserts[0]?.sql).toContain("'source_raw_snapshot'");
+    expect(artifactInserts[0]?.sql).toContain("space_id = $10::varchar");
     expect(artifactInserts[0]?.params[4]).toBe("application/pdf");
     expect(artifactInserts[1]?.sql).toContain("'source_reader_document'");
+    expect(artifactInserts[1]?.sql).toContain("space_id = $10::varchar");
     expect(String(artifactInserts[1]?.params[3])).toContain("\"extraction_method\":\"pdf_text_v1\"");
     const extractedSnapshot = db.calls.filter((call) => call.sql.includes("INSERT INTO source_snapshots")).at(-1);
     expect(JSON.parse(String(extractedSnapshot?.params[10]))).toMatchObject({
@@ -569,15 +568,15 @@ function connectionRow(params: readonly unknown[]): Record<string, unknown> {
     access_level: "full",
     name: params[6],
     endpoint_url: params[7],
-    status: "active",
-    fetch_frequency: params[8],
-    capture_policy: params[9],
-    trust_level: params[10],
-    topic_hints_json: null,
-    consent_json: {},
-    policy_json: {},
-    config_json: JSON.parse(String(params[14])),
-    schedule_rule_json: JSON.parse(String(params[15])),
+    status: params[8],
+    fetch_frequency: params[9],
+    capture_policy: params[10],
+    trust_level: params[11],
+    topic_hints_json: JSON.parse(String(params[12])),
+    consent_json: JSON.parse(String(params[13])),
+    policy_json: JSON.parse(String(params[14])),
+    config_json: JSON.parse(String(params[15])),
+    schedule_rule_json: JSON.parse(String(params[16])),
     handler_kind: "built_in",
     active_handler_version_id: null,
     active_recipe_version_id: null,

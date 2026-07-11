@@ -352,6 +352,7 @@ export interface AgentChatRecord {
   space_id: string;
   name: string | null;
   current_version_id: string | null;
+  tool_permissions_json?:Record<string,unknown>;
 }
 
 export class PgAgentChatRepository {
@@ -369,9 +370,10 @@ export class PgAgentChatRepository {
     agentId: string,
   ): Promise<AgentChatRecord | null> {
     const result: QueryResult<AgentChatRecord> = await this.db.query<AgentChatRecord>(
-      `SELECT id, space_id, name, current_version_id
-         FROM agents
-        WHERE space_id = $1 AND id = $2
+      `SELECT a.id, a.space_id, a.name, a.current_version_id, COALESCE(av.tool_permissions_json,'{}'::jsonb) AS tool_permissions_json
+         FROM agents a
+         LEFT JOIN agent_versions av ON av.id=a.current_version_id AND av.agent_id=a.id AND av.space_id=a.space_id
+        WHERE a.space_id = $1 AND a.id = $2
         LIMIT 1`,
       [spaceId, agentId],
     );
@@ -951,7 +953,7 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
         contextPolicyJson: {},
         memoryPolicyJson: DEFAULT_MEMORY_POLICY,
         capabilitiesJson: [],
-        toolPermissionsJson: {},
+        toolPermissionsJson: {allowed_tools:["source.connection.propose_create","project.source.propose_bind","source.backfill.propose_start"]},
         runtimePolicyJson: buildRuntimePolicy("model_api", null),
         toolPolicyJson: {},
         outputPolicyJson: {},

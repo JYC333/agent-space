@@ -675,8 +675,8 @@ const RETRIEVAL_TOOL_ACTIONS = new Set([
   "retrieval.brief",
   "memory.retrieval.search",
   "memory.retrieval.brief",
-  "project_public_summary.search",
-  "project_public_summary.brief",
+  "project.summary.search",
+  "project.summary.brief",
   "source.retrieval.search",
   "source.retrieval.brief",
 ]);

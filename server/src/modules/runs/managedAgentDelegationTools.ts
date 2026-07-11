@@ -36,13 +36,13 @@ export interface AgentDelegationToolBinding {
   targets: AgentDelegationTarget[];
   toolDefinitions: CanonicalToolDefinition[];
   toolBindings: RuntimeHostExecuteRequest["tool_bindings"];
-  service: Pick<AgentGroupRunService, "spawnChildRun">;
+  service: Pick<AgentGroupRunService, "spawnChildRun"> & Partial<Pick<AgentGroupRunService, "preflightSpawnChildRunPolicy" | "spawnChildRunAuthorized">>;
   pool: Pool | null;
 }
 
 export interface AgentDelegationToolDeps {
   pool?: Pool;
-  service?: Pick<AgentGroupRunService, "spawnChildRun">;
+  service?: Pick<AgentGroupRunService, "spawnChildRun"> & Partial<Pick<AgentGroupRunService, "preflightSpawnChildRunPolicy" | "spawnChildRunAuthorized">>;
   targets?: AgentDelegationTarget[] | null;
 }
 
@@ -188,6 +188,8 @@ export async function executeWithAgentDelegationTools(
   request: RuntimeHostExecuteRequest,
   execute: RuntimeHostExecutor,
   binding: AgentDelegationToolBinding,
+  _onActionEvent?: (eventType: "action_invoked" | "action_completed", call: CanonicalToolCall, metadata?: Record<string, unknown>) => Promise<void>,
+  dispatch?: (call: CanonicalToolCall) => Promise<{ modelResult: unknown; summary: Record<string, unknown>; suspend?: RuntimeHostExecuteResponse }>,
 ): Promise<RuntimeHostExecuteResponse> {
   const messages = initialMessagesForToolLoop(request);
   const summaries: Array<Record<string, unknown>> = [];
@@ -231,7 +233,7 @@ export async function executeWithAgentDelegationTools(
       tool_calls: toolCalls,
     });
     for (const call of toolCalls) {
-      const result = await runAgentRoomToolCall(call, binding, run, request);
+      const result = dispatch ? await dispatch(call) : await runAgentRoomToolCall(call, binding, run, request);
       summaries.push(result.summary);
       if (result.suspend) {
         return responseWithAgentDelegationMetadata(result.suspend, summaries);
@@ -286,11 +288,12 @@ async function loadDelegationTargets(
   return result.rows;
 }
 
-async function runAgentRoomToolCall(
+export async function runAgentRoomToolCall(
   call: CanonicalToolCall,
   binding: AgentDelegationToolBinding,
   run: RunRecord,
   request: RuntimeHostExecuteRequest,
+  authorizedPolicy?: Awaited<ReturnType<AgentGroupRunService["preflightSpawnChildRunPolicy"]>>,
 ): Promise<{ modelResult: unknown; summary: Record<string, unknown>; suspend?: RuntimeHostExecuteResponse }> {
   if (call.name === AGENT_WAIT_FOR_RESULTS_TOOL) {
     return runAgentWaitForResultsToolCall(call, binding, run, request);
@@ -302,25 +305,10 @@ async function runAgentRoomToolCall(
     };
   }
   try {
-    const params = parseAgentDelegateArguments(call.arguments_json, binding.targets);
-    const identity: AgentGroupIdentity = {
-      spaceId: run.space_id,
-      userId: run.instructed_by_user_id as string,
-    };
-    const input: SpawnChildRunInput = {
-      space_id: run.space_id,
-      group_id: run.run_group_id as string,
-      parent_run_id: run.id,
-      root_run_id: run.root_run_id as string,
-      requesting_agent_id: run.agent_id,
-      target_agent_id: params.target_agent_id,
-      manager_user_id: run.instructed_by_user_id as string,
-      instruction: params.instruction,
-      reason: params.reason ?? "agent_delegate_tool",
-      budget_json: params.budget,
-      context_policy_json: params.context,
-    };
-    const result = await binding.service.spawnChildRun(identity, input);
+    const { params, identity, input } = agentDelegatePolicyInput(call, binding, run);
+    const result = authorizedPolicy && binding.service.spawnChildRunAuthorized
+      ? await binding.service.spawnChildRunAuthorized(identity, input, authorizedPolicy)
+      : await binding.service.spawnChildRun(identity, input);
     const target = binding.targets.find((candidate) => candidate.agent_id === params.target_agent_id);
     if (result.delegation.status === "policy_denied" || !result.child_run_id) {
       return {
@@ -382,6 +370,25 @@ async function runAgentRoomToolCall(
       },
     };
   }
+}
+
+export function agentDelegatePolicyInput(call: CanonicalToolCall, binding: AgentDelegationToolBinding, run: RunRecord) {
+  const params = parseAgentDelegateArguments(call.arguments_json, binding.targets);
+  const identity: AgentGroupIdentity = { spaceId: run.space_id, userId: run.instructed_by_user_id as string };
+  const input: SpawnChildRunInput = {
+    space_id: run.space_id,
+    group_id: run.run_group_id as string,
+    parent_run_id: run.id,
+    root_run_id: run.root_run_id as string,
+    requesting_agent_id: run.agent_id,
+    target_agent_id: params.target_agent_id,
+    manager_user_id: run.instructed_by_user_id as string,
+    instruction: params.instruction,
+    reason: params.reason ?? "agent_delegate_tool",
+    budget_json: params.budget,
+    context_policy_json: params.context,
+  };
+  return { params, identity, input };
 }
 
 async function runAgentWaitForResultsToolCall(

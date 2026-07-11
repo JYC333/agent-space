@@ -11,6 +11,7 @@ import type {
   ReaderAnnotationCreate,
   ReaderCommentThread,
   ReaderDocumentPayload,
+  ExtractionJob,
   SourcePostProcessingBriefingDetail,
   SourcePostProcessingItemRelevance,
 } from '../../types/api'
@@ -29,7 +30,7 @@ import { textExtractionActionLabel, textExtractionDisabledReason } from '../sour
 import { Skeleton } from '../../components/ui/skeleton'
 import { EmptyState } from '../../components/ui/empty-state'
 import { Button } from '../../components/ui/button'
-import { ArrowLeft, ChevronLeft, ChevronRight, ExternalLink, FileText, PanelRight, RefreshCw } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, ChevronLeft, ChevronRight, ExternalLink, FileText, PanelRight, RefreshCw } from 'lucide-react'
 
 type Visibility = 'private' | 'space_shared'
 
@@ -93,6 +94,7 @@ export default function LibraryItemReaderPage() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [pendingCommentFocusAnnotationId, setPendingCommentFocusAnnotationId] = useState<string | null>(null)
   const [reextracting, setReextracting] = useState(false)
+  const [failedExtractionJob, setFailedExtractionJob] = useState<ExtractionJob | null>(null)
 
   const readerRef = useRef<HTMLDivElement>(null)
   const readerHandleRef = useRef<ReadOnlyTiptapReaderHandle>(null)
@@ -108,6 +110,7 @@ export default function LibraryItemReaderPage() {
       setFocusedBlockIndex(null)
       setPendingAnnotationType(null)
       setPendingCommentFocusAnnotationId(null)
+      setFailedExtractionJob(null)
       setLoading(false)
       return
     }
@@ -121,13 +124,15 @@ export default function LibraryItemReaderPage() {
       setPendingAnnotationType(null)
       setPendingCommentFocusAnnotationId(null)
       try {
-        const [d, annRes] = await Promise.all([
+        const [d, annRes, failedJobPage] = await Promise.all([
           sourceReaderApi.getDocument('source_item', itemId),
           sourceReaderApi.listAnnotations('source_item', itemId),
+          sourcesApi.jobs({ source_item_id: itemId, job_type: 'extract_text', limit: 1 }).catch(() => ({ items: [] as ExtractionJob[] })),
         ])
         if (!cancelled) {
           setDoc(d)
           setAnnotations(annRes.items)
+          setFailedExtractionJob(failedJobPage.items[0]?.status === 'failed' ? failedJobPage.items[0] : null)
         }
       } catch (e) {
         if (!cancelled) {
@@ -309,9 +314,10 @@ export default function LibraryItemReaderPage() {
     const result = await runPendingItemJob(itemId, jobType)
     if (!result) {
       toast.success(`${label} queued`)
-      return
+      return null
     }
     toast.success(`${label} ${result.status}`)
+    return result
   }
 
   async function reextractReaderDocument() {
@@ -328,7 +334,8 @@ export default function LibraryItemReaderPage() {
     setReextracting(true)
     try {
       await sourcesApi.itemAction(doc.document_id, 'queue_content')
-      await runQueuedItemJob(doc.document_id, 'extract_text', 'Text extraction')
+      const result = await runQueuedItemJob(doc.document_id, 'extract_text', 'Text extraction')
+      setFailedExtractionJob(result?.status === 'failed' ? result : null)
       const [d, annRes] = await Promise.all([
         sourceReaderApi.getDocument('source_item', doc.document_id),
         sourceReaderApi.listAnnotations('source_item', doc.document_id),
@@ -448,6 +455,19 @@ export default function LibraryItemReaderPage() {
           <PanelRight className="size-4" />
         </Button>
       </header>
+
+      {failedExtractionJob && (
+        <div role="alert" className="mx-4 mt-3 flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-destructive" />
+          <div>
+            <p className="font-medium text-destructive">Text extraction failed</p>
+            <p className="mt-0.5 break-words text-muted-foreground">
+              {failedExtractionJob.error_message ?? failedExtractionJob.error_code ?? 'No error detail was recorded.'}
+            </p>
+            {failedExtractionJob.completed_at && <p className="mt-1 text-xs text-muted-foreground">{new Date(failedExtractionJob.completed_at).toLocaleString()}</p>}
+          </div>
+        </div>
+      )}
 
       {/* Body */}
       <div className="flex flex-1 min-h-0 overflow-hidden">

@@ -1,5 +1,5 @@
 {
-  "id": "88e2f077-566a-4dff-8d77-7857550e12dd",
+  "id": "b429f64f-c56f-4eee-bb3e-2fa7dcf83b5b",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -778,6 +778,251 @@
         "ck_activity_records_private_owner": {
           "name": "ck_activity_records_private_owner",
           "value": "visibility = 'space_shared' OR owner_user_id IS NOT NULL"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.action_approval_grants": {
+      "name": "action_approval_grants",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar(36)",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "space_id": {
+          "name": "space_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "agent_id": {
+          "name": "agent_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "action_id": {
+          "name": "action_id",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "resource_kind": {
+          "name": "resource_kind",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "resource_id": {
+          "name": "resource_id",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "granted_by_user_id": {
+          "name": "granted_by_user_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'active'"
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "max_uses": {
+          "name": "max_uses",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "use_count": {
+          "name": "use_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "last_used_at": {
+          "name": "last_used_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "revoked_at": {
+          "name": "revoked_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "ix_action_approval_grants_space_agent_action": {
+          "name": "ix_action_approval_grants_space_agent_action",
+          "columns": [
+            {
+              "expression": "space_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "agent_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "action_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "uq_action_approval_grants_active_scope": {
+          "name": "uq_action_approval_grants_active_scope",
+          "columns": [
+            {
+              "expression": "space_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "agent_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "action_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "coalesce(\"project_id\", '')",
+              "asc": true,
+              "isExpression": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "coalesce(\"resource_kind\", '')",
+              "asc": true,
+              "isExpression": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "coalesce(\"resource_id\", '')",
+              "asc": true,
+              "isExpression": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "status = 'active'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "action_approval_grants_space_id_fkey": {
+          "name": "action_approval_grants_space_id_fkey",
+          "tableFrom": "action_approval_grants",
+          "tableTo": "spaces",
+          "columnsFrom": [
+            "space_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "action_approval_grants_agent_id_fkey": {
+          "name": "action_approval_grants_agent_id_fkey",
+          "tableFrom": "action_approval_grants",
+          "tableTo": "agents",
+          "columnsFrom": [
+            "agent_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "space_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "action_approval_grants_granted_by_user_id_fkey": {
+          "name": "action_approval_grants_granted_by_user_id_fkey",
+          "tableFrom": "action_approval_grants",
+          "tableTo": "users",
+          "columnsFrom": [
+            "granted_by_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "action_approval_grants_project_id_fkey": {
+          "name": "action_approval_grants_project_id_fkey",
+          "tableFrom": "action_approval_grants",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "project_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "space_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "ck_action_approval_grants_status": {
+          "name": "ck_action_approval_grants_status",
+          "value": "status IN ('active', 'revoked', 'expired')"
+        },
+        "ck_action_approval_grants_use_count": {
+          "name": "ck_action_approval_grants_use_count",
+          "value": "use_count >= 0 AND (max_uses IS NULL OR (max_uses > 0 AND use_count <= max_uses))"
         }
       },
       "isRLSEnabled": false
@@ -22817,6 +23062,928 @@
       },
       "isRLSEnabled": false
     },
+    "public.project_source_bindings": {
+      "name": "project_source_bindings",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar(36)",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "space_id": {
+          "name": "space_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_connection_id": {
+          "name": "source_connection_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "binding_key": {
+          "name": "binding_key",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'default'"
+        },
+        "status": {
+          "name": "status",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "priority": {
+          "name": "priority",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "delivery_scope": {
+          "name": "delivery_scope",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'project_members'"
+        },
+        "collection_notifications_enabled": {
+          "name": "collection_notifications_enabled",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "filters_json": {
+          "name": "filters_json",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "routing_policy_json": {
+          "name": "routing_policy_json",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "extraction_policy_json": {
+          "name": "extraction_policy_json",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_by_user_id": {
+          "name": "created_by_user_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "ix_project_source_bindings_created_by_user_id": {
+          "name": "ix_project_source_bindings_created_by_user_id",
+          "columns": [
+            {
+              "expression": "created_by_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ix_project_source_bindings_project_id": {
+          "name": "ix_project_source_bindings_project_id",
+          "columns": [
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ix_project_source_bindings_source_connection_id": {
+          "name": "ix_project_source_bindings_source_connection_id",
+          "columns": [
+            {
+              "expression": "source_connection_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ix_project_source_bindings_space_id": {
+          "name": "ix_project_source_bindings_space_id",
+          "columns": [
+            {
+              "expression": "space_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ix_project_source_bindings_status": {
+          "name": "ix_project_source_bindings_status",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "project_source_bindings_created_by_user_id_fkey": {
+          "name": "project_source_bindings_created_by_user_id_fkey",
+          "tableFrom": "project_source_bindings",
+          "tableTo": "users",
+          "columnsFrom": [
+            "created_by_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "project_source_bindings_project_id_fkey": {
+          "name": "project_source_bindings_project_id_fkey",
+          "tableFrom": "project_source_bindings",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "project_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "space_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "project_source_bindings_source_connection_id_fkey": {
+          "name": "project_source_bindings_source_connection_id_fkey",
+          "tableFrom": "project_source_bindings",
+          "tableTo": "source_connections",
+          "columnsFrom": [
+            "source_connection_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "project_source_bindings_space_id_fkey": {
+          "name": "project_source_bindings_space_id_fkey",
+          "tableFrom": "project_source_bindings",
+          "tableTo": "spaces",
+          "columnsFrom": [
+            "space_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "uq_project_source_bindings_id_space_id": {
+          "name": "uq_project_source_bindings_id_space_id",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "space_id"
+          ]
+        },
+        "uq_project_source_bindings_project_connection": {
+          "name": "uq_project_source_bindings_project_connection",
+          "nullsNotDistinct": false,
+          "columns": [
+            "binding_key",
+            "project_id",
+            "source_connection_id",
+            "space_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "ck_project_source_bindings_delivery_scope": {
+          "name": "ck_project_source_bindings_delivery_scope",
+          "value": "(delivery_scope)::text = ANY (ARRAY[('project_members'::character varying)::text, ('source_subscribers'::character varying)::text])"
+        },
+        "ck_project_source_bindings_status": {
+          "name": "ck_project_source_bindings_status",
+          "value": "(status)::text = ANY (ARRAY[('active'::character varying)::text, ('paused'::character varying)::text, ('archived'::character varying)::text])"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.project_source_item_links": {
+      "name": "project_source_item_links",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar(36)",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "space_id": {
+          "name": "space_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "project_source_binding_id": {
+          "name": "project_source_binding_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_connection_id": {
+          "name": "source_connection_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "source_item_id": {
+          "name": "source_item_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'active'"
+        },
+        "matched_at": {
+          "name": "matched_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "match_reason": {
+          "name": "match_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "ix_project_source_item_links_binding_id": {
+          "name": "ix_project_source_item_links_binding_id",
+          "columns": [
+            {
+              "expression": "project_source_binding_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ix_project_source_item_links_matched_at": {
+          "name": "ix_project_source_item_links_matched_at",
+          "columns": [
+            {
+              "expression": "matched_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ix_project_source_item_links_project_id": {
+          "name": "ix_project_source_item_links_project_id",
+          "columns": [
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ix_project_source_item_links_source_connection_id": {
+          "name": "ix_project_source_item_links_source_connection_id",
+          "columns": [
+            {
+              "expression": "source_connection_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ix_project_source_item_links_source_item_id": {
+          "name": "ix_project_source_item_links_source_item_id",
+          "columns": [
+            {
+              "expression": "source_item_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ix_project_source_item_links_status": {
+          "name": "ix_project_source_item_links_status",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "project_source_item_links_binding_id_fkey": {
+          "name": "project_source_item_links_binding_id_fkey",
+          "tableFrom": "project_source_item_links",
+          "tableTo": "project_source_bindings",
+          "columnsFrom": [
+            "project_source_binding_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "project_source_item_links_project_id_fkey": {
+          "name": "project_source_item_links_project_id_fkey",
+          "tableFrom": "project_source_item_links",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "project_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "space_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "project_source_item_links_source_connection_id_fkey": {
+          "name": "project_source_item_links_source_connection_id_fkey",
+          "tableFrom": "project_source_item_links",
+          "tableTo": "source_connections",
+          "columnsFrom": [
+            "source_connection_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "project_source_item_links_source_item_id_fkey": {
+          "name": "project_source_item_links_source_item_id_fkey",
+          "tableFrom": "project_source_item_links",
+          "tableTo": "source_items",
+          "columnsFrom": [
+            "source_item_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "project_source_item_links_space_id_fkey": {
+          "name": "project_source_item_links_space_id_fkey",
+          "tableFrom": "project_source_item_links",
+          "tableTo": "spaces",
+          "columnsFrom": [
+            "space_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "uq_project_source_item_links_binding_item": {
+          "name": "uq_project_source_item_links_binding_item",
+          "nullsNotDistinct": false,
+          "columns": [
+            "project_source_binding_id",
+            "project_id",
+            "source_item_id",
+            "space_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "ck_project_source_item_links_status": {
+          "name": "ck_project_source_item_links_status",
+          "value": "(status)::text = ANY (ARRAY[('active'::character varying)::text, ('archived'::character varying)::text])"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.project_operation_links": {
+      "name": "project_operation_links",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar(36)",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "operation_id": {
+          "name": "operation_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "space_id": {
+          "name": "space_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "target_type": {
+          "name": "target_type",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "target_id": {
+          "name": "target_id",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "role": {
+          "name": "role",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "ix_project_operation_links_target": {
+          "name": "ix_project_operation_links_target",
+          "columns": [
+            {
+              "expression": "space_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "target_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "target_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "project_operation_links_operation_fkey": {
+          "name": "project_operation_links_operation_fkey",
+          "tableFrom": "project_operation_links",
+          "tableTo": "project_operations",
+          "columnsFrom": [
+            "operation_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "space_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "uq_project_operation_links_target": {
+          "name": "uq_project_operation_links_target",
+          "nullsNotDistinct": false,
+          "columns": [
+            "operation_id",
+            "target_type",
+            "target_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "ck_project_operation_links_target_type": {
+          "name": "ck_project_operation_links_target_type",
+          "value": "target_type IN ('run','job','proposal','artifact','source_backfill_plan','project_source_binding','corpus_sync')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.project_operation_steps": {
+      "name": "project_operation_steps",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar(36)",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "operation_id": {
+          "name": "operation_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "space_id": {
+          "name": "space_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "seq": {
+          "name": "seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "title": {
+          "name": "title",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "detail_json": {
+          "name": "detail_json",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "project_operation_steps_operation_fkey": {
+          "name": "project_operation_steps_operation_fkey",
+          "tableFrom": "project_operation_steps",
+          "tableTo": "project_operations",
+          "columnsFrom": [
+            "operation_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "space_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "uq_project_operation_steps_seq": {
+          "name": "uq_project_operation_steps_seq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "operation_id",
+            "seq"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "ck_project_operation_steps_status": {
+          "name": "ck_project_operation_steps_status",
+          "value": "status IN ('pending','active','blocked','done','skipped')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.project_operations": {
+      "name": "project_operations",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar(36)",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "space_id": {
+          "name": "space_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "title": {
+          "name": "title",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "intent_text": {
+          "name": "intent_text",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "varchar(32)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_by_user_id": {
+          "name": "created_by_user_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "initiating_run_id": {
+          "name": "initiating_run_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "plan_artifact_id": {
+          "name": "plan_artifact_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "progress_json": {
+          "name": "progress_json",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "ix_project_operations_project_status": {
+          "name": "ix_project_operations_project_status",
+          "columns": [
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "project_operations_project_fkey": {
+          "name": "project_operations_project_fkey",
+          "tableFrom": "project_operations",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "project_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "space_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "project_operations_space_fkey": {
+          "name": "project_operations_space_fkey",
+          "tableFrom": "project_operations",
+          "tableTo": "spaces",
+          "columnsFrom": [
+            "space_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "project_operations_user_fkey": {
+          "name": "project_operations_user_fkey",
+          "tableFrom": "project_operations",
+          "tableTo": "users",
+          "columnsFrom": [
+            "created_by_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "project_operations_run_fkey": {
+          "name": "project_operations_run_fkey",
+          "tableFrom": "project_operations",
+          "tableTo": "runs",
+          "columnsFrom": [
+            "initiating_run_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "space_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "project_operations_artifact_fkey": {
+          "name": "project_operations_artifact_fkey",
+          "tableFrom": "project_operations",
+          "tableTo": "artifacts",
+          "columnsFrom": [
+            "plan_artifact_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "uq_project_operations_space_id_id": {
+          "name": "uq_project_operations_space_id_id",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "space_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "ck_project_operations_kind": {
+          "name": "ck_project_operations_kind",
+          "value": "kind IN ('source_setup','source_backfill','research','custom')"
+        },
+        "ck_project_operations_status": {
+          "name": "ck_project_operations_status",
+          "value": "status IN ('draft','active','waiting_review','completed','failed','cancelled')"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.project_members": {
       "name": "project_members",
       "schema": "",
@@ -23437,6 +24604,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "action_grant_id": {
+          "name": "action_grant_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
         "target_space_id": {
           "name": "target_space_id",
           "type": "varchar(36)",
@@ -23529,6 +24702,21 @@
           "method": "btree",
           "with": {}
         },
+        "ix_proposal_approvals_action_grant_id": {
+          "name": "ix_proposal_approvals_action_grant_id",
+          "columns": [
+            {
+              "expression": "action_grant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "ix_proposal_approvals_proposal_id": {
           "name": "ix_proposal_approvals_proposal_id",
           "columns": [
@@ -23592,6 +24780,28 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "ix_proposal_approvals_unique_action_grant": {
+          "name": "ix_proposal_approvals_unique_action_grant",
+          "columns": [
+            {
+              "expression": "proposal_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "action_grant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "status = 'approved' AND action_grant_id IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -23614,6 +24824,19 @@
           "tableTo": "personal_memory_grants",
           "columnsFrom": [
             "grant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "proposal_approvals_action_grant_id_fkey": {
+          "name": "proposal_approvals_action_grant_id_fkey",
+          "tableFrom": "proposal_approvals",
+          "tableTo": "action_approval_grants",
+          "columnsFrom": [
+            "action_grant_id"
           ],
           "columnsTo": [
             "id"
@@ -23654,7 +24877,7 @@
       "checkConstraints": {
         "ck_proposal_approvals_approval_type": {
           "name": "ck_proposal_approvals_approval_type",
-          "value": "(approval_type)::text = 'egress_granting_user'::text"
+          "value": "(approval_type)::text = ANY (ARRAY['egress_granting_user'::text, 'action_grant'::text])"
         },
         "ck_proposal_approvals_status": {
           "name": "ck_proposal_approvals_status",
@@ -23682,6 +24905,12 @@
         "created_by_run_id": {
           "name": "created_by_run_id",
           "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "action_idempotency_key": {
+          "name": "action_idempotency_key",
+          "type": "varchar(256)",
           "primaryKey": false,
           "notNull": false
         },
@@ -23962,6 +25191,34 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "uq_proposals_run_action_idempotency": {
+          "name": "uq_proposals_run_action_idempotency",
+          "columns": [
+            {
+              "expression": "created_by_run_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "proposal_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "action_idempotency_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "action_idempotency_key IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -24075,7 +25332,16 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "uq_proposals_id_space_id": {
+          "name": "uq_proposals_id_space_id",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "space_id"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {
         "ck_proposals_risk_level": {
@@ -28161,7 +29427,7 @@
         },
         "ck_run_events_event_type": {
           "name": "ck_run_events_event_type",
-          "value": "(event_type)::text = ANY (ARRAY[('context_compiled'::character varying)::text, ('runtime_selected'::character varying)::text, ('credential_granted'::character varying)::text, ('sandbox_created'::character varying)::text, ('policy_checked'::character varying)::text, ('adapter_invoked'::character varying)::text, ('adapter_completed'::character varying)::text, ('artifact_ingested'::character varying)::text, ('patch_collected'::character varying)::text, ('validation_started'::character varying)::text, ('validation_completed'::character varying)::text, ('proposal_created'::character varying)::text, ('evaluation_created'::character varying)::text, ('run_finalized'::character varying)::text, ('delegation_requested'::character varying)::text, ('delegation_policy_denied'::character varying)::text, ('delegation_queued'::character varying)::text, ('delegation_started'::character varying)::text, ('delegation_completed'::character varying)::text])"
+          "value": "(event_type)::text = ANY (ARRAY[('context_compiled'::character varying)::text, ('runtime_selected'::character varying)::text, ('credential_granted'::character varying)::text, ('sandbox_created'::character varying)::text, ('policy_checked'::character varying)::text, ('adapter_invoked'::character varying)::text, ('adapter_completed'::character varying)::text, ('artifact_ingested'::character varying)::text, ('patch_collected'::character varying)::text, ('validation_started'::character varying)::text, ('validation_completed'::character varying)::text, ('proposal_created'::character varying)::text, ('evaluation_created'::character varying)::text, ('run_finalized'::character varying)::text, ('delegation_requested'::character varying)::text, ('delegation_policy_denied'::character varying)::text, ('delegation_queued'::character varying)::text, ('delegation_started'::character varying)::text, ('delegation_completed'::character varying)::text, ('action_invoked'::character varying)::text, ('action_completed'::character varying)::text])"
         },
         "ck_run_events_status": {
           "name": "ck_run_events_status",
@@ -31596,6 +32862,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "project_id": {
+          "name": "project_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
         "title": {
           "name": "title",
           "type": "varchar(512)",
@@ -31702,6 +32974,21 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "ix_sessions_project_id": {
+          "name": "ix_sessions_project_id",
+          "columns": [
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -31750,6 +33037,21 @@
           "tableTo": "workspaces",
           "columnsFrom": [
             "workspace_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "space_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "sessions_project_id_fkey": {
+          "name": "sessions_project_id_fkey",
+          "tableFrom": "sessions",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "project_id",
             "space_id"
           ],
           "columnsTo": [
@@ -32700,7 +34002,16 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "uq_extraction_jobs_id_space_id": {
+          "name": "uq_extraction_jobs_id_space_id",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "space_id"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {
         "ck_extraction_jobs_job_type": {
@@ -37356,6 +38667,542 @@
       },
       "isRLSEnabled": false
     },
+    "public.source_backfill_plans": {
+      "name": "source_backfill_plans",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar(36)",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "space_id": {
+          "name": "space_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_connection_id": {
+          "name": "source_connection_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "project_source_binding_id": {
+          "name": "project_source_binding_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "project_operation_id": {
+          "name": "project_operation_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "requested_by_user_id": {
+          "name": "requested_by_user_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "origin": {
+          "name": "origin",
+          "type": "varchar(24)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "proposal_id": {
+          "name": "proposal_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "strategy_json": {
+          "name": "strategy_json",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "quota_policy_json": {
+          "name": "quota_policy_json",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "varchar(24)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "next_eligible_at": {
+          "name": "next_eligible_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "segments_total": {
+          "name": "segments_total",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "segments_completed": {
+          "name": "segments_completed",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "segments_failed": {
+          "name": "segments_failed",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "items_ingested": {
+          "name": "items_ingested",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "idempotency_key": {
+          "name": "idempotency_key",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "error_json": {
+          "name": "error_json",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "ix_source_backfill_plans_connection_status": {
+          "name": "ix_source_backfill_plans_connection_status",
+          "columns": [
+            {
+              "expression": "source_connection_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "source_backfill_plans_space_fkey": {
+          "name": "source_backfill_plans_space_fkey",
+          "tableFrom": "source_backfill_plans",
+          "tableTo": "spaces",
+          "columnsFrom": [
+            "space_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "source_backfill_plans_connection_fkey": {
+          "name": "source_backfill_plans_connection_fkey",
+          "tableFrom": "source_backfill_plans",
+          "tableTo": "source_connections",
+          "columnsFrom": [
+            "source_connection_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "space_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "source_backfill_plans_binding_fkey": {
+          "name": "source_backfill_plans_binding_fkey",
+          "tableFrom": "source_backfill_plans",
+          "tableTo": "project_source_bindings",
+          "columnsFrom": [
+            "project_source_binding_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "space_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "source_backfill_plans_operation_fkey": {
+          "name": "source_backfill_plans_operation_fkey",
+          "tableFrom": "source_backfill_plans",
+          "tableTo": "project_operations",
+          "columnsFrom": [
+            "project_operation_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "space_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "source_backfill_plans_user_fkey": {
+          "name": "source_backfill_plans_user_fkey",
+          "tableFrom": "source_backfill_plans",
+          "tableTo": "users",
+          "columnsFrom": [
+            "requested_by_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "source_backfill_plans_proposal_fkey": {
+          "name": "source_backfill_plans_proposal_fkey",
+          "tableFrom": "source_backfill_plans",
+          "tableTo": "proposals",
+          "columnsFrom": [
+            "proposal_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "space_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "uq_source_backfill_plans_idempotency": {
+          "name": "uq_source_backfill_plans_idempotency",
+          "nullsNotDistinct": false,
+          "columns": [
+            "space_id",
+            "idempotency_key"
+          ]
+        },
+        "uq_source_backfill_plans_space_id_id": {
+          "name": "uq_source_backfill_plans_space_id_id",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "space_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "ck_source_backfill_plans_origin": {
+          "name": "ck_source_backfill_plans_origin",
+          "value": "origin IN ('user','agent_proposal','system')"
+        },
+        "ck_source_backfill_plans_status": {
+          "name": "ck_source_backfill_plans_status",
+          "value": "status IN ('draft','proposed','approved','running','paused','completed','failed','cancelled')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.source_backfill_segments": {
+      "name": "source_backfill_segments",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar(36)",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "plan_id": {
+          "name": "plan_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "space_id": {
+          "name": "space_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "seq": {
+          "name": "seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "window_json": {
+          "name": "window_json",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "attempt_count": {
+          "name": "attempt_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "extraction_job_id": {
+          "name": "extraction_job_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "items_ingested": {
+          "name": "items_ingested",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "next_eligible_at": {
+          "name": "next_eligible_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "error_json": {
+          "name": "error_json",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "ix_source_backfill_segments_ready": {
+          "name": "ix_source_backfill_segments_ready",
+          "columns": [
+            {
+              "expression": "space_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "next_eligible_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "source_backfill_segments_plan_fkey": {
+          "name": "source_backfill_segments_plan_fkey",
+          "tableFrom": "source_backfill_segments",
+          "tableTo": "source_backfill_plans",
+          "columnsFrom": [
+            "plan_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "space_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "source_backfill_segments_job_fkey": {
+          "name": "source_backfill_segments_job_fkey",
+          "tableFrom": "source_backfill_segments",
+          "tableTo": "extraction_jobs",
+          "columnsFrom": [
+            "extraction_job_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "space_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "uq_source_backfill_segments_seq": {
+          "name": "uq_source_backfill_segments_seq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "plan_id",
+            "seq"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "ck_source_backfill_segments_status": {
+          "name": "ck_source_backfill_segments_status",
+          "value": "status IN ('pending','running','succeeded','failed','skipped')"
+        },
+        "ck_source_backfill_segments_attempt": {
+          "name": "ck_source_backfill_segments_attempt",
+          "value": "attempt_count>=0"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.source_quota_buckets": {
+      "name": "source_quota_buckets",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar(36)",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "space_id": {
+          "name": "space_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "scope_kind": {
+          "name": "scope_kind",
+          "type": "varchar(24)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "scope_key": {
+          "name": "scope_key",
+          "type": "varchar(256)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "window": {
+          "name": "window",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "limit_count": {
+          "name": "limit_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "used_count": {
+          "name": "used_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "window_started_at": {
+          "name": "window_started_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "reset_at": {
+          "name": "reset_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "source_quota_buckets_space_fkey": {
+          "name": "source_quota_buckets_space_fkey",
+          "tableFrom": "source_quota_buckets",
+          "tableTo": "spaces",
+          "columnsFrom": [
+            "space_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "uq_source_quota_buckets_scope": {
+          "name": "uq_source_quota_buckets_scope",
+          "nullsNotDistinct": false,
+          "columns": [
+            "space_id",
+            "scope_kind",
+            "scope_key",
+            "window"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "ck_source_quota_buckets_scope": {
+          "name": "ck_source_quota_buckets_scope",
+          "value": "scope_kind IN ('connector','source_connection')"
+        },
+        "ck_source_quota_buckets_window": {
+          "name": "ck_source_quota_buckets_window",
+          "value": "\"window\" IN ('minute','hour','day')"
+        },
+        "ck_source_quota_buckets_counts": {
+          "name": "ck_source_quota_buckets_counts",
+          "value": "limit_count>0 AND used_count>=0"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.space_invitations": {
       "name": "space_invitations",
       "schema": "",
@@ -41035,518 +42882,6 @@
         "ck_usage_import_batches_status": {
           "name": "ck_usage_import_batches_status",
           "value": "(status)::text = ANY (ARRAY[('previewed'::character varying)::text, ('importing'::character varying)::text, ('completed'::character varying)::text, ('failed'::character varying)::text, ('cancelled'::character varying)::text])"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.project_source_bindings": {
-      "name": "project_source_bindings",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "varchar(36)",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "space_id": {
-          "name": "space_id",
-          "type": "varchar(36)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "project_id": {
-          "name": "project_id",
-          "type": "varchar(36)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "source_connection_id": {
-          "name": "source_connection_id",
-          "type": "varchar(36)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "binding_key": {
-          "name": "binding_key",
-          "type": "varchar(128)",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'default'"
-        },
-        "status": {
-          "name": "status",
-          "type": "varchar(32)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "priority": {
-          "name": "priority",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "delivery_scope": {
-          "name": "delivery_scope",
-          "type": "varchar(32)",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'project_members'"
-        },
-        "collection_notifications_enabled": {
-          "name": "collection_notifications_enabled",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": true
-        },
-        "filters_json": {
-          "name": "filters_json",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "routing_policy_json": {
-          "name": "routing_policy_json",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "extraction_policy_json": {
-          "name": "extraction_policy_json",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_by_user_id": {
-          "name": "created_by_user_id",
-          "type": "varchar(36)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "ix_project_source_bindings_created_by_user_id": {
-          "name": "ix_project_source_bindings_created_by_user_id",
-          "columns": [
-            {
-              "expression": "created_by_user_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "ix_project_source_bindings_project_id": {
-          "name": "ix_project_source_bindings_project_id",
-          "columns": [
-            {
-              "expression": "project_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "ix_project_source_bindings_source_connection_id": {
-          "name": "ix_project_source_bindings_source_connection_id",
-          "columns": [
-            {
-              "expression": "source_connection_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "ix_project_source_bindings_space_id": {
-          "name": "ix_project_source_bindings_space_id",
-          "columns": [
-            {
-              "expression": "space_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "ix_project_source_bindings_status": {
-          "name": "ix_project_source_bindings_status",
-          "columns": [
-            {
-              "expression": "status",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "project_source_bindings_created_by_user_id_fkey": {
-          "name": "project_source_bindings_created_by_user_id_fkey",
-          "tableFrom": "project_source_bindings",
-          "tableTo": "users",
-          "columnsFrom": [
-            "created_by_user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "project_source_bindings_project_id_fkey": {
-          "name": "project_source_bindings_project_id_fkey",
-          "tableFrom": "project_source_bindings",
-          "tableTo": "projects",
-          "columnsFrom": [
-            "project_id",
-            "space_id"
-          ],
-          "columnsTo": [
-            "id",
-            "space_id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "project_source_bindings_source_connection_id_fkey": {
-          "name": "project_source_bindings_source_connection_id_fkey",
-          "tableFrom": "project_source_bindings",
-          "tableTo": "source_connections",
-          "columnsFrom": [
-            "source_connection_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "project_source_bindings_space_id_fkey": {
-          "name": "project_source_bindings_space_id_fkey",
-          "tableFrom": "project_source_bindings",
-          "tableTo": "spaces",
-          "columnsFrom": [
-            "space_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "uq_project_source_bindings_project_connection": {
-          "name": "uq_project_source_bindings_project_connection",
-          "nullsNotDistinct": false,
-          "columns": [
-            "binding_key",
-            "project_id",
-            "source_connection_id",
-            "space_id"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {
-        "ck_project_source_bindings_delivery_scope": {
-          "name": "ck_project_source_bindings_delivery_scope",
-          "value": "(delivery_scope)::text = ANY (ARRAY[('project_members'::character varying)::text, ('source_subscribers'::character varying)::text])"
-        },
-        "ck_project_source_bindings_status": {
-          "name": "ck_project_source_bindings_status",
-          "value": "(status)::text = ANY (ARRAY[('active'::character varying)::text, ('paused'::character varying)::text, ('archived'::character varying)::text])"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.project_source_item_links": {
-      "name": "project_source_item_links",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "varchar(36)",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "space_id": {
-          "name": "space_id",
-          "type": "varchar(36)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "project_id": {
-          "name": "project_id",
-          "type": "varchar(36)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "project_source_binding_id": {
-          "name": "project_source_binding_id",
-          "type": "varchar(36)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "source_connection_id": {
-          "name": "source_connection_id",
-          "type": "varchar(36)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "source_item_id": {
-          "name": "source_item_id",
-          "type": "varchar(36)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "status": {
-          "name": "status",
-          "type": "varchar(32)",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'active'"
-        },
-        "matched_at": {
-          "name": "matched_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "match_reason": {
-          "name": "match_reason",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "ix_project_source_item_links_binding_id": {
-          "name": "ix_project_source_item_links_binding_id",
-          "columns": [
-            {
-              "expression": "project_source_binding_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "ix_project_source_item_links_matched_at": {
-          "name": "ix_project_source_item_links_matched_at",
-          "columns": [
-            {
-              "expression": "matched_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "ix_project_source_item_links_project_id": {
-          "name": "ix_project_source_item_links_project_id",
-          "columns": [
-            {
-              "expression": "project_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "ix_project_source_item_links_source_connection_id": {
-          "name": "ix_project_source_item_links_source_connection_id",
-          "columns": [
-            {
-              "expression": "source_connection_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "ix_project_source_item_links_source_item_id": {
-          "name": "ix_project_source_item_links_source_item_id",
-          "columns": [
-            {
-              "expression": "source_item_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "ix_project_source_item_links_status": {
-          "name": "ix_project_source_item_links_status",
-          "columns": [
-            {
-              "expression": "status",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "project_source_item_links_binding_id_fkey": {
-          "name": "project_source_item_links_binding_id_fkey",
-          "tableFrom": "project_source_item_links",
-          "tableTo": "project_source_bindings",
-          "columnsFrom": [
-            "project_source_binding_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "project_source_item_links_project_id_fkey": {
-          "name": "project_source_item_links_project_id_fkey",
-          "tableFrom": "project_source_item_links",
-          "tableTo": "projects",
-          "columnsFrom": [
-            "project_id",
-            "space_id"
-          ],
-          "columnsTo": [
-            "id",
-            "space_id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "project_source_item_links_source_connection_id_fkey": {
-          "name": "project_source_item_links_source_connection_id_fkey",
-          "tableFrom": "project_source_item_links",
-          "tableTo": "source_connections",
-          "columnsFrom": [
-            "source_connection_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "project_source_item_links_source_item_id_fkey": {
-          "name": "project_source_item_links_source_item_id_fkey",
-          "tableFrom": "project_source_item_links",
-          "tableTo": "source_items",
-          "columnsFrom": [
-            "source_item_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "project_source_item_links_space_id_fkey": {
-          "name": "project_source_item_links_space_id_fkey",
-          "tableFrom": "project_source_item_links",
-          "tableTo": "spaces",
-          "columnsFrom": [
-            "space_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "uq_project_source_item_links_binding_item": {
-          "name": "uq_project_source_item_links_binding_item",
-          "nullsNotDistinct": false,
-          "columns": [
-            "project_source_binding_id",
-            "project_id",
-            "source_item_id",
-            "space_id"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {
-        "ck_project_source_item_links_status": {
-          "name": "ck_project_source_item_links_status",
-          "value": "(status)::text = ANY (ARRAY[('active'::character varying)::text, ('archived'::character varying)::text])"
         }
       },
       "isRLSEnabled": false

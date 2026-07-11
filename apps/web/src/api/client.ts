@@ -38,6 +38,7 @@ import type {
   PromptPromotionRequest, PromptRenderPreviewRequest, PromptRenderPreviewResult,
   PromptRollbackRequest, PromptVersionCreateRequest,
   Project, ProjectCreate, ProjectUpdate, ProjectWorkspaceLinkCreate, ProjectWorkspaceLinkOut, ProjectSummary,
+  ProjectOperation,
   CapabilityDefinition, CapabilityPackDescriptor, WorkflowTemplate, ProjectWorkflowProfile, WorkflowRunDraftRequest, WorkflowRunDraftResponse,
   ProjectPresetDescriptor, ProjectPresetSelection,
   ProjectResearchArtifactLink, ProjectResearchCheckpoint, ProjectResearchLiteratureMatrixItem, ProjectResearchProfile,
@@ -49,6 +50,7 @@ import type {
   SourcePresetListResponse, ArxivPresetPreviewRequest, ArxivPresetPreviewResponse, ArxivPresetCreateRequest,
   ExtractedEvidence, EvidenceLink, ProjectCorpusBackfillResult, ProjectCorpusItem,
   ProjectSourceBinding, ProjectSourceBindingBackfillResult, ProjectSourceItem, ProjectSourceSummary, SourceHealth,
+  SourceBackfillPlan, SourceBackfillPreview, SourceBackfillQuotaPolicy, SourceBackfillStrategy,
   CustomSourceActivationResult, CustomSourceCreateDraftRequest, CustomSourceHandlerRun,
   CustomSourceHandlerSummary, CustomSourceHandlerVersion, CustomSourceInstanceRunnerSettings,
   CustomSourceInstanceRunnerSettingsUpdate,
@@ -917,7 +919,7 @@ export const agentsApi = {
     post<Run>(`/agents/${agentId}/runs`, body),
   // Synchronous Personal Assistant chat turn. spaceId pins the request to the
   // agent's space (the assistant may live in a space other than the active one).
-  chat: (agentId: string, body: { message: string; session_id?: string }, options: { spaceId?: string } = {}) =>
+  chat: (agentId: string, body: { message: string; session_id?: string; project_id?: string }, options: { spaceId?: string } = {}) =>
     post<ChatTurnOut>(`/agents/${agentId}/chat`, body, { spaceId: options.spaceId }),
   listRuns:       (limit = 50)        => get<Run[]>(`/agents/runs?limit=${limit}`),
   getRun:         (runId: string)     => get<Run>(`/agents/runs/${runId}`),
@@ -1355,6 +1357,20 @@ export const sourcesApi = {
     if (params.offset !== undefined) q.offset = String(params.offset)
     return get<Page<SourceRunSummary>>(`/sources/connections/${connectionId}/source-runs?` + new URLSearchParams(q))
   },
+  previewBackfill: (connectionId: string, body: { strategy: Partial<SourceBackfillStrategy>; quota_policy?: Partial<SourceBackfillQuotaPolicy> }) =>
+    post<SourceBackfillPreview>(`/sources/${connectionId}/backfill/plans/preview`, body),
+  createBackfillPlan: (connectionId: string, body: { idempotency_key: string; strategy: Partial<SourceBackfillStrategy>; quota_policy?: Partial<SourceBackfillQuotaPolicy>; project_source_binding_id?: string; project_operation_id?: string }) =>
+    post<SourceBackfillPlan>(`/sources/${connectionId}/backfill/plans`, body),
+  backfillPlans: (connectionId: string) =>
+    get<SourceBackfillPlan[]>(`/sources/${connectionId}/backfill/plans`),
+  backfillPlan: (connectionId: string, planId: string) =>
+    get<SourceBackfillPlan>(`/sources/${connectionId}/backfill/plans/${planId}`),
+  proposeBackfillStart: (connectionId: string, planId: string) =>
+    post<{ proposal: Proposal; auto_applied: boolean }>(`/sources/${connectionId}/backfill/plans/${planId}/propose-start`, {}),
+  pauseBackfill: (connectionId: string, planId: string) =>
+    post<SourceBackfillPlan>(`/sources/${connectionId}/backfill/plans/${planId}/pause`, {}),
+  resumeBackfill: (connectionId: string, planId: string) =>
+    post<SourceBackfillPlan>(`/sources/${connectionId}/backfill/plans/${planId}/resume`, {}),
 
   createCustomSourceDraft: (body: CustomSourceCreateDraftRequest) =>
     post<SourceConnection>('/sources/custom-sources/drafts', body),
@@ -1488,8 +1504,7 @@ export const sourcesApi = {
   projectSourceBindings: (params: { project_id: string; source_connection_id?: string }) => {
     const q: Record<string, string> = {}
     if (params.source_connection_id !== undefined) q.source_connection_id = params.source_connection_id
-    q.project_id = params.project_id
-    return get<ProjectSourceBinding[]>('/sources/project-source-bindings?' + new URLSearchParams(q))
+    return get<ProjectSourceBinding[]>(`/projects/${params.project_id}/sources/bindings?` + new URLSearchParams(q))
   },
   createProjectSourceBinding: (body: {
     source_connection_id: string
@@ -1502,8 +1517,8 @@ export const sourcesApi = {
     filters?: Record<string, unknown>
     routing_policy?: Record<string, unknown>
     extraction_policy?: Record<string, unknown>
-  }) => post<ProjectSourceBinding>('/sources/project-source-bindings', body),
-  updateProjectSourceBinding: (bindingId: string, body: Partial<{
+  }) => post<ProjectSourceBinding>(`/projects/${body.project_id}/sources/bindings`, body),
+  updateProjectSourceBinding: (projectId: string, bindingId: string, body: Partial<{
     status: string
     binding_key: string
     priority: number
@@ -1512,11 +1527,11 @@ export const sourcesApi = {
     filters: Record<string, unknown>
     routing_policy: Record<string, unknown>
     extraction_policy: Record<string, unknown>
-  }>) => patch<ProjectSourceBinding>(`/sources/project-source-bindings/${bindingId}`, body),
-  deleteProjectSourceBinding: (bindingId: string) =>
-    del<{ id: string; status: string }>(`/sources/project-source-bindings/${bindingId}`),
-  backfillProjectSourceBinding: (bindingId: string) =>
-    post<ProjectSourceBindingBackfillResult>(`/sources/project-source-bindings/${bindingId}/backfill`),
+  }>) => patch<ProjectSourceBinding>(`/projects/${projectId}/sources/bindings/${bindingId}`, body),
+  deleteProjectSourceBinding: (projectId: string, bindingId: string) =>
+    del<{ id: string; status: string }>(`/projects/${projectId}/sources/bindings/${bindingId}`),
+  backfillProjectSourceBinding: (projectId: string, bindingId: string) =>
+    post<ProjectSourceBindingBackfillResult>(`/projects/${projectId}/sources/bindings/${bindingId}/backfill`),
   projectItems: (params: {
     project_id: string
     source_connection_id?: string
@@ -1544,7 +1559,7 @@ export const sourcesApi = {
   projectSourceSummary: (projectId: string) =>
     get<ProjectSourceSummary>(`/sources/project-source-summary?project_id=${encodeURIComponent(projectId)}`),
   projectSourceHealth: (projectId: string) =>
-    get<SourceHealth[]>(`/sources/project-source-health?project_id=${encodeURIComponent(projectId)}`),
+    get<SourceHealth[]>(`/projects/${encodeURIComponent(projectId)}/sources/health`),
   sourceHealth: (params: { connection_id?: string } = {}) => {
     const q: Record<string, string> = {}
     if (params.connection_id !== undefined) q.connection_id = params.connection_id
@@ -1719,6 +1734,28 @@ export const projectsApi = {
   update: (id: string, data: ProjectUpdate) => patch<Project>(`/projects/${id}`, data),
   archive: (id: string) => post<Project>(`/projects/${id}/archive`),
   getSummary: (id: string) => get<ProjectSummary>(`/projects/${id}/summary`),
+  operations: (id: string) => get<ProjectOperation[]>(`/projects/${id}/operations`),
+  getOperation: (id: string, operationId: string) => get<ProjectOperation>(`/projects/${id}/operations/${operationId}`),
+  createOperation: (id: string, body: { kind: ProjectOperation['kind']; title: string; intent_text?: string; steps?: Array<{ title: string; detail?: Record<string, unknown> }> }) =>
+    post<ProjectOperation>(`/projects/${id}/operations`, body),
+  cancelOperation: (id: string, operationId: string) => post<ProjectOperation>(`/projects/${id}/operations/${operationId}/cancel`, {}),
+  sourceBindings: (id: string, sourceConnectionId?: string) => {
+    const q = sourceConnectionId ? `?source_connection_id=${encodeURIComponent(sourceConnectionId)}` : ''
+    return get<ProjectSourceBinding[]>(`/projects/${id}/sources/bindings${q}`)
+  },
+  sourceHealth: (id: string) => get<SourceHealth[]>(`/projects/${id}/sources/health`),
+  createSourceBinding: (id: string, body: Omit<Parameters<typeof sourcesApi.createProjectSourceBinding>[0], 'project_id'>) =>
+    post<ProjectSourceBinding>(`/projects/${id}/sources/bindings`, body),
+  proposeSourceBinding: (id: string, body: Record<string, unknown>) =>
+    post<{ proposal: Proposal; auto_applied: boolean }>(`/projects/${id}/sources/propose-bind`, body),
+  proposeSourceSetup: (id:string,body:Record<string,unknown>) => post<{operation:ProjectOperation;connection_draft:SourceConnection;source_proposal:Proposal;binding_proposal:Proposal}>(`/projects/${id}/sources/propose-setup`,body),
+  updateSourceBinding: (id: string, bindingId: string, body: Record<string, unknown>) =>
+    patch<ProjectSourceBinding>(`/projects/${id}/sources/bindings/${bindingId}`, body),
+  deleteSourceBinding: (id: string, bindingId: string) =>
+    del<{ id: string; status: string }>(`/projects/${id}/sources/bindings/${bindingId}`),
+  backfillSourceBinding: (id: string, bindingId: string) =>
+    post<ProjectSourceBindingBackfillResult>(`/projects/${id}/sources/bindings/${bindingId}/backfill`, {}),
+  proposeBindingBackfill:(id:string,bindingId:string,body:Record<string,unknown>)=>post<{operation:ProjectOperation;plan:SourceBackfillPlan;proposal:Proposal}>(`/projects/${id}/sources/bindings/${bindingId}/propose-backfill`,body),
   corpus: (id: string, params: {
     status?: string
     triage_status?: string

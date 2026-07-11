@@ -1,4 +1,4 @@
-import { pgTable, index, uniqueIndex, check, foreignKey, varchar, text, boolean, jsonb, timestamp, type PgTableExtraConfigValue } from "drizzle-orm/pg-core";
+import { pgTable, index, unique, uniqueIndex, check, foreignKey, varchar, text, boolean, jsonb, timestamp, type PgTableExtraConfigValue } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { agents } from "./agents";
 import { users } from "./auth";
@@ -7,11 +7,13 @@ import { spaces } from "./spaces";
 import { workspaces } from "./workspaces";
 import { projects } from "./projects";
 import { personalMemoryGrants } from "./personalMemoryGrants";
+import { actionApprovalGrants } from "./actionApprovalGrants";
 
 export const proposals = pgTable("proposals", {
 	id: varchar({ length: 36 }).primaryKey().notNull(),
 	spaceId: varchar("space_id", { length: 36 }).notNull(),
 	createdByRunId: varchar("created_by_run_id", { length: 36 }),
+	actionIdempotencyKey: varchar("action_idempotency_key",{length:256}),
 	proposalType: varchar("proposal_type", { length: 64 }).notNull(),
 	status: varchar({ length: 32 }).notNull(),
 	riskLevel: varchar("risk_level", { length: 32 }).notNull(),
@@ -45,6 +47,8 @@ export const proposals = pgTable("proposals", {
 	index("ix_proposals_status").using("btree", table.status.asc().nullsLast()),
 	index("ix_proposals_urgency").using("btree", table.urgency.asc().nullsLast()),
 	index("ix_proposals_workspace_id").using("btree", table.workspaceId.asc().nullsLast()),
+	unique("uq_proposals_id_space_id").on(table.id, table.spaceId),
+	uniqueIndex("uq_proposals_run_action_idempotency").on(table.createdByRunId,table.proposalType,table.actionIdempotencyKey).where(sql`action_idempotency_key IS NOT NULL`),
 	foreignKey({
 			columns: [table.projectId, table.spaceId],
 			foreignColumns: [projects.id, projects.spaceId],
@@ -98,6 +102,7 @@ export const proposalApprovals = pgTable("proposal_approvals", {
 	approvalType: varchar("approval_type", { length: 64 }).notNull(),
 	approverUserId: varchar("approver_user_id", { length: 36 }).notNull(),
 	grantId: varchar("grant_id", { length: 36 }),
+	actionGrantId: varchar("action_grant_id", { length: 36 }),
 	targetSpaceId: varchar("target_space_id", { length: 36 }),
 	status: varchar({ length: 32 }).notNull(),
 	metadataJson: jsonb("metadata_json"),
@@ -108,9 +113,11 @@ export const proposalApprovals = pgTable("proposal_approvals", {
 	index("ix_proposal_approvals_approver_user_id").using("btree", table.approverUserId.asc().nullsLast()),
 	index("ix_proposal_approvals_created_at").using("btree", table.createdAt.asc().nullsLast()),
 	index("ix_proposal_approvals_grant_id").using("btree", table.grantId.asc().nullsLast()),
+	index("ix_proposal_approvals_action_grant_id").using("btree", table.actionGrantId.asc().nullsLast()),
 	index("ix_proposal_approvals_proposal_id").using("btree", table.proposalId.asc().nullsLast()),
 	index("ix_proposal_approvals_target_space_id").using("btree", table.targetSpaceId.asc().nullsLast()),
 	uniqueIndex("ix_proposal_approvals_unique_active").using("btree", table.proposalId.asc().nullsLast(), table.approvalType.asc().nullsLast(), table.approverUserId.asc().nullsLast(), table.grantId.asc().nullsLast()).where(sql`((status)::text = 'approved'::text)`),
+	uniqueIndex("ix_proposal_approvals_unique_action_grant").on(table.proposalId, table.actionGrantId).where(sql`status = 'approved' AND action_grant_id IS NOT NULL`),
 	foreignKey({
 			columns: [table.approverUserId],
 			foreignColumns: [users.id],
@@ -119,8 +126,13 @@ export const proposalApprovals = pgTable("proposal_approvals", {
 	foreignKey({
 			columns: [table.grantId],
 			foreignColumns: [personalMemoryGrants.id],
-			name: "proposal_approvals_grant_id_fkey"
+		name: "proposal_approvals_grant_id_fkey"
 		}),
+	foreignKey({
+		columns: [table.actionGrantId],
+		foreignColumns: [actionApprovalGrants.id],
+		name: "proposal_approvals_action_grant_id_fkey"
+	}),
 	foreignKey({
 			columns: [table.proposalId],
 			foreignColumns: [proposals.id],
@@ -131,6 +143,6 @@ export const proposalApprovals = pgTable("proposal_approvals", {
 			foreignColumns: [spaces.id],
 			name: "proposal_approvals_target_space_id_fkey"
 		}),
-	check("ck_proposal_approvals_approval_type", sql`(approval_type)::text = 'egress_granting_user'::text`),
+	check("ck_proposal_approvals_approval_type", sql`(approval_type)::text = ANY (ARRAY['egress_granting_user'::text, 'action_grant'::text])`),
 	check("ck_proposal_approvals_status", sql`(status)::text = ANY (ARRAY[('approved'::character varying)::text, ('revoked'::character varying)::text])`),
 ]);

@@ -636,15 +636,15 @@ remains future product work.
   `retrieval.search` / `retrieval.brief`; Memory, Project, and Sources are never silently
   merged into those tools. They are exposed only by explicit run/runtime
   configuration or capabilities, as `memory.retrieval.search`,
-  `memory.retrieval.brief`, `project_public_summary.search`, and
-  `project_public_summary.brief`, `source.retrieval.search`, and
+  `memory.retrieval.brief`, `project.summary.search`, and
+  `project.summary.brief`, `source.retrieval.search`, and
   `source.retrieval.brief`. Preflight modes remain Knowledge-only and run
   one governed retrieval call before a no-tool model turn, appending the compact
   result as explicit evidence. Each tool invocation now passes through a
   policy-gateway action before search/brief execution:
   `retrieval.search`, `retrieval.brief`, `memory.retrieval.search`,
-  `memory.retrieval.brief`, `project_public_summary.search`, or
-  `project_public_summary.brief`, `source.retrieval.search`, or
+  `memory.retrieval.brief`, `project.summary.search`, or
+  `project.summary.brief`, `source.retrieval.search`, or
   `source.retrieval.brief`. The policy gate verifies the domain is enabled
   for the run, that there is an instructed-user viewer, and reserves source and
   egress denial hooks for the source-policy enforcement slice. It writes

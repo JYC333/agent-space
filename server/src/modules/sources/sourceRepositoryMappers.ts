@@ -35,6 +35,7 @@ export function connectionOut(row: SourceConnectionRow) {
     id: row.id,
     space_id: row.space_id,
     connector_id: row.connector_id,
+    connector_key:row.connector_key??null,
     owner_user_id: row.owner_user_id,
     credential_id: row.credential_id,
     visibility: row.visibility,

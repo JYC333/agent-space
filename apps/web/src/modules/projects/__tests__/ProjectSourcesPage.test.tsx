@@ -21,6 +21,15 @@ vi.mock('../../../api/client', () => ({
     corpus: vi.fn(),
     updateCorpusItem: vi.fn(),
     backfillCorpusFromSources: vi.fn(),
+    sourceBindings: vi.fn(),
+    sourceHealth: vi.fn(),
+    backfillSourceBinding: vi.fn(),
+    updateSourceBinding: vi.fn(),
+    deleteSourceBinding: vi.fn(),
+    createSourceBinding: vi.fn(),
+    proposeSourceBinding: vi.fn(),
+    createOperation:vi.fn(),
+    proposeBindingBackfill:vi.fn(),
   },
   projectPresetsApi: {
     getProjectPreset: vi.fn(),
@@ -35,6 +44,7 @@ vi.mock('../../../api/client', () => ({
     scanConnection: vi.fn(),
     updateProjectSourceBinding: vi.fn(),
     deleteProjectSourceBinding: vi.fn(),
+    backfillPlans:vi.fn(),previewBackfill:vi.fn(),createBackfillPlan:vi.fn(),proposeBackfillStart:vi.fn(),
   },
 }))
 
@@ -59,6 +69,7 @@ beforeEach(() => {
       id: 'conn-1',
       space_id: 'space-1',
       connector_id: 'connector-1',
+      connector_key:'arxiv',
       owner_user_id: 'user-1',
       credential_id: null,
       visibility: 'space_shared',
@@ -88,7 +99,12 @@ beforeEach(() => {
     limit: 200,
     offset: 0,
   })
-  vi.mocked(sourcesApi.projectSourceBindings).mockResolvedValue([{
+  vi.mocked(sourcesApi.backfillPlans).mockResolvedValue([])
+  vi.mocked(projectsApi.proposeBindingBackfill).mockResolvedValue({operation:{id:'operation-1'},plan:{id:'plan-1'},proposal:{id:'proposal-1'}} as never)
+  vi.mocked(sourcesApi.previewBackfill).mockResolvedValue({strategy:{window_unit:'date_window',from:null,to:null,window_size:30,max_items:100,direction:'backward'},segments:[{}],quota_policy:{window:'minute',limit_count:10}})
+  vi.mocked(sourcesApi.createBackfillPlan).mockResolvedValue({id:'plan-1'} as never)
+  vi.mocked(sourcesApi.proposeBackfillStart).mockResolvedValue({proposal:{id:'proposal-1'} as never,auto_applied:false})
+  vi.mocked(projectsApi.sourceBindings).mockResolvedValue([{
     id: 'binding-1',
     space_id: 'space-1',
     project_id: 'project-1',
@@ -105,7 +121,7 @@ beforeEach(() => {
     created_at: '2026-07-01T00:00:00.000Z',
     updated_at: '2026-07-01T00:00:00.000Z',
   }])
-  vi.mocked(sourcesApi.projectSourceHealth).mockResolvedValue([{
+  vi.mocked(projectsApi.sourceHealth).mockResolvedValue([{
     binding_id: 'binding-1',
     project_id: 'project-1',
     source_connection_id: 'conn-1',
@@ -113,7 +129,7 @@ beforeEach(() => {
     status: 'healthy',
     last_success_at: '2026-07-01T00:00:00.000Z',
     last_failure_at: null,
-    last_error: null,
+    last_error: 'A previous scan failed',
     next_run_at: '2026-07-02T00:00:00.000Z',
     queued_jobs: 0,
     running_jobs: 0,
@@ -252,7 +268,7 @@ beforeEach(() => {
     source_decisions: 0,
     archived_source_items: 0,
   })
-  vi.mocked(sourcesApi.backfillProjectSourceBinding).mockResolvedValue({
+  vi.mocked(projectsApi.backfillSourceBinding).mockResolvedValue({
     binding_id: 'binding-1',
     project_id: 'project-1',
     source_connection_id: 'conn-1',
@@ -280,11 +296,13 @@ describe('ProjectSourcesPage', () => {
 
     expect(await screen.findByText('Research Project')).toBeInTheDocument()
     expect(screen.getByText('Research feed')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Research feed' })).toHaveAttribute('href', '/sources/connections/conn-1')
+    expect(screen.queryByText(/a previous scan failed/i)).not.toBeInTheDocument()
     expect(screen.getAllByText('Collected paper').length).toBeGreaterThanOrEqual(2)
     expect(screen.getByText('Project corpus')).toBeInTheDocument()
 
     await waitFor(() => {
-      expect(sourcesApi.projectSourceBindings).toHaveBeenCalledWith({ project_id: 'project-1' })
+      expect(projectsApi.sourceBindings).toHaveBeenCalledWith('project-1')
       expect(sourcesApi.projectItems).toHaveBeenCalledWith(expect.objectContaining({ project_id: 'project-1', limit: 50 }))
       expect(projectsApi.corpus).toHaveBeenCalledWith('project-1', expect.objectContaining({ limit: 50 }))
     })
@@ -335,8 +353,37 @@ describe('ProjectSourcesPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: /run scan/i }))
     await waitFor(() => expect(sourcesApi.scanConnection).toHaveBeenCalledWith('conn-1'))
 
-    fireEvent.click(await screen.findByRole('button', { name: /backfill/i }))
-    await waitFor(() => expect(sourcesApi.backfillProjectSourceBinding).toHaveBeenCalledWith('binding-1'))
+    fireEvent.click(await screen.findByRole('button', { name: /import history/i }))
+    await waitFor(() => expect(projectsApi.proposeBindingBackfill).toHaveBeenCalledWith('project-1','binding-1',expect.objectContaining({strategy:expect.objectContaining({window_unit:'date_window'})})))
+  })
+
+  it('uses the product confirmation dialog before removing a binding', async () => {
+    vi.mocked(projectsApi.deleteSourceBinding).mockResolvedValue({ id: 'binding-1', status: 'archived' })
+    renderPage()
+
+    fireEvent.click(await screen.findByRole('button', { name: /^remove$/i }))
+    expect(screen.getByRole('heading', { name: /remove source from project/i })).toBeInTheDocument()
+    expect(projectsApi.deleteSourceBinding).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: /remove source/i }))
+    await waitFor(() => expect(projectsApi.deleteSourceBinding).toHaveBeenCalledWith('project-1', 'binding-1'))
+  })
+
+  it('directly binds an existing Source for a Project writer', async () => {
+    vi.mocked(projectsApi.sourceBindings).mockResolvedValueOnce([])
+    vi.mocked(projectsApi.createSourceBinding).mockResolvedValue({ id: 'binding-new' } as never)
+    renderPage()
+
+    fireEvent.click((await screen.findAllByRole('button', { name: /add source/i }))[0]!)
+    const addSourceButtons = screen.getAllByRole('button', { name: /add source/i })
+    fireEvent.click(addSourceButtons[addSourceButtons.length - 1]!)
+
+    await waitFor(() => expect(projectsApi.createSourceBinding).toHaveBeenCalledWith('project-1', expect.objectContaining({
+      source_connection_id: 'conn-1',
+      delivery_scope: 'project_members',
+      backfill_history: true,
+    })))
+    expect(projectsApi.proposeSourceBinding).not.toHaveBeenCalled()
   })
 
   it('syncs project corpus and updates project-level corpus state', async () => {

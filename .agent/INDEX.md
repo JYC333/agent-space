@@ -96,6 +96,7 @@ reports in `.agent/reports/` are not source of truth and should be deleted after
 | [architecture/SERVER_FOUNDATION.md](architecture/SERVER_FOUNDATION.md) | The server service: gateway, route registry, compose wiring |
 | [architecture/SERVER_OWNERSHIP.md](architecture/SERVER_OWNERSHIP.md) | Current server ownership and deferred surfaces |
 | [architecture/SERVER_MODULE_CONVENTION.md](architecture/SERVER_MODULE_CONVENTION.md) | Server-owned module structure, route registry, error envelope |
+| [architecture/SYSTEM_ACTIONS.md](architecture/SYSTEM_ACTIONS.md) | System action registry, gateway exposure, policy, proposal, grant, idempotency, and audit boundaries |
 
 ### Memory / Activity / Proposal
 

@@ -199,6 +199,20 @@ function ProjectsCard({ projects }: { projects: Project[] }) {
   )
 }
 
+function OperationsCard({ operations }: { operations: HomeSummaryOut['operations_in_progress'] }) {
+  if (operations.length === 0) return null
+  return <div className="bg-card border border-border rounded-lg p-4 flex flex-col gap-3">
+    <span className="text-[11px] font-bold tracking-[.1em] uppercase text-muted-foreground">Operations in progress</span>
+    {operations.slice(0, 5).map(operation => {
+      const completed = Number(operation.progress_json.completed ?? 0), total = Number(operation.progress_json.total ?? 0)
+      return <Link key={operation.id} to={`/projects/${operation.project_id}`} className="rounded-md px-1 py-1.5 hover:bg-accent">
+        <div className="flex justify-between gap-2 text-[12px]"><span className="truncate">{operation.title}</span><span className="text-muted-foreground">{total ? `${completed}/${total}` : operation.status}</span></div>
+        <div className="text-[10px] text-muted-foreground truncate">{operation.project_name} · {operation.kind.replace(/_/g, ' ')}</div>
+      </Link>
+    })}
+  </div>
+}
+
 function ModelProviderStatusCard({ status }: { status: HomeModelProviderStatusSection }) {
   const n = status.enabled_model_providers_count
   return (
@@ -283,6 +297,7 @@ function emptyHomeSummary(): HomeSummaryOut {
     runtime_status: { real_adapters_configured_count: 0, configured_adapter_types: [], message: '' },
     model_provider_status: { model_providers_count: 0, enabled_model_providers_count: 0, missing_model_provider_config: true, message: '' },
     suggested_actions: [],
+    operations_in_progress: [],
     source_summary: { open_items: 0, new_items_today: 0, pending_extraction_jobs: 0, failed_extraction_jobs: 0, candidate_evidence: 0, active_evidence: 0, due_connections: 0 },
   }
 }
@@ -369,6 +384,7 @@ export default function TodayPage() {
       <div className="flex flex-col gap-3 min-w-0">
         <ProposalStatusCard proposals={s.pending_proposals.items} onDecide={decide} />
         <SourceAttentionCard source={s.source_summary} />
+        <OperationsCard operations={s.operations_in_progress} />
         <ProjectsCard projects={projects} />
         <ModelProviderStatusCard status={s.model_provider_status} />
         <RuntimeStatusCard status={s.runtime_status} />

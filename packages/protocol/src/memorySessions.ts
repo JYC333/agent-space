@@ -27,6 +27,7 @@ export const SessionOutSchema = z
     space_id: IdSchema,
     user_id: IdSchema,
     workspace_id: IdSchema.nullish(),
+    project_id:IdSchema.nullish(),
     title: z.string().nullish(),
     status: z.string(),
     created_at: ISODateTimeSchema,
@@ -121,6 +122,7 @@ export const ChatTurnRequestSchema = z
   .object({
     message: z.string().trim().min(1).max(8000),
     session_id: IdSchema.nullish(),
+    project_id:IdSchema.nullish(),
   })
   .passthrough();
 export type ChatTurnRequest = z.infer<typeof ChatTurnRequestSchema>;
@@ -133,6 +135,7 @@ export const ChatTurnResultSchema = z
     reply: z.string().nullish(),
     error: z.string().nullish(),
     error_code: z.string().nullish(),
+    action_previews:z.array(z.object({action_id:z.string(),status:z.enum(["proposed","auto_applied","completed","failed"]),proposal_id:IdSchema.nullish(),proposal_type:z.string().nullish(),title:z.string().nullish(),summary:z.string().nullish(),risk_level:z.string().nullish(),scope:JsonObjectSchema.nullish()})).optional(),
     ...SecretResponseGuards,
   })
   .passthrough();
@@ -188,6 +191,7 @@ export const ChatContextCandidatesRequestSchema = z.object({
   user_id: IdSchema,
   session_id: IdSchema,
   message: z.string().min(1).max(8000),
+  project_id:IdSchema.nullish(),
 });
 export type ChatContextCandidatesRequest = z.infer<
   typeof ChatContextCandidatesRequestSchema

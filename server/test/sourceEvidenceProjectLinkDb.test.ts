@@ -10,7 +10,7 @@ import { migrate } from "../src/db/migrator";
 import {
   linkEvidenceToBoundProjects,
   recomputeProjectSourceBindingLinks,
-} from "../src/modules/sources/evidenceProjectLinker";
+} from "../src/modules/projects/projectSourceRoutingService";
 import { PgRunContextRepository } from "../src/modules/context/repository";
 
 // Real-PostgreSQL tests for evidence→project auto-linking on materialization:

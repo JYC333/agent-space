@@ -8,16 +8,9 @@ import type {
 import type { ServerConfig } from "../../config";
 import { executeRuntimeHost } from "../runtimeHost";
 import type { RunRecord } from "./repository";
-import {
-  executeWithRetrievalTools,
-  resolveRetrievalToolBinding,
-  type ManagedApiRetrievalToolDeps,
-} from "./managedRetrievalTools";
-import {
-  executeWithAgentDelegationTools,
-  resolveAgentDelegationToolBinding,
-  type AgentDelegationToolDeps,
-} from "./managedAgentDelegationTools";
+import type { ManagedApiRetrievalToolDeps } from "./managedRetrievalTools";
+import type { AgentDelegationToolDeps } from "./managedAgentDelegationTools";
+import { AgentToolGateway } from "../systemActions/agentToolGateway";
 import {
   redactEvidenceText,
   redactSecretPatterns,
@@ -82,20 +75,7 @@ export async function executeManagedApiNoToolAdapter(
 
   const request = runtimeHostRequest(input, adapterType, modelProviderId);
   const execute = deps.executeRuntimeHost ?? executeRuntimeHost;
-  const agentDelegationTools = await resolveAgentDelegationToolBinding(
-    config,
-    input.run,
-    deps.agentDelegationTools,
-  );
-  const retrievalTools = await resolveRetrievalToolBinding(config, input.run, deps);
-  let response: RuntimeHostExecuteResponse;
-  if (agentDelegationTools) {
-    response = await executeWithAgentDelegationTools(config, input.run, request, execute, agentDelegationTools);
-  } else if (retrievalTools) {
-    response = await executeWithRetrievalTools(config, input.run, request, execute, retrievalTools);
-  } else {
-    response = await execute(config, request);
-  }
+  const response = await new AgentToolGateway(config).execute(input.run, request, execute, deps);
   return envelopeFromRuntimeHost(input, adapterType, response, startedAt);
 }
 

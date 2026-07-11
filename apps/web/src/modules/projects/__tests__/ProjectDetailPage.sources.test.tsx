@@ -411,7 +411,7 @@ describe('ProjectDetailPage Source consumption', () => {
     fireEvent.click(button)
 
     await waitFor(() => {
-      expect(sourcesApi.backfillProjectSourceBinding).toHaveBeenCalledWith('binding-1')
+      expect(sourcesApi.backfillProjectSourceBinding).toHaveBeenCalledWith('project-1', 'binding-1')
     })
   })
 

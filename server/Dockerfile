@@ -8,7 +8,7 @@
 # (not tsx/ts-node).
 
 # ---- deps: install node_modules and build the local protocol package ----------
-FROM node:20-slim AS deps
+FROM node:22.22.2-slim AS deps
 WORKDIR /app
 
 ENV NPM_CONFIG_FETCH_RETRIES=5 \
@@ -73,7 +73,7 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
 CMD ["node", "dist/index.js"]
 
 # ---- prod-deps: production node_modules (with native builds) -------------------
-FROM node:20-slim AS prod-deps
+FROM node:22.22.2-slim AS prod-deps
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -86,7 +86,7 @@ WORKDIR /app/server
 RUN npm ci --omit=dev
 
 # ---- runtime: prod deps + compiled output -------------------------------------
-FROM node:20-slim AS runtime
+FROM node:22.22.2-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 

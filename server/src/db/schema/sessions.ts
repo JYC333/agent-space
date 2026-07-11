@@ -4,6 +4,7 @@ import { agents } from "./agents";
 import { users } from "./auth";
 import { spaces } from "./spaces";
 import { workspaces } from "./workspaces";
+import { projects } from "./projects";
 
 export const sessions = pgTable("sessions", {
 	id: varchar({ length: 36 }).primaryKey().notNull(),
@@ -11,6 +12,7 @@ export const sessions = pgTable("sessions", {
 	userId: varchar("user_id", { length: 36 }),
 	agentId: varchar("agent_id", { length: 36 }),
 	workspaceId: varchar("workspace_id", { length: 36 }),
+	projectId:varchar("project_id",{length:36}),
 	title: varchar({ length: 512 }),
 	status: varchar({ length: 32 }).notNull(),
 	metadataJson: jsonb("metadata_json"),
@@ -22,6 +24,7 @@ export const sessions = pgTable("sessions", {
 	index("ix_sessions_status").using("btree", table.status.asc().nullsLast()),
 	index("ix_sessions_user_id").using("btree", table.userId.asc().nullsLast()),
 	index("ix_sessions_workspace_id").using("btree", table.workspaceId.asc().nullsLast()),
+	index("ix_sessions_project_id").on(table.projectId),
 	foreignKey({
 			columns: [table.agentId],
 			foreignColumns: [agents.id],
@@ -39,9 +42,10 @@ export const sessions = pgTable("sessions", {
 		}),
 	foreignKey({
 			columns: [table.workspaceId, table.spaceId],
-			foreignColumns: [workspaces.id, workspaces.spaceId],
+		foreignColumns: [workspaces.id, workspaces.spaceId],
 			name: "sessions_workspace_id_fkey"
-		}),
+	}),
+	foreignKey({columns:[table.projectId,table.spaceId],foreignColumns:[projects.id,projects.spaceId],name:"sessions_project_id_fkey"}),
 ]);
 
 export const messages = pgTable("messages", {

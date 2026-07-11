@@ -39,6 +39,7 @@ export const extractionJobs = pgTable("extraction_jobs", {
 	index("ix_extraction_jobs_space_id").using("btree", table.spaceId.asc().nullsLast()),
 	index("ix_extraction_jobs_space_status").using("btree", table.spaceId.asc().nullsLast(), table.status.asc().nullsLast()),
 	index("ix_extraction_jobs_status").using("btree", table.status.asc().nullsLast()),
+	unique("uq_extraction_jobs_id_space_id").on(table.id, table.spaceId),
 	foreignKey({
 			columns: [table.connectionId],
 			foreignColumns: [sourceConnections.id],

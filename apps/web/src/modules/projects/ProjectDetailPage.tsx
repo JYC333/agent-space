@@ -4,7 +4,7 @@ import { useSpaceNavigate as useNavigate, SpaceLink as Link } from '../../core/s
 import {
   FolderKanban, Target, Edit2, Archive, Plus, Trash2, ChevronLeft,
   Activity, Package, CheckCircle, Folder, Cpu, Database, Rss, Link2, FileText, RefreshCw,
-  BookOpen,
+  BookOpen, MessageSquareText,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { projectsApi, workspacesApi, activityApi, artifactsApi, proposalsApi, runsApi, memoryApi, sourcesApi, sourceReaderApi, automationsApi, projectPresetsApi, projectResearchApi } from '../../api/client'
@@ -17,6 +17,7 @@ import type {
   ReaderAnnotation, AutomationOut, SourcePostProcessingItemDecision,
   ProjectResearchArtifactLink, ProjectResearchCheckpoint, ProjectResearchLiteratureMatrixItem,
   ProjectResearchProfile, ProjectResearchScreeningCriteria, ProjectResearchWorkflow,
+  ProjectOperation,
 } from '../../types/api'
 import { Card } from '../../components/ui/card'
 import { Button } from '../../components/ui/button'
@@ -502,6 +503,7 @@ export default function ProjectDetailPage() {
   const [sourceRecommendations, setSourceRecommendations] = useState<SourcePostProcessingItemDecision[]>([])
   const [readerAnnotations, setReaderAnnotations] = useState<ReaderAnnotation[]>([])
   const [automations, setAutomations] = useState<AutomationOut[]>([])
+  const [operations, setOperations] = useState<ProjectOperation[]>([])
   const [projectPresetKey, setProjectPresetKey] = useState<string | null>(null)
   const [researchProfile, setResearchProfile] = useState<ProjectResearchProfile | null>(null)
   const [researchWorkflows, setResearchWorkflows] = useState<ProjectResearchWorkflow[]>([])
@@ -555,7 +557,7 @@ export default function ProjectDetailPage() {
 
     setDetailsLoading(true)
     try {
-      const [allWs, acts, arts, props, runs, mems, sourceConnections, sourceBindings, sourceItems, evidenceItems, recommendations, readerAnns, allAutomations] = await Promise.all([
+      const [allWs, acts, arts, props, runs, mems, sourceConnections, sourceBindings, sourceItems, evidenceItems, recommendations, readerAnns, allAutomations, operationRows] = await Promise.all([
         workspacesApi.list({ limit: '200' }),
         activityApi.list({ project_id: projectId, limit: 5 }),
         artifactsApi.list({ project_id: projectId, limit: 5 }),
@@ -569,6 +571,7 @@ export default function ProjectDetailPage() {
         sourcesApi.postProcessingDecisions({ project_id: projectId, limit: 20 }).catch(() => ({ items: [] as SourcePostProcessingItemDecision[], total: 0, limit: 20, offset: 0 })),
         sourceReaderApi.listByProject(projectId, 5).catch(() => ({ items: [] as ReaderAnnotation[] })),
         automationsApi.list({ project_id: projectId }).catch(() => [] as AutomationOut[]),
+        projectsApi.operations ? projectsApi.operations(projectId).catch(() => [] as ProjectOperation[]) : Promise.resolve([] as ProjectOperation[]),
       ])
       const map: Record<string, Workspace> = {}
       allWs.items.forEach(w => { map[w.id] = w })
@@ -583,6 +586,7 @@ export default function ProjectDetailPage() {
       setRecentSourceItems(sourceItems.items.map(projectItem => projectItem.item))
       setRecentEvidence(evidenceItems.items)
       setSourceRecommendations(recommendations.items.filter(item => item.relevance !== 'not_relevant').slice(0, 5))
+      setOperations(operationRows)
       setReaderAnnotations(readerAnns.items)
       setAutomations(allAutomations.filter(a => a.status !== 'archived'))
 
@@ -674,9 +678,10 @@ export default function ProjectDetailPage() {
   }
 
   async function backfillSourceBinding(binding: ProjectSourceBinding) {
+    if (!projectId) return
     setBackfillingBindingId(binding.id)
     try {
-      const result = await sourcesApi.backfillProjectSourceBinding(binding.id)
+      const result = await sourcesApi.backfillProjectSourceBinding(projectId, binding.id)
       toast.success(`Backfilled ${result.created_links} project items`)
       await loadAll()
     } catch (e) {
@@ -873,6 +878,7 @@ export default function ProjectDetailPage() {
           </div>
         </div>
         <div className="flex gap-2 shrink-0">
+          <Button asChild size="sm" className="gap-1.5"><Link to={`/projects/${project.id}/chat`}><MessageSquareText className="size-3.5" />Chat</Link></Button>
           <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setEditOpen(true)}>
             <Edit2 className="size-3.5" />
             Edit
@@ -900,6 +906,16 @@ export default function ProjectDetailPage() {
           </div>
         </section>
       )}
+
+      {operations.some(operation => ['draft', 'active', 'waiting_review'].includes(operation.status)) && <section className="space-y-2">
+        <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Operations</h2>
+        <div className="grid gap-3 md:grid-cols-2">
+          {operations.filter(operation => ['draft', 'active', 'waiting_review'].includes(operation.status)).map(operation => {
+            const total=Number(operation.progress_json.total ?? 0),completed=Number(operation.progress_json.completed ?? 0),failed=Number(operation.progress_json.failed ?? 0)
+            return <Card key={operation.id} className="p-4 space-y-2"><div className="flex items-center justify-between gap-2"><p className="text-sm font-medium truncate">{operation.title}</p><StatusBadge status={operation.status} /></div><p className="text-xs text-muted-foreground">{operation.kind.replace(/_/g,' ')} · {total ? `${completed}/${total} complete` : 'Preparing'}{failed ? ` · ${failed} failed` : ''}</p><div className="h-1.5 rounded bg-muted overflow-hidden"><div className="h-full bg-primary" style={{width:total?`${Math.min(100,completed/total*100)}%`:'5%'}} /></div>{operation.links&&operation.links.length>0&&<div className="flex flex-wrap gap-2">{operation.links.map(link=>{const to=link.target_type==='run'?`/runs/${link.target_id}`:link.target_type==='proposal'?`/proposals/${link.target_id}`:link.target_type==='source_backfill_plan'?`/projects/${project.id}/sources`:null;return to?<Link key={`${link.target_type}:${link.target_id}`} to={to} className="text-xs text-accent-foreground hover:underline">{link.role.replace(/_/g,' ')}</Link>:<span key={`${link.target_type}:${link.target_id}`} className="text-xs text-muted-foreground">{link.role.replace(/_/g,' ')}</span>})}</div>}</Card>
+          })}
+        </div>
+      </section>}
 
       {/* Current focus */}
       <section className="space-y-2">

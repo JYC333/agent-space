@@ -12,7 +12,7 @@ import {
   type SpaceUserIdentity,
 } from "../../routeUtils/common";
 import { loadProtocol } from "../../providers/protocolRuntime";
-import { PgSourcesRepository } from "../repository";
+import { SourceConnectionService } from "../sourceConnectionService";
 import { CONNECTION_COLUMNS, type SourceConnectionRow } from "../sourceRepositoryRows";
 import { PgCustomSourceHandlerRepository } from "../customSources/customSourceHandlerRepository";
 import { getSourceConnectionScanTask, upsertSourceConnectionScanTask } from "../sourceConnectionScheduler";
@@ -91,9 +91,9 @@ export class SourceRecipePipelineBridgeService {
     };
 
     return withDbTransaction(this.pool, async (client) => {
-      const sourcesRepo = new PgSourcesRepository(client, this.config);
+      const connections = new SourceConnectionService(client, this.config);
       const sourceScheduleTask = await getSourceConnectionScanTask(client, sourceConnection.id);
-      const connection = await sourcesRepo.createConnection(
+      const connection = await connections.createConnection(
         identity,
         {
           connector_key: "custom_source",

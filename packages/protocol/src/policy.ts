@@ -86,7 +86,7 @@ export type PolicyActionDefinition = z.infer<
  * omitted from the enforcement contract surface (it is human documentation, not
  * a decision input), but carried so audits and docs share the same labels.
  */
-export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
+export const POLICY_ACTION_REGISTRY = [
   // ---- WIRED_DIRECT ----
   {
     action: "runtime.execute",
@@ -837,7 +837,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     record_failure_mode: "fail_closed",
   },
   {
-    action: "source.connection_manage",
+    action: "source.connection.manage",
     resource_type: "source_connection",
     default_risk_level: "medium",
     default_decision: "allow",
@@ -920,7 +920,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     record_failure_mode: "best_effort",
   },
   {
-    action: "source.custom_source_create",
+    action: "source.custom.create",
     resource_type: "source_connection",
     default_risk_level: "medium",
     default_decision: "allow",
@@ -933,7 +933,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     record_failure_mode: "best_effort",
   },
   {
-    action: "source.custom_source_generate",
+    action: "source.custom.generate",
     resource_type: "source_connection",
     default_risk_level: "medium",
     default_decision: "allow",
@@ -946,7 +946,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     record_failure_mode: "best_effort",
   },
   {
-    action: "source.custom_source_test",
+    action: "source.custom.test",
     resource_type: "source_connection",
     default_risk_level: "low",
     default_decision: "allow",
@@ -959,7 +959,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     record_failure_mode: "best_effort",
   },
   {
-    action: "source.custom_source_activate",
+    action: "source.custom.activate",
     resource_type: "source_connection",
     default_risk_level: "medium",
     default_decision: "allow",
@@ -973,7 +973,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     record_failure_mode: "best_effort",
   },
   {
-    action: "source.custom_source_repair",
+    action: "source.custom.repair",
     resource_type: "source_connection",
     default_risk_level: "medium",
     default_decision: "allow",
@@ -987,7 +987,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     record_failure_mode: "best_effort",
   },
   {
-    action: "source.custom_source_rollback",
+    action: "source.custom.rollback",
     resource_type: "source_connection",
     default_risk_level: "medium",
     default_decision: "allow",
@@ -1001,7 +1001,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     record_failure_mode: "best_effort",
   },
   {
-    action: "source.custom_source_credential_create",
+    action: "source.custom.credential_create",
     resource_type: "custom_source_credential",
     default_risk_level: "high",
     default_decision: "allow",
@@ -1015,7 +1015,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     record_failure_mode: "best_effort",
   },
   {
-    action: "source.source_recipe_create",
+    action: "source.recipe.create",
     resource_type: "source_connection",
     default_risk_level: "medium",
     default_decision: "allow",
@@ -1029,7 +1029,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     record_failure_mode: "best_effort",
   },
   {
-    action: "source.source_recipe_activate",
+    action: "source.recipe.activate",
     resource_type: "source_connection",
     default_risk_level: "medium",
     default_decision: "allow",
@@ -1043,7 +1043,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     record_failure_mode: "best_effort",
   },
   {
-    action: "source.source_recipe_dry_run",
+    action: "source.recipe.dry_run",
     resource_type: "source_connection",
     default_risk_level: "low",
     default_decision: "allow",
@@ -1057,7 +1057,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     record_failure_mode: "best_effort",
   },
   {
-    action: "source.custom_source_settings_update",
+    action: "source.custom.settings_update",
     resource_type: "custom_source_settings",
     default_risk_level: "medium",
     default_decision: "allow",
@@ -1071,16 +1071,30 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     record_failure_mode: "best_effort",
   },
   {
-    action: "project_source.configure",
+    action: "project.source.bind",
     resource_type: "project_source",
     default_risk_level: "medium",
     default_decision: "allow",
     audit_required: true,
     approval_capability: null,
     default_required_approver_role: null,
-    current_enforcement_point: "server/src/modules/sources/routes.ts",
+    current_enforcement_point: "server/src/modules/projects/routes.ts",
     description:
-      "Configure project source bindings for Source.",
+      "Create or update a Project-owned Source binding (project consumption configuration over a Sources-owned connection).",
+    lifecycle_status: "wired_direct",
+    record_failure_mode: "best_effort",
+  },
+  {
+    action: "project.operation.manage",
+    resource_type: "project_operation",
+    default_risk_level: "low",
+    default_decision: "allow",
+    audit_required: true,
+    approval_capability: null,
+    default_required_approver_role: null,
+    current_enforcement_point: "server/src/modules/projects/routes.ts",
+    description:
+      "Create or cancel a Project operation progress record. Project operations are a grouping/read model over runs, jobs, proposals, and plans; they carry no execution authority of their own.",
     lifecycle_status: "wired_direct",
     record_failure_mode: "best_effort",
   },
@@ -1160,7 +1174,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     record_failure_mode: "fail_closed",
   },
   {
-    action: "project_public_summary.search",
+    action: "project.summary.search",
     resource_type: "retrieval_tool",
     default_risk_level: "low",
     default_decision: "deny",
@@ -1175,7 +1189,7 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     record_failure_mode: "fail_closed",
   },
   {
-    action: "project_public_summary.brief",
+    action: "project.summary.brief",
     resource_type: "retrieval_tool",
     default_risk_level: "low",
     default_decision: "deny",
@@ -1247,7 +1261,52 @@ export const POLICY_ACTION_REGISTRY: readonly PolicyActionDefinition[] = [
     lifecycle_status: "reserved",
     record_failure_mode: "best_effort",
   },
-] as const;
+  {
+    action: "policy.action_grant.create",
+    resource_type: "action_approval_grant",
+    default_risk_level: "high",
+    default_decision: "allow",
+    audit_required: true,
+    approval_capability: "manage_action_grants",
+    default_required_approver_role: "owner",
+    current_enforcement_point: "server/src/modules/policy/actionApprovalGrantService.ts",
+    description: "Create a bounded pre-authorization grant for one agent and system action.",
+    lifecycle_status: "wired_direct",
+    record_failure_mode: "fail_closed",
+  },
+  {
+    action: "source.connection.activate",
+    resource_type: "source_connection",
+    default_risk_level: "high",
+    default_decision: "require_approval",
+    audit_required: true,
+    approval_capability: "approve_source_connection",
+    default_required_approver_role: "owner",
+    current_enforcement_point: "server/src/modules/proposals/applyService.ts via source_connection_create",
+    description: "Activate a reviewed Source connection draft; direct activation requires approval unless an owning flow proves an approved envelope.",
+    lifecycle_status: "wired_via_proposal",
+    record_failure_mode: "fail_closed",
+  },
+  {
+    action: "policy.action_grant.revoke",
+    resource_type: "action_approval_grant",
+    default_risk_level: "high",
+    default_decision: "allow",
+    audit_required: true,
+    approval_capability: "manage_action_grants",
+    default_required_approver_role: "owner",
+    current_enforcement_point: "server/src/modules/policy/actionApprovalGrantService.ts",
+    description: "Revoke an active action pre-authorization grant.",
+    lifecycle_status: "wired_direct",
+    record_failure_mode: "fail_closed",
+  },
+  { action:"source.backfill.plan",resource_type:"source_backfill_plan",default_risk_level:"medium",default_decision:"allow",audit_required:true,approval_capability:null,default_required_approver_role:null,current_enforcement_point:"server/src/modules/sources/sourceBackfillService.ts",description:"Preview or create a bounded Source history import plan.",lifecycle_status:"wired_direct",record_failure_mode:"fail_closed" },
+  { action:"source.backfill.start",resource_type:"source_backfill_plan",default_risk_level:"high",default_decision:"require_approval",audit_required:true,approval_capability:"approve_source_backfill",default_required_approver_role:"owner",current_enforcement_point:"server/src/modules/sources/sourceBackfillProposalApplier.ts",description:"Start an approved quota-controlled Source history import.",lifecycle_status:"wired_via_proposal",record_failure_mode:"fail_closed" },
+  { action:"source.backfill.manage",resource_type:"source_backfill_plan",default_risk_level:"medium",default_decision:"allow",audit_required:true,approval_capability:null,default_required_approver_role:null,current_enforcement_point:"server/src/modules/sources/routes.ts",description:"Pause or resume a Source history import plan.",lifecycle_status:"wired_direct",record_failure_mode:"fail_closed" },
+] as const satisfies readonly PolicyActionDefinition[];
+
+export type PolicyActionId = (typeof POLICY_ACTION_REGISTRY)[number]["action"];
+export const POLICY_ACTION_IDS = POLICY_ACTION_REGISTRY.map((definition) => definition.action) as readonly PolicyActionId[];
 
 // ---------------------------------------------------------------------------
 // Enforcement request (PolicyCheckRequest, gateway.py)

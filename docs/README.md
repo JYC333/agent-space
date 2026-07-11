@@ -8,7 +8,7 @@ This is the index for design and operations docs. The root
 | Need | Read |
 |---|---|
 | Product quick start and local development | [../README.md](../README.md) |
-| High-level architecture | [ARCHITECTURE.md](ARCHITECTURE.md) |
+| High-level architecture | [../.agent/ARCHITECTURE.md](../.agent/ARCHITECTURE.md) |
 | How to run backups, restore, and DB scripts | [BACKUP_AND_RESTORE.md](BACKUP_AND_RESTORE.md) |
 | AI-agent working context | [../.agent/INDEX.md](../.agent/INDEX.md) |
 
@@ -16,7 +16,7 @@ This is the index for design and operations docs. The root
 
 | Document | Description |
 |---|---|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | High-level system architecture |
+| [../.agent/ARCHITECTURE.md](../.agent/ARCHITECTURE.md) | High-level system architecture (layer map) |
 | [SPACE_MODEL.md](SPACE_MODEL.md) | Spaces, membership, visibility, and private memory conventions |
 | [TARGET_VIEW_MODEL.md](TARGET_VIEW_MODEL.md) | Unified content owner, scope, visibility, and disclosure model |
 | [MEMORY_MODEL.md](MEMORY_MODEL.md) | Memory data model and lifecycle |
@@ -37,7 +37,7 @@ This is the index for design and operations docs. The root
 
 | Document | Description |
 |---|---|
-| [MULTI_AGENT.md](MULTI_AGENT.md) | Multi-agent runtime and delegation model |
+| [../.agent/architecture/EXECUTION_MODEL.md](../.agent/architecture/EXECUTION_MODEL.md) | Run/agent execution model, agent groups, delegation |
 | [CAPABILITY_SYSTEM.md](CAPABILITY_SYSTEM.md) | Capability manifests, registry, enable state, execution |
 | [EVOLUTION_CORE.md](EVOLUTION_CORE.md) | Evolution core — source of truth for targets, signals, strategies, runs, experiences |
 | [SELF_EVOLUTION.md](SELF_EVOLUTION.md) | Self-evolution deployment: worktrees, deployer jobs, merge flow |

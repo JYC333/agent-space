@@ -32,7 +32,11 @@ Proposals are the product review and application boundary for durable mutations.
   until their owning domain registers a server applier. `egress_review` approval
   rows are supported, but `egress_review` does not currently have a registered applier.
 - Accept returns the general `ProposalAcceptOut` response shape.
-- A proposal is never auto-applied.
+- Agent-created proposals remain pending by default. A grantable System Action
+  may be applied immediately only when a matching human-created
+  `ActionApprovalGrant` is atomically consumed; the proposal and an
+  `action_grant` approval row are still durable. Never-grantable actions always
+  require fresh explicit review.
 - `POST /api/v1/proposals/:proposalId/rollback` restores workspace files to their
   pre-apply state from a `code_patch_snapshots` record captured at accept time.
   Rollback is only available while the snapshot is within its retention window and
@@ -125,4 +129,6 @@ Proposals are the product review and application boundary for durable mutations.
   for Knowledge, but the full evaluator for external or untrusted
   Activity/Artifact-derived Knowledge remains future work.
 - Accepted proposals keep enough result detail for callers to identify the applied product effect.
+- Automatic grant acceptance records `approval_source=action_grant:<id>` and
+  increments the bounded grant use count in the same transaction as apply.
 - Proposal application must be idempotence-safe at the API boundary: repeated accept attempts must not repeat the mutation.

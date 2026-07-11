@@ -15,7 +15,7 @@ import {
 } from "../../routeUtils/common";
 import { loadProtocol } from "../../providers/protocolRuntime";
 import { insertProposalRow } from "../../proposals/reviewPackets";
-import { PgSourcesRepository } from "../repository";
+import { SourceConnectionService } from "../sourceConnectionService";
 import { PgCustomSourceHandlerRepository } from "../customSources/customSourceHandlerRepository";
 import { CustomSourceCredentialService } from "../customSources/customSourceCredentialService";
 import {
@@ -156,8 +156,8 @@ export class SourceRecipeCreateService {
     }
 
     return withDbTransaction(this.pool, async (client) => {
-      const sourcesRepo = new PgSourcesRepository(client, this.config);
-      const connection = await sourcesRepo.createConnection(
+      const connections = new SourceConnectionService(client, this.config);
+      const connection = await connections.createConnection(
         identity,
         {
           connector_key: "custom_source",

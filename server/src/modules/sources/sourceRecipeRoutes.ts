@@ -3,7 +3,6 @@ import type { ModuleContext } from "../../gateway/routeRegistry";
 import {
   dbPool,
   jsonBody,
-  page,
   parsePage,
   params,
   query,
@@ -11,35 +10,25 @@ import {
   sendRouteError,
 } from "../routeUtils/common";
 import { enforceSources } from "./enforceSources";
-import { SourceRecipeDryRunService } from "./sourceRecipes/recipeDryRunService";
-import { SourceRecipeCreateService } from "./sourceRecipes/recipeCreateService";
-import { SourceRecipePipelineBridgeService } from "./sourceRecipes/pipelineBridgeService";
-import { listSourceRecipePrimitives } from "./sourceRecipes/primitiveRegistry";
-import {
-  getSourceRecipeVersion,
-  listSourceRecipeVersions,
-  recipeVersionOut,
-} from "./sourceRecipes/recipeVersionStore";
+import { SourceRecipeService } from "./sourceRecipeService";
 
 /** Level 2 Source recipe routes (plan/create, dry-run preview, activation, and the recipe-version read model), split out of routes.ts like customSourceRoutes.ts. */
 export function registerSourceRecipeRoutes(app: FastifyInstance, context: ModuleContext): void {
-  const dryRunService = () => new SourceRecipeDryRunService(dbPool(context.config), context.config);
-  const createService = () => new SourceRecipeCreateService(dbPool(context.config), context.config);
-  const pipelineBridgeService = () => new SourceRecipePipelineBridgeService(dbPool(context.config), context.config);
+  const recipeService = () => new SourceRecipeService(dbPool(context.config), context.config);
 
   app.get("/api/v1/sources/source-recipes/primitives", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
-    return reply.send({ primitives: listSourceRecipePrimitives() });
+    return reply.send(recipeService().listPrimitives());
   });
 
   app.post("/api/v1/sources/source-recipes/plan", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
     try {
-      const gate = await enforceSources(context, identity, "source.source_recipe_create", "source_connection");
+      const gate = await enforceSources(context, identity, "source.recipe.create", "source_connection");
       if (gate.blocked) return reply.code(403).send(gate.reply403);
-      return reply.send(await createService().planSource(identity, jsonBody(request)));
+      return reply.send(await recipeService().planSource(identity, jsonBody(request)));
     } catch (error) {
       return sendRouteError(reply, error);
     }
@@ -49,9 +38,9 @@ export function registerSourceRecipeRoutes(app: FastifyInstance, context: Module
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
     try {
-      const gate = await enforceSources(context, identity, "source.source_recipe_create", "source_connection");
+      const gate = await enforceSources(context, identity, "source.recipe.create", "source_connection");
       if (gate.blocked) return reply.code(403).send(gate.reply403);
-      return reply.code(201).send(await createService().createSource(identity, jsonBody(request)));
+      return reply.code(201).send(await recipeService().createSource(identity, jsonBody(request)));
     } catch (error) {
       return sendRouteError(reply, error);
     }
@@ -62,9 +51,9 @@ export function registerSourceRecipeRoutes(app: FastifyInstance, context: Module
     if (!identity) return reply;
     try {
       const connectionId = params(request).connectionId ?? "";
-      const gate = await enforceSources(context, identity, "source.source_recipe_activate", "source_connection", connectionId);
+      const gate = await enforceSources(context, identity, "source.recipe.activate", "source_connection", connectionId);
       if (gate.blocked) return reply.code(403).send(gate.reply403);
-      return reply.send(await createService().activateRecipe(identity, connectionId, jsonBody(request)));
+      return reply.send(await recipeService().activateRecipe(identity, connectionId, jsonBody(request)));
     } catch (error) {
       return sendRouteError(reply, error);
     }
@@ -75,10 +64,10 @@ export function registerSourceRecipeRoutes(app: FastifyInstance, context: Module
     if (!identity) return reply;
     try {
       const connectionId = params(request).connectionId ?? "";
-      const gate = await enforceSources(context, identity, "source.source_recipe_create", "source_connection", connectionId);
+      const gate = await enforceSources(context, identity, "source.recipe.create", "source_connection", connectionId);
       if (gate.blocked) return reply.code(403).send(gate.reply403);
       return reply.code(201).send(
-        await pipelineBridgeService().bridgePipelineHandler(identity, connectionId, jsonBody(request)),
+        await recipeService().bridgePipelineHandler(identity, connectionId, jsonBody(request)),
       );
     } catch (error) {
       return sendRouteError(reply, error);
@@ -90,9 +79,9 @@ export function registerSourceRecipeRoutes(app: FastifyInstance, context: Module
     if (!identity) return reply;
     try {
       const connectionId = params(request).connectionId ?? "";
-      const gate = await enforceSources(context, identity, "source.source_recipe_dry_run", "source_connection", connectionId);
+      const gate = await enforceSources(context, identity, "source.recipe.dry_run", "source_connection", connectionId);
       if (gate.blocked) return reply.code(403).send(gate.reply403);
-      return reply.send(await dryRunService().dryRunRecipeVersion(identity, connectionId, jsonBody(request)));
+      return reply.send(await recipeService().dryRunRecipeVersion(identity, connectionId, jsonBody(request)));
     } catch (error) {
       return sendRouteError(reply, error);
     }
@@ -103,13 +92,11 @@ export function registerSourceRecipeRoutes(app: FastifyInstance, context: Module
     if (!identity) return reply;
     try {
       const { limit, offset } = parsePage(query(request));
-      const listed = await listSourceRecipeVersions(
-        dbPool(context.config),
+      return reply.send(await recipeService().listVersions(
         identity.spaceId,
         params(request).connectionId ?? "",
         { limit, offset },
-      );
-      return reply.send(page(listed.rows.map(recipeVersionOut), listed.total, limit, offset));
+      ));
     } catch (error) {
       return sendRouteError(reply, error);
     }
@@ -122,14 +109,13 @@ export function registerSourceRecipeRoutes(app: FastifyInstance, context: Module
       if (!identity) return reply;
       try {
         const p = params(request);
-        const version = await getSourceRecipeVersion(
-          dbPool(context.config),
+        const version = await recipeService().getVersion(
           identity.spaceId,
           p.connectionId ?? "",
           p.versionId ?? "",
         );
         if (!version) return reply.code(404).send({ detail: "Recipe version not found" });
-        return reply.send(recipeVersionOut(version));
+        return reply.send(version);
       } catch (error) {
         return sendRouteError(reply, error);
       }

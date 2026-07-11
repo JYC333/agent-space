@@ -13,6 +13,8 @@ import { checkInternalToken } from "../../gateway/internalAuth";
 import { loadProtocol } from "../providers/protocolRuntime";
 import { loadActionRegistry } from "./actionRegistry";
 import { enforce, enforceProposalApply } from "./service";
+import { ActionApprovalGrantService } from "./actionApprovalGrantService";
+import { dbPool, jsonBody as publicJsonBody, params, requiredString, resolveIdentity, sendRouteError } from "../routeUtils/common";
 
 function jsonBody(request: FastifyRequest): unknown {
   const text = request.body instanceof Buffer ? request.body.toString("utf8") : "";
@@ -25,6 +27,25 @@ function sendDomainError(reply: FastifyReply, error: unknown): FastifyReply {
 }
 
 export function registerRoutes(app: FastifyInstance, context: ModuleContext): void {
+  const grants = () => new ActionApprovalGrantService(dbPool(context.config));
+  app.post("/api/v1/policy/action-grants", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply); if (!identity) return reply;
+    try {
+      const result = await enforce(context.config, await loadActionRegistry(), { action: "policy.action_grant.create", actor_type: "user", actor_id: identity.userId, space_id: identity.spaceId, resource_type: "action_approval_grant", resource_id: null, force_record: true });
+      if (result.status !== "allow") return reply.code(result.status === "blocked" ? 403 : 503).send({ detail: result.message ?? "Policy enforcement failed" });
+      return reply.code(201).send(await grants().create(identity, publicJsonBody(request)));
+    } catch (error) { return sendRouteError(reply, error); }
+  });
+  app.post("/api/v1/policy/action-grants/:grantId/revoke", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply); if (!identity) return reply;
+    try {
+      const grantId = requiredString(params(request).grantId, "grant_id");
+      const result = await enforce(context.config, await loadActionRegistry(), { action: "policy.action_grant.revoke", actor_type: "user", actor_id: identity.userId, space_id: identity.spaceId, resource_type: "action_approval_grant", resource_id: grantId, force_record: true });
+      if (result.status !== "allow") return reply.code(result.status === "blocked" ? 403 : 503).send({ detail: result.message ?? "Policy enforcement failed" });
+      return reply.send(await grants().revoke(identity, grantId));
+    } catch (error) { return sendRouteError(reply, error); }
+  });
+
   app.post("/internal/policy/enforce", async (request, reply) => {
     if (!checkInternalToken(context.config, request)) {
       return reply.code(401).send({ detail: "Unauthorized" });

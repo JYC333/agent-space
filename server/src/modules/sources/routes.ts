@@ -37,9 +37,102 @@ import { resolveProviderCommandStore } from "../providers/commands/store";
 import { enqueueRetrievalEmbeddingBackfill } from "../retrieval/embedding/job";
 import { loadProtocol } from "../providers/protocolRuntime";
 import { sourceRetrievalRegistry } from "./retrievalAdapter";
+import { SourceConnectionService } from "./sourceConnectionService";
+import { SourceBackfillPlanningService } from "./sourceBackfillService";
 
 export function registerRoutes(app: FastifyInstance, context: ModuleContext): void {
   const repository = () => new PgSourcesRepository(dbPool(context.config), context.config);
+  const connections = () => new SourceConnectionService(dbPool(context.config), context.config);
+  const backfills = () => new SourceBackfillPlanningService(dbPool(context.config), context.config);
+
+  app.post("/api/v1/sources/:connectionId/backfill/plans/preview", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const gate = await enforceSources(context, identity, "source.backfill.plan", "source_backfill_plan");
+      if (gate.blocked) return reply.code(403).send(gate.reply403);
+      return reply.send(await backfills().preview(identity, requiredString(params(request).connectionId, "connection_id"), jsonBody(request)));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.post("/api/v1/sources/:connectionId/backfill/plans", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const gate = await enforceSources(context, identity, "source.backfill.plan", "source_backfill_plan");
+      if (gate.blocked) return reply.code(403).send(gate.reply403);
+      return reply.code(201).send(await backfills().create(identity, requiredString(params(request).connectionId, "connection_id"), jsonBody(request)));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.get("/api/v1/sources/:connectionId/backfill/plans", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const gate = await enforceSources(context, identity, "source.backfill.plan", "source_backfill_plan");
+      if (gate.blocked) return reply.code(403).send(gate.reply403);
+      return reply.send(await backfills().list(identity, requiredString(params(request).connectionId, "connection_id")));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.get("/api/v1/sources/:connectionId/backfill/plans/:planId", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const p = params(request);
+      const gate = await enforceSources(context, identity, "source.backfill.plan", "source_backfill_plan", p.planId);
+      if (gate.blocked) return reply.code(403).send(gate.reply403);
+      return reply.send(await backfills().get(identity, requiredString(p.connectionId, "connection_id"), requiredString(p.planId, "plan_id")));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.post("/api/v1/sources/:connectionId/backfill/plans/:planId/propose-start", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const p = params(request);
+      const gate = await enforceSources(context, identity, "source.backfill.plan", "source_backfill_plan", p.planId);
+      if (gate.blocked) return reply.code(403).send(gate.reply403);
+      return reply.code(201).send(await backfills().proposeStart(identity, requiredString(p.connectionId, "connection_id"), requiredString(p.planId, "plan_id")));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.post("/api/v1/sources/:connectionId/backfill/plans/:planId/pause", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const p = params(request);
+      const gate = await enforceSources(context, identity, "source.backfill.manage", "source_backfill_plan", p.planId);
+      if (gate.blocked) return reply.code(403).send(gate.reply403);
+      return reply.send(await backfills().setPaused(identity, requiredString(p.connectionId, "connection_id"), requiredString(p.planId, "plan_id"), true));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.post("/api/v1/sources/:connectionId/backfill/plans/:planId/resume", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const p = params(request);
+      const gate = await enforceSources(context, identity, "source.backfill.manage", "source_backfill_plan", p.planId);
+      if (gate.blocked) return reply.code(403).send(gate.reply403);
+      return reply.send(await backfills().setPaused(identity, requiredString(p.connectionId, "connection_id"), requiredString(p.planId, "plan_id"), false));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
   const postProcessing = () => new SourcePostProcessingService(dbPool(context.config), context.config);
   registerCustomSourceRoutes(app, context);
   registerSourceRecipeRoutes(app, context);
@@ -222,7 +315,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
     try {
-      return reply.send(await repository().listConnectors());
+      return reply.send(await connections().listConnectors());
     } catch (error) {
       return sendRouteError(reply, error);
     }
@@ -234,7 +327,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     try {
       const q = query(request);
       const { limit, offset } = parsePage(q);
-      return reply.send(await repository().listConnections(identity, {
+      return reply.send(await connections().listConnections(identity, {
         view: optionalString(q.view),
         status: optionalString(q.status),
         limit,
@@ -249,19 +342,31 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
     try {
-      const gate = await enforceSources(context, identity, "source.connection_manage", "source_connection");
+      const gate = await enforceSources(context, identity, "source.connection.manage", "source_connection");
       if (gate.blocked) return reply.code(403).send(gate.reply403);
-      return reply.code(201).send(await repository().createConnection(identity, jsonBody(request)));
+      return reply.code(201).send(await connections().createConnection(identity, jsonBody(request)));
     } catch (error) {
       return sendRouteError(reply, error);
     }
+  });
+
+  app.post("/api/v1/sources/connections/drafts", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply); if (!identity) return reply;
+    try { const gate = await enforceSources(context, identity, "source.connection.manage", "source_connection"); if (gate.blocked) return reply.code(403).send(gate.reply403);
+      return reply.code(201).send(await connections().createDraft(identity, jsonBody(request))); } catch (error) { return sendRouteError(reply, error); }
+  });
+
+  app.post("/api/v1/sources/connections/proposals", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply); if (!identity) return reply;
+    try { const gate = await enforceSources(context, identity, "source.connection.manage", "source_connection"); if (gate.blocked) return reply.code(403).send(gate.reply403);
+      return reply.code(201).send(await connections().proposeCreate(identity, jsonBody(request))); } catch (error) { return sendRouteError(reply, error); }
   });
 
   app.get("/api/v1/sources/connections/:connectionId", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
     try {
-      const connection = await repository().getConnection(identity, params(request).connectionId ?? "");
+      const connection = await connections().getConnection(identity, params(request).connectionId ?? "");
       if (!connection) return reply.code(404).send({ detail: "Source connection not found" });
       return reply.send(connection);
     } catch (error) {
@@ -274,9 +379,9 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     if (!identity) return reply;
     try {
       const connectionId = params(request).connectionId ?? "";
-      const gate = await enforceSources(context, identity, "source.connection_manage", "source_connection", connectionId);
+      const gate = await enforceSources(context, identity, "source.connection.manage", "source_connection", connectionId);
       if (gate.blocked) return reply.code(403).send(gate.reply403);
-      return reply.send(await repository().recommendConnection(identity, connectionId, jsonBody(request)));
+      return reply.send(await connections().recommendConnection(identity, connectionId, jsonBody(request)));
     } catch (error) {
       return sendRouteError(reply, error);
     }
@@ -286,7 +391,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
     try {
-      return reply.send(await repository().updateConnectionSubscription(
+      return reply.send(await connections().updateConnectionSubscription(
         identity,
         params(request).connectionId ?? "",
         jsonBody(request),
@@ -325,7 +430,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     if (!identity) return reply;
     try {
       const connectionId = params(request).connectionId ?? "";
-      const gate = await enforceSources(context, identity, "source.connection_manage", "source_connection", connectionId);
+      const gate = await enforceSources(context, identity, "source.connection.manage", "source_connection", connectionId);
       if (gate.blocked) return reply.code(403).send(gate.reply403);
       return reply.code(201).send(await postProcessing().createRule(identity, connectionId, jsonBody(request)));
     } catch (error) {
@@ -338,7 +443,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     if (!identity) return reply;
     try {
       const connectionId = params(request).connectionId ?? "";
-      const gate = await enforceSources(context, identity, "source.connection_manage", "source_connection", connectionId);
+      const gate = await enforceSources(context, identity, "source.connection.manage", "source_connection", connectionId);
       if (gate.blocked) return reply.code(403).send(gate.reply403);
       return reply.send(await postProcessing().updateRule(
         identity,
@@ -356,7 +461,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     if (!identity) return reply;
     try {
       const connectionId = params(request).connectionId ?? "";
-      const gate = await enforceSources(context, identity, "source.connection_manage", "source_connection", connectionId);
+      const gate = await enforceSources(context, identity, "source.connection.manage", "source_connection", connectionId);
       if (gate.blocked) return reply.code(403).send(gate.reply403);
       return reply.code(202).send(await postProcessing().runRuleNow(
         identity,
@@ -413,7 +518,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     if (!identity) return reply;
     try {
       const connectionId = params(request).connectionId ?? "";
-      const gate = await enforceSources(context, identity, "source.connection_manage", "source_connection", connectionId);
+      const gate = await enforceSources(context, identity, "source.connection.manage", "source_connection", connectionId);
       if (gate.blocked) return reply.code(403).send(gate.reply403);
       return reply.code(202).send(await postProcessing().drainRuleNow(
         identity,
@@ -498,9 +603,9 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     if (!identity) return reply;
     try {
       const connectionId = params(request).connectionId ?? "";
-      const gate = await enforceSources(context, identity, "source.connection_manage", "source_connection", connectionId);
+      const gate = await enforceSources(context, identity, "source.connection.manage", "source_connection", connectionId);
       if (gate.blocked) return reply.code(403).send(gate.reply403);
-      return reply.send(await repository().updateConnection(identity, connectionId, jsonBody(request)));
+      return reply.send(await connections().updateConnection(identity, connectionId, jsonBody(request)));
     } catch (error) {
       return sendRouteError(reply, error);
     }
@@ -511,9 +616,9 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     if (!identity) return reply;
     try {
       const connectionId = params(request).connectionId ?? "";
-      const gate = await enforceSources(context, identity, "source.connection_manage", "source_connection", connectionId);
+      const gate = await enforceSources(context, identity, "source.connection.manage", "source_connection", connectionId);
       if (gate.blocked) return reply.code(403).send(gate.reply403);
-      return reply.send(await repository().updateConnection(identity, connectionId, { status: "archived" }));
+      return reply.send(await connections().archiveConnection(identity, connectionId));
     } catch (error) {
       return sendRouteError(reply, error);
     }
@@ -525,7 +630,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     try {
       const gate = await enforceSources(context, identity, "source.item_create", "extraction_job");
       if (gate.blocked) return reply.code(403).send(gate.reply403);
-      return reply.code(202).send(await repository().scanConnection(identity, params(request).connectionId ?? ""));
+      return reply.code(202).send(await connections().scanConnection(identity, params(request).connectionId ?? ""));
     } catch (error) {
       return sendRouteError(reply, error);
     }
@@ -732,71 +837,6 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     }
   });
 
-  app.get("/api/v1/sources/project-source-bindings", async (request, reply) => {
-    const identity = await resolveIdentity(context.config, request, reply);
-    if (!identity) return reply;
-    try {
-      const q = query(request);
-      return reply.send(await repository().listProjectSourceBindings(identity, {
-        projectId: requiredString(q.project_id, "project_id"),
-        sourceConnectionId: optionalString(q.source_connection_id),
-      }));
-    } catch (error) {
-      return sendRouteError(reply, error);
-    }
-  });
-
-  app.post("/api/v1/sources/project-source-bindings", async (request, reply) => {
-    const identity = await resolveIdentity(context.config, request, reply);
-    if (!identity) return reply;
-    try {
-      const gate = await enforceSources(context, identity, "project_source.configure", "project_source");
-      if (gate.blocked) return reply.code(403).send(gate.reply403);
-      return reply.code(201).send(await repository().createProjectSourceBinding(identity, jsonBody(request)));
-    } catch (error) {
-      return sendRouteError(reply, error);
-    }
-  });
-
-  app.patch("/api/v1/sources/project-source-bindings/:bindingId", async (request, reply) => {
-    const identity = await resolveIdentity(context.config, request, reply);
-    if (!identity) return reply;
-    try {
-      const gate = await enforceSources(context, identity, "project_source.configure", "project_source");
-      if (gate.blocked) return reply.code(403).send(gate.reply403);
-      const bindingId = requiredString(params(request).bindingId, "binding_id");
-      return reply.send(await repository().updateProjectSourceBinding(identity, bindingId, jsonBody(request)));
-    } catch (error) {
-      return sendRouteError(reply, error);
-    }
-  });
-
-  app.delete("/api/v1/sources/project-source-bindings/:bindingId", async (request, reply) => {
-    const identity = await resolveIdentity(context.config, request, reply);
-    if (!identity) return reply;
-    try {
-      const gate = await enforceSources(context, identity, "project_source.configure", "project_source");
-      if (gate.blocked) return reply.code(403).send(gate.reply403);
-      const bindingId = requiredString(params(request).bindingId, "binding_id");
-      return reply.send(await repository().deleteProjectSourceBinding(identity, bindingId));
-    } catch (error) {
-      return sendRouteError(reply, error);
-    }
-  });
-
-  app.post("/api/v1/sources/project-source-bindings/:bindingId/backfill", async (request, reply) => {
-    const identity = await resolveIdentity(context.config, request, reply);
-    if (!identity) return reply;
-    try {
-      const gate = await enforceSources(context, identity, "project_source.configure", "project_source");
-      if (gate.blocked) return reply.code(403).send(gate.reply403);
-      const bindingId = requiredString(params(request).bindingId, "binding_id");
-      return reply.send(await repository().backfillProjectSourceBinding(identity, bindingId));
-    } catch (error) {
-      return sendRouteError(reply, error);
-    }
-  });
-
   app.get("/api/v1/sources/project-items", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
@@ -826,17 +866,6 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     try {
       const q = query(request);
       return reply.send(await repository().projectSourceSummary(identity, requiredString(q.project_id, "project_id")));
-    } catch (error) {
-      return sendRouteError(reply, error);
-    }
-  });
-
-  app.get("/api/v1/sources/project-source-health", async (request, reply) => {
-    const identity = await resolveIdentity(context.config, request, reply);
-    if (!identity) return reply;
-    try {
-      const q = query(request);
-      return reply.send(await repository().projectSourceHealth(identity, requiredString(q.project_id, "project_id")));
     } catch (error) {
       return sendRouteError(reply, error);
     }
