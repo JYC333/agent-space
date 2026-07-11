@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { Pool } from "pg";
-import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import { getTestPostgres, type TestPostgresDatabase } from "./support/sharedPostgres";
 import { migrate } from "../src/db/migrator";
 import { ProjectCorpusRepository } from "../src/modules/projects/corpusRepository";
 import type { SpaceUserIdentity } from "../src/modules/routeUtils/common";
@@ -23,13 +23,13 @@ const CONNECTION = "44444444-4444-4444-8444-444444444444";
 const AGENT = "66666666-6666-4666-8666-666666666666";
 const PP_RUN = "77777777-7777-4777-8777-777777777777";
 
-let container: StartedPostgreSqlContainer | undefined;
+let container: TestPostgresDatabase | undefined;
 let pool: Pool | undefined;
 let available = false;
 
 beforeAll(async () => {
   try {
-    container = await new PostgreSqlContainer("pgvector/pgvector:pg18").start();
+    container = await getTestPostgres(__filename);
     pool = new Pool({ connectionString: container.getConnectionUri(), max: 3 });
     await migrate(pool, MIGRATIONS_DIR);
     available = true;

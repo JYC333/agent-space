@@ -29,6 +29,10 @@ npm run build
 npm run typecheck
 npm test
 
+# Real-Postgres tests share one tuned container and reuse it across local runs.
+# Opt out when a CI/job boundary requires the container to be stopped afterward.
+TESTCONTAINERS_REUSE_ENABLE=false npm test
+
 # Explicit schema migrations
 SERVER_DATABASE_URL=postgresql://... npm run migrate:status
 SERVER_DATABASE_URL=postgresql://... npm run migrate

@@ -19,8 +19,6 @@
     "noUnusedLocals": true,
     "noUnusedParameters": false,
     "noFallthroughCasesInSwitch": true,
-    "ignoreDeprecations": "6.0",
-    "baseUrl": ".",
     "paths": {
       "@agent-space/protocol": ["../../../../packages/protocol/dist/index.d.ts"],
       "fastify": ["../../../../server/node_modules/fastify"]

@@ -1,10 +1,7 @@
 import { createHash } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { Pool } from "pg";
-import {
-  PostgreSqlContainer,
-  type StartedPostgreSqlContainer,
-} from "@testcontainers/postgresql";
+import { getTestPostgres, type TestPostgresDatabase } from "./support/sharedPostgres";
 import { PgAuthRepository } from "../src/modules/auth/identity";
 
 const SCHEMA = `
@@ -89,14 +86,14 @@ CREATE TABLE note_collections (
 );
 `;
 
-let container: StartedPostgreSqlContainer | undefined;
+let container: TestPostgresDatabase | undefined;
 let pool: Pool | undefined;
 let repo: PgAuthRepository | undefined;
 let available = false;
 
 beforeAll(async () => {
   try {
-    container = await new PostgreSqlContainer("pgvector/pgvector:pg18").start();
+    container = await getTestPostgres(__filename, { empty: true });
     pool = new Pool({ connectionString: container.getConnectionUri() });
     await pool.query(SCHEMA);
     repo = new PgAuthRepository(pool);

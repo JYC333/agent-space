@@ -3,10 +3,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { Pool } from "pg";
-import {
-  PostgreSqlContainer,
-  type StartedPostgreSqlContainer,
-} from "@testcontainers/postgresql";
+import { getTestPostgres, type TestPostgresDatabase } from "./support/sharedPostgres";
 import * as poolModule from "../src/db/pool";
 import { migrate } from "../src/db/migrator";
 import { runBuiltInSeeds } from "../src/db/seeds";
@@ -22,13 +19,13 @@ import type { SpaceUserIdentity } from "../src/modules/routeUtils/common";
 const MIGRATIONS_DIR = join(process.cwd(), "migrations");
 const CATALOG_ROOT = join(process.cwd(), "..", "catalog");
 
-let container: StartedPostgreSqlContainer | undefined;
+let container: TestPostgresDatabase | undefined;
 let pool: Pool | undefined;
 let available = false;
 
 beforeAll(async () => {
   try {
-    container = await new PostgreSqlContainer("pgvector/pgvector:pg18").start();
+    container = await getTestPostgres(__filename);
     pool = new Pool({ connectionString: container.getConnectionUri(), max: 3 });
     await migrate(pool, MIGRATIONS_DIR);
     // Built-in evolution strategy assets (e.g. "repair.runtime_failure") are

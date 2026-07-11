@@ -1,10 +1,7 @@
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from "vitest";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { Pool } from "pg";
-import {
-  PostgreSqlContainer,
-  type StartedPostgreSqlContainer,
-} from "@testcontainers/postgresql";
+import { getTestPostgres, type TestPostgresDatabase } from "./support/sharedPostgres";
 import { loadFinanceLedgerRuntime } from "./financeLedgerRuntime";
 
 const {
@@ -12,7 +9,7 @@ const {
   routes: { registerFinanceLedgerRoutes },
 } = loadFinanceLedgerRuntime();
 
-let container: StartedPostgreSqlContainer | null = null;
+let container: TestPostgresDatabase | null = null;
 let pool: Pool | null = null;
 let app: FastifyInstance | null = null;
 
@@ -30,7 +27,7 @@ const guardState = {
 };
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer("pgvector/pgvector:pg18").start();
+  container = await getTestPostgres(__filename, { empty: true });
   pool = new Pool({ connectionString: container.getConnectionUri() });
   for (const migration of financeLedgerPlugin.migrations!) {
     await pool.query(migration.sql);

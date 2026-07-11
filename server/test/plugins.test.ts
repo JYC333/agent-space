@@ -13,10 +13,7 @@ import { randomUUID } from "node:crypto";
 import Fastify from "fastify";
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { Pool } from "pg";
-import {
-  PostgreSqlContainer,
-  type StartedPostgreSqlContainer,
-} from "@testcontainers/postgresql";
+import { getTestPostgres, type TestPostgresDatabase } from "./support/sharedPostgres";
 import {
   listOfficialPlugins,
   getOfficialPlugin,
@@ -178,7 +175,7 @@ interface DbQueryable {
   ): Promise<{ rows: Row[]; rowCount: number | null }>;
 }
 
-let container: StartedPostgreSqlContainer | null = null;
+let container: TestPostgresDatabase | null = null;
 let pool: Pool | null = null;
 let db: DbQueryable;
 
@@ -188,7 +185,7 @@ const USER_1 = "user-1-test";
 const USER_2 = "user-2-test";
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer("pgvector/pgvector:pg18").start();
+  container = await getTestPostgres(__filename, { empty: true });
   pool = new Pool({ connectionString: container.getConnectionUri() });
   db = pool;
   await pool.query(SCHEMA);

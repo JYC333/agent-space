@@ -1,10 +1,7 @@
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { Pool } from "pg";
-import {
-  PostgreSqlContainer,
-  type StartedPostgreSqlContainer,
-} from "@testcontainers/postgresql";
+import { getTestPostgres, type TestPostgresDatabase } from "./support/sharedPostgres";
 import type { RetrievalBriefResponse } from "@agent-space/protocol" with { "resolution-mode": "import" };
 import { migrate } from "../src/db/migrator";
 import { runContextReviewCycle } from "../src/modules/contextOps/reviewCycle";
@@ -24,13 +21,13 @@ const TARGET = "00000000-0000-4000-8000-000000000105";
 
 const LONG = "This object has enough searchable operational content to avoid being classified as thin.";
 
-let container: StartedPostgreSqlContainer | undefined;
+let container: TestPostgresDatabase | undefined;
 let pool: Pool | undefined;
 let available = false;
 
 beforeAll(async () => {
   try {
-    container = await new PostgreSqlContainer("pgvector/pgvector:pg18").start();
+    container = await getTestPostgres(__filename);
     pool = new Pool({ connectionString: container.getConnectionUri(), max: 3 });
     await migrate(pool, MIGRATIONS_DIR);
     available = true;

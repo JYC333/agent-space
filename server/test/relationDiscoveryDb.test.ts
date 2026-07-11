@@ -1,10 +1,7 @@
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { Pool } from "pg";
-import {
-  PostgreSqlContainer,
-  type StartedPostgreSqlContainer,
-} from "@testcontainers/postgresql";
+import { getTestPostgres, type TestPostgresDatabase } from "./support/sharedPostgres";
 import { migrate } from "../src/db/migrator";
 import { runRelationDiscoveryScan } from "../src/modules/knowledge/relationDiscovery";
 import { insertKnowledgeItem } from "./support/knowledgeFixtures";
@@ -18,13 +15,13 @@ const SPACE = "11111111-1111-4111-8111-111111111111";
 const VIEWER = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const OTHER = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 
-let container: StartedPostgreSqlContainer | undefined;
+let container: TestPostgresDatabase | undefined;
 let pool: Pool | undefined;
 let available = false;
 
 beforeAll(async () => {
   try {
-    container = await new PostgreSqlContainer("pgvector/pgvector:pg18").start();
+    container = await getTestPostgres(__filename);
     pool = new Pool({ connectionString: container.getConnectionUri(), max: 3 });
     await migrate(pool, MIGRATIONS_DIR);
     available = true;

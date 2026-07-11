@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { Pool } from "pg";
-import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import { getTestPostgres, type TestPostgresDatabase } from "./support/sharedPostgres";
 import type { CustomSourcePolicyEnvelope } from "@agent-space/protocol" with {
   "resolution-mode": "import",
 };
@@ -36,7 +36,7 @@ const IDENTITY = { spaceId: SPACE_A, userId: "user-1" };
 const CUSTOM_SOURCE_SPACE_POLICY_SETTINGS_KEY = "source.custom_source.space_policy";
 const CUSTOM_SOURCE_INSTANCE_RUNNER_SETTINGS_KEY = "source.custom_source.runner";
 
-let container: StartedPostgreSqlContainer | undefined;
+let container: TestPostgresDatabase | undefined;
 let pool: Pool | undefined;
 let config: ServerConfig | undefined;
 let service: CustomSourceCreateFlowService | undefined;
@@ -45,7 +45,7 @@ let available = false;
 
 beforeAll(async () => {
   try {
-    container = await new PostgreSqlContainer("pgvector/pgvector:pg18").start();
+    container = await getTestPostgres(__filename, { empty: true });
     pool = new Pool({ connectionString: container.getConnectionUri() });
     await pool.query(SCHEMA);
     available = true;

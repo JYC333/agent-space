@@ -2,10 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { Pool } from "pg";
-import {
-  PostgreSqlContainer,
-  type StartedPostgreSqlContainer,
-} from "@testcontainers/postgresql";
+import { getTestPostgres, type TestPostgresDatabase } from "./support/sharedPostgres";
 import { loadConfig } from "../src/config";
 import {
   MemoryProposalNotFoundError,
@@ -17,7 +14,7 @@ const SCHEMA = readFileSync(
   "utf8",
 );
 
-let container: StartedPostgreSqlContainer | undefined;
+let container: TestPostgresDatabase | undefined;
 let pool: Pool | undefined;
 let repo: PgMemoryProposalRepository | undefined;
 let available = false;
@@ -27,7 +24,7 @@ const USER = "user-1";
 
 beforeAll(async () => {
   try {
-    container = await new PostgreSqlContainer("pgvector/pgvector:pg18").start();
+    container = await getTestPostgres(__filename, { empty: true });
     pool = new Pool({ connectionString: container.getConnectionUri() });
     await pool.query(SCHEMA);
     repo = new PgMemoryProposalRepository(

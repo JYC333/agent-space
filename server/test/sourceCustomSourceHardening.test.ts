@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { Pool } from "pg";
-import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import { getTestPostgres, type TestPostgresDatabase } from "./support/sharedPostgres";
 import { loadConfig, type ServerConfig } from "../src/config";
 import { CustomSourceCreateFlowService } from "../src/modules/sources/customSources/customSourceCreateFlowService";
 import { CustomSourceRepairService } from "../src/modules/sources/customSources/customSourceRepairService";
@@ -22,7 +22,7 @@ const SCHEMA = readFileSync(join(process.cwd(), "test/fixtures/sourceCustomSourc
 const SPACE_A = "space-a";
 const IDENTITY = { spaceId: SPACE_A, userId: "user-1" };
 
-let container: StartedPostgreSqlContainer | undefined;
+let container: TestPostgresDatabase | undefined;
 let pool: Pool | undefined;
 let config: ServerConfig | undefined;
 let createFlow: CustomSourceCreateFlowService | undefined;
@@ -31,7 +31,7 @@ let available = false;
 
 beforeAll(async () => {
   try {
-    container = await new PostgreSqlContainer("pgvector/pgvector:pg18").start();
+    container = await getTestPostgres(__filename, { empty: true });
     pool = new Pool({ connectionString: container.getConnectionUri() });
     await pool.query(SCHEMA);
     available = true;

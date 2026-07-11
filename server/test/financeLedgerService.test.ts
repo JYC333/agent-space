@@ -1,9 +1,6 @@
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from "vitest";
 import { Pool } from "pg";
-import {
-  PostgreSqlContainer,
-  type StartedPostgreSqlContainer,
-} from "@testcontainers/postgresql";
+import { getTestPostgres, type TestPostgresDatabase } from "./support/sharedPostgres";
 import { loadFinanceLedgerRuntime } from "./financeLedgerRuntime";
 
 const {
@@ -11,7 +8,7 @@ const {
   service: { financeLedgerService, rootTypeForAccountName },
 } = loadFinanceLedgerRuntime();
 
-let container: StartedPostgreSqlContainer | null = null;
+let container: TestPostgresDatabase | null = null;
 let pool: Pool | null = null;
 
 const SPACE_A = "space-finance-a";
@@ -19,7 +16,7 @@ const SPACE_B = "space-finance-b";
 const USER_1 = "user-finance-1";
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer("pgvector/pgvector:pg18").start();
+  container = await getTestPostgres(__filename, { empty: true });
   pool = new Pool({ connectionString: container.getConnectionUri() });
   for (const migration of financeLedgerPlugin.migrations!) {
     await pool.query(migration.sql);

@@ -2,10 +2,7 @@ import { join } from "node:path";
 import { readFileSync, readdirSync } from "node:fs";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { Pool } from "pg";
-import {
-  PostgreSqlContainer,
-  type StartedPostgreSqlContainer,
-} from "@testcontainers/postgresql";
+import { getTestPostgres, type TestPostgresDatabase } from "./support/sharedPostgres";
 import { loadMigrations, migrate } from "../src/db/migrator";
 
 // Empty-DB migration test. Applies the committed consolidated baseline
@@ -51,13 +48,13 @@ const REPRESENTATIVE_TABLES = [
   "evolution_selector_decisions",
 ];
 
-let container: StartedPostgreSqlContainer | undefined;
+let container: TestPostgresDatabase | undefined;
 let pool: Pool | undefined;
 let available = false;
 
 beforeAll(async () => {
   try {
-    container = await new PostgreSqlContainer("pgvector/pgvector:pg18").start();
+    container = await getTestPostgres(__filename);
     pool = new Pool({ connectionString: container.getConnectionUri(), max: 3 });
     available = true;
   } catch (err) {

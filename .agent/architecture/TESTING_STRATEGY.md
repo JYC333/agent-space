@@ -85,6 +85,30 @@ Rules:
 - Do not rely on uncommitted ORM identity-map state for API contract assertions.
 - Rollback-only setup is acceptable only for tests that never cross the API boundary.
 
+## Shared PostgreSQL Test Infrastructure
+
+Real-PostgreSQL server tests share one `pgvector/pgvector:pg18` Testcontainers
+instance per Vitest project. Global setup applies the committed server baseline
+once to a template database. Each test file receives its own database cloned
+from that template, so files remain isolated while avoiding one container and
+one migration run per file.
+
+Tests that specifically exercise the migration runner, plugin migrations, or a
+hand-authored minimal schema must request an empty database from the shared
+helper. Test files still own and close their `Pool`; calling the helper handle's
+`stop()` drops only that file's database, not the shared container.
+
+The shared container is test-only and uses tmpfs plus `fsync=off`,
+`synchronous_commit=off`, and `full_page_writes=off`. PostgreSQL 18 requires the
+tmpfs mount at `/var/lib/postgresql`, not the pre-18
+`/var/lib/postgresql/data` path.
+
+Local runs reuse the container across Vitest invocations. Set
+`TESTCONTAINERS_REUSE_ENABLE=false` to disable reuse (for example in a CI job
+that requires teardown); global teardown then stops the container. Reuse never
+reuses per-file databases or the migrated template: those are recreated for
+each Vitest run.
+
 ## Proposal And Run Rules
 
 - `/api/v1/proposals` is the only product API for proposal review and application.
