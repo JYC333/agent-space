@@ -560,6 +560,7 @@ describe("RunMaterializationService", () => {
           id: `${spaceId}:${runId}:finalization`,
           space_id: spaceId,
           run_id: runId,
+          attempt_number: 1,
           finalizer_version: "post_run_finalization.v1",
           status: "completed",
           run_evaluation_id: "evaluation-1",

@@ -31,7 +31,12 @@ export function useRun(runId: string | null, reloadKey: number = 0): UseRunResul
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!runId) return
+    if (!runId) {
+      setRun(null)
+      setLoading(false)
+      setError(null)
+      return
+    }
     const id = runId
 
     let active = true

@@ -14,6 +14,7 @@ import {
   type RuntimeToolResolverPort,
 } from "../runtimeTools";
 import {
+  ensureRuntimeSubagentsDisabled,
   getLocalCliRuntimeAdapterSpec,
   type LocalCliRuntimeAdapterSpec,
 } from "../runtimeAdapters";
@@ -28,6 +29,7 @@ import {
   type RenderedCliCommand,
 } from "./cliCommandRendering";
 import {
+  DockerCliCommandExecutor,
   LocalCliCommandExecutor,
   type CliCommandExecutor,
   type CliExecutionResult,
@@ -50,12 +52,13 @@ export { buildSubprocessEnv } from "./cliSubprocessEnv";
 export { renderCliCommand } from "./cliCommandRendering";
 export {
   LocalCliProcessRegistry,
+  DockerCliCommandExecutor,
   type CliCommandExecutor,
   type CliExecutionResult,
   type CliProcessRegistry,
 } from "./localCliExecution";
 
-export type VendorCliAdapterType = "claude_code" | "codex_cli";
+export type VendorCliAdapterType = "claude_code" | "codex_cli" | "opencode";
 export type ExecutorMode = "worktree" | "docker";
 
 export interface CliCredentialBrokerPort {
@@ -115,7 +118,8 @@ export async function executeVendorCliAdapter(
   }
 
   const credentialBroker = deps.credentialBroker ?? new CliCredentialBroker(config);
-  const credential = await grantCredential(input, spec, credentialBroker);
+  const executorMode = executorModeFor(input);
+  const credential = await grantCredential(input, spec, credentialBroker, executorMode);
   if (!credential.granted) {
     return cliFailure(
       input,
@@ -160,6 +164,20 @@ export async function executeVendorCliAdapter(
     );
   }
 
+  // Docker mode deliberately has no network namespace. A provider proxy lease
+  // or credential network profile would either fail mysteriously or tempt a
+  // future caller to weaken the container policy, so reject it explicitly.
+  if (executorMode === "docker" && (input.run.model_provider_id || credential.network_profile_id)) {
+    await cleanupCredential(input, credentialBroker);
+    return cliFailure(
+      input,
+      "docker_network_policy_denied",
+      "One-shot Docker CLI execution currently permits only local, network-isolated runs.",
+      startedAt,
+      spec,
+    );
+  }
+
   let rendered: RenderedCliCommand;
   try {
     rendered = await renderCliCommand(spec, {
@@ -184,7 +202,7 @@ export async function executeVendorCliAdapter(
     );
   }
 
-  const timeout = timeoutSeconds(input.adapter_config, spec);
+  const timeout = timeoutSeconds(input.adapter_config, spec, input.run);
   let runtimeBinding: RuntimeProviderBinding;
   try {
     runtimeBinding = await buildRuntimeProviderBinding(
@@ -213,7 +231,9 @@ export async function executeVendorCliAdapter(
     );
   }
 
-  const executor = deps.executor ?? new LocalCliCommandExecutor();
+  const executor = deps.executor ?? (
+    executorMode === "docker" ? new DockerCliCommandExecutor() : new LocalCliCommandExecutor()
+  );
   let result: CliExecutionResult;
   try {
     const cliNetworkEnv = await cliDefaultNetworkEnv(config, input.run.space_id, credential, runtimeBinding);
@@ -221,10 +241,22 @@ export async function executeVendorCliAdapter(
       command: rendered.argv,
       cwd: input.sandbox_cwd ?? null,
       timeout_seconds: timeout,
+      stall_timeout_seconds: stallTimeoutSeconds(input.adapter_config, timeout),
       env: buildSubprocessEnv(credential.env, { ...runtimeBinding.env, ...cliNetworkEnv }),
       run_id: input.run.id,
       stdin: rendered.stdin,
       process_registry: input.process_registry,
+      docker: executorMode === "docker"
+        ? {
+            image: config.cliSandboxImage,
+            sandbox_cwd: input.sandbox_cwd!,
+            sandbox_root: config.sandboxRoot,
+            cli_tools_root: config.cliToolsRoot,
+            credential_root: `${config.agentSpaceHome}/secrets`,
+            credential_source_path: credential.host_source_path,
+            credential_target_path: credential.target_path,
+          }
+        : undefined,
     });
   } finally {
     cleanupRuntimeProviderBinding(runtimeBinding);
@@ -268,12 +300,19 @@ function validateSandbox(
 ): { code: string; message: string } | null {
   const level = input.required_sandbox_level ?? input.run.required_sandbox_level;
   if (level === "one_shot_docker" || level === "docker") {
-    return spec.sandbox.supports_one_shot_docker
-      ? null
-      : {
-          code: "docker_sandbox_not_implemented",
-          message: `Runtime adapter '${spec.adapter_type}' does not support one-shot Docker execution.`,
-        };
+    if (!spec.sandbox.supports_one_shot_docker) {
+      return {
+        code: "docker_sandbox_not_supported",
+        message: `Runtime adapter '${spec.adapter_type}' does not support one-shot Docker execution.`,
+      };
+    }
+    if (!input.sandbox_cwd) {
+      return {
+        code: "workspace_prepare_failed",
+        message: `Runtime adapter '${spec.adapter_type}' requires a prepared Docker sandbox directory.`,
+      };
+    }
+    return null;
   }
   if (level === "ephemeral") {
     // Run-scope sandbox: a system-provisioned throwaway working dir. No
@@ -311,13 +350,14 @@ async function grantCredential(
   input: VendorCliAdapterInput,
   spec: LocalCliRuntimeAdapterSpec,
   broker: CliCredentialBrokerPort,
+  executorMode: ExecutorMode,
 ): Promise<CredentialGrant> {
   try {
     return await broker.grantForRun(
       input.run.id,
       input.run.space_id,
       spec.credentials.credential_runtime_name,
-      "worktree",
+      executorMode,
       profileId(input),
     );
   } catch {
@@ -325,7 +365,7 @@ async function grantCredential(
       granted: false,
       profile_id: null,
       runtime: spec.credentials.credential_runtime_name,
-      executor_mode: "worktree",
+      executor_mode: executorMode,
       readonly: false,
       temp_home: null,
       host_source_path: null,
@@ -337,17 +377,26 @@ async function grantCredential(
   }
 }
 
+function executorModeFor(input: VendorCliAdapterInput): ExecutorMode {
+  const level = input.required_sandbox_level ?? input.run.required_sandbox_level;
+  return level === "one_shot_docker" || level === "docker" ? "docker" : "worktree";
+}
+
 async function renderVendorContext(
   input: VendorCliAdapterInput,
   spec: LocalCliRuntimeAdapterSpec,
 ): Promise<void> {
-  if (!spec.context.writes_vendor_context_file) return;
-  if (!input.sandbox_cwd) throw new Error("CLI context rendering requires a sandbox worktree.");
-  const content = input.context_text ?? "";
-  await writeFile(join(input.sandbox_cwd, spec.context.context_file_type), content, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
+  if (!input.sandbox_cwd && (spec.context.writes_vendor_context_file || spec.subagent_disable_config)) {
+    throw new Error("CLI context rendering requires a sandbox worktree.");
+  }
+  if (spec.context.writes_vendor_context_file) {
+    const content = input.context_text ?? "";
+    await writeFile(join(input.sandbox_cwd!, spec.context.context_file_type), content, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+  }
+  if (spec.subagent_disable_config) await ensureRuntimeSubagentsDisabled(spec, input.sandbox_cwd!);
 }
 
 async function cleanupCredential(
@@ -373,18 +422,25 @@ function cliResultEnvelope(
   const success = result.returncode === 0 && !result.timed_out;
   const stdout = redactCliOutput(result.stdout);
   const stderr = redactCliOutput(result.stderr);
+  const structured = spec.adapter_type === "opencode" ? parseOpenCodeOutput(stdout) : null;
   const completedAt = new Date().toISOString();
   return {
     adapter_type: spec.adapter_type,
     adapter_kind: "local_cli",
     success,
-    output_text: stdout,
-    output_json: success ? null : { adapter_type: spec.adapter_type },
+    output_text: structured?.text ?? stdout,
+    output_json: (success
+      ? structured?.output_json ?? null
+      : { adapter_type: spec.adapter_type }) as RunAdapterResultEnvelope["output_json"],
     exit_code: result.returncode,
     error_code: success
       ? null
+      : result.failure_code === "docker_sandbox_unavailable"
+        ? "docker_sandbox_unavailable"
       : result.timed_out
-        ? "cli_adapter_timeout"
+        ? result.failure_code === "stall_timeout"
+          ? "cli_stall_timeout"
+          : "cli_adapter_timeout"
         : "cli_adapter_nonzero_exit",
     error_message: success ? null : stderr || "CLI adapter failed.",
     started_at: startedAt,
@@ -408,6 +464,8 @@ function cliResultEnvelope(
       context_file_type: spec.context.context_file_type,
       context_target_format: spec.context.context_target_format,
       rendered_in_sandbox: spec.context.writes_vendor_context_file,
+      structured_output: Boolean(structured),
+      structured_event_count: structured?.event_count ?? null,
       runtime_provider_id: runtimeBinding.provider_id,
       runtime_provider_model: runtimeBinding.model ?? modelFromRun(input.run),
       runtime_provider_protocol: runtimeBinding.protocol,
@@ -426,6 +484,42 @@ function cliResultEnvelope(
       exit_code: result.returncode,
       timeout_seconds: timeout,
     }) as RunAdapterResultEnvelope["metadata_json"],
+  };
+}
+
+export function parseOpenCodeOutput(stdout: string): {
+  text: string;
+  output_json: Record<string, unknown> | null;
+  event_count: number;
+} {
+  const events = stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      try {
+        const value: unknown = JSON.parse(line);
+        return value && typeof value === "object" && !Array.isArray(value)
+          ? value as Record<string, unknown>
+          : null;
+      } catch {
+        return null;
+      }
+    })
+    .filter((event): event is Record<string, unknown> => Boolean(event));
+  if (events.length === 0) return { text: stdout, output_json: null, event_count: 0 };
+  const text = events
+    .map((event) =>
+      stringValue(event.text)
+      ?? stringValue(recordValue(event.part).text)
+      ?? stringValue(recordValue(event.message).text),
+    )
+    .filter((value): value is string => Boolean(value))
+    .join("\n");
+  return {
+    text: text || stdout,
+    output_json: sanitizeEvidenceJson({ format: "opencode_jsonl", events: events.slice(-128) }) as unknown as Record<string, unknown>,
+    event_count: events.length,
   };
 }
 
@@ -458,11 +552,29 @@ function cliFailure(
   };
 }
 
-function timeoutSeconds(config: Record<string, unknown> | undefined, spec: LocalCliRuntimeAdapterSpec): number {
+function timeoutSeconds(
+  config: Record<string, unknown> | undefined,
+  spec: LocalCliRuntimeAdapterSpec,
+  run: RunRecord,
+): number {
   const raw = config?.timeout;
   const parsed = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
   const selected = Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : spec.limits.default_timeout_seconds;
-  return Math.min(selected, spec.limits.max_timeout_seconds);
+  const contract = recordValue(run.contract_snapshot_json);
+  const maxDuration = typeof contract.max_duration_seconds === "number" &&
+    Number.isFinite(contract.max_duration_seconds) && contract.max_duration_seconds > 0
+    ? Math.trunc(contract.max_duration_seconds)
+    : null;
+  return Math.min(selected, spec.limits.max_timeout_seconds, maxDuration ?? Number.MAX_SAFE_INTEGER);
+}
+
+function stallTimeoutSeconds(
+  adapterConfig: Record<string, unknown> | undefined,
+  timeoutSeconds: number,
+): number {
+  const configured = Number(adapterConfig?.stall_timeout_seconds);
+  const requested = Number.isFinite(configured) && configured > 0 ? configured : 300;
+  return Math.min(requested, Math.max(1, timeoutSeconds - 1));
 }
 
 function profileId(input: VendorCliAdapterInput): string | null {

@@ -17,6 +17,12 @@ import { ContextPrepareService } from "../context";
 import { PgCodePatchCollector, PgWorkspaceManager } from "../workspaces";
 import { EvolutionRepository } from "../evolution/repository";
 import { EvolutionSolidifier } from "../evolution/solidifier";
+import { EvolutionSignalEmitter } from "../evolution/signalEmitters";
+import { PgUsageRepository } from "../usage/repository";
+import { PgVerificationEngine } from "./verification";
+import { PlanExecutionService } from "../plans/executionService";
+import { WorkflowExecutionService } from "../automations/workflowExecutionService";
+import { PgRunSupervisor } from "./supervisor";
 import {
   NonTerminalRunError,
   PostRunFinalizationService,
@@ -33,6 +39,7 @@ import {
   runStatusToOut,
   runStepToOut,
   runToOut,
+  verificationResultToOut,
 } from "./runReadModel";
 
 interface RunsCommandServices {
@@ -138,6 +145,7 @@ function commandServices(context: ModuleContext): RunsCommandServices {
       contextPreparer,
       workspaceManager: PgWorkspaceManager.fromConfig(context.config),
       codePatchCollector: PgCodePatchCollector.fromConfig(context.config),
+      verificationEngine: PgVerificationEngine.fromConfig(context.config),
       processRegistry: sharedCliProcessRegistry,
     }),
   };
@@ -235,6 +243,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
         agent_id: q.agent_id ?? null,
         workspace_id: q.workspace_id ?? null,
         project_id: q.project_id ?? null,
+        workflow_version_id: q.workflow_version_id ?? null,
         limit: boundedInt(q.limit, 50, 1, 200),
         offset: boundedInt(q.offset, 0, 0, Number.MAX_SAFE_INTEGER),
       });
@@ -338,6 +347,19 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     });
   });
 
+  app.get("/api/v1/runs/:runId/attempts", async (request, reply) => {
+    const result = await visibleRun(context, request, reply);
+    if (!result) return reply;
+    const [attempts, supervisorDecisions] = await Promise.all([
+      result.repository.listRunAttempts(result.run.space_id, result.run.id),
+      result.repository.listRunSupervisorDecisions(result.run.space_id, result.run.id),
+    ]);
+    return reply.send({
+      attempts,
+      supervisor_decisions: supervisorDecisions,
+    });
+  });
+
   app.post("/api/v1/runs/:runId/finalize", async (request, reply) => {
     const identity = await resolveIdentity(context, request, reply);
     if (!identity) return reply;
@@ -348,6 +370,15 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       const finalization = await new PostRunFinalizationService(
         repository,
         new EvolutionSolidifier(new EvolutionRepository(db)),
+        new EvolutionSignalEmitter(db),
+        new PgUsageRepository(db),
+        {
+          reconcileForRun: async (spaceId: string, childRunId: string, userId: string) => {
+            await new PlanExecutionService(db).reconcileForRun(spaceId, childRunId);
+            await new WorkflowExecutionService().reconcileForRun(db, spaceId, childRunId, userId);
+          },
+        },
+        new PgRunSupervisor(db, new EvolutionSignalEmitter(db)),
       ).finalize(
         runId,
         identity.spaceId,
@@ -414,6 +445,26 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     return reply.send(evaluations.map(runEvaluationToOut));
   });
 
+  app.get("/api/v1/runs/:runId/verification", async (request, reply) => {
+    const result = await visibleRun(context, request, reply);
+    if (!result) return reply;
+    const verifications = await result.repository.listVerificationResults(
+      result.run.space_id,
+      result.run.id,
+    );
+    return reply.send(verifications.map(verificationResultToOut));
+  });
+
+  app.get("/api/v1/runs/:runId/verifications", async (request, reply) => {
+    const result = await visibleRun(context, request, reply);
+    if (!result) return reply;
+    const verifications = await result.repository.listVerificationResults(
+      result.run.space_id,
+      result.run.id,
+    );
+    return reply.send(verifications.map(verificationResultToOut));
+  });
+
   app.get("/api/v1/runs/:runId", async (request, reply) => {
     const result = await visibleRun(context, request, reply);
     if (!result) return reply;
@@ -435,12 +486,20 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
         .send({ detail: `Run is not waiting for review (current status: ${run.status})` });
     }
     const grantedAt = new Date().toISOString();
-    const updated = await repository.grantRunApprovalAndRequeue({
-      run_id: runId,
-      space_id: identity.spaceId,
-      granted_by_user_id: identity.userId,
-      granted_at: grantedAt,
-    });
+    const supervisorReview = recordValue(run.error_json).supervisor_review === true;
+    const updated = supervisorReview
+      ? await repository.resumeRunAfterSupervisorReview({
+          run_id: runId,
+          space_id: identity.spaceId,
+          resumed_by_user_id: identity.userId,
+          resumed_at: grantedAt,
+        })
+      : await repository.grantRunApprovalAndRequeue({
+          run_id: runId,
+          space_id: identity.spaceId,
+          granted_by_user_id: identity.userId,
+          granted_at: grantedAt,
+        });
     if (!updated) {
       return reply.code(409).send({ detail: "Run could not be resumed (status may have changed)" });
     }
@@ -455,6 +514,48 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       id: updated.id,
       status: updated.status,
       resumed_at: grantedAt,
+      resume_kind: supervisorReview ? "new_attempt" : "same_attempt",
+    });
+  });
+
+  app.post("/api/v1/runs/:runId/abandon", async (request, reply) => {
+    const identity = await resolveIdentity(context, request, reply);
+    if (!identity) return reply;
+    const repository = PgRunRepository.fromConfig(context.config);
+    const runId = params(request).runId ?? "";
+    const run = await repository.getVisibleRun(identity.spaceId, identity.userId, runId);
+    if (!run) {
+      return reply.code(404).send({ detail: "Run not found in this space" });
+    }
+    if (run.status !== "waiting_for_review") {
+      return reply
+        .code(409)
+        .send({ detail: `Run is not waiting for review (current status: ${run.status})` });
+    }
+    const body = jsonBody(request);
+    const abandonedAt = new Date().toISOString();
+    const updated = await repository.markRunTerminal({
+      run_id: runId,
+      space_id: identity.spaceId,
+      status: "cancelled",
+      output_json: {},
+      error_json: {
+        error_code: "run_abandoned",
+        error_text: stringValue(body.reason) ?? "Run abandoned after supervisor review.",
+        abandoned_by_user_id: identity.userId,
+      },
+      exit_code: 1,
+      completed_at: abandonedAt,
+      usage_json: {},
+    });
+    if (!updated) {
+      return reply.code(409).send({ detail: "Run could not be abandoned (status may have changed)" });
+    }
+    await RunMaterializationService.fromConfig(context.config).finalizeRun(updated);
+    return reply.code(202).send({
+      id: updated.id,
+      status: updated.status,
+      abandoned_at: abandonedAt,
     });
   });
 }
@@ -479,6 +580,12 @@ function stopResponse(
 
 function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
 }
 
 async function visibleRun(

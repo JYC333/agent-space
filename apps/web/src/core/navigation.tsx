@@ -170,6 +170,7 @@ export const SCENES: Scene[] = [
       { label: 'Chat history', to: '/sessions' },
       { label: 'Templates',  to: '/agents/templates' },
       { label: 'Runs',       to: '/runs' },
+      { label: 'Plans',      to: '/plans' },
       { label: 'Automations', to: '/automations' },
       { label: 'Capabilities', to: '/capabilities' },
     ],

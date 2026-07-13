@@ -22,6 +22,11 @@ import { loadProtocol } from "../providers/protocolRuntime";
 import { insertProposalRow } from "../proposals/reviewPackets";
 import { EvolutionRepository } from "../evolution/repository";
 import { EvolutionSolidifier } from "../evolution/solidifier";
+import { EvolutionSignalEmitter } from "../evolution/signalEmitters";
+import { PgUsageRepository } from "../usage/repository";
+import { PlanExecutionService } from "../plans/executionService";
+import { WorkflowExecutionService } from "../automations/workflowExecutionService";
+import { PgRunSupervisor } from "./supervisor";
 import {
   AgentGroupRuntimeDelegationMaterializer,
   type RuntimeDelegationMaterializerPort,
@@ -71,6 +76,15 @@ export class RunMaterializationService {
     private readonly finalizer: RunFinalizer = new PostRunFinalizationService(
       new PgRunRepository(db),
       new EvolutionSolidifier(new EvolutionRepository(db)),
+      new EvolutionSignalEmitter(db),
+      new PgUsageRepository(db),
+      {
+        reconcileForRun: async (spaceId: string, runId: string, userId: string) => {
+          await new PlanExecutionService(db).reconcileForRun(spaceId, runId);
+          await new WorkflowExecutionService().reconcileForRun(db, spaceId, runId, userId);
+        },
+      },
+      new PgRunSupervisor(db, new EvolutionSignalEmitter(db)),
     ),
     policyEnforcer?: MaterializationPolicyEnforcer,
     private readonly runtimeDelegationMaterializer: RuntimeDelegationMaterializerPort =
@@ -267,7 +281,12 @@ export class RunMaterializationService {
         kind: "artifact",
         status: "succeeded",
         artifact_id: artifactId,
-        metadata_json: { label: input.label, operation: "artifact.persist" },
+        metadata_json: {
+          label: input.label,
+          operation: "artifact.persist",
+          artifact_type: stringValue(spec.artifact_type) ?? "adapter_output",
+          title: stringValue(spec.title) ?? `Adapter artifact (${input.adapterType})`,
+        },
       };
     } catch (error) {
       return materializationError("artifact", input.label, "output_artifact_materialization_error", error);

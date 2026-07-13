@@ -41,6 +41,8 @@ import {
   type RunFinalizationRecord,
   type RunListFilters,
   type RunRecord,
+  type RunAttemptRecord,
+  type RuntimeProfileSelectionSource,
   type RunStepDetailRecord,
   type RunStepInput,
   type RunStepRecord,
@@ -54,6 +56,13 @@ import {
   taskScoreForOutcome,
   taskSummaryFromRunEvaluation,
 } from "./taskEvaluationProjection";
+import {
+  createRunContractSnapshot,
+  type RunContractSnapshotInput,
+} from "./contractSnapshot";
+import { assertBudgetSourcesAvailable, checkRunBudget } from "./budgetEnforcement";
+import { withQueryableTransaction } from "../routeUtils/common";
+import type { VerificationResultRecord } from "./verification/types";
 
 export {
   RunCreateValidationError,
@@ -75,11 +84,14 @@ export {
   type RunFinalizationRecord,
   type RunListFilters,
   type RunRecord,
+  type RunAttemptRecord,
   type RunStepDetailRecord,
   type RunStepInput,
   type RunStepRecord,
   type RunTerminalUpdate,
 } from "./runRepositoryTypes";
+
+export type { VerificationResultRecord } from "./verification/types";
 
 interface RuntimeProfileForRun {
   id: string;
@@ -113,22 +125,41 @@ export class PgRunRepository {
       now.getTime() - Math.max(1, staleAfterSeconds) * 1000,
     ).toISOString();
     const completedAt = now.toISOString();
-    const errorMessage = "Run timed out (stale running recovery at server worker startup)";
+    const errorMessage = "Run became orphaned after the server lost its execution registry";
     const errorJson = sanitizeErrorJson({
-      error_code: "stale_run_recovered",
-      error_text: "Run was stuck in running status and was recovered at server worker startup",
+      error_code: "orphaned",
+      error_text: "Run was still running after the server lost its execution registry",
     });
     const result = await this.db.query<{ id: string }>(
-      `UPDATE runs
-          SET status = 'failed',
+      `WITH orphaned_runs AS (
+         UPDATE runs
+            SET status = 'orphaned',
               error_message = $3,
               error_json = $4::jsonb,
               ended_at = $2,
               updated_at = $2
-        WHERE status = 'running'
+          WHERE status IN ('running', 'cancelling')
           AND started_at IS NOT NULL
           AND started_at < $1
-        RETURNING id`,
+          RETURNING id, space_id
+       ), updated_attempts AS (
+         UPDATE run_attempts a
+            SET status = 'orphaned',
+                error_code = 'orphaned',
+                error_json = $4::jsonb,
+                ended_at = $2,
+                last_activity_at = $2,
+                updated_at = $2
+           FROM orphaned_runs r
+          WHERE a.space_id = r.space_id
+            AND a.run_id = r.id
+            AND a.attempt_number = (
+              SELECT max(candidate.attempt_number)
+                FROM run_attempts candidate
+               WHERE candidate.space_id = r.space_id AND candidate.run_id = r.id
+            )
+       )
+       SELECT id FROM orphaned_runs`,
       [
         cutoff,
         completedAt,
@@ -139,9 +170,40 @@ export class PgRunRepository {
     return result.rowCount ?? result.rows.length;
   }
 
+  async listOrphanedRunIds(limit = 100): Promise<Array<{ id: string; space_id: string }>> {
+    const result = await this.db.query<{ id: string; space_id: string }>(
+      `SELECT id, space_id
+         FROM runs
+        WHERE status = 'orphaned'
+          AND error_json->>'error_code' = 'orphaned'
+        ORDER BY updated_at ASC, id ASC
+        LIMIT $1`,
+      [Math.max(1, Math.min(500, Math.trunc(limit)))],
+    );
+    return result.rows;
+  }
+
   async createQueuedRun(input: RunCreateInput): Promise<RunRecord> {
     validateRunCreateInput(input);
     return this.createQueuedRunInternal(input);
+  }
+
+  /**
+   * Public admission path for callers that create a logical Run directly.
+   * The budget lock, source validation, context snapshot, Run row, and first
+   * attempt are committed as one unit so a rejected admission cannot return a
+   * queued Run that will only fail later in dispatch.
+   */
+  async createQueuedRunWithBudgetAdmission(input: RunCreateInput): Promise<RunRecord> {
+    validateRunCreateInput(input);
+    return withQueryableTransaction(this.db, async (db) => {
+      const contractSnapshot = createRunContractSnapshot(
+        input.contract_snapshot,
+        new Date().toISOString(),
+      );
+      await assertBudgetSourcesAvailable(db, input.space_id, contractSnapshot.budget_sources);
+      return new PgRunRepository(db).createQueuedRun(input);
+    });
   }
 
   async createDelegatedChildRun(input: DelegatedChildRunCreateInput): Promise<RunRecord> {
@@ -167,6 +229,7 @@ export class PgRunRepository {
         scheduled_at: input.scheduled_at ?? null,
         parent_run_id: input.parent_run_id,
         runtime_profile_id: input.runtime_profile_id ?? null,
+        runtime_profile_selection_source: input.runtime_profile_selection_source ?? "default",
         capability_id: input.capability_id ?? null,
         capabilities_json: input.capabilities_json ?? null,
         model_override_json: input.model_override_json ?? null,
@@ -237,17 +300,18 @@ export class PgRunRepository {
   }): Promise<RunRecord | null> {
     const now = input.updated_at ?? new Date().toISOString();
     const result = await this.db.query<RunRecord>(
-      `UPDATE runs
+      `WITH updated AS (
+       UPDATE runs
           SET root_run_id = id,
               run_group_id = $3,
-              updated_at = $4
+              updated_at = $4::timestamptz
         WHERE space_id = $1 AND id = $2
         RETURNING id, space_id, agent_id, agent_version_id, runtime_profile_id,
                   context_snapshot_id, run_type, status, mode, prompt, instruction,
                   workspace_id, session_id, parent_run_id, root_run_id, run_group_id,
                   delegation_id, project_id, scheduled_at, adapter_type, capability_id,
                   capabilities_json, model_provider_id, model_override_json,
-                  runtime_profile_snapshot_json, required_sandbox_level, trigger_origin,
+                  runtime_profile_snapshot_json, required_sandbox_level, contract_snapshot_json, workflow_version_id, trigger_origin,
                   instructed_by_user_id, instructed_by_agent_id, error_message, error_json,
                   output_json, usage_json, started_at, ended_at, created_at, updated_at,
                   visibility`,
@@ -316,6 +380,9 @@ export class PgRunRepository {
           input.runtime_profile_id,
         )
       : await this.getDefaultRuntimeProfileForRun(input.space_id, input.agent_id);
+    const runtimeProfileSelectionSource: RuntimeProfileSelectionSource =
+      input.runtime_profile_selection_source
+      ?? (input.runtime_profile_id ? "explicit" : "default");
     if (!runtimeProfile) {
       throw new RunCreateValidationError(
         `Agent '${input.agent_id}' has no enabled runtime profile`,
@@ -353,6 +420,7 @@ export class PgRunRepository {
     }
 
     const now = new Date().toISOString();
+    const contractSnapshot = createRunContractSnapshot(input.contract_snapshot, now);
     const contextSnapshotId = randomUUID();
     const capabilitiesJson = normalizeRunCapabilitiesJson(input.capabilities_json);
     const contextArtifactIds = normalizeContextArtifactIds(input.context_artifact_ids);
@@ -375,7 +443,7 @@ export class PgRunRepository {
           session_id: input.session_id ?? null,
           workspace_id: input.workspace_id ?? null,
           project_id: input.project_id ?? null,
-          root_run_id: links.root_run_id ?? null,
+          root_run_id: links.root_run_id ?? input.root_run_id ?? null,
           run_group_id: links.run_group_id ?? null,
           delegation_id: links.delegation_id ?? null,
           instructed_by_agent_id: links.instructed_by_agent_id ?? null,
@@ -411,14 +479,15 @@ export class PgRunRepository {
           delegation_id, instructed_by_user_id, instructed_by_agent_id,
           run_type, trigger_origin, status, mode, prompt, instruction,
           scheduled_at, created_at, updated_at, adapter_type, capability_id,
-          capabilities_json, model_provider_id, model_override_json, runtime_profile_snapshot_json,
-          required_sandbox_level, usage_accuracy, owner_user_id, visibility, access_level, project_id, source
+                  capabilities_json, model_provider_id, model_override_json, runtime_profile_snapshot_json,
+                  required_sandbox_level, usage_accuracy, owner_user_id, visibility, access_level, project_id,
+                  contract_snapshot_json, workflow_version_id, source, runtime_profile_selection_source
        )
        VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
           $11, $12, $13, $14, $15, $16, 'queued', $17, $18, $19, $20, $21, $21,
           $22, $23, $24::jsonb, $25, $26::jsonb, $27::jsonb, $28, 'estimated',
-          $13, $29, $30, $31, 'managed'
+          $13, $29, $30, $31, $32::jsonb, $33, 'managed', $34
        )
        RETURNING id, space_id, agent_id, agent_version_id, runtime_profile_id,
                  context_snapshot_id,
@@ -431,7 +500,7 @@ export class PgRunRepository {
                  instructed_by_user_id, instructed_by_agent_id, error_message,
                  error_json, output_json,
                  usage_json, started_at, ended_at, created_at, updated_at,
-                 owner_user_id, visibility, access_level`,
+                 owner_user_id, visibility, access_level, contract_snapshot_json, workflow_version_id, runtime_profile_selection_source`,
       [
         runId,
         input.space_id,
@@ -442,7 +511,7 @@ export class PgRunRepository {
         input.workspace_id ?? null,
         input.session_id ?? null,
         input.parent_run_id ?? null,
-        links.root_run_id ?? null,
+        links.root_run_id ?? input.root_run_id ?? null,
         links.run_group_id ?? null,
         links.delegation_id ?? null,
         input.user_id,
@@ -464,10 +533,21 @@ export class PgRunRepository {
         agent.visibility === "space_shared" ? "space_shared" : "private",
         agent.access_level,
         input.project_id ?? null,
+        JSON.stringify(contractSnapshot),
+        input.workflow_version_id ?? null,
+        runtimeProfileSelectionSource,
       ],
     );
     const row = result.rows[0];
     if (!row) throw new Error("Run insert returned no row");
+    await this.db.query(
+      `INSERT INTO run_attempts (
+         id, space_id, run_id, attempt_number, status,
+         created_at, updated_at
+       ) VALUES ($1, $2, $3, 1, 'queued', $4, $4)
+       ON CONFLICT (space_id, run_id, attempt_number) DO NOTHING`,
+      [randomUUID(), input.space_id, row.id, now],
+    );
     await this.db.query(
       `UPDATE context_snapshots SET run_id = $3 WHERE space_id = $1 AND id = $2`,
       [input.space_id, contextSnapshotId, row.id],
@@ -486,6 +566,8 @@ export class PgRunRepository {
     trigger_origin: "automation" | "job" | "system";
     capability_id?: string | null;
     capabilities_json?: unknown[] | null;
+    contract_snapshot?: RunContractSnapshotInput;
+    workflow_version_id?: string | null;
     source?: "managed" | "scheduled" | "webhook" | "manual_import" | "remote_import" | "ide_assist" | null;
     started_at?: string | null;
   }): Promise<RunRecord> {
@@ -531,6 +613,7 @@ export class PgRunRepository {
     await this.assertOptionalSpaceRef("projects", input.project_id, input.space_id, "Project");
 
     const now = input.started_at ?? new Date().toISOString();
+    const contractSnapshot = createRunContractSnapshot(input.contract_snapshot, now);
     const contextSnapshotId = randomUUID();
     const capabilitiesJson = normalizeRunCapabilitiesJson(input.capabilities_json);
     await this.db.query(
@@ -574,7 +657,7 @@ export class PgRunRepository {
           scheduled_at, started_at, created_at, updated_at, adapter_type,
           capability_id, capabilities_json, model_provider_id, model_override_json,
           runtime_profile_snapshot_json, required_sandbox_level, usage_accuracy,
-          owner_user_id, visibility, access_level, project_id, source
+          owner_user_id, visibility, access_level, project_id, contract_snapshot_json, workflow_version_id, source
        )
        VALUES (
           $1, $2, $3, $4, NULL, $5, $6, NULL, NULL, $7,
@@ -582,7 +665,7 @@ export class PgRunRepository {
           NULL, $11, $11, $11, NULL,
           $12, $13::jsonb, NULL, $14::jsonb,
           NULL, 'none', 'estimated',
-          $7, 'space_shared', 'full', $15, $16
+          $7, 'space_shared', 'full', $15, $16::jsonb, $17, $18
        )
        RETURNING id, space_id, agent_id, agent_version_id, runtime_profile_id,
                  context_snapshot_id,
@@ -595,7 +678,7 @@ export class PgRunRepository {
                  instructed_by_user_id, instructed_by_agent_id, error_message,
                  error_json, output_json,
                  usage_json, started_at, ended_at, created_at, updated_at,
-                 owner_user_id, visibility, access_level`,
+                 owner_user_id, visibility, access_level, contract_snapshot_json, workflow_version_id`,
       [
         runId,
         input.space_id,
@@ -612,11 +695,21 @@ export class PgRunRepository {
         JSON.stringify(capabilitiesJson),
         modelOverrideJson,
         input.project_id ?? null,
+        JSON.stringify(contractSnapshot),
+        input.workflow_version_id ?? null,
         input.source ?? "managed",
       ],
     );
     const row = result.rows[0];
     if (!row) throw new Error("Run insert returned no row");
+    await this.db.query(
+      `INSERT INTO run_attempts (
+         id, space_id, run_id, attempt_number, status,
+         started_at, last_activity_at, created_at, updated_at
+       ) VALUES ($1, $2, $3, 1, 'running', $4, $4, $4, $4)
+       ON CONFLICT (space_id, run_id, attempt_number) DO NOTHING`,
+      [randomUUID(), input.space_id, row.id, now],
+    );
     await this.db.query(
       `UPDATE context_snapshots SET run_id = $3 WHERE space_id = $1 AND id = $2`,
       [input.space_id, contextSnapshotId, row.id],
@@ -846,7 +939,7 @@ export class PgRunRepository {
     const result = await this.db.query<RunRecord>(
       `SELECT r.id, r.space_id, r.agent_id, r.agent_version_id,
               a.name AS agent_name,
-              r.runtime_profile_id,
+              r.runtime_profile_id, r.runtime_profile_selection_source,
               av.system_prompt AS system_prompt,
               r.context_snapshot_id, r.run_type, r.status, r.mode, r.prompt,
               r.instruction, r.workspace_id, r.session_id, r.parent_run_id,
@@ -855,6 +948,7 @@ export class PgRunRepository {
               r.capabilities_json, r.model_provider_id, r.model_override_json, r.required_sandbox_level,
               r.runtime_profile_snapshot_json,
               COALESCE(r.runtime_profile_snapshot_json->'runtime_config_json', '{}'::jsonb) AS runtime_config_json,
+              r.contract_snapshot_json, r.workflow_version_id, r.route_decision_id,
               r.trigger_origin, r.instructed_by_user_id, r.instructed_by_agent_id, r.error_message,
               r.error_json, r.output_json, r.usage_json, r.started_at,
               r.ended_at, r.created_at, r.updated_at, r.owner_user_id, r.visibility, r.access_level
@@ -894,18 +988,19 @@ export class PgRunRepository {
     addOptionalFilter(clauses, params, "agent_id", filters.agent_id);
     addOptionalFilter(clauses, params, "workspace_id", filters.workspace_id);
     addOptionalFilter(clauses, params, "project_id", filters.project_id);
+    addOptionalFilter(clauses, params, "workflow_version_id", filters.workflow_version_id);
     params.push(filters.limit, filters.offset);
     const limitIndex = params.length - 1;
     const offsetIndex = params.length;
     const result = await this.db.query<RunRecord>(
-      `SELECT id, space_id, agent_id, agent_version_id, runtime_profile_id,
+      `SELECT id, space_id, agent_id, agent_version_id, runtime_profile_id, runtime_profile_selection_source,
               context_snapshot_id,
               run_type, status, mode, prompt, instruction, workspace_id,
               session_id, parent_run_id, root_run_id, run_group_id, delegation_id,
               project_id, scheduled_at, adapter_type,
               capability_id, capabilities_json, model_provider_id, model_override_json,
               runtime_profile_snapshot_json,
-              required_sandbox_level, trigger_origin, instructed_by_user_id,
+              required_sandbox_level, contract_snapshot_json, workflow_version_id, route_decision_id, trigger_origin, instructed_by_user_id,
               instructed_by_agent_id,
               error_message, error_json, output_json, usage_json, started_at,
               ended_at, created_at, updated_at, owner_user_id, visibility, access_level
@@ -1059,7 +1154,8 @@ export class PgRunRepository {
               root_run_id, run_group_id, delegation_id, status,
               run_type, trigger_origin, mode, created_at, started_at, ended_at,
               prompt, instruction, workspace_id, session_id, project_id,
-              adapter_type, model_provider_id, required_sandbox_level,
+              runtime_profile_id, runtime_profile_selection_source,
+              adapter_type, model_provider_id, required_sandbox_level, contract_snapshot_json, workflow_version_id,
               instructed_by_user_id, instructed_by_agent_id, error_message, visibility
          FROM runs
         WHERE space_id = $1 AND parent_run_id = $2
@@ -1123,6 +1219,21 @@ export class PgRunRepository {
          FROM run_evaluations
         WHERE space_id = $1 AND run_id = $2
         ORDER BY evaluated_at DESC, id DESC`,
+      [spaceId, runId],
+    );
+    return result.rows;
+  }
+
+  async listVerificationResults(
+    spaceId: string,
+    runId: string,
+  ): Promise<VerificationResultRecord[]> {
+    const result = await this.db.query<VerificationResultRecord>(
+      `SELECT id, space_id, run_id, verifier_type, verifier_version, status,
+              summary, evidence_refs_json, details_json, started_at, completed_at, created_at
+         FROM verification_results
+        WHERE space_id = $1 AND run_id = $2
+        ORDER BY created_at ASC, id ASC`,
       [spaceId, runId],
     );
     return result.rows;
@@ -1211,7 +1322,7 @@ export class PgRunRepository {
     runId: string,
   ): Promise<RunFinalizationRecord | null> {
     const result = await this.db.query<RunFinalizationRecord>(
-      `SELECT id, space_id, run_id, finalizer_version, status,
+      `SELECT id, space_id, run_id, attempt_number, finalizer_version, status,
               run_evaluation_id, task_evaluation_id, outcome_status,
               failure_layer, failure_reason_code, trajectory_status,
               skipped_reasons_json, error_json, metadata_json, finalized_at,
@@ -1228,18 +1339,19 @@ export class PgRunRepository {
   async getRunFinalizationByVersion(
     spaceId: string,
     runId: string,
+    attemptNumber: number,
     finalizerVersion: string,
   ): Promise<RunFinalizationRecord | null> {
     const result = await this.db.query<RunFinalizationRecord>(
-      `SELECT id, space_id, run_id, finalizer_version, status,
+      `SELECT id, space_id, run_id, attempt_number, finalizer_version, status,
               run_evaluation_id, task_evaluation_id, outcome_status,
               failure_layer, failure_reason_code, trajectory_status,
               skipped_reasons_json, error_json, metadata_json, finalized_at,
               created_at
          FROM run_finalizations
-        WHERE space_id = $1 AND run_id = $2 AND finalizer_version = $3
+        WHERE space_id = $1 AND run_id = $2 AND attempt_number = $3 AND finalizer_version = $4
         LIMIT 1`,
-      [spaceId, runId, finalizerVersion],
+      [spaceId, runId, attemptNumber, finalizerVersion],
     );
     return result.rows[0] ?? null;
   }
@@ -1249,7 +1361,7 @@ export class PgRunRepository {
     runId: string,
   ): Promise<RunFinalizationRecord[]> {
     const result = await this.db.query<RunFinalizationRecord>(
-      `SELECT id, space_id, run_id, finalizer_version, status,
+      `SELECT id, space_id, run_id, attempt_number, finalizer_version, status,
               run_evaluation_id, task_evaluation_id, outcome_status,
               failure_layer, failure_reason_code, trajectory_status,
               skipped_reasons_json, error_json, metadata_json, finalized_at,
@@ -1311,6 +1423,7 @@ export class PgRunRepository {
   async insertRunFinalization(input: {
     space_id: string;
     run_id: string;
+    attempt_number: number;
     finalizer_version: string;
     status: "completed" | "failed";
     run_evaluation_id?: string | null;
@@ -1327,14 +1440,14 @@ export class PgRunRepository {
   }): Promise<RunFinalizationRecord> {
     const result = await this.db.query<RunFinalizationRecord>(
       `INSERT INTO run_finalizations (
-          id, space_id, run_id, finalizer_version, status,
+          id, space_id, run_id, attempt_number, finalizer_version, status,
           run_evaluation_id, task_evaluation_id, outcome_status,
           failure_layer, failure_reason_code, trajectory_status,
           skipped_reasons_json, error_json, metadata_json, finalized_at, created_at
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-               $12::jsonb, $13::jsonb, $14::jsonb, $15, $16)
-       RETURNING id, space_id, run_id, finalizer_version, status,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+               $13::jsonb, $14::jsonb, $15::jsonb, $16, $17)
+       RETURNING id, space_id, run_id, attempt_number, finalizer_version, status,
                  run_evaluation_id, task_evaluation_id, outcome_status,
                  failure_layer, failure_reason_code, trajectory_status,
                  skipped_reasons_json, error_json, metadata_json, finalized_at,
@@ -1343,6 +1456,7 @@ export class PgRunRepository {
         randomUUID(),
         input.space_id,
         input.run_id,
+        input.attempt_number,
         input.finalizer_version,
         input.status,
         input.run_evaluation_id ?? null,
@@ -1432,6 +1546,7 @@ export class PgRunRepository {
     started_at: string;
     required_sandbox_level?: string | null;
   }): Promise<RunRecord | null> {
+    const attemptId = randomUUID();
     const result = await this.db.query<RunRecord>(
       `WITH updated AS (
          UPDATE runs
@@ -1446,9 +1561,40 @@ export class PgRunRepository {
                     parent_run_id, root_run_id, run_group_id, delegation_id,
                     adapter_type, capability_id, capabilities_json, model_provider_id,
                     model_override_json,
-                    required_sandbox_level, trigger_origin, instructed_by_user_id,
+                    required_sandbox_level, contract_snapshot_json, workflow_version_id, trigger_origin, instructed_by_user_id,
                     instructed_by_agent_id, error_message,
                     started_at, ended_at
+       )
+       , updated_attempt AS (
+         UPDATE run_attempts a
+            SET status = 'running',
+                started_at = $3,
+                last_activity_at = $3,
+                updated_at = $3
+           FROM updated u
+          WHERE a.space_id = u.space_id
+            AND a.run_id = u.id
+            AND a.status = 'queued'
+            AND a.attempt_number = (
+              SELECT max(candidate.attempt_number)
+                FROM run_attempts candidate
+               WHERE candidate.space_id = u.space_id AND candidate.run_id = u.id
+            )
+         RETURNING a.id
+       ), inserted_attempt AS (
+         INSERT INTO run_attempts (
+           id, space_id, run_id, attempt_number, status,
+           started_at, last_activity_at, created_at, updated_at
+         )
+         SELECT $5, u.space_id, u.id,
+                COALESCE((SELECT max(a.attempt_number)
+                            FROM run_attempts a
+                           WHERE a.space_id = u.space_id AND a.run_id = u.id), 0) + 1,
+                'running', $3, $3, $3, $3
+           FROM updated u
+          WHERE NOT EXISTS (SELECT 1 FROM updated_attempt)
+         ON CONFLICT (space_id, run_id, attempt_number) DO NOTHING
+         RETURNING id
        )
        SELECT u.*,
               a.name AS agent_name,
@@ -1467,9 +1613,16 @@ export class PgRunRepository {
         input.run_id,
         input.started_at,
         input.required_sandbox_level ?? null,
+        attemptId,
       ],
     );
     return result.rows[0] ?? null;
+  }
+
+  async checkRunDispatchContract(
+    run: Pick<RunRecord, "space_id" | "id" | "root_run_id" | "contract_snapshot_json">,
+  ): Promise<{ allowed: boolean; error_code?: string; error_message?: string }> {
+    return checkRunBudget(this.db, run);
   }
 
   async updateRunSandboxLevel(input: {
@@ -1499,8 +1652,12 @@ export class PgRunRepository {
     };
     const errorJson = sanitizeErrorJson(input.error_json ?? {});
     const usageJson = sanitizeEvidenceJson(input.usage_json ?? {});
+    const terminalErrorCode = typeof recordValue(errorJson).error_code === "string"
+      ? recordValue(errorJson).error_code as string
+      : null;
     const result = await this.db.query<RunRecord>(
-      `UPDATE runs
+      `WITH updated AS (
+       UPDATE runs
           SET status = $3,
               output_json = $4::jsonb,
               error_json = $5::jsonb,
@@ -1510,13 +1667,34 @@ export class PgRunRepository {
               updated_at = $8,
               error_message = $9
         WHERE space_id = $1 AND id = $2
-          AND status NOT IN ('succeeded', 'failed', 'degraded', 'cancelled')
+          AND status NOT IN ('succeeded', 'failed', 'degraded', 'cancelled', 'orphaned')
         RETURNING id, space_id, agent_id, agent_version_id, run_type, status, mode,
                   prompt, instruction, workspace_id, session_id, project_id,
                   parent_run_id, root_run_id, run_group_id, delegation_id,
                   adapter_type, model_provider_id,
                   required_sandbox_level, trigger_origin, instructed_by_user_id,
-                  instructed_by_agent_id, error_message, started_at, ended_at`,
+                  instructed_by_agent_id, error_message, started_at, ended_at
+       ), updated_attempt AS (
+         UPDATE run_attempts a
+            SET status = $3,
+                error_code = NULLIF($10::text, ''),
+                error_json = $5::jsonb,
+                usage_json = $7::jsonb,
+                exit_code = $6,
+                ended_at = $8,
+                last_activity_at = $8,
+                cancel_confirmed_at = CASE WHEN $3 = 'cancelled' THEN $8 ELSE cancel_confirmed_at END,
+                updated_at = $8
+           FROM updated u
+          WHERE a.space_id = u.space_id
+            AND a.run_id = u.id
+            AND a.attempt_number = (
+              SELECT max(candidate.attempt_number)
+                FROM run_attempts candidate
+               WHERE candidate.space_id = u.space_id AND candidate.run_id = u.id
+            )
+       )
+       SELECT * FROM updated`,
       [
         input.space_id,
         input.run_id,
@@ -1527,6 +1705,211 @@ export class PgRunRepository {
         JSON.stringify(usageJson),
         input.completed_at,
         redactEvidenceText(extractErrorMessage(errorJson)),
+        terminalErrorCode,
+      ],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async getLatestRunAttempt(spaceId: string, runId: string): Promise<RunAttemptRecord | null> {
+    const result = await this.db.query<RunAttemptRecord>(
+      `SELECT id, space_id, run_id, attempt_number, status,
+              started_at, ended_at, last_activity_at,
+              cancel_requested_at, cancel_confirmed_at, exit_code,
+              error_code, error_json, usage_json, created_at, updated_at
+         FROM run_attempts
+        WHERE space_id = $1 AND run_id = $2
+        ORDER BY attempt_number DESC
+        LIMIT 1`,
+      [spaceId, runId],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async listRunAttempts(spaceId: string, runId: string): Promise<RunAttemptRecord[]> {
+    const result = await this.db.query<RunAttemptRecord>(
+      `SELECT id, space_id, run_id, attempt_number, status,
+              started_at, ended_at, last_activity_at,
+              cancel_requested_at, cancel_confirmed_at, exit_code,
+              error_code, error_json, usage_json, created_at, updated_at
+         FROM run_attempts
+        WHERE space_id = $1 AND run_id = $2
+        ORDER BY attempt_number DESC, id ASC`,
+      [spaceId, runId],
+    );
+    return result.rows;
+  }
+
+  async listRunSupervisorDecisions(spaceId: string, runId: string): Promise<Record<string, unknown>[]> {
+    const result = await this.db.query<Record<string, unknown>>(
+      `SELECT id, space_id, run_id, attempt_id, decision, reason_code,
+              next_attempt_number, total_estimated_cost_usd, max_cost_usd,
+              metadata_json, created_at
+         FROM run_supervisor_decisions
+        WHERE space_id = $1 AND run_id = $2
+        ORDER BY created_at DESC, id ASC`,
+      [spaceId, runId],
+    );
+    return result.rows;
+  }
+
+  async markRunCancelling(input: {
+    run_id: string;
+    space_id: string;
+    requested_at: string;
+    reason?: string | null;
+    requested_by_user_id?: string | null;
+  }): Promise<RunRecord | null> {
+    const errorJson = sanitizeErrorJson({
+      error_code: "run_cancel_requested",
+      error_text: input.reason ?? "Run cancellation requested.",
+      requested_by_user_id: input.requested_by_user_id ?? null,
+    });
+    const result = await this.db.query<RunRecord>(
+      `WITH updated AS (
+         UPDATE runs
+            SET status = 'cancelling',
+                error_json = $3::jsonb,
+                error_message = $4,
+                updated_at = $5
+          WHERE space_id = $1
+            AND id = $2
+            AND status IN ('queued', 'running', 'waiting_for_review', 'waiting_for_dependency', 'cancelling')
+          RETURNING id, space_id, agent_id, agent_version_id, run_type, status, mode,
+                    prompt, instruction, workspace_id, session_id, project_id,
+                    parent_run_id, root_run_id, run_group_id, delegation_id,
+                    adapter_type, model_provider_id, required_sandbox_level,
+                    trigger_origin, instructed_by_user_id, instructed_by_agent_id,
+                    error_message, started_at, ended_at
+       ), updated_attempt AS (
+         UPDATE run_attempts a
+            SET status = 'cancelling',
+                cancel_requested_at = $5,
+                error_code = 'run_cancel_requested',
+                error_json = $3::jsonb,
+                updated_at = $5
+           FROM updated u
+          WHERE a.space_id = u.space_id
+            AND a.run_id = u.id
+            AND a.attempt_number = (
+              SELECT max(candidate.attempt_number)
+                FROM run_attempts candidate
+               WHERE candidate.space_id = u.space_id AND candidate.run_id = u.id
+            )
+       )
+       SELECT * FROM updated`,
+      [
+        input.space_id,
+        input.run_id,
+        JSON.stringify(errorJson),
+        redactEvidenceText(input.reason ?? "Run cancellation requested."),
+        input.requested_at,
+      ],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async requeueRunForRetry(input: {
+    run_id: string;
+    space_id: string;
+    updated_at: string;
+    reason_code: string;
+    attempt_number: number;
+  }): Promise<RunRecord | null> {
+    const attemptId = randomUUID();
+    const result = await this.db.query<RunRecord>(
+      `WITH updated AS (
+         UPDATE runs
+            SET status = 'queued',
+                started_at = NULL,
+                ended_at = NULL,
+                error_json = jsonb_build_object(
+                  'error_code', 'supervisor_retry_scheduled',
+                  'reason_code', $4::text,
+                  'attempt_number', $5::int
+                ),
+                error_message = $4,
+                updated_at = $3
+          WHERE space_id = $1
+            AND id = $2
+            AND status IN ('failed', 'degraded', 'orphaned')
+          RETURNING id, space_id, agent_id, agent_version_id, runtime_profile_id,
+                    run_type, status, mode, prompt, instruction, workspace_id,
+                    session_id, project_id, parent_run_id, root_run_id,
+                    run_group_id, delegation_id, adapter_type, model_provider_id,
+                    required_sandbox_level, trigger_origin, instructed_by_user_id,
+                    instructed_by_agent_id, error_message, error_json,
+                    started_at, ended_at, owner_user_id, visibility, access_level,
+                    contract_snapshot_json, workflow_version_id
+       ), inserted_attempt AS (
+         INSERT INTO run_attempts (
+           id, space_id, run_id, attempt_number, status,
+           created_at, updated_at
+         )
+         SELECT $6, space_id, id, $5, 'queued', $3, $3
+           FROM updated
+         ON CONFLICT (space_id, run_id, attempt_number) DO NOTHING
+       )
+       SELECT * FROM updated`,
+      [input.space_id, input.run_id, input.updated_at, input.reason_code, input.attempt_number, attemptId],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async holdRunForSupervisorReview(input: {
+    run_id: string;
+    space_id: string;
+    updated_at: string;
+    reason_code: string;
+    message: string;
+  }): Promise<RunRecord | null> {
+    const errorJson = sanitizeErrorJson({
+      error_code: input.reason_code,
+      error_text: input.message,
+      supervisor_review: true,
+    });
+    const result = await this.db.query<RunRecord>(
+      `WITH updated AS (
+         UPDATE runs
+            SET status = 'waiting_for_review',
+                error_json = $3::jsonb,
+                error_message = $4,
+                updated_at = $5
+          WHERE space_id = $1
+            AND id = $2
+            AND status IN ('failed', 'degraded', 'orphaned')
+          RETURNING id, space_id, agent_id, agent_version_id, run_type, status,
+                    mode, prompt, instruction, workspace_id, session_id,
+                    project_id, parent_run_id, root_run_id, run_group_id,
+                    delegation_id, adapter_type, model_provider_id,
+                    required_sandbox_level, trigger_origin, instructed_by_user_id,
+                    instructed_by_agent_id, error_message, error_json,
+                    started_at, ended_at, owner_user_id, visibility, access_level,
+                    contract_snapshot_json, workflow_version_id
+       ), updated_attempt AS (
+         UPDATE run_attempts a
+            SET status = 'waiting_for_review',
+                error_code = $6,
+                error_json = $3::jsonb,
+                last_activity_at = $5,
+                updated_at = $5
+           FROM updated u
+          WHERE a.space_id = u.space_id
+            AND a.run_id = u.id
+            AND a.attempt_number = (
+              SELECT max(candidate.attempt_number)
+                FROM run_attempts candidate
+               WHERE candidate.space_id = u.space_id AND candidate.run_id = u.id
+            )
+       )
+       SELECT * FROM updated`,
+      [
+        input.space_id,
+        input.run_id,
+        JSON.stringify(errorJson),
+        redactEvidenceText(input.message),
+        input.updated_at,
+        input.reason_code,
       ],
     );
     return result.rows[0] ?? null;
@@ -1544,7 +1927,8 @@ export class PgRunRepository {
       error_text: input.message,
     });
     const result = await this.db.query<RunRecord>(
-      `UPDATE runs
+      `WITH updated AS (
+       UPDATE runs
           SET status = 'waiting_for_review',
               error_json = $3::jsonb,
               error_message = $4,
@@ -1557,13 +1941,31 @@ export class PgRunRepository {
                   parent_run_id, root_run_id, run_group_id, delegation_id,
                   adapter_type, model_provider_id,
                   required_sandbox_level, trigger_origin, instructed_by_user_id,
-                  instructed_by_agent_id, error_message, started_at, ended_at`,
+                  instructed_by_agent_id, error_message, started_at, ended_at
+       ), updated_attempt AS (
+         UPDATE run_attempts a
+            SET status = 'waiting_for_review',
+                error_code = $6,
+                error_json = $3::jsonb,
+                last_activity_at = $5,
+                updated_at = $5
+           FROM updated u
+          WHERE a.space_id = u.space_id
+            AND a.run_id = u.id
+            AND a.attempt_number = (
+              SELECT max(candidate.attempt_number)
+                FROM run_attempts candidate
+               WHERE candidate.space_id = u.space_id AND candidate.run_id = u.id
+            )
+       )
+       SELECT * FROM updated`,
       [
         input.space_id,
         input.run_id,
         JSON.stringify(errorJson),
         redactEvidenceText(input.message),
         input.paused_at,
+        input.approval_code,
       ],
     );
     return result.rows[0] ?? null;
@@ -1688,7 +2090,8 @@ export class PgRunRepository {
     granted_at: string;
   }): Promise<RunRecord | null> {
     const result = await this.db.query<RunRecord>(
-      `UPDATE runs
+      `WITH updated AS (
+       UPDATE runs
           SET status = 'queued',
               permission_snapshot_json = jsonb_set(
                 COALESCE(permission_snapshot_json, '{}'),
@@ -1702,7 +2105,7 @@ export class PgRunRepository {
               ),
               error_json = NULL,
               error_message = NULL,
-              updated_at = $4
+              updated_at = $4::timestamptz
         WHERE space_id = $1
           AND id = $2
           AND status = 'waiting_for_review'
@@ -1711,8 +2114,75 @@ export class PgRunRepository {
                   parent_run_id, root_run_id, run_group_id, delegation_id,
                   adapter_type, model_provider_id, permission_snapshot_json,
                   required_sandbox_level, trigger_origin, instructed_by_user_id,
-                  instructed_by_agent_id, error_message, started_at, ended_at`,
+                  instructed_by_agent_id, error_message, started_at, ended_at
+       ), updated_attempt AS (
+         UPDATE run_attempts a
+            SET status = 'queued',
+                error_code = NULL,
+                error_json = NULL,
+                updated_at = $4::timestamptz
+           FROM updated u
+          WHERE a.space_id = u.space_id
+            AND a.run_id = u.id
+            AND a.status = 'waiting_for_review'
+            AND a.attempt_number = (
+              SELECT max(candidate.attempt_number)
+                FROM run_attempts candidate
+               WHERE candidate.space_id = u.space_id AND candidate.run_id = u.id
+            )
+       )
+       SELECT * FROM updated`,
       [input.space_id, input.run_id, input.granted_by_user_id, input.granted_at],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async resumeRunAfterSupervisorReview(input: {
+    run_id: string;
+    space_id: string;
+    resumed_by_user_id: string;
+    resumed_at: string;
+  }): Promise<RunRecord | null> {
+    const attemptId = randomUUID();
+    const result = await this.db.query<RunRecord>(
+      `WITH updated AS (
+         UPDATE runs
+            SET status = 'queued',
+                error_json = NULL,
+                error_message = NULL,
+                updated_at = $4::timestamptz
+          WHERE space_id = $1
+            AND id = $2
+            AND status = 'waiting_for_review'
+            AND COALESCE(error_json->>'supervisor_review', 'false') = 'true'
+          RETURNING id, space_id, agent_id, agent_version_id, run_type, status,
+                    mode, prompt, instruction, workspace_id, session_id, project_id,
+                    parent_run_id, root_run_id, run_group_id, delegation_id,
+                    adapter_type, model_provider_id, required_sandbox_level,
+                    trigger_origin, instructed_by_user_id, instructed_by_agent_id,
+                    error_message, error_json, started_at, ended_at,
+                    owner_user_id, visibility, access_level,
+                    contract_snapshot_json, workflow_version_id
+       ), inserted_attempt AS (
+         INSERT INTO run_attempts (
+           id, space_id, run_id, attempt_number, status,
+           error_json, created_at, updated_at
+         )
+         SELECT $5, u.space_id, u.id,
+                COALESCE((SELECT max(candidate.attempt_number)
+                            FROM run_attempts candidate
+                           WHERE candidate.space_id = u.space_id AND candidate.run_id = u.id), 0) + 1,
+                'queued',
+                jsonb_build_object(
+                  'error_code', 'supervisor_review_resumed',
+                  'resumed_by_user_id', $3::text,
+                  'resumed_at', $4::timestamptz
+                ),
+                $4::timestamptz, $4::timestamptz
+           FROM updated u
+       )
+       SELECT * FROM updated`,
+      [input.space_id, input.run_id, input.resumed_by_user_id, input.resumed_at, attemptId],
     );
     return result.rows[0] ?? null;
   }

@@ -953,7 +953,7 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
         contextPolicyJson: {},
         memoryPolicyJson: DEFAULT_MEMORY_POLICY,
         capabilitiesJson: [],
-        toolPermissionsJson: {allowed_tools:["source.connection.propose_create","project.source.propose_bind","source.backfill.propose_start"]},
+        toolPermissionsJson: {allowed_tools:["source.connection.propose_create","project.source.propose_bind","source.backfill.propose_start","task.plan.propose"]},
         runtimePolicyJson: buildRuntimePolicy("model_api", null),
         toolPolicyJson: {},
         outputPolicyJson: {},

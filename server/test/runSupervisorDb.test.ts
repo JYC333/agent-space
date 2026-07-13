@@ -1,0 +1,518 @@
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { Pool } from "pg";
+import { randomUUID } from "node:crypto";
+import { getTestPostgres, type TestPostgresDatabase } from "./support/sharedPostgres";
+import { PgRunRepository } from "../src/modules/runs/repository";
+import { PgRunSupervisor } from "../src/modules/runs/supervisor";
+import { PostRunFinalizationService } from "../src/modules/runs/finalizationService";
+import { PgRouteDecisionRepository } from "../src/modules/routing/repository";
+import { PgUsageRepository } from "../src/modules/usage/repository";
+import { normalizeUsageObservation } from "../src/modules/usage/normalizer";
+import { EvolutionSignalEmitter } from "../src/modules/evolution/signalEmitters";
+
+const SPACE = "81111111-1111-4111-8111-111111111111";
+const USER = "82222222-2222-4222-8222-222222222222";
+const AGENT = "83333333-3333-4333-8333-333333333333";
+const VERSION = "84444444-4444-4444-8444-444444444444";
+const PROFILE = "85555555-5555-4555-8555-555555555555";
+const FALLBACK_PROFILE = "86666666-6666-4666-8666-666666666666";
+const PROVIDER = "87777777-7777-4777-8777-777777777777";
+const CREDENTIAL = "88888888-8888-4888-8888-888888888888";
+const PROVIDER_CREDENTIAL = "89999999-9999-4999-8999-999999999999";
+const PROVIDER_GRANT = "8aaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+
+let database: TestPostgresDatabase | undefined;
+let pool: Pool | undefined;
+let available = false;
+
+beforeAll(async () => {
+  try {
+    database = await getTestPostgres(__filename);
+    pool = new Pool({ connectionString: database.getConnectionUri(), max: 4 });
+    available = true;
+  } catch (error) {
+    console.warn(
+      `[run-supervisor-db] skipped — Docker/Postgres unavailable: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}, 180_000);
+
+afterAll(async () => {
+  await pool?.end();
+  await database?.stop();
+});
+
+beforeEach(async () => {
+  if (!available || !pool) return;
+  await pool.query("TRUNCATE spaces, users CASCADE");
+  const now = new Date().toISOString();
+  await pool.query(
+    `INSERT INTO users (id, display_name, status, created_at, updated_at)
+     VALUES ($1, 'Supervisor Test User', 'active', $2, $2)`,
+    [USER, now],
+  );
+  await pool.query(
+    `INSERT INTO spaces (id, name, type, created_by_user_id, created_at, updated_at)
+     VALUES ($1, 'Supervisor Test Space', 'team', $2, $3, $3)`,
+    [SPACE, USER, now],
+  );
+  await pool.query(
+    `INSERT INTO space_memberships (id, space_id, user_id, role, status, created_at, updated_at)
+     VALUES ('86666666-6666-4666-8666-666666666666', $1, $2, 'owner', 'active', $3, $3)`,
+    [SPACE, USER, now],
+  );
+  await pool.query(
+    `INSERT INTO agents (id, space_id, owner_user_id, name, status, current_version_id,
+                         created_at, updated_at, visibility)
+     VALUES ($1, $2, $3, 'Supervisor Test Agent', 'active', NULL, $4, $4, 'space_shared')`,
+    [AGENT, SPACE, USER, now],
+  );
+  await pool.query(
+    `INSERT INTO agent_versions (
+       id, agent_id, space_id, version_label, system_prompt,
+       model_config_json, runtime_config_json, context_policy_json,
+       memory_policy_json, capabilities_json, tool_permissions_json,
+       runtime_policy_json, created_at
+     ) VALUES ($1, $2, $3, 'v1', 'You are a test agent.',
+               '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb,
+               '[]'::jsonb, '{}'::jsonb, '{}'::jsonb, $4)`,
+    [VERSION, AGENT, SPACE, now],
+  );
+  await pool.query(
+    `UPDATE agents SET current_version_id = $2 WHERE id = $1 AND space_id = $3`,
+    [AGENT, VERSION, SPACE],
+  );
+  await pool.query(
+    `INSERT INTO credentials (
+       id, space_id, owner_user_id, name, credential_type, secret_ref,
+       scopes_json, created_at, updated_at
+     ) VALUES ($1, $2, $3, 'Supervisor Test Credential', 'api_key', 'test-secret-ref', '{}'::jsonb, $4, $4)`,
+    [CREDENTIAL, SPACE, USER, now],
+  );
+  await pool.query(
+    `INSERT INTO model_providers (
+       id, space_id, owner_user_id, name, provider_type, default_model,
+       credential_id, enabled, capabilities_json, config_json, created_at, updated_at
+     ) VALUES ($1, $2, $3, 'Supervisor Test Provider', 'openai', 'test-model', $4, true, '{}'::jsonb, '{}'::jsonb, $5, $5)`,
+    [PROVIDER, SPACE, USER, CREDENTIAL, now],
+  );
+  await pool.query(
+    `INSERT INTO model_provider_credentials (
+       id, space_id, provider_id, credential_id, position, enabled, healthy,
+       request_count, failure_count, created_at, updated_at
+     ) VALUES ($1, $2, $3, $4, 0, true, true, 0, 0, $5, $5)`,
+    [PROVIDER_CREDENTIAL, SPACE, PROVIDER, CREDENTIAL, now],
+  );
+  await pool.query(
+    `INSERT INTO model_provider_space_grants (
+       id, provider_id, space_id, owner_user_id, granted_by_user_id,
+       enabled, is_default, created_at, updated_at
+     ) VALUES ($1, $2, $3, $4, $4, true, true, $5, $5)`,
+    [PROVIDER_GRANT, PROVIDER, SPACE, USER, now],
+  );
+  await pool.query(
+    `INSERT INTO agent_runtime_profiles (
+       id, space_id, agent_id, name, adapter_type,
+       model_provider_id, runtime_config_json, runtime_policy_json, enabled, is_default,
+       created_at, updated_at
+     ) VALUES ($1, $2, $3, 'Default', 'model_api', $4, '{}', '{}', true, true, $5, $5)`,
+    [PROFILE, SPACE, AGENT, PROVIDER, now],
+  );
+  await pool.query(
+    `INSERT INTO agent_runtime_profiles (
+       id, space_id, agent_id, name, adapter_type, model_provider_id,
+       runtime_config_json, runtime_policy_json, enabled, is_default,
+       created_at, updated_at
+     ) VALUES ($1, $2, $3, 'Fallback', 'model_api', $4, '{}', '{}', true, false, $5, $5)`,
+    [FALLBACK_PROFILE, SPACE, AGENT, PROVIDER, now],
+  );
+});
+
+describe("run attempts and supervisor against shared PostgreSQL", () => {
+  it("records physical attempts and retries the same route before human review", async (ctx) => {
+    if (!available || !pool) return ctx.skip();
+    const runId = await seedRun({ max_attempts: 2 });
+    const repository = new PgRunRepository(pool);
+    const supervisor = new PgRunSupervisor(pool, new EvolutionSignalEmitter(pool));
+    const finalizer = new PostRunFinalizationService(repository, undefined, undefined, undefined, undefined, supervisor);
+
+    await pool.query(
+      `INSERT INTO run_attempts (id, space_id, run_id, attempt_number, status, created_at, updated_at)
+       VALUES ($1, $2, $3, 1, 'queued', now(), now())`,
+      [randomUUID(), SPACE, runId],
+    );
+    await repository.markRunRunning({ run_id: runId, space_id: SPACE, started_at: new Date().toISOString() });
+    await repository.markRunTerminal({
+      run_id: runId,
+      space_id: SPACE,
+      status: "failed",
+      error_json: { error_code: "cli_stall_timeout", error_text: "no output" },
+      completed_at: new Date().toISOString(),
+    });
+    await finalizer.finalize(runId, SPACE);
+
+    const firstAttempt = await pool.query<{ attempt_number: number; status: string }>(
+      `SELECT attempt_number, status FROM run_attempts WHERE space_id = $1 AND run_id = $2`,
+      [SPACE, runId],
+    );
+    expect(firstAttempt.rows).toEqual([
+      { attempt_number: 1, status: "failed" },
+      { attempt_number: 2, status: "queued" },
+    ]);
+    expect((await repository.getRun(SPACE, runId))?.status).toBe("queued");
+    expect((await pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM jobs WHERE space_id = $1 AND payload_json->>'run_id' = $2`,
+      [SPACE, runId],
+    )).rows[0]?.count).toBe("1");
+    expect((await pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count
+         FROM evolution_signals
+        WHERE space_id = $1 AND signal_type = 'supervisor_outcome'
+          AND source_type = 'supervisor'`,
+      [SPACE],
+    )).rows[0]?.count).toBe("1");
+
+    await repository.markRunRunning({ run_id: runId, space_id: SPACE, started_at: new Date().toISOString() });
+    await repository.markRunTerminal({
+      run_id: runId,
+      space_id: SPACE,
+      status: "failed",
+      error_json: { error_code: "cli_stall_timeout", error_text: "no output again" },
+      completed_at: new Date().toISOString(),
+    });
+    await finalizer.finalize(runId, SPACE);
+
+    const decisions = await pool.query<{ decision: string; reason_code: string }>(
+      `SELECT decision, reason_code
+         FROM run_supervisor_decisions
+        WHERE space_id = $1 AND run_id = $2
+        ORDER BY created_at`,
+      [SPACE, runId],
+    );
+    expect(decisions.rows).toEqual([
+      { decision: "retry_same_route", reason_code: "cli_stall_timeout" },
+      { decision: "human_review", reason_code: "retry_attempt_cap_reached" },
+    ]);
+    expect((await repository.getRun(SPACE, runId))?.status).toBe("waiting_for_review");
+    expect((await pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM jobs WHERE space_id = $1 AND payload_json->>'run_id' = $2`,
+      [SPACE, runId],
+    )).rows[0]?.count).toBe("1");
+  });
+
+  it("keeps cancellation in cancelling until the terminal write confirms the attempt", async (ctx) => {
+    if (!available || !pool) return ctx.skip();
+    const runId = await seedRun();
+    const repository = new PgRunRepository(pool);
+    await repository.markRunRunning({ run_id: runId, space_id: SPACE, started_at: new Date().toISOString() });
+    const cancelling = await repository.markRunCancelling({
+      run_id: runId,
+      space_id: SPACE,
+      requested_at: new Date().toISOString(),
+      reason: "operator requested stop",
+      requested_by_user_id: USER,
+    });
+    expect(cancelling?.status).toBe("cancelling");
+    expect((await repository.getLatestRunAttempt(SPACE, runId))?.status).toBe("cancelling");
+
+    await repository.markRunTerminal({
+      run_id: runId,
+      space_id: SPACE,
+      status: "cancelled",
+      error_json: { error_code: "run_cancelled", confirmed_exit: true },
+      completed_at: new Date().toISOString(),
+    });
+    const attempt = await repository.getLatestRunAttempt(SPACE, runId);
+    expect(attempt?.status).toBe("cancelled");
+    expect(attempt?.cancel_confirmed_at).toBeTruthy();
+  });
+
+  it("reroutes a retry through the persisted C2 fallback chain", async (ctx) => {
+    if (!available || !pool) return ctx.skip();
+    const runId = await seedRun({ max_attempts: 2 });
+    const repository = new PgRunRepository(pool);
+    const routing = new PgRouteDecisionRepository(pool);
+    const initial = await repository.getRun(SPACE, runId);
+    if (!initial) throw new Error("seeded run not found");
+    const firstRoute = await routing.routeRun(initial);
+    expect(firstRoute.runtime_profile_id).toBe(PROFILE);
+
+    await repository.markRunRunning({ run_id: runId, space_id: SPACE, started_at: new Date().toISOString() });
+    await repository.markRunTerminal({
+      run_id: runId,
+      space_id: SPACE,
+      status: "failed",
+      error_json: { error_code: "cli_stall_timeout" },
+      completed_at: new Date().toISOString(),
+    });
+    await new PostRunFinalizationService(
+      repository,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      new PgRunSupervisor(pool),
+    ).finalize(runId, SPACE);
+
+    const queuedRetry = await repository.getRun(SPACE, runId);
+    if (!queuedRetry) throw new Error("retry run not found");
+    const secondRoute = await routing.routeRun(queuedRetry);
+    expect(secondRoute.runtime_profile_id).toBe(FALLBACK_PROFILE);
+    expect((await pool.query<{ attempt_number: number; selected_runtime_profile_id: string }>(
+      `SELECT attempt_number, selected_runtime_profile_id
+         FROM route_decisions WHERE space_id = $1 AND run_id = $2 ORDER BY attempt_number`,
+      [SPACE, runId],
+    )).rows).toEqual([
+      { attempt_number: 1, selected_runtime_profile_id: PROFILE },
+      { attempt_number: 2, selected_runtime_profile_id: FALLBACK_PROFILE },
+    ]);
+    expect((await pool.query<{ decision: string; next_attempt_number: number | null }>(
+      `SELECT decision, next_attempt_number
+         FROM run_supervisor_decisions WHERE space_id = $1 AND run_id = $2`,
+      [SPACE, runId],
+    )).rows[0]).toEqual({ decision: "retry_fallback_route", next_attempt_number: 2 });
+  });
+
+  it("keeps the current route when the persisted fallback chain has no remainder", async (ctx) => {
+    if (!available || !pool) return ctx.skip();
+    await pool.query(
+      `UPDATE agent_runtime_profiles SET enabled = false WHERE space_id = $1 AND id = $2`,
+      [SPACE, FALLBACK_PROFILE],
+    );
+    const runId = await seedRun({ max_attempts: 2 });
+    const repository = new PgRunRepository(pool);
+    const routing = new PgRouteDecisionRepository(pool);
+    const initial = await repository.getRun(SPACE, runId);
+    if (!initial) throw new Error("seeded run not found");
+    expect((await routing.routeRun(initial)).runtime_profile_id).toBe(PROFILE);
+    await repository.markRunRunning({ run_id: runId, space_id: SPACE, started_at: new Date().toISOString() });
+    await repository.markRunTerminal({
+      run_id: runId,
+      space_id: SPACE,
+      status: "failed",
+      error_json: { error_code: "cli_stall_timeout" },
+      completed_at: new Date().toISOString(),
+    });
+    await new PostRunFinalizationService(
+      repository,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      new PgRunSupervisor(pool),
+    ).finalize(runId, SPACE);
+    const retry = await repository.getRun(SPACE, runId);
+    if (!retry) throw new Error("retry run not found");
+    expect((await routing.routeRun(retry)).runtime_profile_id).toBe(PROFILE);
+    expect((await pool.query<{ decision: string }>(
+      `SELECT decision FROM run_supervisor_decisions WHERE space_id = $1 AND run_id = $2`,
+      [SPACE, runId],
+    )).rows[0]?.decision).toBe("retry_same_route");
+  });
+
+  it("keeps approval-paused attempts resumable without inventing a duplicate attempt", async (ctx) => {
+    if (!available || !pool) return ctx.skip();
+    const runId = await seedRun();
+    const repository = new PgRunRepository(pool);
+    await repository.markRunRunning({ run_id: runId, space_id: SPACE, started_at: new Date().toISOString() });
+    const paused = await repository.markRunWaitingForReview({
+      run_id: runId,
+      space_id: SPACE,
+      approval_code: "policy_requires_approval_runtime_execute",
+      message: "approval required",
+      paused_at: new Date().toISOString(),
+    });
+    expect(paused?.status).toBe("waiting_for_review");
+    expect((await repository.getLatestRunAttempt(SPACE, runId))?.status).toBe("waiting_for_review");
+
+    await repository.grantRunApprovalAndRequeue({
+      run_id: runId,
+      space_id: SPACE,
+      granted_by_user_id: USER,
+      granted_at: new Date().toISOString(),
+    });
+    await repository.markRunRunning({ run_id: runId, space_id: SPACE, started_at: new Date().toISOString() });
+    const attempts = await pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM run_attempts WHERE space_id = $1 AND run_id = $2`,
+      [SPACE, runId],
+    );
+    expect(attempts.rows[0]?.count).toBe("1");
+  });
+
+  it("allows a human to abandon a supervisor-held run and finalize it", async (ctx) => {
+    if (!available || !pool) return ctx.skip();
+    const runId = await seedRun({ max_attempts: 1 });
+    const repository = new PgRunRepository(pool);
+    await repository.markRunRunning({ run_id: runId, space_id: SPACE, started_at: new Date().toISOString() });
+    await repository.markRunTerminal({
+      run_id: runId,
+      space_id: SPACE,
+      status: "failed",
+      error_json: { error_code: "adapter_runtime_error" },
+      completed_at: new Date().toISOString(),
+    });
+    await repository.holdRunForSupervisorReview({
+      run_id: runId,
+      space_id: SPACE,
+      updated_at: new Date().toISOString(),
+      reason_code: "retry_attempt_cap_reached",
+      message: "review required",
+    });
+    const abandoned = await repository.markRunTerminal({
+      run_id: runId,
+      space_id: SPACE,
+      status: "cancelled",
+      output_json: {},
+      error_json: { error_code: "run_abandoned", abandoned_by_user_id: USER },
+      completed_at: new Date().toISOString(),
+      usage_json: {},
+    });
+    expect(abandoned?.status).toBe("cancelled");
+    expect((await repository.getLatestRunAttempt(SPACE, runId))?.status).toBe("cancelled");
+    const finalization = await new PostRunFinalizationService(repository).finalize(runId, SPACE);
+    expect(finalization.outcome_status).toBe("failed");
+  });
+
+  it("resumes a supervisor terminal hold as a new explicitly authorized attempt", async (ctx) => {
+    if (!available || !pool) return ctx.skip();
+    const runId = await seedRun({ max_attempts: 1 });
+    const repository = new PgRunRepository(pool);
+    await repository.markRunRunning({ run_id: runId, space_id: SPACE, started_at: new Date().toISOString() });
+    await repository.markRunTerminal({
+      run_id: runId,
+      space_id: SPACE,
+      status: "failed",
+      error_json: { error_code: "adapter_runtime_error" },
+      completed_at: new Date().toISOString(),
+    });
+    await repository.holdRunForSupervisorReview({
+      run_id: runId,
+      space_id: SPACE,
+      updated_at: new Date().toISOString(),
+      reason_code: "retry_attempt_cap_reached",
+      message: "review required",
+    });
+    const resumed = await repository.resumeRunAfterSupervisorReview({
+      run_id: runId,
+      space_id: SPACE,
+      resumed_by_user_id: USER,
+      resumed_at: new Date().toISOString(),
+    });
+    expect(resumed?.status).toBe("queued");
+    expect((await pool.query<{ attempt_number: number; status: string }>(
+      `SELECT attempt_number, status
+         FROM run_attempts WHERE space_id = $1 AND run_id = $2 ORDER BY attempt_number`,
+      [SPACE, runId],
+    )).rows).toEqual([
+      { attempt_number: 1, status: "waiting_for_review" },
+      { attempt_number: 2, status: "queued" },
+    ]);
+  });
+
+  it("enforces a run cost cap across attempts before scheduling a retry", async (ctx) => {
+    if (!available || !pool) return ctx.skip();
+    const runId = await seedRun({ max_attempts: 2, max_cost: 1 });
+    const repository = new PgRunRepository(pool);
+    const usage = new PgUsageRepository(pool);
+    const instanceId = await usage.getOrCreateInstanceId();
+    await usage.appendEvent(normalizeUsageObservation(
+      {
+        space_id: SPACE,
+        event_type: "llm.generation",
+        source_type: "local_run",
+        execution_channel: "managed_api",
+        run_id: runId,
+        agent_id: AGENT,
+        estimated_cost_usd: 1.25,
+        usage_details: { input: 10, output: 10 },
+        usage_accuracy: "estimated",
+        idempotency_key: `supervisor-cost:${runId}`,
+      },
+      instanceId,
+      {
+        owner_user_id: USER,
+        visibility: "space_shared",
+        access_level: "full",
+        source_resource_type: null,
+        source_resource_id: null,
+        workspace_id: null,
+        project_id: null,
+        grant_snapshots: [],
+      },
+    ));
+
+    await repository.markRunRunning({ run_id: runId, space_id: SPACE, started_at: new Date().toISOString() });
+    await repository.markRunTerminal({
+      run_id: runId,
+      space_id: SPACE,
+      status: "failed",
+      error_json: { error_code: "cli_stall_timeout" },
+      completed_at: new Date().toISOString(),
+    });
+    await new PostRunFinalizationService(
+      repository,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      new PgRunSupervisor(pool),
+    ).finalize(runId, SPACE);
+
+    expect((await repository.getRun(SPACE, runId))?.status).toBe("waiting_for_review");
+    expect((await pool.query<{ decision: string }>(
+      `SELECT decision FROM run_supervisor_decisions WHERE space_id = $1 AND run_id = $2`,
+      [SPACE, runId],
+    )).rows[0]?.decision).toBe("budget_exceeded");
+    expect((await pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM jobs WHERE space_id = $1 AND payload_json->>'run_id' = $2`,
+      [SPACE, runId],
+    )).rows[0]?.count).toBe("0");
+  });
+
+  it("marks lost executions orphaned during startup recovery", async (ctx) => {
+    if (!available || !pool) return ctx.skip();
+    const runId = await seedRun();
+    const repository = new PgRunRepository(pool);
+    const startedAt = new Date(Date.now() - 120_000).toISOString();
+    await repository.markRunRunning({ run_id: runId, space_id: SPACE, started_at: startedAt });
+    await pool.query(
+      `UPDATE runs SET started_at = $3, updated_at = $3 WHERE space_id = $1 AND id = $2`,
+      [SPACE, runId, startedAt],
+    );
+    const recovered = await repository.recoverStaleRuns(60, new Date());
+    expect(recovered).toBe(1);
+    expect((await repository.getRun(SPACE, runId))?.status).toBe("orphaned");
+    expect((await repository.getLatestRunAttempt(SPACE, runId))?.status).toBe("orphaned");
+  });
+});
+
+async function seedRun(contract: { max_runs?: number; max_attempts?: number; max_cost?: number } = {}): Promise<string> {
+  const runId = randomUUID();
+  const now = new Date().toISOString();
+  await pool!.query(
+    `INSERT INTO runs (
+       id, space_id, agent_id, agent_version_id, runtime_profile_id,
+       run_type, trigger_origin, status, mode, usage_accuracy,
+       adapter_type, instructed_by_user_id, owner_user_id,
+       required_sandbox_level, contract_snapshot_json, created_at, updated_at
+     ) VALUES ($1, $2, $3, $4, $5, 'agent', 'manual', 'queued', 'live',
+       'estimated', 'model_api', $6, $6, 'none', $7::jsonb, $8, $8)`,
+    [
+      runId,
+      SPACE,
+      AGENT,
+      VERSION,
+      PROFILE,
+      USER,
+      JSON.stringify({
+        contract_version: "run_contract.v1",
+        source: { kind: "direct", id: null },
+        max_runs: contract.max_runs ?? null,
+        max_attempts: contract.max_attempts ?? null,
+        max_cost: contract.max_cost ?? null,
+      }),
+      now,
+    ],
+  );
+  return runId;
+}

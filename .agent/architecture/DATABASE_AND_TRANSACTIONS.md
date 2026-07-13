@@ -12,6 +12,13 @@ server repositories: `BEGIN`, `COMMIT`, rollback on error, and client release.
 Repositories and stores still own domain queries and row construction. The
 transaction helper owns only transaction control.
 
+`withQueryableTransaction` (`server/src/modules/routeUtils/common.ts`) accepts
+either a pool or an already checked-out `pg` `PoolClient`. It identifies an
+existing client by its `release()` method; `pg` clients also expose `connect()`
+on their prototype, so `connect` alone is not a valid Pool discriminator.
+Existing clients join the caller's transaction without issuing a nested
+`BEGIN`/`COMMIT`.
+
 ## Transaction Ownership Rules
 
 - API routes may open or receive a transaction helper, but must not scatter
@@ -60,6 +67,12 @@ Required pattern:
 4. Perform external work **outside** the transaction.
 5. Open short transaction.
 6. Persist result or failure.
+
+Proposal appliers are the explicit exception for small compensatable file
+operations such as `code_patch`: the applier returns an external rollback handle
+to the transaction owner. The handle remains live until `COMMIT` succeeds and
+is invoked if commit fails; post-commit telemetry callbacks run only after a
+successful commit and never participate in the critical write outcome.
 
 `RunOrchestrationService` applies this: setup state is committed before adapter execution; result/failure is persisted in a separate transaction afterward.
 

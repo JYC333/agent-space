@@ -103,7 +103,7 @@ export function adapterTimeoutEnvelope(
   const now = new Date().toISOString();
   return {
     adapter_type: run.adapter_type ?? "unknown",
-    adapter_kind: run.adapter_type === "claude_code" || run.adapter_type === "codex_cli"
+    adapter_kind: run.adapter_type === "claude_code" || run.adapter_type === "codex_cli" || run.adapter_type === "opencode"
       ? "local_cli"
       : "managed_api",
     success: false,
@@ -182,12 +182,13 @@ export function isTerminalRunStatus(status: string): status is RunTerminalStatus
     "failed",
     "degraded",
     "cancelled",
+    "orphaned",
     "waiting_for_review",
   ].includes(status);
 }
 
 export function isHardTerminalRunStatus(status: string): status is RunTerminalStatus {
-  return ["succeeded", "failed", "degraded", "cancelled"].includes(status);
+  return ["succeeded", "failed", "degraded", "cancelled", "orphaned"].includes(status);
 }
 
 export function protocolRunStatus(status: string): RunStatus | "unknown" {
@@ -195,10 +196,12 @@ export function protocolRunStatus(status: string): RunStatus | "unknown" {
     [
       "queued",
       "running",
+      "cancelling",
       "succeeded",
       "failed",
       "degraded",
       "cancelled",
+      "orphaned",
       "waiting_for_review",
       "waiting_for_dependency",
     ].includes(status)

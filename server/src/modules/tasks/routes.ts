@@ -12,6 +12,7 @@ import {
   sendRouteError,
 } from "../routeUtils/common";
 import { PgTaskRepository } from "./repository";
+import { PgPlanRepository } from "../plans/repository.js";
 
 export function registerRoutes(app: FastifyInstance, context: ModuleContext): void {
   const repository = () => new PgTaskRepository(dbPool(context.config));
@@ -121,6 +122,27 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     try {
       const { limit, offset } = parsePage(query(request));
       return reply.send(await repository().listTaskRuns(identity, params(request).taskId ?? "", limit, offset));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.post("/api/v1/tasks/:taskId/plan-requests", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      return reply.code(202).send(await repository().requestPlanningRun(identity, params(request).taskId ?? "", jsonBody(request)));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.get("/api/v1/tasks/:taskId/plan", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const plan = await new PgPlanRepository(dbPool(context.config)).getPlanForTask(identity, params(request).taskId ?? "");
+      return reply.send(plan);
     } catch (error) {
       return sendRouteError(reply, error);
     }

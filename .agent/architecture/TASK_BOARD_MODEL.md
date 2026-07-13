@@ -6,6 +6,13 @@ This document describes the **agent-native task board** domain layer. It is back
 
 - **Board** — A space- or workspace-level work surface. Groups columns and tasks for planning and visibility.
 - **Task** — The **product-level work item**. Humans and agents share this vocabulary. Tasks carry acceptance criteria, priority, assignment, and lifecycle status **independent of the job queue**.
+- **Task role** — `source` identifies a user/Agent-owned product goal and may
+  own one Agent-generated Plan; `subtask` is an ordinary product child Task.
+  `task_type` remains the business classification and is never a Plan-node
+  discriminator.
+- **Plan Node** — An internal step in an Agent Plan. It lives in
+  `plan_nodes`, not in `tasks`, and links to physical Runs through
+  `plan_node_runs`. It is not shown in the Task board.
 - **Run** — One **execution attempt** for an agent (or system workflow). A task may have many runs over time (retries, validation passes, reviews).
 - **Job** — An **infrastructure queue row** (`jobs` table). Used for workers, retries, and dispatch plumbing. **Jobs are not product tasks** and must not be used as the source of truth for user-visible task state.
 - **Artifact** — Output attached to a run or task (files, reports, logs). Linked to tasks through `task_artifacts` when needed.
@@ -16,8 +23,22 @@ This document describes the **agent-native task board** domain layer. It is back
 
 - A task may optionally sit on a **board** and **column** (`board_id`, `column_id`).
 - A task links to many **runs** via `task_runs` (roles such as `primary`, `retry`, `review`).
+- A TaskRun creates its Run with an immutable `runs.contract_snapshot_json`
+  carrying the Task's acceptance criteria, definition of done, required
+  outputs, project/workspace binding, risk, budget caps, and route hints. The
+  snapshot is the execution input; later Task edits do not rewrite prior Runs.
 - A task links to **artifacts** and **proposals** through junction tables with roles (for example `output`, `evidence`, `main_change`). `task_artifacts.run_id` records the task-run context for a selected artifact when known; `artifacts.run_id` remains the artifact's producing run.
 - Dependencies between tasks use `task_dependencies` (`blocks`, `requires`, `related`, etc.).
+
+## Planning boundary
+
+Creating a source Task does not create a Plan. Task Detail may enqueue a
+`planning` Run through `POST /api/v1/tasks/{id}/plan-requests`; the Agent then
+uses `task.plan.propose` to create or revise the Task's PlanVersion. Human
+users review and execute an approved Plan, but do not submit raw Plan
+definitions through a public Plan-create API. A fixed Workflow Automation has
+its own `WorkflowExecution` aggregate and never creates Plan Nodes or Task
+rows.
 
 ## Agent–human collaboration
 

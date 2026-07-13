@@ -818,7 +818,8 @@ function isHardTerminalRunStatus(status: string): boolean {
   return status === "succeeded" ||
     status === "failed" ||
     status === "cancelled" ||
-    status === "degraded";
+    status === "degraded" ||
+    status === "orphaned";
 }
 
 function terminalRunResultSummary(run: RunRecord): string {

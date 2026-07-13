@@ -108,6 +108,25 @@ Proposals are the product review and application boundary for durable mutations.
 - `code_patch` proposals are accepted via the server applier; pre-apply file
   snapshots are captured automatically and pruned by retention policy (default
   7 days / 20 max per workspace, configurable per-workspace and per-space).
+- Evolution bundles are a review grouping with exclusive ownership of their
+  pending members. Their member decisions run through `ProposalApplyService`
+  in the same database transaction as the member state transition; ordinary
+  proposal accept/reject routes cannot bypass an active bundle. D3 rollback is
+  represented by an `evolution_bundle_rollback` proposal, so it receives the
+  normal `proposal.apply` policy/audit gate, and its successful reverse-order
+  restoration writes an activity record. Bundle rejection emits the same
+  `proposal_rejected` signal as ordinary rejection, but only from a post-commit
+  callback. Transactional apply results retain external compensation handles
+  (for example, code-patch file rollback) until the owning transaction has
+  committed. Rollback preflight exposes blockers and refuses to create a
+  rollback proposal for unsupported members; promotion and rollback serialize
+  on a sorted asset-level transaction advisory lock. It is fail-closed when a
+  member type has no supported snapshot adapter. Snapshot capture acquires the
+  asset lock before reading the asset version/reference set, not only when the
+  promotion applier starts. The PostgreSQL workflow suite includes barrier-
+  controlled same-asset Bundle/Bundle and Bundle/ordinary-promotion cases; it
+  must run against the shared Testcontainers database when that runtime is
+  available.
 - Public post-create execution config changes for Agents must use
   `POST /api/v1/agents/{agent_id}/config-proposals`; direct
   `POST /agents/{agent_id}/versions` does not advance the current version.

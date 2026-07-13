@@ -19,6 +19,7 @@ import {
 } from "./assetAccess";
 
 const EVALUATION_STATUSES = new Set(["queued", "running", "passed", "failed", "blocked", "cancelled"]);
+const EVALUATION_HARD_GATE_CASE_THRESHOLD = 5;
 
 function requiredDateIso(value: unknown): string {
   return dateIso(value) ?? new Date(0).toISOString();
@@ -118,9 +119,9 @@ function evaluationRunOut(row: EvaluationRunRow): Record<string, unknown> {
 
 /**
  * Evaluation-run metadata and promotion-proposal creation for evolvable
- * assets. This does not run an evaluator itself — it records results
- * reported by a human reviewer or an external evaluation process:
- * store real structured results, never fabricate a pass/fail.
+ * assets. The evaluation harness owns Verification Engine execution; this
+ * repository remains the durable metadata boundary for executor results and
+ * externally reported evidence.
  */
 export class EvolvableAssetEvaluationRepository {
   constructor(private readonly db: Queryable) {}
@@ -150,6 +151,7 @@ export class EvolvableAssetEvaluationRepository {
     assetId: string,
     versionId: string,
     body: Record<string, unknown>,
+    options: { trustedExecutor?: boolean } = {},
   ): Promise<Record<string, unknown>> {
     const asset = await this.requireWritableAsset(identity, assetId);
     const version = await this.versionRow(assetId, versionId);
@@ -164,6 +166,14 @@ export class EvolvableAssetEvaluationRepository {
     const evaluatorVersion = optionalString(body.evaluator_version);
     if (!evaluatorVersion) throw new HttpError(422, "evaluator_version is required");
     const status = enumValue(body.status, EVALUATION_STATUSES, "status") ?? "queued";
+    if (
+      !options.trustedExecutor
+      && status === "passed"
+      && evaluatorVersion === "verification_engine.v1"
+      && evalSuiteRef.kind === "evaluation_case"
+    ) {
+      throw new HttpError(403, "Evaluation Engine results can only be marked passed by the evaluation job");
+    }
     const baselineVersionId = optionalString(body.baseline_version_id);
     if (baselineVersionId) {
       const baseline = await this.versionRow(assetId, baselineVersionId);
@@ -244,6 +254,35 @@ export class EvolvableAssetEvaluationRepository {
     }
     const normalizedTargetScopeId = await normalizeVersionScopeForWrite(this.db, identity, targetScopeType, targetScopeId ?? null);
     assertAssetAllowsTargetScope(asset, identity, targetScopeType, normalizedTargetScopeId);
+    const evaluationRunIds = Array.isArray(body.evaluation_run_ids)
+      ? [...new Set(body.evaluation_run_ids.filter((value): value is string => typeof value === "string" && value.length > 0))].slice(0, 50)
+      : [];
+    const evaluationRows = await this.db.query<{
+      id: string;
+      status: string;
+      metrics_json: unknown;
+      created_at: unknown;
+    }>(
+      `SELECT id, status, metrics_json, created_at
+         FROM evolvable_asset_evaluation_runs
+        WHERE asset_id = $1 AND candidate_version_id = $2 AND space_id = $3
+          ${evaluationRunIds.length > 0 ? "AND id = ANY($4::varchar[])" : ""}
+        ORDER BY created_at DESC, id ASC`,
+      evaluationRunIds.length > 0 ? [assetId, versionId, identity.spaceId, evaluationRunIds] : [assetId, versionId, identity.spaceId],
+    );
+    if (evaluationRunIds.length > 0 && evaluationRows.rows.length !== evaluationRunIds.length) {
+      throw new HttpError(422, "evaluation_run_ids must reference evaluation runs for this candidate version");
+    }
+    const evaluationSummary = summarizeEvaluationRows(evaluationRows.rows);
+    const caseCountResult = await this.db.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM evaluation_cases WHERE asset_id = $1 AND space_id = $2 AND status = 'active'`,
+      [assetId, identity.spaceId],
+    );
+    const caseCount = Number(caseCountResult.rows[0]?.count ?? 0);
+    const assetRisk = optionalString(objectValue(asset.metadata_json).risk_level);
+    const riskLevel = higherRisk(assetRisk, targetScopeType === "system" ? "high" : "medium");
+    const autoHardGate = (riskLevel === "high" || riskLevel === "critical") && caseCount >= EVALUATION_HARD_GATE_CASE_THRESHOLD;
+    const hardGate = body.hard_gate === true || body.evaluation_hard_gate === true || autoHardGate;
     const payload = {
       proposal_type: "evolvable_asset_version_promote",
       asset_id: assetId,
@@ -252,9 +291,15 @@ export class EvolvableAssetEvaluationRepository {
       target_scope_id: normalizedTargetScopeId,
       pin_after_approval: body.pin_after_approval === true,
       deprecate_previous: body.deprecate_previous === true,
-      evaluation_run_ids: Array.isArray(body.evaluation_run_ids)
-        ? body.evaluation_run_ids.filter((v): v is string => typeof v === "string")
-        : [],
+      evaluation_run_ids: evaluationRunIds,
+      evaluation_policy: {
+        mode: hardGate ? "hard_gate" : "warn_only",
+        hard_gate: hardGate,
+      },
+      evaluation_summary: evaluationSummary,
+      evaluation_case_count: caseCount,
+      evaluation_hard_gate_threshold: EVALUATION_HARD_GATE_CASE_THRESHOLD,
+      evaluation_risk_level: riskLevel,
       reason: optionalString(body.reason),
       deployment_label: optionalString(body.deployment_label),
     };
@@ -267,7 +312,7 @@ export class EvolvableAssetEvaluationRepository {
       rationale: optionalString(body.reason) ?? "Asset version promotion",
       createdByUserId: identity.userId,
       visibility: "space_shared",
-      riskLevel: targetScopeType === "system" ? "high" : "medium",
+      riskLevel,
       projectId: targetScopeType === "project" ? normalizedTargetScopeId : null,
     });
     return {
@@ -301,6 +346,33 @@ export class EvolvableAssetEvaluationRepository {
     );
     return result.rows[0] ?? null;
   }
+}
+
+function higherRisk(left: string | null, right: string): string {
+  const order = ["low", "medium", "high", "critical"];
+  const leftValue = left && order.includes(left) ? left : "low";
+  return order[Math.max(order.indexOf(leftValue), order.indexOf(right))] ?? right;
+}
+
+function summarizeEvaluationRows(rows: Array<{ id: string; status: string; metrics_json: unknown; created_at: unknown }>): Record<string, unknown> {
+  const counts = rows.reduce<Record<string, number>>((out, row) => {
+    out[row.status] = (out[row.status] ?? 0) + 1;
+    return out;
+  }, {});
+  const latest = rows[0];
+  return {
+    evaluator_version: rows.length > 0 ? "verification_engine.v1" : null,
+    total: rows.length,
+    passed: counts.passed ?? 0,
+    failed: counts.failed ?? 0,
+    blocked: counts.blocked ?? 0,
+    queued: counts.queued ?? 0,
+    running: counts.running ?? 0,
+    latest_run_id: latest?.id ?? null,
+    latest_status: latest?.status ?? null,
+    latest_metrics: latest ? objectValue(latest.metrics_json) : {},
+    recorded_at: latest ? dateIso(latest.created_at) : null,
+  };
 }
 
 async function canViewVersionRef(

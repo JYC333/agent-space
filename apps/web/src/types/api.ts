@@ -2203,6 +2203,7 @@ export interface ChatActionPreview {
 export interface Task {
   id: string
   space_id: string
+  task_role: 'source' | 'subtask' | string
   owner_user_id: string | null
   workspace_id: string | null
   board_id: string | null
@@ -2238,6 +2239,10 @@ export interface Task {
   acceptance_criteria_json?: Record<string, unknown> | null
   definition_of_done?: string | null
   required_outputs_json?: unknown[] | null
+  max_runs?: number | null
+  max_cost?: number | null
+  max_duration_seconds?: number | null
+  policy_json?: Record<string, unknown> | null
   tags?: string[] | null
   metadata_json?: Record<string, unknown> | null
 }
@@ -2349,6 +2354,235 @@ export interface Run {
   access_level?: ContentAccessLevel
   owner_user_id?: string | null
   task_id?: string | null
+  required_sandbox_level?: string | null
+  contract_snapshot_json?: Record<string, unknown>
+  workflow_version_id?: string | null
+  route_decision_id?: string | null
+}
+
+export interface RunAttempt {
+  id: string
+  space_id: string
+  run_id: string
+  attempt_number: number
+  status: string
+  started_at: string | null
+  ended_at: string | null
+  last_activity_at: string | null
+  cancel_requested_at: string | null
+  cancel_confirmed_at: string | null
+  exit_code: number | null
+  error_code: string | null
+  error_json: Record<string, unknown> | null
+  usage_json: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
+export interface RunSupervisorDecision {
+  id: string
+  space_id: string
+  run_id: string
+  attempt_id: string
+  decision: string
+  reason_code: string
+  next_attempt_number: number | null
+  total_estimated_cost_usd: number | null
+  max_cost_usd: number | null
+  metadata_json: Record<string, unknown>
+  created_at: string
+}
+
+export interface RunEvaluation {
+  id: string
+  space_id: string
+  run_id: string
+  evaluator_type: string
+  evaluator_version: string
+  outcome_status: string
+  failure_layer: string | null
+  failure_reason_code: string | null
+  trajectory_status: string | null
+  evidence_json: Record<string, unknown> | null
+  rule_trace_json: Record<string, unknown> | null
+  notes: string | null
+  evaluated_at: string
+}
+
+export interface RunVerificationResult {
+  id: string
+  space_id: string
+  run_id: string
+  verifier_type: string
+  verifier_version: string
+  status: string
+  summary: string | null
+  evidence_refs_json: Record<string, unknown> | null
+  details_json: Record<string, unknown> | null
+  started_at: string | null
+  completed_at: string | null
+  created_at: string
+}
+
+export interface RunFinalization {
+  id: string
+  space_id: string
+  run_id: string
+  attempt_number: number
+  finalizer_version: string
+  status: string
+  run_evaluation_id: string | null
+  task_evaluation_id: string | null
+  outcome_status: string
+  failure_layer: string | null
+  failure_reason_code: string | null
+  trajectory_status: string | null
+  skipped_reasons_json: unknown
+  error_json: Record<string, unknown> | null
+  metadata_json: Record<string, unknown> | null
+}
+
+export interface PlanVersionSummary {
+  id: string
+  version: number | null
+  status: string | null
+  node_count: number | null
+  depth: number | null
+  pending_node_count: number
+}
+
+export interface PlanSummary {
+  id: string
+  space_id: string
+  workspace_id: string | null
+  project_id: string | null
+  source_task_id: string
+  root_run_id: string | null
+  name: string
+  description: string | null
+  status: string
+  created_by_user_id: string | null
+  created_by_agent_id: string | null
+  created_at: string
+  updated_at: string
+  current_version: PlanVersionSummary | null
+}
+
+export interface PlanBudgetSource {
+  source: {
+    kind: string
+    id?: string | null
+  }
+  precedence?: number
+  max_runs?: number
+  max_attempts?: number
+  max_cost?: number
+  max_duration_seconds?: number
+}
+
+export interface PlanExecuteBody {
+  agent_id?: string | null
+  prompt?: string | null
+  instruction?: string | null
+  runtime_profile_id?: string | null
+}
+
+export interface PlanExecutionResult {
+  plan_id: string
+  root_run_id?: string | null
+  scheduled_node_ids: string[]
+  status?: string
+  root_status?: string
+  idempotent?: boolean
+}
+
+export interface PlanDetail extends PlanSummary {
+  current_version: PlanVersionSummary & {
+    reference_workflow_version_id: string | null
+    planner_mode: string
+    approval_proposal_id: string | null
+    planning_run_id: string | null
+    planning_tool_call_id: string | null
+    budget_json: Record<string, unknown>
+    definition_json: unknown
+    nodes: Array<{
+      id: string
+      node_key: string
+      title: string
+      description: string | null
+      node_kind: string
+      status: string
+      assigned_agent_id: string | null
+      runtime_profile_id: string | null
+      capability_id: string | null
+      risk_level: string
+      blocked_reason: string | null
+      approval_proposal_id: string | null
+      latest_run: { run_id: string; status: string; outcome_status: string | null } | null
+    }>
+    created_at: string
+    updated_at: string
+  }
+}
+
+export interface WorkflowExecutionSummary {
+  workflow_execution_id: string
+  automation_id: string
+  workflow_version_id: string
+  status: string
+  trigger_type: string
+  root_run_id: string | null
+  created_at: string
+  updated_at: string
+  node_count: number
+  completed_node_count: number
+  waiting_node_count: number
+}
+
+export interface EvolutionBundleMember {
+  id: string
+  bundle_id: string
+  proposal_id: string
+  position: number
+  status: string
+  decision_note: string | null
+  decided_by_user_id: string | null
+  decided_at: string | null
+  created_at: string | null
+  before_snapshot_available: boolean
+  after_snapshot_available: boolean
+  rollback_supported?: boolean | null
+  rollback_blocker?: string | null
+  proposal: {
+    id: string
+    proposal_type: string
+    status: string
+    risk_level: string
+    title: string
+    summary: string | null
+    created_at: string | null
+  }
+}
+
+export interface EvolutionBundle {
+  id: string
+  space_id: string
+  title: string
+  description: string | null
+  status: string
+  risk_level: string
+  created_by_user_id: string
+  created_at: string | null
+  updated_at: string | null
+  decided_at: string | null
+  rolled_back_at: string | null
+  rollback_error: string | null
+  member_count: number
+  pending_count: number
+  approved_count: number
+  rollbackable: boolean
+  rollback_blockers: string[]
+  members?: EvolutionBundleMember[]
 }
 
 export interface RunStatusOut {
@@ -2877,6 +3111,9 @@ export interface EvolutionSignal {
   severity: string
   summary: string | null
   payload_json: Record<string, unknown>
+  triage_status?: 'new' | 'acknowledged' | 'dismissed' | 'actioned'
+  triaged_at?: string | null
+  triage_note?: string | null
   created_at: string
 }
 
@@ -2924,6 +3161,14 @@ export interface EvolutionProposal {
   summary: string | null
   created_at: string
   created_by_run_id: string | null
+  incomplete_patch?: boolean
+  skipped_count?: number
+  grant_id?: string | null
+  required_approver_user_id?: string | null
+  requires_approval_type?: string | null
+  egress_approval_status?: string | null
+  bundle_id?: string | null
+  bundle_member_status?: string | null
 }
 
 export interface EvolutionStrategy {
@@ -3079,6 +3324,24 @@ export interface EvolvableAssetEvaluationRun {
   blockers: unknown[]
   output_artifact_id: string | null
   report_artifact_id: string | null
+  created_by_user_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface EvolvableAssetEvaluationCase {
+  id: string
+  space_id: string
+  asset_id: string
+  name: string
+  description: string | null
+  input_json: Record<string, unknown>
+  expectation_json: Record<string, unknown>
+  verification_recipe_json: Record<string, unknown>
+  baseline_output_json?: unknown
+  baseline_version_id: string
+  source_run_id: string | null
+  status: string
   created_by_user_id: string | null
   created_at: string
   updated_at: string
@@ -5081,7 +5344,7 @@ export interface ProjectSummary {
 
 // ── Automations ─────────────────────────────────────────────────────────────
 export type AutomationTriggerType = 'manual' | 'schedule'
-export type AutomationTargetType = 'agent_run' | 'knowledge_retrieval_maintenance' | 'context_ops_review_cycle'
+export type AutomationTargetType = 'agent_run' | 'knowledge_retrieval_maintenance' | 'context_ops_review_cycle' | 'workflow'
 
 export interface AutomationOut {
   id: string

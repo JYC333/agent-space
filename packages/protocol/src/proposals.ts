@@ -93,6 +93,10 @@ export const ProposalAcceptResultTypeSchema = z.enum([
   "project_source_binding",
   "source_backfill_plan",
   "evolvable_asset_version",
+  "evolution_bundle_rollback",
+  "plan_version",
+  "plan_checkpoint",
+  "workflow_execution_checkpoint",
 ]);
 export type ProposalAcceptResultType = z.infer<
   typeof ProposalAcceptResultTypeSchema

@@ -109,6 +109,29 @@ that requires teardown); global teardown then stops the container. Reuse never
 reuses per-file databases or the migrated template: those are recreated for
 each Vitest run.
 
+### No Fake Database For Durable Behavior
+
+Tests that claim a database-backed product behavior must run against the
+shared real PostgreSQL infrastructure. Reuse an existing domain test file
+and call `getTestPostgres(__filename)` from
+`server/test/support/sharedPostgres.ts`; do not start a second Testcontainers
+instance, create an ad-hoc database, or replace the database with a fake
+`Queryable`.
+
+This applies to contracts, invariants, workflows, plans, run dispatch and
+budget enforcement, routing persistence, verification persistence, and any
+assertion about durable state or transaction behavior. If the shared
+PostgreSQL fixture is unavailable, the test must use the repository's
+established skip path and report the unavailable runtime. It must never fall
+back to a fake database, because that can validate SQL shape while missing
+constraints, transactions, locks, JSON queries, triggers, and cross-table
+invariants.
+
+Database fakes are allowed only for narrowly scoped, database-free unit tests
+whose stated purpose is SQL/parameter shape or a pure adapter boundary. Such
+tests must not be used to prove product behavior or to duplicate coverage
+that belongs in a real-PostgreSQL workflow test.
+
 ## Proposal And Run Rules
 
 - `/api/v1/proposals` is the only product API for proposal review and application.

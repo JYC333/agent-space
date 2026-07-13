@@ -283,6 +283,9 @@ class AgentGroupServiceDb {
         rowCount: 1,
       };
     }
+    if (sql.includes("INSERT INTO run_attempts")) {
+      return { rows: [], rowCount: 1 };
+    }
     if (sql.includes("FROM artifacts a") || sql.includes("FROM proposals p")) {
       return { rows: [], rowCount: 0 };
     }

@@ -55,8 +55,10 @@ describe("runtime tool routes", () => {
     expect(res.json().map((row: { runtime: string }) => row.runtime)).toEqual([
       "claude_code",
       "codex_cli",
+      "opencode",
     ]);
     expect(res.json().map((row: { enabled: boolean }) => row.enabled)).toEqual([
+      false,
       false,
       false,
     ]);

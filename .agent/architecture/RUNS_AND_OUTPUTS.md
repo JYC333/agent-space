@@ -165,6 +165,97 @@ proposal-envelope fields.
   executor exists.
 - External workspace capabilities default **disabled**; enable state persists in `$AGENT_SPACE_HOME/config/settings.yaml` (`capabilities.enabled_external_capabilities`) and survives registry reload.
 - Disabled external capabilities fail at adapter resolution with `capability_disabled` before execution.
+- `one_shot_docker` is the critical local-CLI executor mode. It provides a
+  separate container with deny-by-default networking, read-only root, dropped
+  capabilities, no-new-privileges, and fixed resource limits. Docker/image/path
+  failures are terminal and never downgrade to worktree execution. Worktree
+  execution still scopes repository changes only and does not provide OS,
+  network, or resource isolation.
+
+## Validation status
+
+The A2 Verification Engine runs before a worktree sandbox is cleaned up and
+persists one `verification_results` row per `(run, verifier_type,
+verifier_version)`. It consumes the immutable Run contract, the workspace's
+enabled `ValidationRecipe`/profile checks, adapter output, materialization
+summaries, and the live sandbox. Supported deterministic checks are
+`command`, `test`, `lint`, `typecheck`, `file_exists`, `file_changed`,
+`diff_scope`, `artifact_exists`, `artifact_schema`, `output_schema`,
+`proposal_created`, and `no_forbidden_change`. Code-patch collection now
+records structural validation metadata and the engine verifies changed files
+and forbidden-path boundaries; the proposal payload no longer claims that
+patch validation is skipped.
+
+`PostRunFinalizationService` reads these results. A declared failed/error
+check makes a successful runtime evaluation `failed`; a declared but skipped
+or missing check is `unknown` with `insufficient_evidence`; a successful
+runtime exit alone cannot produce `passed` when deterministic checks are
+declared. Result evidence stores references, paths, exit metadata, and bounded
+schema error codes, never raw stdout/stderr, full patches, credentials, or
+file contents. `GET /api/v1/runs/{run_id}/verification(s)` exposes the
+space-scoped result read model.
+
+## Attempts, cancellation, and supervision
+
+`runs` is the logical execution record; `run_attempts` is the physical
+execution record. The first dispatch claims a pre-created queued attempt when
+available, while legacy runs are backfilled as attempt 1. A retry never creates
+a second logical Run: it records the completed attempt, writes an idempotent
+`run_supervisor_decisions` row, and queues the next attempt. When C2 has a
+persisted fallback chain, the next untried eligible profile is selected and
+stamped for that attempt; an explicit profile remains a hard pin.
+
+The deterministic MVP retries only classified transient failures and respects
+the `max_attempts` cap and aggregate run cost cap. Exhaustion, non-retryable
+failures, missing retry identity, and budget exhaustion move the logical Run to
+`waiting_for_review`. Cost is read from the append-only usage ledger rather than
+from `runs.usage_json`.
+
+Runs in `waiting_for_review` have explicit human controls: `POST /resume`
+requeues after approval (`same_attempt` for an in-flight policy pause,
+`new_attempt` for a Supervisor terminal hold) and `POST /abandon` records a
+cancelled terminal outcome after review. There is no implicit automatic resume.
+
+CLI cancellation is two-phase: the Run enters `cancelling`, the process gets
+SIGTERM, the server waits for exit, and escalates to SIGKILL when needed. The
+Run is marked `cancelled` only after exit confirmation; otherwise it remains
+`cancelling` with a confirmation-timeout result. On worker startup, stale
+running/cancelling runs whose process registry was lost become `orphaned`, are
+finalized, and pass through the same supervisor policy. Local CLI attempts also
+have a no-output/no-activity watchdog that emits `cli_stall_timeout`.
+
+`manual_review` and `model_judge` are represented as declared, skipped
+verifier types only. They are not completion evidence until their respective
+review/model boundaries land; model-judge execution must use a model distinct
+from the generator. Root/integration verification is implemented by the B2
+Plan graph layer.
+
+The `RuntimeAdapterSpec` catalog is the dispatch declaration: each spec names
+an executor family, and orchestration selects the family implementation from a
+registry map. Adapter-specific names are not dispatch branches. The same spec
+records conservative runtime capability declarations for future routing and
+conformance checks. For Claude Code, the local CLI path renders and verifies a
+run-scoped `.claude/settings.json` denying the runtime-internal `Task` tool;
+Codex remains unknown for this control.
+
+Workflow definitions are versioned through the evolvable-asset control plane.
+`runs.workflow_version_id` records the approved version selected for a fixed
+Workflow launch. Workflow Automation materializes that version into a durable
+`WorkflowExecution` and its execution-node tables. An Agent Plan may retain a
+`reference_workflow_version_id` as planning context, but its Plan Nodes are
+independent and are never copied into `tasks`.
+
+Task/Automation/Workflow contract fields such as `acceptance_criteria_json`,
+`definition_of_done`, `required_outputs_json`, `risk_level`, `max_runs`,
+`max_cost`, and `max_duration_seconds` are declared in the task schema but
+are snapshotted into the Run contract. A run contract may additionally declare
+`max_attempts`; `max_runs` is resolved from budget-source precedence and limits
+logical executions for the selected Task, Automation, or Workflow/plan
+coordinator source. Plan children carry `root_run_id`, so one workflow fire
+is not multiplied by its child count. `max_attempts` limits physical
+executions of one Run. A1 carries the applicable project/route context
+forward; A2 owns verification of acceptance and required outputs; A3 enforces
+both limits at their respective boundaries.
 
 ## Run model config (resolved_model)
 

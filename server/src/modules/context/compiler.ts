@@ -68,6 +68,12 @@ const VENDOR_FILE_HEADER = `<!-- GENERATED FILE - DO NOT EDIT MANUALLY
 
 const CLAUDE_SETTINGS = JSON.stringify(
   {
+    permissions: {
+      // Claude Code's runtime-internal Task tool is not a server-owned
+      // delegation channel. Keep it disabled unless a future conformance
+      // change explicitly updates this runtime policy.
+      deny: ["Task"],
+    },
     hooks: {
       PostToolUse: [
         {

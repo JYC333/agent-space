@@ -109,4 +109,16 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       return sendRouteError(reply, error);
     }
   });
+
+  app.get("/api/v1/spaces/:spaceId/automations/:automationId/workflow-executions", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    const spaceId = params(request).spaceId ?? identity.spaceId;
+    if (spaceId !== identity.spaceId) return reply.code(403).send({ detail: "Access denied" });
+    try {
+      return reply.send(await new PgAutomationRepository(dbPool(context.config)).listWorkflowExecutions(spaceId, params(request).automationId ?? ""));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
 }

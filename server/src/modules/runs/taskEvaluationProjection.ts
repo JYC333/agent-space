@@ -32,6 +32,13 @@ export function taskRecommendationForOutcome(outcome: string): string {
 export function taskSummaryFromRunEvaluation(row: RunEvaluationProjectionInput): string {
   const outcome = row.outcome_status;
   const trajectory = row.trajectory_status;
+  const verification = recordValue(recordValue(row.evidence_json).verification);
+  if (verification.status === "failed") {
+    return "Run evaluation failed deterministic verification checks.";
+  }
+  if (verification.status === "incomplete") {
+    return "Run evaluation needs verification evidence before acceptance.";
+  }
   if (outcome === "passed" && trajectory === "acceptable") {
     return "Run evaluation passed with acceptable trajectory.";
   }
@@ -49,6 +56,7 @@ export function taskSummaryFromRunEvaluation(row: RunEvaluationProjectionInput):
 }
 
 export function taskChecklistFromRunEvaluation(row: RunEvaluationProjectionInput): Record<string, unknown> {
+  const evidence = recordValue(row.evidence_json);
   return {
     run_evaluation_id: row.id,
     run_id: row.run_id,
@@ -57,6 +65,7 @@ export function taskChecklistFromRunEvaluation(row: RunEvaluationProjectionInput
     failure_layer: row.failure_layer,
     failure_reason_code: row.failure_reason_code,
     evaluator_version: row.evaluator_version,
+    verification: recordValue(evidence.verification),
   };
 }
 
@@ -80,6 +89,16 @@ export function taskKnownIssuesFromRunEvaluation(row: RunEvaluationProjectionInp
     issues.push({ kind: "validation_status", status: validation.status });
   }
   collectIssueList(issues, validation.signals, "validation_signal", "code");
+  const verification = recordValue(evidence.verification);
+  if (verification.status === "failed" || verification.status === "incomplete") {
+    issues.push({
+      kind: "verification",
+      status: verification.status,
+      failed: verification.failed ?? 0,
+      skipped: verification.skipped ?? 0,
+    });
+  }
+  collectIssueList(issues, verification.results, "verification_result", "verifier_type");
   if (row.trajectory_status === "unsafe") {
     issues.push({ kind: "trajectory", status: "unsafe" });
   }

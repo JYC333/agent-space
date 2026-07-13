@@ -272,6 +272,16 @@ export const MODULE_REGISTRY: Module[] = [
     component: lazy(() => import('./tasks/TasksModule')),
   },
   {
+    id: 'plans', label: 'Plans', path: '/plans',
+    section: 'agents', group: 'work', icon: 'list-tree',
+    description: 'Review Agent-generated Plans linked to source Tasks without a canvas.',
+    source: 'built_in', capabilityId: undefined,
+    enabled: true, visible: true, planned: false,
+    perspectiveType: 'space-scoped',
+    hasSubRoutes: true,
+    component: lazy(() => import('./plans/PlansModule')),
+  },
+  {
     id: 'runs', label: 'Runs', path: '/runs',
     section: 'agents', group: 'work', icon: 'cpu', accent: true,
     description: 'Inspect agent runs, status, activities, artifacts, and proposals.',
@@ -425,7 +435,8 @@ export const MODULE_REGISTRY: Module[] = [
     source: 'built_in', capabilityId: undefined,
     enabled: true, visible: true, planned: false,
     perspectiveType: 'neutral',
-    component: lazy(() => import('./evolution/EvolutionPage')),
+    hasSubRoutes: true,
+    component: lazy(() => import('./evolution/EvolutionModule')),
   },
   {
     id: 'prompt_library', label: 'Prompt Library', path: '/prompts',

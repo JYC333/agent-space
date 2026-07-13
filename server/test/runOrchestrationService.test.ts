@@ -61,6 +61,7 @@ class FakeRepo implements RunExecutionRepositoryPort {
   }> = [];
   run: RunRecord | null = run();
   lockAcquired = true;
+  dispatchAllowed = true;
   failEvents = false;
   failSteps = false;
 
@@ -87,6 +88,12 @@ class FakeRepo implements RunExecutionRepositoryPort {
     if (!this.run || this.run.status !== "queued") return null;
     this.run = { ...this.run, status: "running", started_at: input.started_at };
     return this.run;
+  }
+
+  async checkRunDispatchContract(): Promise<{ allowed: boolean; error_code?: string; error_message?: string }> {
+    return this.dispatchAllowed
+      ? { allowed: true }
+      : { allowed: false, error_code: "dispatch_denied", error_message: "dispatch denied" };
   }
 
   async updateRunSandboxLevel(input: {
@@ -1153,8 +1160,15 @@ describe("RunOrchestrationService", () => {
       message: "Runtime execution denied by policy: blocked by rule",
     });
     let adapterInvoked = false;
+    const finalized: string[] = [];
     const service = new RunOrchestrationService(config(), repo, {
       policyEnforcer: denyPolicy,
+      materializer: {
+        async finalizeRun(finalizedRun: RunRecord) {
+          finalized.push(`${finalizedRun.id}:${finalizedRun.status}`);
+          return { kind: "activity", status: "succeeded", activity_id: "finalization-1", metadata_json: {} };
+        },
+      } as unknown as RunMaterializationService,
       managedApi: {
         executeRuntimeHost: async () => {
           adapterInvoked = true;
@@ -1179,7 +1193,76 @@ describe("RunOrchestrationService", () => {
       status: "failed",
       error_json: { error_code: "policy_denied_runtime_execute" },
     });
+    expect(finalized).toEqual(["run-1:failed"]);
     expect(repo.calls).toContain("unlock:run-1");
+  });
+
+  it("upgrades every critical CLI run to one-shot Docker at the shared policy boundary", async () => {
+    const repo = new FakeRepo();
+    repo.run = run({
+      adapter_type: "codex_cli",
+      model_provider_id: null,
+      required_sandbox_level: "worktree",
+      workspace_id: "workspace-1",
+      contract_snapshot_json: {
+        risk_level: "critical",
+        source: { kind: "direct", id: null },
+      },
+    });
+    const workspaceManager = new FakeWorkspaceManager();
+    const executorModes: string[] = [];
+    const executorInputs: Array<{ docker?: unknown }> = [];
+    const service = new RunOrchestrationService(config(), repo, {
+      policyEnforcer: allowPolicy,
+      runtimeToolVersionResolver: async () => "test-version",
+      contextPreparer: new FakeContextPreparer(),
+      workspaceManager,
+      vendorCli: {
+        credentialBroker: {
+          async grantForRun(
+            _runId,
+            _spaceId,
+            _runtime,
+            executorMode,
+          ) {
+            executorModes.push(executorMode);
+            return {
+              granted: true,
+              profile_id: "11111111-1111-4111-8111-111111111111",
+              runtime: "codex_cli",
+              executor_mode: executorMode,
+              readonly: true,
+              temp_home: null,
+              host_source_path: null,
+              target_path: null,
+              env: {},
+              network_profile_id: null,
+              fallback_reason: null,
+            };
+          },
+        },
+        executor: {
+          async runCommand(input) {
+            executorInputs.push({ docker: input.docker });
+            return { returncode: 0, stdout: "critical cli ok", stderr: "", timed_out: false };
+          },
+        },
+        toolRegistry: new FakeTools(),
+      },
+    });
+
+    await expect(service.executeRun({
+      run_id: "run-1",
+      space_id: "space-1",
+      worker_id: "worker-1",
+      command_source: "job",
+      risk_level: "low",
+    })).resolves.toMatchObject({ status: "succeeded" });
+
+    expect(repo.calls).toContain("sandbox_level:one_shot_docker");
+    expect(executorModes).toEqual(["docker"]);
+    expect(executorInputs[0]?.docker).toMatchObject({ image: "agent-space-sandbox" });
+    expect(workspaceManager.calls).toContain("prepare:run-1");
   });
 
   it("ignores caller-supplied executable path overrides", async () => {

@@ -47,6 +47,11 @@ export {
 export { CapabilitiesService } from "./service";
 export { PgCapabilitiesRepository } from "./repository";
 export {
+  resolveWorkflowVersionId,
+  syncBuiltinWorkflows,
+  workflowDefinitionFromTemplate,
+} from "./workflowAssets";
+export {
   __setCapabilitiesIdentityForTests,
   __setCapabilitiesRepositoryFactoryForTests,
   __setCapabilitiesSkillFetcherForTests,

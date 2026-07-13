@@ -16,8 +16,8 @@ import {
 } from "./vendorCliAdapter";
 import { AgentGroupRunLifecycleProjector } from "../agentGroups/lifecycleProjector";
 import type { CliProcessRegistry } from "./localCliExecution";
+import { PgRunRepository } from "./repository";
 import type {
-  PgRunRepository,
   RunEventInput,
   RunRecord,
   RunStepInput,
@@ -32,8 +32,10 @@ import {
 } from "./ephemeralSandbox";
 import type { RunWorkspaceManagerPort } from "../workspaces";
 import {
+  getRuntimeAdapterSpec,
   isVendorCliAdapter,
   targetFormatForAdapter,
+  type RuntimeExecutorFamily,
 } from "../runtimeAdapters";
 import type { RunMaterializationService } from "./materializationService";
 import type { ContextPrepareInput, ContextPrepareResult } from "../context";
@@ -41,6 +43,7 @@ import { loadActionRegistry } from "../policy/actionRegistry";
 import { enforce, type EnforceResult } from "../policy/service";
 import { RuntimeToolRegistry } from "../runtimeTools";
 import { resolveRuntimeToolVersionForSpace } from "../runtimeTools/policies";
+import { PgRouteDecisionRepository } from "../routing/repository";
 import { RunApprovalRequiredError, RunPreparationError } from "./orchestrationErrors";
 import {
   adapterErrorJson,
@@ -60,6 +63,10 @@ import {
   waitingForDependencyFromAdapter,
   withTimeout,
 } from "./orchestrationResults";
+import type {
+  VerificationEnginePort,
+  VerificationResultRecord,
+} from "./verification";
 
 export interface RunExecutionRepositoryPort {
   getRun(spaceId: string, runId: string): Promise<RunRecord | null>;
@@ -73,12 +80,24 @@ export interface RunExecutionRepositoryPort {
     started_at: string;
     required_sandbox_level?: string | null;
   }): Promise<RunRecord | null>;
+  checkRunDispatchContract(run: Pick<RunRecord, "space_id" | "id" | "root_run_id" | "contract_snapshot_json">): Promise<{
+    allowed: boolean;
+    error_code?: string;
+    error_message?: string;
+  }>;
   updateRunSandboxLevel(input: {
     run_id: string;
     space_id: string;
     required_sandbox_level: string;
   }): Promise<void>;
   markRunTerminal(input: RunTerminalUpdate): Promise<RunRecord | null>;
+  markRunCancelling?(input: {
+    run_id: string;
+    space_id: string;
+    requested_at: string;
+    reason?: string | null;
+    requested_by_user_id?: string | null;
+  }): Promise<RunRecord | null>;
   markRunDegraded?(input: {
     run_id: string;
     space_id: string;
@@ -126,6 +145,7 @@ export interface RunExecutionAdapterDeps {
   contextPreparer?: RunContextPrepareClient;
   workspaceManager?: RunWorkspaceManagerPort;
   codePatchCollector?: RunCodePatchCollectorPort;
+  verificationEngine?: VerificationEnginePort;
   policyEnforcer?: RunPolicyEnforcer;
   runtimeToolVersionResolver?: RunRuntimeToolVersionResolver;
   delegationProjector?: RunDelegationLifecycleProjectorPort;
@@ -136,6 +156,11 @@ export interface RunExecutionAdapterDeps {
    * running process.
    */
   processRegistry?: CliProcessRegistry;
+  routeResolver?: RunRouteResolverPort;
+}
+
+export interface RunRouteResolverPort {
+  routeRun(run: RunRecord): Promise<RunRecord>;
 }
 
 export interface RunDelegationLifecycleProjectorPort {
@@ -177,6 +202,62 @@ export interface RunExecutionInput extends RunExecuteRequest {
   timeout_ms?: number | null;
 }
 
+type RuntimeAdapterExecutor = (
+  config: ServerConfig,
+  run: RunRecord,
+  input: RunExecutionInput,
+  deps: RunExecutionAdapterDeps,
+) => Promise<RunAdapterResultEnvelope>;
+
+const RUNTIME_EXECUTORS: Readonly<Record<RuntimeExecutorFamily, RuntimeAdapterExecutor>> = {
+  managed_api: (config, run, input, deps) =>
+    executeManagedApiNoToolAdapter(
+      config,
+      {
+        run,
+        model: input.model ?? null,
+        system_prompt: input.system_prompt ?? run.system_prompt ?? null,
+        prompt: input.prompt ?? null,
+        context_text: input.context_text ?? null,
+        context_snapshot_id: run.context_snapshot_id,
+        max_tokens: input.max_tokens ?? null,
+      },
+      deps.managedApi,
+    ),
+  local_cli: (config, run, input, deps) =>
+    executeVendorCliAdapter(
+      config,
+      {
+        run,
+        prompt: input.prompt ?? null,
+        model: input.model ?? null,
+        sandbox_cwd: input.sandbox_cwd ?? null,
+        context_text: input.context_text ?? null,
+        adapter_config: input.adapter_config ?? {},
+        risk_level: input.risk_level ?? null,
+        trigger_origin: run.trigger_origin,
+        process_registry: deps.processRegistry,
+      },
+      deps.vendorCli,
+    ),
+  native: (_config, run) =>
+    Promise.resolve(
+      adapterFailureEnvelope(
+        run,
+        "runtime_adapter_not_implemented",
+        `Runtime adapter '${run.adapter_type ?? "unknown"}' is not executable in server runs.`,
+      ),
+    ),
+  custom: (_config, run) =>
+    Promise.resolve(
+      adapterFailureEnvelope(
+        run,
+        "runtime_adapter_not_implemented",
+        `Runtime adapter '${run.adapter_type ?? "unknown"}' is not executable in server runs.`,
+      ),
+    ),
+};
+
 interface PreparedRuntimeContext {
   prompt: string | null;
   sandbox_cwd: string | null;
@@ -201,6 +282,7 @@ interface ResolvedRuntimePolicy {
 
 export class RunOrchestrationService {
   private readonly delegationProjector: RunDelegationLifecycleProjectorPort | null;
+  private readonly routeResolver: RunRouteResolverPort | null;
 
   constructor(
     private readonly config: ServerConfig,
@@ -209,6 +291,10 @@ export class RunOrchestrationService {
   ) {
     this.delegationProjector =
       adapters.delegationProjector ?? AgentGroupRunLifecycleProjector.fromConfig(config);
+    this.routeResolver = adapters.routeResolver
+      ?? (repository instanceof PgRunRepository && config.databaseUrl
+        ? new PgRouteDecisionRepository(getDbPool(config.databaseUrl))
+        : null);
   }
 
   async executeRun(input: RunExecutionInput): Promise<RunJobResult> {
@@ -260,6 +346,31 @@ export class RunOrchestrationService {
     let step: RunStepRecord | null = null;
     let preparedRuntime: PreparedRuntimeContext | null = null;
     try {
+      const routedRun = this.routeResolver ? await this.routeResolver.routeRun(run) : run;
+      const dispatchContract = await this.repository.checkRunDispatchContract(routedRun);
+      if (!dispatchContract.allowed) {
+        const rejected = await this.repository.markRunTerminal({
+          run_id: run.id,
+          space_id: run.space_id,
+          status: "failed",
+          output_text: "",
+          output_json: {},
+          error_json: {
+            error_code: dispatchContract.error_code ?? "run_contract_dispatch_denied",
+            error_text: dispatchContract.error_message ?? "Run contract rejected dispatch.",
+          },
+          exit_code: 1,
+          completed_at: startedAt,
+          usage_json: {},
+        });
+        await this.finalizeTerminalRunBestEffort(rejected ?? { ...run, status: "failed", ended_at: startedAt });
+        return {
+          run_id: run.id,
+          status: protocolRunStatus(rejected?.status ?? "failed"),
+          error_code: dispatchContract.error_code ?? "run_contract_dispatch_denied",
+          error: dispatchContract.error_message ?? "Run contract rejected dispatch.",
+        };
+      }
       const running = await this.repository.markRunRunning({
         run_id: run.id,
         space_id: run.space_id,
@@ -438,6 +549,36 @@ export class RunOrchestrationService {
         materialization.items.push(codePatch.item);
         materialization.errors.push(...codePatch.errors);
       }
+      let verificationResults: VerificationResultRecord[] = [];
+      if (this.adapters.verificationEngine) {
+        await this.appendRunEventBestEffort({
+          run_id: running.id,
+          space_id: running.space_id,
+          event_type: "validation_started",
+          status: "running",
+          workspace_id: running.workspace_id,
+          metadata_json: { verifier_version: "verification_engine.v1" },
+        });
+        verificationResults = await this.adapters.verificationEngine.verify({
+          run: effectiveRun,
+          sandbox_cwd: preparedRuntime?.sandbox_cwd ?? null,
+          base_commit_sha: preparedRuntime?.base_commit_sha ?? null,
+          output_json: adapterResult.output_json,
+          materialization_items: materialization.items,
+        });
+        await this.appendRunEventBestEffort({
+          run_id: running.id,
+          space_id: running.space_id,
+          event_type: "validation_completed",
+          status: verificationStatus(verificationResults),
+          workspace_id: running.workspace_id,
+          metadata_json: {
+            verifier_version: "verification_engine.v1",
+            result_count: verificationResults.length,
+            failed_count: verificationResults.filter((result) => result.status === "failed" || result.status === "error").length,
+          },
+        });
+      }
       const terminalStatus = adapterResult.success && materialization.errors.length > 0
         ? "degraded"
         : adapterTerminalStatus;
@@ -447,10 +588,11 @@ export class RunOrchestrationService {
         space_id: running.space_id,
         status: terminalStatus,
         output_text: adapterResult.output_text,
-        output_json: outputJsonWithMaterialization(
+        output_json: outputJsonWithVerification(
           adapterResult.output_json,
           materialization.items,
           materialization.errors,
+          verificationResults,
         ),
         error_json: adapterErrorJson(adapterResult),
         exit_code: adapterResult.exit_code,
@@ -588,6 +730,7 @@ export class RunOrchestrationService {
         completed_at: completedAt,
         usage_json: {},
       });
+      await this.finalizeTerminalRunBestEffort(failedRun ?? { ...run, status: "failed", ended_at: completedAt });
       if (failedRun) await this.markDelegatedRunTerminalBestEffort(failedRun);
       if (step) {
         await this.updateRunStepStatusBestEffort({
@@ -631,7 +774,7 @@ export class RunOrchestrationService {
     reason?: string | null;
     terminate_process?: boolean;
   }): Promise<RunJobResult> {
-    const completedAt = new Date().toISOString();
+    const requestedAt = new Date().toISOString();
     const run = await this.repository.getRun(input.space_id, input.run_id);
     if (!run) {
       return {
@@ -652,15 +795,55 @@ export class RunOrchestrationService {
       };
     }
 
-    // SIGTERM a server-registered CLI subprocess before the DB status change
-    // (best-effort).
+    const cancellationRequested = this.repository.markRunCancelling
+      ? await this.repository.markRunCancelling({
+          run_id: run.id,
+          space_id: run.space_id,
+          requested_at: requestedAt,
+          reason: input.reason,
+          requested_by_user_id: input.requested_by_user_id,
+        })
+      : null;
+    if (this.repository.markRunCancelling && !cancellationRequested) {
+      const current = await this.repository.getRun(input.space_id, run.id);
+      return {
+        run_id: run.id,
+        status: protocolRunStatus(current?.status ?? run.status),
+        skipped: true,
+        skip_reason: "run_already_terminal",
+      };
+    }
+
+    // Cancellation is a two-phase state transition. The run remains
+    // cancelling until the child process has confirmed exit or escalation has
+    // been attempted, so a late adapter result cannot be mistaken for a clean
+    // cancellation.
     let processTerminated = false;
+    let confirmedExit = true;
+    let forceKillEscalated = false;
     if (input.terminate_process !== false && this.adapters.processRegistry) {
       try {
         processTerminated = this.adapters.processRegistry.terminate(run.id);
+        if (processTerminated && this.adapters.processRegistry.waitForExit) {
+          confirmedExit = await this.adapters.processRegistry.waitForExit(run.id, 5_000);
+          if (!confirmedExit) {
+            forceKillEscalated = this.adapters.processRegistry.forceTerminate?.(run.id) ?? false;
+            confirmedExit = await this.adapters.processRegistry.waitForExit(run.id, 2_000);
+          }
+        }
       } catch {
         processTerminated = false;
+        confirmedExit = false;
       }
+    }
+
+    if (!confirmedExit) {
+      return {
+        run_id: run.id,
+        status: "cancelling",
+        error_code: "cancel_confirmation_timeout",
+        error: "Cancellation was requested but the runtime process has not confirmed exit.",
+      };
     }
 
     const updated = await this.repository.markRunTerminal({
@@ -674,9 +857,11 @@ export class RunOrchestrationService {
         error_text: input.reason ?? "Run cancelled.",
         requested_by_user_id: input.requested_by_user_id ?? null,
         process_terminated: processTerminated,
+        confirmed_exit: confirmedExit,
+        force_kill_escalated: forceKillEscalated,
       },
       exit_code: 1,
-      completed_at: completedAt,
+      completed_at: new Date().toISOString(),
       usage_json: {},
     });
     if (!updated) {
@@ -688,11 +873,22 @@ export class RunOrchestrationService {
         skip_reason: "run_already_terminal",
       };
     }
+    await this.finalizeTerminalRunBestEffort(updated ?? { ...run, status: "cancelled", ended_at: new Date().toISOString() });
     await this.markDelegatedRunTerminalBestEffort(updated);
     // Cancellation evidence lives on the run row (error_json carries requester
     // + process_terminated); no run_event is appended (event_type has a closed
     // CHECK constraint with no cancel type).
     return { run_id: run.id, status: "cancelled", error_code: "run_cancelled" };
+  }
+
+  private async finalizeTerminalRunBestEffort(run: RunRecord): Promise<void> {
+    if (!this.adapters.materializer) return;
+    try {
+      await this.adapters.materializer.finalizeRun(run);
+    } catch {
+      // Terminal status is authoritative. Finalization is idempotent and can
+      // be retried through the explicit finalize endpoint or a later worker.
+    }
   }
 
   /**
@@ -709,11 +905,30 @@ export class RunOrchestrationService {
   ): Promise<ResolvedRuntimePolicy> {
     const runtimeConfig = recordValue(run.runtime_config_json);
     const callerConfig = input.command_source === "http" ? {} : input.adapter_config ?? {};
+    const contract = recordValue(run.contract_snapshot_json);
+    // The immutable run contract is authoritative. An internal execution
+    // caller may supply a fallback risk for legacy runs, but it can never
+    // downgrade a critical contract to reach a weaker sandbox.
+    const riskLevel = stringConfigValue(contract.risk_level) ?? input.risk_level ?? null;
+    const requiredSandboxLevel = requiredSandboxLevelForRuntimePolicy(
+      run.adapter_type,
+      run.required_sandbox_level,
+      riskLevel,
+    );
+    if (requiredSandboxLevel === "one_shot_docker" && isVendorCliAdapter(run.adapter_type)) {
+      const spec = getRuntimeAdapterSpec(run.adapter_type);
+      if (!spec?.sandbox.supports_one_shot_docker) {
+        throw new RunPreparationError(
+          "docker_sandbox_not_supported",
+          `Runtime adapter '${run.adapter_type}' does not support one-shot Docker execution for critical risk.`,
+        );
+      }
+    }
     const base: ResolvedRuntimePolicy = {
       adapter_type: run.adapter_type,
       adapter_config: { ...runtimeConfig, ...callerConfig },
-      risk_level: input.risk_level ?? null,
-      required_sandbox_level: run.required_sandbox_level ?? null,
+      risk_level: riskLevel,
+      required_sandbox_level: requiredSandboxLevel,
     };
     const policyRequest: Parameters<typeof enforce>[2] = {
       action: "runtime.execute",
@@ -1029,12 +1244,35 @@ export class RunOrchestrationService {
     run: RunRecord,
     input: RunExecutionInput,
   ): Promise<RunAdapterResultEnvelope> {
-    const promise = this.invokeAdapterUnbounded(run, input);
-    if (!input.timeout_ms || input.timeout_ms <= 0) return promise;
+    const contract = recordValue(run.contract_snapshot_json);
+    const declaredDurationSeconds = positiveNumber(contract.max_duration_seconds);
+    const contractTimeoutMs = declaredDurationSeconds === null
+      ? null
+      : declaredDurationSeconds * 1000;
+    const requestedTimeoutMs = input.timeout_ms && input.timeout_ms > 0 ? input.timeout_ms : null;
+    const timeoutMs = contractTimeoutMs === null
+      ? requestedTimeoutMs
+      : requestedTimeoutMs === null
+        ? contractTimeoutMs
+        : Math.min(requestedTimeoutMs, contractTimeoutMs);
+    const adapterInput = contractTimeoutMs === null
+      ? input
+      : {
+          ...input,
+          adapter_config: {
+            ...(input.adapter_config ?? {}),
+            timeout: Math.min(
+              positiveNumber(input.adapter_config?.timeout) ?? contractTimeoutMs / 1000,
+              contractTimeoutMs / 1000,
+            ),
+          },
+        };
+    const promise = this.invokeAdapterUnbounded(run, adapterInput);
+    if (!timeoutMs || timeoutMs <= 0) return promise;
     return withTimeout(
       promise,
-      input.timeout_ms,
-      adapterTimeoutEnvelope(run, input.timeout_ms),
+      timeoutMs,
+      adapterTimeoutEnvelope(run, timeoutMs),
     );
   }
 
@@ -1042,42 +1280,15 @@ export class RunOrchestrationService {
     run: RunRecord,
     input: RunExecutionInput,
   ): Promise<RunAdapterResultEnvelope> {
-    if (run.adapter_type === "model_api" || run.adapter_type === "ts_agent_host") {
-      return executeManagedApiNoToolAdapter(
-        this.config,
-        {
-          run,
-          model: input.model ?? null,
-          system_prompt: input.system_prompt ?? run.system_prompt ?? null,
-          prompt: input.prompt ?? null,
-          context_text: input.context_text ?? null,
-          context_snapshot_id: run.context_snapshot_id,
-          max_tokens: input.max_tokens ?? null,
-        },
-        this.adapters.managedApi,
+    const spec = getRuntimeAdapterSpec(run.adapter_type);
+    if (!spec) {
+      return adapterFailureEnvelope(
+        run,
+        "runtime_adapter_not_implemented",
+        `Runtime adapter '${run.adapter_type ?? "unknown"}' is not registered.`,
       );
     }
-    if (run.adapter_type === "claude_code" || run.adapter_type === "codex_cli") {
-      return executeVendorCliAdapter(
-        this.config,
-        {
-          run,
-          prompt: input.prompt ?? null,
-          model: input.model ?? null,
-          sandbox_cwd: input.sandbox_cwd ?? null,
-          context_text: input.context_text ?? null,
-          adapter_config: input.adapter_config ?? {},
-          risk_level: input.risk_level ?? null,
-          process_registry: this.adapters.processRegistry,
-        },
-        this.adapters.vendorCli,
-      );
-    }
-    return adapterFailureEnvelope(
-      run,
-      "runtime_adapter_not_implemented",
-      `Runtime adapter '${run.adapter_type ?? "unknown"}' is not executable in server runs.`,
-    );
+    return RUNTIME_EXECUTORS[spec.executor_family](this.config, run, input, this.adapters);
   }
 
   private async appendMaterializationEvents(
@@ -1259,6 +1470,55 @@ export class RunOrchestrationService {
   }
 }
 
+function outputJsonWithVerification(
+  outputJson: unknown,
+  items: RunMaterializationItemSummary[],
+  errors: string[],
+  results: VerificationResultRecord[],
+): unknown {
+  const output = recordValue(outputJsonWithMaterialization(outputJson, items, errors));
+  if (results.length > 0) {
+    output.verification_results = results.map((result) => ({
+      id: result.id,
+      verifier_type: result.verifier_type,
+      verifier_version: result.verifier_version,
+      status: result.status,
+      summary: result.summary,
+      evidence_refs_json: result.evidence_refs_json,
+      completed_at: result.completed_at,
+    }));
+  }
+  return output;
+}
+
+function verificationStatus(
+  results: VerificationResultRecord[],
+): "succeeded" | "failed" | "warning" | "skipped" {
+  if (results.length === 0) return "skipped";
+  if (results.some((result) => result.status === "failed" || result.status === "error")) return "failed";
+  if (results.some((result) => result.status === "skipped")) return "warning";
+  return "succeeded";
+}
+
+function requiredSandboxLevelForRuntimePolicy(
+  adapterType: string | null,
+  configuredLevel: string | null | undefined,
+  riskLevel: string | null | undefined,
+): string | null {
+  if (
+    isVendorCliAdapter(adapterType) &&
+    typeof riskLevel === "string" &&
+    riskLevel.trim().toLowerCase() === "critical"
+  ) {
+    return "one_shot_docker";
+  }
+  return configuredLevel ?? null;
+}
+
 function stringConfigValue(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function positiveNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
 }

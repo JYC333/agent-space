@@ -20,7 +20,11 @@ import {
 import { readSpaceRetrievalSettings } from "../retrieval/settings";
 import { knowledgeRetrievalRegistry } from "../knowledge/retrievalAdapter";
 import { PgRunRepository } from "../runs/repository";
+import { assertBudgetSourcesAvailable } from "../runs/budgetEnforcement";
+import { contractRouteHints, type RunBudgetSource } from "../runs/contractSnapshot";
 import { BUILTIN_RUNTIME_ADAPTER_SPECS, type RuntimeAdapterType } from "../runtimeAdapters";
+import { resolveEvolvableAssetVersion } from "../evolution/assetResolutionService";
+import { WorkflowExecutionService } from "./workflowExecutionService";
 import { computeNextRunAt, InvalidScheduleError } from "./schedule";
 import {
   PgAutomationRepository,
@@ -34,11 +38,13 @@ const VALID_STATUSES = new Set(["active", "paused", "archived"]);
 const AUTOMATION_TARGET_AGENT_RUN = "agent_run";
 const AUTOMATION_TARGET_KNOWLEDGE_MAINTENANCE = "knowledge_retrieval_maintenance";
 const AUTOMATION_TARGET_CONTEXT_OPS_REVIEW_CYCLE = "context_ops_review_cycle";
+const AUTOMATION_TARGET_WORKFLOW = "workflow";
 const AUTOMATION_SCHEDULE_HANDLED = Symbol("automation_schedule_handled");
 const VALID_AUTOMATION_TARGETS = new Set([
   AUTOMATION_TARGET_AGENT_RUN,
   AUTOMATION_TARGET_KNOWLEDGE_MAINTENANCE,
   AUTOMATION_TARGET_CONTEXT_OPS_REVIEW_CYCLE,
+  AUTOMATION_TARGET_WORKFLOW,
 ]);
 const CREATE_KEYS = new Set([
   "name",
@@ -119,7 +125,7 @@ export class AutomationService {
     if (!VALID_TRIGGER_TYPES.has(triggerType)) {
       throw new HttpError(422, `Unsupported trigger_type ${JSON.stringify(triggerType)}`);
     }
-    const configJson = validateConfigJson(input.body.config_json);
+    let configJson = validateConfigJson(input.body.config_json);
     if (triggerType === "schedule") {
       try {
         computeNextRunAt(configJson);
@@ -129,9 +135,18 @@ export class AutomationService {
       }
     }
     const targetType = automationTargetType(configJson);
+    configJson = await normalizeWorkflowConfig(configJson, {
+      targetType,
+      triggerType,
+      spaceId: input.spaceId,
+      userId: input.ownerUserId,
+      agentId,
+      projectId,
+      databaseUrl: this.config.databaseUrl,
+    });
     if (projectId) {
-      if (targetType !== AUTOMATION_TARGET_AGENT_RUN) {
-        throw new HttpError(422, "project_id is only supported for agent_run automations");
+      if (targetType !== AUTOMATION_TARGET_AGENT_RUN && targetType !== AUTOMATION_TARGET_WORKFLOW) {
+        throw new HttpError(422, "project_id is only supported for agent_run and workflow automations");
       }
       await this.repo.assertProjectWriter(input.spaceId, projectId, input.ownerUserId);
     }
@@ -179,7 +194,7 @@ export class AutomationService {
     if (status && !VALID_STATUSES.has(status)) {
       throw new HttpError(422, `Invalid status ${JSON.stringify(status)}`);
     }
-    const configJson =
+    let configJson =
       Object.prototype.hasOwnProperty.call(input.body, "config_json") && input.body.config_json !== null
         ? validateConfigJson(input.body.config_json)
         : undefined;
@@ -196,10 +211,21 @@ export class AutomationService {
     const nextProjectId = hasProjectKey
       ? optionalString(input.body.project_id, "project_id")
       : existing.project_id;
-    if (nextProjectId && nextTargetType !== AUTOMATION_TARGET_AGENT_RUN) {
-      throw new HttpError(422, "project_id is only supported for agent_run automations");
+    if (nextProjectId && nextTargetType !== AUTOMATION_TARGET_AGENT_RUN && nextTargetType !== AUTOMATION_TARGET_WORKFLOW) {
+      throw new HttpError(422, "project_id is only supported for agent_run and workflow automations");
     }
     const authorityProjectId = nextProjectId ?? existing.project_id;
+    configJson = configJson
+      ? await normalizeWorkflowConfig(configJson, {
+          targetType: nextTargetType,
+          triggerType: existing.trigger_type,
+          spaceId: input.spaceId,
+          userId: input.actorUserId,
+          agentId: existing.agent_id,
+          projectId: nextProjectId,
+          databaseUrl: this.config.databaseUrl,
+        })
+      : configJson;
     let hasProjectWriterAuthority = false;
     if (authorityProjectId) {
       await this.repo.assertProjectWriter(input.spaceId, authorityProjectId, input.actorUserId);
@@ -218,7 +244,7 @@ export class AutomationService {
         actorUserId: input.actorUserId,
         agentId: existing.agent_id,
         workspaceId: existing.workspace_id,
-        projectId: null,
+        projectId: nextTargetType === AUTOMATION_TARGET_WORKFLOW ? nextProjectId : null,
         automationPreAuthorized: isUnattendedTrigger(existing.trigger_type),
         configJson: configJson ?? existing.config_json,
       });
@@ -279,6 +305,12 @@ export class AutomationService {
       automationPreAuthorized: preAuthorized,
       configJson: auto.config_json,
     });
+
+    if (targetType === AUTOMATION_TARGET_WORKFLOW) {
+      const result = await this.executeWorkflowFire(auto, input, triggerType, preflightSnapshot);
+      if (triggerType === "manual") await this.repo.recordFire(input.spaceId, auto.id);
+      return result;
+    }
 
     if (!this.config.databaseUrl) {
       throw new HttpError(502, "SERVER_DATABASE_URL is required");
@@ -350,7 +382,11 @@ export class AutomationService {
           automationPreAuthorized: preAuthorized,
           configJson: auto.config_json,
         });
-        if (targetType === AUTOMATION_TARGET_KNOWLEDGE_MAINTENANCE) {
+        if (targetType === AUTOMATION_TARGET_WORKFLOW) {
+          await this.executeWorkflowFire(auto, fireInput, "schedule", preflightSnapshot, {
+            advanceSchedule: true,
+          });
+        } else if (targetType === AUTOMATION_TARGET_KNOWLEDGE_MAINTENANCE) {
           await this.executeMaintenanceFire(auto, fireInput, "schedule", preflightSnapshot, {
             advanceSchedule: true,
           });
@@ -407,6 +443,7 @@ export class AutomationService {
     const runs = new PgRunRepository(client);
     const queue = new PgJobQueueRepository(client);
     const automations = new PgAutomationRepository(client);
+    await lockAndCheckAutomationBudget(client, auto);
 
     const instruction = input.instruction ?? null;
     const prompt = input.prompt ?? automationConfiguredPrompt(auto.config_json);
@@ -423,6 +460,7 @@ export class AutomationService {
       trigger_origin: "automation",
       run_type: "agent",
       mode: "live",
+      contract_snapshot: automationContract(auto),
     });
     await queue.enqueue({
       job_type: "agent_run",
@@ -443,6 +481,73 @@ export class AutomationService {
     return { runId: run.id, automationRunId };
   }
 
+  private async executeWorkflowFire(
+    auto: AutomationRow,
+    input: {
+      spaceId: string;
+      actorUserId: string;
+      prompt?: string | null;
+      instruction?: string | null;
+      triggerContext?: Record<string, unknown> | null;
+    },
+    triggerType: string,
+    preflightSnapshot: Record<string, unknown>,
+    options: { advanceSchedule?: boolean } = {},
+  ): Promise<Record<string, unknown>> {
+    if (!this.config.databaseUrl) throw new HttpError(502, "SERVER_DATABASE_URL is required");
+    const target = workflowTargetFromConfig(auto.config_json);
+    const resolved = await resolveWorkflowTarget(this.config.databaseUrl, {
+      spaceId: input.spaceId,
+      userId: input.actorUserId,
+      projectId: auto.project_id,
+      agentId: auto.agent_id,
+      target,
+    });
+    const executionResult = await withTransaction(getDbPool(this.config.databaseUrl), async (client) => {
+      const execution = await new WorkflowExecutionService().start({
+        db: client,
+        identity: { spaceId: input.spaceId, userId: input.actorUserId },
+        automation: auto,
+        target: resolved,
+        triggerType,
+        prompt: input.prompt ?? automationConfiguredPrompt(auto.config_json) ?? auto.name,
+        instruction: input.instruction ?? `Execute automation workflow '${auto.name}'.`,
+        inputJson: target.inputJson,
+        preflightSnapshot,
+        triggerContext: input.triggerContext,
+        budgetSources: [automationBudgetSource(auto)],
+      });
+      const automationRunId = await new PgAutomationRepository(client).createAutomationRun({
+        automationId: auto.id,
+        runId: execution.rootRunId,
+        workflowExecutionId: execution.workflowExecutionId,
+        triggeredByUserId: input.actorUserId,
+        triggerType,
+        preflightSnapshot,
+        triggerContext: {
+          ...(input.triggerContext ?? {}),
+          target_type: AUTOMATION_TARGET_WORKFLOW,
+          workflow_asset_key: target.workflowAssetKey,
+          workflow_resolution: target.resolution,
+          resolved_workflow_version_id: resolved.versionId,
+          resolution_trace: resolved.resolutionTrace,
+        },
+      });
+      if (options.advanceSchedule) await new PgAutomationRepository(client).advanceSchedule(auto);
+      return { execution, automationRunId };
+    });
+    return {
+      workflow_execution_id: executionResult.execution.workflowExecutionId,
+      root_run_id: executionResult.execution.rootRunId,
+      scheduled_node_ids: executionResult.execution.scheduledNodeIds,
+      automation_run_id: executionResult.automationRunId,
+      trigger_origin: "automation",
+      target_type: AUTOMATION_TARGET_WORKFLOW,
+      workflow_version_id: resolved.versionId,
+      preflight_executable: Boolean(preflightSnapshot.executable),
+    };
+  }
+
   private async executeMaintenanceFire(
     auto: AutomationRow,
     input: {
@@ -460,6 +565,7 @@ export class AutomationService {
     const started = await withTransaction(pool, async (client) => {
       const runs = new PgRunRepository(client);
       const automations = new PgAutomationRepository(client);
+      await lockAndCheckAutomationBudget(client, auto);
       const run = await runs.createRunningSystemRun({
         space_id: input.spaceId,
         user_id: input.actorUserId,
@@ -471,6 +577,7 @@ export class AutomationService {
         capability_id: "knowledge.retrieval.maintenance",
         capabilities_json: ["knowledge.retrieval.maintenance"],
         source: triggerType === "schedule" ? "scheduled" : "managed",
+        contract_snapshot: automationContract(auto),
       });
       const automationRunId = await automations.createAutomationRun({
         automationId: auto.id,
@@ -596,6 +703,7 @@ export class AutomationService {
     const started = await withTransaction(pool, async (client) => {
       const runs = new PgRunRepository(client);
       const automations = new PgAutomationRepository(client);
+      await lockAndCheckAutomationBudget(client, auto);
       const run = await runs.createRunningSystemRun({
         space_id: input.spaceId,
         user_id: input.actorUserId,
@@ -607,6 +715,7 @@ export class AutomationService {
         capability_id: "context_ops.review_cycle",
         capabilities_json: ["context_ops.review_cycle"],
         source: triggerType === "schedule" ? "scheduled" : "managed",
+        contract_snapshot: automationContract(auto),
       });
       const automationRunId = await automations.createAutomationRun({
         automationId: auto.id,
@@ -788,7 +897,9 @@ export class AutomationService {
         runtimeErrors.push(`Runtime adapter '${adapterType}' is not implemented`);
       }
       if (requiredSandboxLevel === "one_shot_docker") {
-        runtimeErrors.push("risk_level=critical requires one_shot_docker sandbox which is not implemented");
+        if (!spec?.sandbox.supports_one_shot_docker) {
+          runtimeErrors.push(`Runtime adapter '${adapterType}' does not support one_shot_docker sandbox execution`);
+        }
       }
       if (spec?.sandbox.requires_workspace_for_execution && !workspaceId) {
         runtimeErrors.push(`Runtime adapter '${adapterType}' requires workspace_id`);
@@ -939,6 +1050,9 @@ export class AutomationService {
         reviewCycleRequestFromConfig(input.configJson),
       );
     }
+    if (input.targetType === AUTOMATION_TARGET_WORKFLOW) {
+      return this.runWorkflowPreflight(input);
+    }
     return this.runPreflight(
       input.spaceId,
       input.actorUserId,
@@ -1052,12 +1166,67 @@ export class AutomationService {
     }
     return snapshot;
   }
+
+  private async runWorkflowPreflight(input: {
+    targetType: AutomationTargetType;
+    spaceId: string;
+    actorUserId: string;
+    agentId: string;
+    workspaceId: string | null | undefined;
+    projectId: string | null | undefined;
+    automationPreAuthorized: boolean;
+    configJson: Record<string, unknown> | null | undefined;
+  }): Promise<Record<string, unknown>> {
+    if (!this.config.databaseUrl) throw new HttpError(422, "workflow automations require a configured database");
+    const target = workflowTargetFromConfig(input.configJson);
+    const resolved = await resolveWorkflowTarget(this.config.databaseUrl, {
+      spaceId: input.spaceId,
+      userId: input.actorUserId,
+      projectId: input.projectId,
+      agentId: input.agentId,
+      target,
+    });
+    const agentSnapshot = await this.runPreflight(
+      input.spaceId,
+      input.actorUserId,
+      input.agentId,
+      input.workspaceId,
+      input.projectId,
+      input.automationPreAuthorized,
+    );
+    return {
+      ...agentSnapshot,
+      target_type: AUTOMATION_TARGET_WORKFLOW,
+      workflow_preflight: {
+        executable: true,
+        workflow_asset_key: target.workflowAssetKey,
+        workflow_resolution: target.resolution,
+        resolved_workflow_version_id: resolved.versionId,
+        resolution_trace: resolved.resolutionTrace,
+        input_json: target.inputJson,
+      },
+    };
+  }
 }
 
 type AutomationTargetType =
   | typeof AUTOMATION_TARGET_AGENT_RUN
   | typeof AUTOMATION_TARGET_KNOWLEDGE_MAINTENANCE
-  | typeof AUTOMATION_TARGET_CONTEXT_OPS_REVIEW_CYCLE;
+  | typeof AUTOMATION_TARGET_CONTEXT_OPS_REVIEW_CYCLE
+  | typeof AUTOMATION_TARGET_WORKFLOW;
+
+interface WorkflowAutomationTarget {
+  workflowAssetKey: string;
+  resolution: "pin" | "follow";
+  workflowVersionId: string | null;
+  inputJson: Record<string, unknown>;
+}
+
+interface ResolvedWorkflowTarget {
+  versionId: string;
+  contentJson: unknown;
+  resolutionTrace: string[];
+}
 type ScheduleHandledError = Error & { [AUTOMATION_SCHEDULE_HANDLED]?: true };
 
 function isUnattendedTrigger(triggerType: string): boolean {
@@ -1070,6 +1239,89 @@ function automationTargetType(configJson: Record<string, unknown> | null | undef
     throw new HttpError(422, `Unsupported automation target_type ${JSON.stringify(raw)}`);
   }
   return raw as AutomationTargetType;
+}
+
+async function normalizeWorkflowConfig(
+  configJson: Record<string, unknown>,
+  input: {
+    targetType: AutomationTargetType;
+    triggerType: string;
+    spaceId: string;
+    userId: string;
+    agentId: string;
+    projectId: string | null | undefined;
+    databaseUrl?: string | null;
+  },
+): Promise<Record<string, unknown>> {
+  if (input.targetType !== AUTOMATION_TARGET_WORKFLOW) return configJson;
+  const target = workflowTargetFromConfig(configJson);
+  if (input.triggerType === "schedule" && target.resolution === "follow") {
+    throw new HttpError(422, "Scheduled workflow automations must use workflow_resolution='pin'");
+  }
+  if (target.resolution === "follow") return configJson;
+  if (!input.databaseUrl) throw new HttpError(502, "SERVER_DATABASE_URL is required for workflow automations");
+  const resolved = await resolveWorkflowTarget(input.databaseUrl, {
+    spaceId: input.spaceId,
+    userId: input.userId,
+    projectId: input.projectId,
+    agentId: input.agentId,
+    target,
+  });
+  return {
+    ...configJson,
+    workflow_version_id: resolved.versionId,
+    workflow_resolution: "pin",
+  };
+}
+
+function workflowTargetFromConfig(configJson: Record<string, unknown> | null | undefined): WorkflowAutomationTarget {
+  const config = recordValue(configJson);
+  const workflowAssetKey = stringValue(config.workflow_asset_key);
+  if (!workflowAssetKey) throw new HttpError(422, "workflow automation requires config_json.workflow_asset_key");
+  const resolution = config.workflow_resolution;
+  if (resolution !== "pin" && resolution !== "follow") {
+    throw new HttpError(422, "workflow automation requires workflow_resolution='pin' or 'follow'");
+  }
+  const workflowVersionId = stringValue(config.workflow_version_id);
+  if (resolution === "pin" && config.workflow_version_id !== undefined && !workflowVersionId) {
+    throw new HttpError(422, "workflow_version_id must be a non-empty string when provided");
+  }
+  const rawInput = config.input_json;
+  if (rawInput !== undefined && (!rawInput || typeof rawInput !== "object" || Array.isArray(rawInput))) {
+    throw new HttpError(422, "config_json.input_json must be an object");
+  }
+  return {
+    workflowAssetKey,
+    resolution,
+    workflowVersionId,
+    inputJson: (rawInput as Record<string, unknown> | undefined) ?? {},
+  };
+}
+
+async function resolveWorkflowTarget(
+  databaseUrl: string,
+  input: {
+    spaceId: string;
+    userId: string;
+    projectId: string | null | undefined;
+    agentId: string | null | undefined;
+    target: WorkflowAutomationTarget;
+  },
+): Promise<ResolvedWorkflowTarget> {
+  const resolved = await resolveEvolvableAssetVersion(getDbPool(databaseUrl), {
+    spaceId: input.spaceId,
+    userId: input.userId,
+    projectId: input.projectId,
+    agentId: input.agentId,
+    assetKey: input.target.workflowAssetKey,
+    assetType: "workflow_template",
+    explicitVersionId: input.target.resolution === "pin" ? input.target.workflowVersionId : null,
+  });
+  return {
+    versionId: resolved.versionId,
+    contentJson: resolved.contentJson,
+    resolutionTrace: resolved.resolutionTrace,
+  };
 }
 
 function shouldCreateMaintenancePacket(configJson: Record<string, unknown> | null | undefined): boolean {
@@ -1307,6 +1559,60 @@ function policyCheck(action: string, decision: {
     audit_code: decision.audit_code ?? null,
     message: decision.message ?? null,
   };
+}
+
+function automationContract(auto: AutomationRow) {
+  const config = recordValue(auto.config_json);
+  const declared = recordValue(config.contract_json ?? config.contract);
+  const value = (key: string): unknown => declared[key] ?? config[key] ?? null;
+  const definitionOfDone = value("definition_of_done");
+  return {
+    source: { kind: "automation" as const, id: auto.id },
+    project_id: auto.project_id,
+    workspace_id: auto.workspace_id,
+    acceptance_criteria_json: value("acceptance_criteria_json"),
+    definition_of_done: typeof definitionOfDone === "string" ? definitionOfDone : null,
+    required_outputs_json: value("required_outputs_json"),
+    risk_level: normalizeRiskLevel(value("risk_level")),
+    max_runs: positiveIntegerOrNull(value("max_runs")),
+    max_attempts: positiveIntegerOrNull(value("max_attempts")),
+    max_cost: nonNegativeNumberOrNull(value("max_cost")),
+    max_duration_seconds: positiveIntegerOrNull(value("max_duration_seconds")),
+    budget_precedence: nonNegativeNumberOrNull(value("budget_precedence")),
+    route_hints_json: contractRouteHints(declared) ?? contractRouteHints(config),
+  };
+}
+
+function automationBudgetSource(auto: AutomationRow): RunBudgetSource {
+  const contract = automationContract(auto);
+  return {
+    source: { kind: "automation", id: auto.id },
+    precedence: contract.budget_precedence,
+    max_runs: contract.max_runs,
+    max_attempts: contract.max_attempts,
+    max_cost: contract.max_cost,
+    max_duration_seconds: contract.max_duration_seconds,
+  };
+}
+
+async function lockAndCheckAutomationBudget(client: PoolClient, auto: AutomationRow): Promise<void> {
+  const source = automationBudgetSource(auto);
+  if (source.max_runs === null || source.max_runs === undefined) return;
+  await client.query(
+    `SELECT id FROM automations WHERE space_id = $1 AND id = $2 FOR UPDATE`,
+    [auto.space_id, auto.id],
+  );
+  await assertBudgetSourcesAvailable(client, auto.space_id, [source]);
+}
+
+function positiveIntegerOrNull(value: unknown): number | null {
+  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function nonNegativeNumberOrNull(value: unknown): number | null {
+  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
 export { automationToOut };

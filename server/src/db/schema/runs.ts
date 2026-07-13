@@ -20,6 +20,7 @@ export const runs = pgTable("runs", {
 	agentId: varchar("agent_id", { length: 36 }).notNull(),
 	agentVersionId: varchar("agent_version_id", { length: 36 }).notNull(),
 	runtimeProfileId: varchar("runtime_profile_id", { length: 36 }),
+	runtimeProfileSelectionSource: varchar("runtime_profile_selection_source", { length: 16 }),
 	contextSnapshotId: varchar("context_snapshot_id", { length: 36 }),
 	workspaceId: varchar("workspace_id", { length: 36 }),
 	sessionId: varchar("session_id", { length: 36 }),
@@ -73,6 +74,9 @@ export const runs = pgTable("runs", {
 	trustLevel: varchar("trust_level", { length: 32 }),
 	externalityLevel: varchar("externality_level", { length: 32 }),
 	projectId: varchar("project_id", { length: 36 }),
+	contractSnapshotJson: jsonb("contract_snapshot_json").default({}).notNull(),
+	workflowVersionId: varchar("workflow_version_id", { length: 36 }),
+	routeDecisionId: varchar("route_decision_id", { length: 36 }),
 }, (table): PgTableExtraConfigValue[] => [
 	index("ix_runs_agent_id").using("btree", table.agentId.asc().nullsLast()),
 	index("ix_runs_agent_version_id").using("btree", table.agentVersionId.asc().nullsLast()),
@@ -90,6 +94,7 @@ export const runs = pgTable("runs", {
 	index("ix_runs_root_run_id").using("btree", table.spaceId.asc().nullsLast(), table.rootRunId.asc().nullsLast()),
 	index("ix_runs_run_type").using("btree", table.runType.asc().nullsLast()),
 	index("ix_runs_runtime_profile_id").using("btree", table.runtimeProfileId.asc().nullsLast()),
+	index("ix_runs_route_decision_id").using("btree", table.routeDecisionId.asc().nullsLast()),
 	index("ix_runs_session_id").using("btree", table.sessionId.asc().nullsLast()),
 	index("ix_runs_space_id").using("btree", table.spaceId.asc().nullsLast()),
 	index("ix_runs_status").using("btree", table.status.asc().nullsLast()),
@@ -212,14 +217,84 @@ export const runs = pgTable("runs", {
 	check("ck_runs_mode", sql`(mode)::text = ANY (ARRAY[('live'::character varying)::text, ('dry_run'::character varying)::text])`),
 	check("ck_runs_observability_level", sql`(observability_level IS NULL) OR ((observability_level)::text = ANY (ARRAY[('full_trace'::character varying)::text, ('structured_events'::character varying)::text, ('artifacts_only'::character varying)::text, ('final_output_only'::character varying)::text, ('black_box'::character varying)::text]))`),
 	check("ck_runs_required_sandbox_level", sql`(required_sandbox_level)::text = ANY (ARRAY[('none'::character varying)::text, ('dry_run'::character varying)::text, ('ephemeral'::character varying)::text, ('worktree'::character varying)::text, ('one_shot_docker'::character varying)::text])`),
-	check("ck_runs_run_type", sql`(run_type)::text = ANY (ARRAY[('agent'::character varying)::text, ('system'::character varying)::text, ('workflow'::character varying)::text, ('validation'::character varying)::text, ('reflection'::character varying)::text, ('export'::character varying)::text, ('evolution'::character varying)::text])`),
+	check("ck_runs_run_type", sql`(run_type)::text = ANY (ARRAY[('agent'::character varying)::text, ('planning'::character varying)::text, ('system'::character varying)::text, ('workflow'::character varying)::text, ('validation'::character varying)::text, ('reflection'::character varying)::text, ('export'::character varying)::text, ('evolution'::character varying)::text])`),
 	check("ck_runs_source", sql`(source IS NULL) OR ((source)::text = ANY (ARRAY[('managed'::character varying)::text, ('ide_assist'::character varying)::text, ('manual_import'::character varying)::text, ('remote_import'::character varying)::text, ('scheduled'::character varying)::text, ('webhook'::character varying)::text]))`),
-	check("ck_runs_status", sql`(status)::text = ANY (ARRAY[('queued'::character varying)::text, ('running'::character varying)::text, ('succeeded'::character varying)::text, ('degraded'::character varying)::text, ('failed'::character varying)::text, ('cancelled'::character varying)::text, ('waiting_for_review'::character varying)::text, ('waiting_for_dependency'::character varying)::text])`),
+	check("ck_runs_status", sql`(status)::text = ANY (ARRAY[('queued'::character varying)::text, ('running'::character varying)::text, ('cancelling'::character varying)::text, ('succeeded'::character varying)::text, ('degraded'::character varying)::text, ('failed'::character varying)::text, ('cancelled'::character varying)::text, ('orphaned'::character varying)::text, ('waiting_for_review'::character varying)::text, ('waiting_for_dependency'::character varying)::text])`),
 	check("ck_runs_trigger_origin", sql`(trigger_origin)::text = ANY (ARRAY[('manual'::character varying)::text, ('automation'::character varying)::text, ('job'::character varying)::text, ('system'::character varying)::text, ('delegation'::character varying)::text])`),
 	check("ck_runs_trust_level", sql`(trust_level IS NULL) OR ((trust_level)::text = ANY (ARRAY[('high'::character varying)::text, ('medium'::character varying)::text, ('low'::character varying)::text, ('unknown'::character varying)::text]))`),
 	check("ck_runs_visibility", sql`visibility IN ('private', 'space_shared', 'selected_users')`),
+	check("ck_runs_runtime_profile_selection_source", sql`runtime_profile_selection_source IS NULL OR runtime_profile_selection_source IN ('explicit', 'default')`),
 	check("ck_runs_access_level", sql`access_level IN ('full', 'summary')`),
 	check("ck_runs_private_owner", sql`visibility = 'space_shared' OR owner_user_id IS NOT NULL`),
+]);
+
+export const runAttempts = pgTable("run_attempts", {
+	id: varchar({ length: 36 }).primaryKey().notNull(),
+	spaceId: varchar("space_id", { length: 36 }).notNull(),
+	runId: varchar("run_id", { length: 36 }).notNull(),
+	attemptNumber: integer("attempt_number").notNull(),
+	status: varchar({ length: 32 }).notNull(),
+	startedAt: timestamp("started_at", { withTimezone: true, mode: "string" }),
+	endedAt: timestamp("ended_at", { withTimezone: true, mode: "string" }),
+	lastActivityAt: timestamp("last_activity_at", { withTimezone: true, mode: "string" }),
+	cancelRequestedAt: timestamp("cancel_requested_at", { withTimezone: true, mode: "string" }),
+	cancelConfirmedAt: timestamp("cancel_confirmed_at", { withTimezone: true, mode: "string" }),
+	exitCode: integer("exit_code"),
+	errorCode: varchar("error_code", { length: 128 }),
+	errorJson: jsonb("error_json"),
+	usageJson: jsonb("usage_json"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }).notNull(),
+}, (table): PgTableExtraConfigValue[] => [
+	index("ix_run_attempts_run_status").using("btree", table.spaceId.asc().nullsLast(), table.runId.asc().nullsLast(), table.status.asc().nullsLast()),
+	index("ix_run_attempts_activity").using("btree", table.status.asc().nullsLast(), table.lastActivityAt.asc().nullsLast()),
+	unique("uq_run_attempts_id_space").on(table.id, table.spaceId),
+	unique("uq_run_attempts_space_run_number").on(table.spaceId, table.runId, table.attemptNumber),
+	foreignKey({
+		columns: [table.spaceId],
+		foreignColumns: [spaces.id],
+		name: "run_attempts_space_id_fkey",
+	}).onDelete("cascade"),
+	foreignKey({
+		columns: [table.runId, table.spaceId],
+		foreignColumns: [runs.id, runs.spaceId],
+		name: "run_attempts_run_space_fkey",
+	}).onDelete("cascade"),
+	check("ck_run_attempts_attempt_number", sql`attempt_number > 0`),
+	check("ck_run_attempts_status", sql`(status)::text = ANY (ARRAY[('queued'::character varying)::text, ('running'::character varying)::text, ('cancelling'::character varying)::text, ('succeeded'::character varying)::text, ('degraded'::character varying)::text, ('failed'::character varying)::text, ('cancelled'::character varying)::text, ('orphaned'::character varying)::text, ('waiting_for_review'::character varying)::text])`),
+]);
+
+export const runSupervisorDecisions = pgTable("run_supervisor_decisions", {
+	id: varchar({ length: 36 }).primaryKey().notNull(),
+	spaceId: varchar("space_id", { length: 36 }).notNull(),
+	runId: varchar("run_id", { length: 36 }).notNull(),
+	attemptId: varchar("attempt_id", { length: 36 }).notNull(),
+	decision: varchar({ length: 32 }).notNull(),
+	reasonCode: varchar("reason_code", { length: 128 }).notNull(),
+	nextAttemptNumber: integer("next_attempt_number"),
+	totalEstimatedCostUsd: doublePrecision("total_estimated_cost_usd"),
+	maxCostUsd: doublePrecision("max_cost_usd"),
+	metadataJson: jsonb("metadata_json").default({}).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
+}, (table): PgTableExtraConfigValue[] => [
+	index("ix_run_supervisor_decisions_run").using("btree", table.spaceId.asc().nullsLast(), table.runId.asc().nullsLast(), table.createdAt.desc().nullsLast()),
+	unique("uq_run_supervisor_decisions_attempt").on(table.spaceId, table.attemptId),
+	foreignKey({
+		columns: [table.spaceId],
+		foreignColumns: [spaces.id],
+		name: "run_supervisor_decisions_space_id_fkey",
+	}).onDelete("cascade"),
+	foreignKey({
+		columns: [table.runId, table.spaceId],
+		foreignColumns: [runs.id, runs.spaceId],
+		name: "run_supervisor_decisions_run_space_fkey",
+	}).onDelete("cascade"),
+	foreignKey({
+		columns: [table.attemptId, table.spaceId],
+		foreignColumns: [runAttempts.id, runAttempts.spaceId],
+		name: "run_supervisor_decisions_attempt_space_fkey",
+	}).onDelete("cascade"),
+	check("ck_run_supervisor_decisions_decision", sql`(decision)::text = ANY (ARRAY[('retry_same_route'::character varying)::text, ('retry_fallback_route'::character varying)::text, ('human_review'::character varying)::text, ('budget_exceeded'::character varying)::text, ('cancelled'::character varying)::text])`),
 ]);
 
 export const externalRunRecords = pgTable("external_run_records", {
@@ -275,6 +350,38 @@ export const runExecutionLocks = pgTable("run_execution_locks", {
 			foreignColumns: [runs.id],
 			name: "run_execution_locks_run_id_fkey"
 		}),
+]);
+
+export const verificationResults = pgTable("verification_results", {
+	id: varchar({ length: 36 }).primaryKey().notNull(),
+	spaceId: varchar("space_id", { length: 36 }).notNull(),
+	runId: varchar("run_id", { length: 36 }).notNull(),
+	verifierType: varchar("verifier_type", { length: 64 }).notNull(),
+	verifierVersion: varchar("verifier_version", { length: 64 }).default('verification_engine.v1').notNull(),
+	status: varchar({ length: 32 }).notNull(),
+	summary: text(),
+	evidenceRefsJson: jsonb("evidence_refs_json"),
+	detailsJson: jsonb("details_json"),
+	startedAt: timestamp("started_at", { withTimezone: true, mode: 'string' }).notNull(),
+	completedAt: timestamp("completed_at", { withTimezone: true, mode: 'string' }).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).notNull(),
+}, (table): PgTableExtraConfigValue[] => [
+	index("ix_verification_results_run_id").using("btree", table.runId.asc().nullsLast()),
+	index("ix_verification_results_space_id").using("btree", table.spaceId.asc().nullsLast()),
+	index("ix_verification_results_status").using("btree", table.status.asc().nullsLast()),
+	index("ix_verification_results_run_status").using("btree", table.runId.asc().nullsLast(), table.status.asc().nullsLast()),
+	foreignKey({
+			columns: [table.runId],
+			foreignColumns: [runs.id],
+			name: "verification_results_run_id_fkey"
+		}),
+	foreignKey({
+			columns: [table.spaceId],
+			foreignColumns: [spaces.id],
+			name: "verification_results_space_id_fkey"
+		}),
+	unique("uq_verification_results_run_verifier").on(table.runId, table.verifierType, table.verifierVersion),
+	check("ck_verification_results_status", sql`(status)::text = ANY (ARRAY[('passed'::character varying)::text, ('failed'::character varying)::text, ('skipped'::character varying)::text, ('error'::character varying)::text])`),
 ]);
 
 export const runSteps = pgTable("run_steps", {
@@ -476,6 +583,7 @@ export const runFinalizations = pgTable("run_finalizations", {
 	id: varchar({ length: 36 }).primaryKey().notNull(),
 	spaceId: varchar("space_id", { length: 36 }).notNull(),
 	runId: varchar("run_id", { length: 36 }).notNull(),
+	attemptNumber: integer("attempt_number").notNull(),
 	finalizerVersion: varchar("finalizer_version", { length: 64 }).default('post_run_finalization.v1').notNull(),
 	status: varchar({ length: 32 }).notNull(),
 	runEvaluationId: varchar("run_evaluation_id", { length: 36 }),
@@ -515,7 +623,8 @@ export const runFinalizations = pgTable("run_finalizations", {
 			foreignColumns: [taskEvaluations.id],
 			name: "run_finalizations_task_evaluation_id_fkey"
 		}),
-	unique("uq_run_finalizations_run_version").on(table.finalizerVersion, table.runId),
+	unique("uq_run_finalizations_run_attempt_version").on(table.spaceId, table.runId, table.attemptNumber, table.finalizerVersion),
+	check("ck_run_finalizations_attempt_number", sql`attempt_number > 0`),
 	check("ck_run_finalizations_failure_layer", sql`(failure_layer IS NULL) OR ((failure_layer)::text = ANY (ARRAY[('context'::character varying)::text, ('sandbox'::character varying)::text, ('runtime'::character varying)::text, ('tool'::character varying)::text, ('validation'::character varying)::text, ('policy'::character varying)::text, ('task_spec'::character varying)::text, ('orchestration'::character varying)::text, ('evaluator'::character varying)::text, ('unknown'::character varying)::text]))`),
 	check("ck_run_finalizations_outcome_status", sql`(outcome_status IS NULL) OR ((outcome_status)::text = ANY (ARRAY[('passed'::character varying)::text, ('failed'::character varying)::text, ('partial'::character varying)::text, ('unknown'::character varying)::text]))`),
 	check("ck_run_finalizations_status", sql`(status)::text = ANY (ARRAY[('completed'::character varying)::text, ('failed'::character varying)::text])`),

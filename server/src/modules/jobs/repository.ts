@@ -80,6 +80,7 @@ const TERMINAL_RUN_STATES = [
   "failed",
   "degraded",
   "cancelled",
+  "orphaned",
   "waiting_for_review",
 ];
 

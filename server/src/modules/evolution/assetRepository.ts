@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { loadProtocol } from "../providers/protocolRuntime";
 import {
   HttpError,
   dateIso,
@@ -337,7 +338,7 @@ export class EvolvableAssetRepository {
       const parent = await this.versionRow(assetId, parentVersionId);
       if (!parent) throw new HttpError(422, "parent_version_id does not reference a version of this asset");
     }
-    const contentJson = optionalObject(body.content_json);
+    const contentJson = await validateAssetVersionContent(asset.asset_type, optionalObject(body.content_json));
     const contentRef = optionalString(body.content_ref);
     if (!contentJson && !contentRef) throw new HttpError(422, "content_json or content_ref is required");
     const nextVersionResult = await this.db.query<{ next: number }>(
@@ -387,7 +388,10 @@ export class EvolvableAssetRepository {
     if (current.status !== "draft") {
       throw new HttpError(422, "Only draft versions can be edited — create a child version instead");
     }
-    const contentJson = body.content_json === undefined ? current.content_json : optionalObject(body.content_json);
+    const contentJson = body.content_json === undefined
+      ? optionalObject(current.content_json)
+      : optionalObject(body.content_json);
+    const validatedContentJson = await validateAssetVersionContent(asset.asset_type, contentJson);
     const now = new Date().toISOString();
     await this.db.query(
       `UPDATE evolvable_asset_versions
@@ -398,7 +402,7 @@ export class EvolvableAssetRepository {
         versionId,
         body.content_ref === undefined ? current.content_ref : optionalString(body.content_ref),
         body.content_hash === undefined ? current.content_hash : optionalString(body.content_hash),
-        contentJson ? JSON.stringify(contentJson) : null,
+        validatedContentJson ? JSON.stringify(validatedContentJson) : null,
         now,
       ],
     );
@@ -526,6 +530,20 @@ async function canViewVersionScope(
   if (row.space_id === null) return row.scope_type === "system";
   if (row.space_id !== identity.spaceId) return false;
   return canViewScopedRef(db, identity, row.scope_type, row.scope_id);
+}
+
+async function validateAssetVersionContent(
+  assetType: string,
+  contentJson: Record<string, unknown> | null,
+): Promise<Record<string, unknown> | null> {
+  if (assetType !== "workflow_template") return contentJson;
+  if (!contentJson) throw new HttpError(422, "workflow_template versions require content_json");
+  const protocol = await loadProtocol();
+  const parsed = protocol.WorkflowDefinitionSchema.safeParse(contentJson);
+  if (!parsed.success) {
+    throw new HttpError(422, `workflow_definition.v1 is invalid: ${parsed.error.issues[0]?.message ?? "invalid content"}`);
+  }
+  return parsed.data as Record<string, unknown>;
 }
 
 function canPinVersionToScope(

@@ -39,13 +39,22 @@ is retired. Do not reintroduce instance-level runtime adapter configuration.
 | `ts_agent_host` | managed_api | implemented / disabled by default | `model_provider_api_key` (`server_runtime_host`) | canonical host request | none |
 | `claude_code` | local_cli | implemented | `cli_profile` | `CLAUDE.md` | worktree |
 | `codex_cli` | local_cli | implemented | `cli_profile` | `AGENTS.md` | worktree |
-| `opencode` | local_cli | planned | disabled | prompt/custom | worktree |
+| `opencode` | local_cli | implemented (low trust pending C3) | `cli_profile` | `opencode.json` + locked agent | worktree |
 | `gemini_cli` | local_cli | planned | disabled | prompt/custom | worktree |
 | `custom` | custom | planned | disabled | custom | custom |
 
 Planned adapters may appear in code/catalog metadata but cannot be enabled or
-executed. No adapter currently supports `one_shot_docker`; critical-risk
-execution fails before adapter invocation until that sandbox mode is designed.
+executed. Implemented local CLI adapters support `one_shot_docker` through the
+Docker executor. Critical runs fail closed if the configured image, daemon, or
+runtime-tool mount is unavailable; they never downgrade to worktree execution.
+
+Conformance is persisted per runtime tool version in
+`runtime_conformance_results`. The C3 evaluator requires all five MVP checks —
+file-scope obedience, subagent-attempt detection, cancellation reliability,
+structured-output compliance, and credential leakage — to be explicitly
+observed before recording `passed`. Missing or failed checks remain low trust;
+the router therefore cannot select OpenCode for non-low-risk work without a
+passed result.
 
 ## Product API Surface
 
@@ -91,8 +100,9 @@ authority under `/api/v1/credentials/cli/*`. The frontend runtime page is
    details are split by responsibility: command rendering in
    `cliCommandRendering.ts`, subprocess execution and process registration in
    `localCliExecution.ts`, subprocess env allowlisting in `cliSubprocessEnv.ts`,
-   runtime provider binding in `runtimeProviderBinding.ts`, and Codex config
-   materialization in `codexProviderConfig.ts`.
+   runtime provider binding in `runtimeProviderBinding.ts`, and Codex/OpenCode
+   config materialization in `codexProviderConfig.ts` and the subagent config
+   helper.
 5. For local CLI runtimes, `RunOrchestrationService` resolves the run's
    effective tool version from immutable
    `Run.runtime_profile_snapshot_json.runtime_config_json`, active-space
@@ -120,6 +130,9 @@ authority under `/api/v1/credentials/cli/*`. The frontend runtime page is
    routing is taken from the Provider's NetworkProfile. No provider selected
    means no base URL override; the CLI uses its managed login state and the
    CLI credential profile's default NetworkProfile, if one is configured.
+   OpenCode is CLI-profile-only in this slice; it runs headlessly with JSONL
+   output, a sandbox `--dir`, and a run-scoped locked-agent `opencode.json`
+   denying Task and webfetch.
 7. server workspace/sandbox services validate and prepare the worktree.
    `ContextPrepareService` renders runtime context files only inside the
    sandbox/worktree.
@@ -156,6 +169,11 @@ $AGENT_SPACE_HOME/runtime-tools/
       tool.json
       node_modules/.bin/codex
     active -> versions/<version>
+  opencode/
+    versions/<version>/
+      tool.json
+      node_modules/.bin/opencode
+    active -> versions/<version>
 ```
 
 The server-owned `runtimeTools` module provides the controlled installer. The
@@ -166,6 +184,7 @@ code-allowlisted runtime/package mappings:
 |---|---|---|
 | `claude_code` | `@anthropic-ai/claude-code` | `claude` |
 | `codex_cli` | `@openai/codex` | `codex` |
+| `opencode` | `opencode-ai` | `opencode` |
 
 It invokes `npm` with argv (`shell=false`) and writes into
 `$AGENT_SPACE_HOME/runtime-tools`; npm cache is under
@@ -178,7 +197,10 @@ their platform native optional packages (for example
 explicitly install the package spec declared by `optionalDependencies` when npm
 does not materialize it automatically. Claude Code also reruns its fixed
 postinstall script so the wrapper package places the native binary under
-`bin/claude.exe`. CLI login resolves the instance active binary through
+`bin/claude.exe`. OpenCode installs its wrapper with postinstall disabled, then
+selects and copies only the libc-compatible package for the server container;
+this avoids the upstream postinstall probe choosing a musl package in a glibc
+container. CLI login resolves the instance active binary through
 `RuntimeToolRegistry`. Runtime execution resolves the version pinned on
 `AgentRuntimeProfile.runtime_config_json.runtime_tool_version`, after applying
 the active-space runtime policy. Neither path falls back to ambient PATH or
@@ -216,6 +238,10 @@ API keys.
 Credential audit rows record metadata only: adapter type, credential profile id,
 trigger origin, fallback flags/reason, and cleanup status. Raw tokens, HOME
 paths, and credential file content are never stored.
+
+OpenCode CLI login state is brokered from its documented
+`~/.local/share/opencode/auth.json` location into the per-run credential home;
+the host user's home is never used by the run.
 
 ## Managed API Lifecycle
 
@@ -274,8 +300,11 @@ are generated into the worktree only so real workspace files such as
 `CLAUDE.md`, `AGENTS.md`, or `prompt.md` are never mutated by runtime context
 rendering.
 
-`one_shot_docker` is a policy level but is not implemented by any current
-runtime adapter. Runtime status must not advertise Docker support.
+`one_shot_docker` is the critical-risk execution mode for implemented local CLI
+adapters. The executor uses a deny-by-default network namespace, read-only
+container root, dropped capabilities, no-new-privileges, bounded PID/CPU/memory
+resources, and at most one read-only credential mount. Networked provider proxy
+leases are rejected until an egress-enabled profile has its own policy review.
 
 ## Usage And Output Parsing
 

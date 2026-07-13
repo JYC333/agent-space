@@ -11,6 +11,7 @@ function taskRow(overrides: Partial<TaskRow> = {}): TaskRow {
     board_id: null,
     column_id: null,
     parent_task_id: null,
+    task_role: "source",
     title: "Task",
     description: null,
     task_type: "generic",

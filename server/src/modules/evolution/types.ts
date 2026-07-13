@@ -30,6 +30,10 @@ export interface EvolutionSignalRow {
   severity: string;
   summary: string | null;
   payload_json: unknown;
+  triage_status?: string;
+  triaged_at?: unknown;
+  triaged_by_user_id?: string | null;
+  triage_note?: string | null;
   created_at: unknown;
 }
 

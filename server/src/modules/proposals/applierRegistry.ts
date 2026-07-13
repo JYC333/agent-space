@@ -20,6 +20,10 @@ import { registerSourceConnectionProposalAppliers } from "../sources/sourceConne
 import { registerSourceBackfillProposalAppliers } from "../sources/sourceBackfillProposalApplier";
 import { registerProjectSourceProposalAppliers } from "../projects/projectSourceProposalApplier";
 import { registerEvolvableAssetPromotionProposalApplier } from "../evolution/assetPromotionProposalApplier";
+import { registerWorkflowSaveProposalApplier } from "../evolution/workflowSaveProposalApplier";
+import { registerPlanProposalAppliers } from "../plans/proposalApplier";
+import { registerWorkflowExecutionProposalAppliers } from "../automations/workflowExecutionProposalApplier";
+import { registerEvolutionBundleProposalApplier } from "../evolution/bundleProposalApplier";
 import {
   PgMemoryApplyRepository,
   type ApplyProposal,
@@ -119,6 +123,10 @@ export function createDefaultProposalApplierRegistry(
   registerSourceBackfillProposalAppliers(registry);
   registerProjectSourceProposalAppliers(registry);
   registerEvolvableAssetPromotionProposalApplier(registry);
+  registerWorkflowSaveProposalApplier(registry);
+  registerPlanProposalAppliers(registry);
+  registerWorkflowExecutionProposalAppliers(registry);
+  registerEvolutionBundleProposalApplier(registry);
   contributor?.applyProposalAppliers(registry);
   return registry;
 }

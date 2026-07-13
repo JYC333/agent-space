@@ -44,6 +44,7 @@ export interface TaskRow {
   board_id: string | null;
   column_id: string | null;
   parent_task_id: string | null;
+  task_role: string;
   title: string;
   description: string | null;
   task_type: string;
@@ -63,12 +64,20 @@ export interface TaskRow {
   source_run_id: string | null;
   source_proposal_id: string | null;
   source_artifact_id: string | null;
+  acceptance_criteria_json?: unknown;
+  definition_of_done?: string | null;
+  required_outputs_json?: unknown;
   due_at: unknown;
   start_after: unknown;
   completed_at: unknown;
   cancelled_at: unknown;
   blocked_reason: string | null;
   max_runs: number | null;
+  max_cost?: number | null;
+  max_duration_seconds?: number | null;
+  policy_json?: unknown;
+  metadata_json?: unknown;
+  tags?: unknown;
   created_at: unknown;
   updated_at: unknown;
   deleted_at: unknown;
@@ -154,11 +163,13 @@ export const BOARD_COLUMN_COLUMNS = `
 
 export const TASK_COLUMNS = `
   id, space_id, workspace_id, project_id, board_id, column_id, parent_task_id,
-  title, description, task_type, status, priority, risk_level, owner_user_id, visibility, access_level,
+  task_role, title, description, task_type, status, priority, risk_level, owner_user_id, visibility, access_level,
   created_by_user_id, created_by_agent_id, assigned_user_id, assigned_agent_id,
   claimed_by_user_id, claimed_by_agent_id, source_activity_id, source_run_id,
   source_proposal_id, source_artifact_id, due_at, start_after, completed_at,
-  cancelled_at, blocked_reason, max_runs, created_at, updated_at, deleted_at
+  cancelled_at, blocked_reason, acceptance_criteria_json, definition_of_done,
+  required_outputs_json, max_runs, max_cost, max_duration_seconds, policy_json, metadata_json, tags,
+  created_at, updated_at, deleted_at
 `;
 
 export const DEFAULT_COLUMNS = [

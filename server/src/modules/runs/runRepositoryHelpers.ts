@@ -36,7 +36,7 @@ export function validateRunCreateInput(input: RunCreateInput): void {
   assertOneOf(input.mode, ["live", "dry_run"], "mode");
   assertOneOf(
     input.run_type,
-    ["agent", "system", "workflow", "validation", "reflection", "export", "evolution"],
+    ["agent", "planning", "system", "workflow", "validation", "reflection", "export", "evolution"],
     "run_type",
   );
   assertOneOf(input.trigger_origin, ["manual", "automation", "job", "system"], "trigger_origin");

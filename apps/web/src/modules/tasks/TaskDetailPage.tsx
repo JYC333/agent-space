@@ -1,12 +1,12 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
 import { SpaceLink as Link } from '../../core/spaceNav'
-import { ArrowLeft, ExternalLink } from 'lucide-react'
+import { ArrowLeft, ExternalLink, Pencil } from 'lucide-react'
 import { toast } from 'sonner'
-import { agentsApi, artifactsApi, tasksApi } from '../../api/client'
+import { agentsApi, artifactsApi, boardsApi, tasksApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
 import { errMsg, isNotFoundError } from '../../lib/utils'
-import type { AgentOut, Task, TaskArtifact, TaskProposal, TaskRunCreateBody, TaskRunListItem } from '../../types/api'
+import type { AgentOut, Board, PlanDetail, Task, TaskArtifact, TaskProposal, TaskRunCreateBody, TaskRunListItem } from '../../types/api'
 import { Card } from '../../components/ui/card'
 import { Button } from '../../components/ui/button'
 import { Badge, StatusBadge } from '../../components/ui/badge'
@@ -15,10 +15,12 @@ import { Select } from '../../components/ui/select'
 import { Skeleton } from '../../components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs'
 import { EmptyState } from '../../components/ui/empty-state'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../../components/ui/dialog'
 import { PreviewBadge, DryRunBanner } from '../../components/PreviewBadge'
 import { ScopeBadge } from '../../components/ScopeBadge'
 import { ContextArtifactPicker } from '../artifacts/ContextArtifactPicker'
 import { ContentAccessControl } from '../../components/ContentAccessControl'
+import TaskContractEditor from './TaskContractEditor'
 
 type TaskDetailTab = 'overview' | 'runs' | 'artifacts' | 'proposals'
 
@@ -42,13 +44,17 @@ export default function TaskDetailPage() {
   const [runs, setRuns] = useState<TaskRunListItem[]>([])
   const [arts, setArts] = useState<TaskArtifact[]>([])
   const [props, setProps] = useState<TaskProposal[]>([])
+  const [plan, setPlan] = useState<PlanDetail | null>(null)
   const [agents, setAgents] = useState<AgentOut[]>([])
+  const [boards, setBoards] = useState<Board[]>([])
   const [loading, setLoading] = useState(true)
   const [mode, setMode] = useState<string>('live')
   const [agentPick, setAgentPick] = useState<string>('')
   const [contextArtifactIds, setContextArtifactIds] = useState<string[]>([])
   const [creatingRun, setCreatingRun] = useState(false)
+  const [requestingPlan, setRequestingPlan] = useState(false)
   const [activeTab, setActiveTab] = useState<TaskDetailTab>('overview')
+  const [editOpen, setEditOpen] = useState(false)
 
   const load = useCallback(async () => {
     if (!taskId) return
@@ -57,24 +63,30 @@ export default function TaskDetailPage() {
       setRuns([])
       setArts([])
       setProps([])
+      setPlan(null)
       setAgents([])
+      setBoards([])
       setLoading(false)
       return
     }
     setLoading(true)
     try {
-      const [t, r, a, p, ag] = await Promise.all([
+      const [t, r, a, p, ag, boardPage, nextPlan] = await Promise.all([
         tasksApi.get(taskId),
         tasksApi.runs(taskId, { limit: '50' }),
         tasksApi.artifacts(taskId, { limit: '50' }),
         tasksApi.proposals(taskId, { limit: '50' }),
         agentsApi.list({ limit: '50' }).catch(() => []),
+        boardsApi.list({ limit: '100' }).catch(() => ({ items: [] as Board[] })),
+        tasksApi.plan(taskId).catch(() => null),
       ])
       setTask(t)
       setRuns(r.items)
       setArts(a.items)
       setProps(p.items)
       setAgents(ag)
+      setBoards(boardPage.items)
+      setPlan(nextPlan)
     } catch (e) {
       if (!isNotFoundError(e)) toast.error(errMsg(e))
       setTask(null)
@@ -104,6 +116,22 @@ export default function TaskDetailPage() {
     }
   }
 
+  async function askAgentToPlan() {
+    if (!task || task.task_role !== 'source') return
+    const agentId = task.assigned_agent_id || agentPick
+    if (!agentId) { toast.error('Select an agent for the planning Run'); return }
+    setRequestingPlan(true)
+    try {
+      const run = await tasksApi.requestPlan(task.id, { agent_id: agentId })
+      toast.success(`Planning Run queued: ${run.id.slice(0, 8)}…`)
+      await load()
+    } catch (error) {
+      toast.error(errMsg(error))
+    } finally {
+      setRequestingPlan(false)
+    }
+  }
+
   async function exportArt(artifactId: string) {
     try {
       await artifactsApi.export(artifactId)
@@ -111,6 +139,14 @@ export default function TaskDetailPage() {
     } catch (e) {
       toast.error(errMsg(e))
     }
+  }
+
+  async function saveContract(body: Record<string, unknown>) {
+    if (!task) return
+    await tasksApi.update(task.id, body)
+    toast.success('Task contract updated')
+    setEditOpen(false)
+    await load()
   }
 
   if (loading && !task) {
@@ -157,7 +193,7 @@ export default function TaskDetailPage() {
 
       <div className="border-b border-border pb-4 space-y-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <h1 className="text-xl font-semibold tracking-tight">{task.title}</h1>
+          <div className="flex items-center gap-2"><h1 className="text-xl font-semibold tracking-tight">{task.title}</h1><Button size="sm" variant="outline" onClick={() => setEditOpen(true)}><Pencil className="size-3.5" /> Edit contract</Button></div>
           <ContentAccessControl resourceType="task" resourceId={task.id} ownerUserId={task.owner_user_id} />
         </div>
         <p className="text-xs text-muted-foreground">Viewing: {activeSpaceName ?? activeSpaceId ?? 'No operational space selected'}</p>
@@ -166,6 +202,7 @@ export default function TaskDetailPage() {
           <Badge variant="outline">{task.priority}</Badge>
           <Badge variant="muted">{task.risk_level} risk</Badge>
           <Badge variant="secondary">{task.task_type}</Badge>
+          <Badge variant="outline">{task.task_role}</Badge>
           <ScopeBadge visibility={task.visibility} />
           {task.assigned_agent_id && (
             <Badge variant="outline">agent {task.assigned_agent_id.slice(0, 8)}…</Badge>
@@ -213,6 +250,21 @@ export default function TaskDetailPage() {
           onChange={setContextArtifactIds}
           workspaceId={task.workspace_id}
         />
+        {task.task_role === 'source' && (
+          <Card className="mt-3 border-primary/30 bg-primary/5 p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="font-medium">Agent planning</p>
+                <p className="mt-1 text-sm text-muted-foreground">Ask the assigned Agent to create or revise the dynamic execution Plan for this Task. The request only queues a planning Run.</p>
+                {plan ? <p className="mt-2 text-xs text-muted-foreground">Current Plan: <Link to={`/plans/${plan.id}`} className="text-accent-foreground hover:underline">{plan.name}</Link> · {plan.status} · version {plan.current_version?.version ?? '—'}</p> : <p className="mt-2 text-xs text-muted-foreground">No Plan has been proposed yet.</p>}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {plan?.current_version?.approval_proposal_id && <Button size="sm" variant="outline" asChild><Link to={`/proposals/${plan.current_version.approval_proposal_id}`}>Review proposal</Link></Button>}
+                <Button size="sm" variant="outline" onClick={() => void askAgentToPlan()} disabled={requestingPlan || (!task.assigned_agent_id && !agentPick)}>{requestingPlan ? 'Queueing…' : plan ? 'Ask Agent to revise' : 'Ask Agent to plan'}</Button>
+              </div>
+            </div>
+          </Card>
+        )}
       </div>
 
       <Tabs value={activeTab} onValueChange={value => setActiveTab(value as TaskDetailTab)}>
@@ -328,6 +380,12 @@ export default function TaskDetailPage() {
           ))}
         </TabsContent>
       </Tabs>
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent className="max-w-4xl">
+          <DialogHeader><DialogTitle>Edit task contract</DialogTitle><DialogDescription>Changes are saved through the canonical Task API and will apply to future queued runs.</DialogDescription></DialogHeader>
+          <TaskContractEditor task={task} boards={boards} agents={agents} submitLabel="Save contract" onSubmit={saveContract} onCancel={() => setEditOpen(false)} />
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

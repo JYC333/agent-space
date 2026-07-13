@@ -46,6 +46,18 @@ const privateAttribution = {
 };
 
 describe("usage repository", () => {
+  it("sums production estimated cost by run for finalization", async () => {
+    const db = new RecordingDb((sql, params) => {
+      expect(sql).toContain("sum(estimated_cost_usd)");
+      expect(sql).toContain("FROM token_usage_events");
+      expect(params).toEqual(["space-1", "run-1"]);
+      return { rows: [{ estimated_cost_usd: "1.25000000" }], rowCount: 1 };
+    });
+
+    await expect(new PgUsageRepository(db).getRunEstimatedCost("space-1", "run-1"))
+      .resolves.toBe(1.25);
+  });
+
   it("inserts selected-user grant snapshots in the same statement as the usage event", async () => {
     const grant = {
       id: "grant-snapshot-1",

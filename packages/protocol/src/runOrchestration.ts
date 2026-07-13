@@ -113,10 +113,12 @@ export type TraceSafeJson = z.infer<typeof TraceSafeJsonSchema>;
 export const RUN_STATUS_VALUES = [
   "queued",
   "running",
+  "cancelling",
   "succeeded",
   "failed",
   "degraded",
   "cancelled",
+  "orphaned",
   "waiting_for_review",
   "waiting_for_dependency",
 ] as const;
@@ -128,6 +130,7 @@ export const RUN_TERMINAL_STATUS_VALUES = [
   "failed",
   "degraded",
   "cancelled",
+  "orphaned",
 ] as const;
 export const RunTerminalStatusSchema = z.enum(RUN_TERMINAL_STATUS_VALUES);
 export type RunTerminalStatus = z.infer<typeof RunTerminalStatusSchema>;
@@ -147,6 +150,7 @@ export type RunEventStatus = z.infer<typeof RunEventStatusSchema>;
 export const RUN_EXECUTION_ERROR_CODES = [
   "adapter_nonzero_exit",
   "adapter_timeout",
+  "cli_stall_timeout",
   "code_patch_collection_error",
   "context_render_failed",
   "credential_metadata_missing",
@@ -159,6 +163,9 @@ export const RUN_EXECUTION_ERROR_CODES = [
   "policy_requires_approval_runtime_use_credential",
   "produced_artifact_ingestion_error",
   "run_cancelled",
+  "run_abandoned",
+  "cancel_confirmation_timeout",
+  "orphaned",
   "runtime_removed",
   "runtime_tool_version_unavailable",
   "runtime_tools_not_implemented",

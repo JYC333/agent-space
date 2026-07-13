@@ -107,6 +107,16 @@ Returned artifacts are materialized as `Artifact` rows linked to the Run and pro
 - External capability installation and updates should eventually go through proposal review.
 - Automation can later trigger capability Runs, but scheduling is not part of this module.
 
+## Workflow-as-data (B1)
+
+Versioned workflow definitions use the shared `workflow_definition.v1` protocol
+schema and are stored as `workflow_template` evolvable assets. Built-in
+research templates are synchronized as approved system versions; user/space
+workflow versions remain proposal-promotion governed. This phase stores and
+resolves definitions and records `runs.workflow_version_id`; it does not
+execute node graphs. The existing static workflow template path remains the
+fallback until B2.
+
 ## Related Files
 
 - `server/src/modules/catalog/`

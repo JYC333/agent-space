@@ -141,6 +141,9 @@ describe("server import boundaries", () => {
     const dataReferenceAllowlist = new Set([
       join(srcDir, "modules", "context", "routingManifest.ts"),
       join(srcDir, "modules", "context", "compiler.ts"),
+      // This is the fixed HOME path inside the dedicated one-shot Docker
+      // image, not a repository subsystem import or host path.
+      join(srcDir, "modules", "runs", "localCliExecution.ts"),
     ]);
     const offenders: string[] = [];
     for (const file of tsFiles(srcDir)) {

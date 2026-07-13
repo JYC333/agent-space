@@ -28,6 +28,7 @@ export class HttpError extends Error {
   constructor(
     readonly statusCode: number,
     message: string,
+    readonly responseBody?: unknown,
   ) {
     super(message);
     this.name = "HttpError";
@@ -72,7 +73,7 @@ export async function resolveIdentity(
 
 export function sendRouteError(reply: FastifyReply, error: unknown): FastifyReply {
   if (error instanceof HttpError) {
-    return reply.code(error.statusCode).send({ detail: error.message });
+    return reply.code(error.statusCode).send(error.responseBody ?? { detail: error.message });
   }
   if (
     error instanceof Error &&
@@ -221,8 +222,15 @@ export async function withQueryableTransaction<T>(
   db: Queryable,
   fn: (db: Queryable) => Promise<T>,
 ): Promise<T> {
-  const pool = db as Queryable & { connect?: () => Promise<PoolClient> };
-  if (!pool.connect) return fn(db);
+  const pool = db as Queryable & {
+    connect?: () => Promise<PoolClient>;
+    release?: () => void;
+  };
+  // pg PoolClient also exposes `connect` on its prototype. `release` is the
+  // discriminator that identifies an already checked-out client; calling
+  // connect() on it would throw and, when nested in proposal acceptance,
+  // roll back the caller's transaction.
+  if (typeof pool.release === "function" || typeof pool.connect !== "function") return fn(db);
   const client = await pool.connect();
   try {
     await client.query("BEGIN");

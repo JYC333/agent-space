@@ -13,6 +13,7 @@ import {
 import { EvolvableAssetRepository } from "./assetRepository";
 import { EvolvableAssetEvaluationRepository } from "./assetEvaluationRepository";
 import { resolveEvolvableAssetVersion } from "./assetResolutionService";
+import { EvaluationHarnessService } from "./evaluationHarnessService";
 
 let repositoryFactoryOverride: ((context: ModuleContext) => EvolvableAssetRepository) | null = null;
 let evaluationRepositoryFactoryOverride: ((context: ModuleContext) => EvolvableAssetEvaluationRepository) | null = null;
@@ -37,6 +38,10 @@ function repository(context: ModuleContext): EvolvableAssetRepository {
 function evaluationRepository(context: ModuleContext): EvolvableAssetEvaluationRepository {
   if (evaluationRepositoryFactoryOverride) return evaluationRepositoryFactoryOverride(context);
   return new EvolvableAssetEvaluationRepository(dbPool(context.config));
+}
+
+function evaluationHarness(context: ModuleContext): EvaluationHarnessService {
+  return new EvaluationHarnessService(dbPool(context.config));
 }
 
 function requireParam(request: Parameters<typeof params>[0], name: string): string {
@@ -207,6 +212,68 @@ export function registerEvolvableAssetRoutes(app: FastifyInstance, context: Modu
     if (!identity) return reply;
     try {
       return reply.send(await evaluationRepository(context).listEvaluationRuns(identity, requireParam(request, "assetId")));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.get(`${base}/:assetId/evaluation-cases`, async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      return reply.send(await evaluationHarness(context).listCases(identity, requireParam(request, "assetId")));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.post(`${base}/:assetId/evaluation-cases`, async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      return reply.code(201).send(
+        await evaluationHarness(context).createCase(
+          identity,
+          requireParam(request, "assetId"),
+          jsonBody(request),
+        ),
+      );
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.post(`${base}/:assetId/evaluation-cases/from-run`, async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const body = jsonBody(request);
+      const sourceRunId = optionalString(body.source_run_id);
+      if (!sourceRunId) throw new HttpError(422, "source_run_id is required");
+      return reply.code(201).send(
+        await evaluationHarness(context).createCaseFromRun(identity, requireParam(request, "assetId"), {
+          ...body,
+          source_run_id: sourceRunId,
+        }),
+      );
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.post(`${base}/:assetId/versions/:versionId/evaluation-cases/:caseId/execute`, async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      return reply.code(202).send(
+        await evaluationHarness(context).startEvaluation(
+          identity,
+          requireParam(request, "assetId"),
+          requireParam(request, "versionId"),
+          requireParam(request, "caseId"),
+          jsonBody(request),
+        ),
+      );
     } catch (error) {
       return sendRouteError(reply, error);
     }

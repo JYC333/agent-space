@@ -2,15 +2,14 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useSpaceNavigate as useNavigate } from '../../core/spaceNav'
 import { ListTodo, Plus } from 'lucide-react'
 import { toast } from 'sonner'
-import { boardsApi, tasksApi } from '../../api/client'
+import { agentsApi, boardsApi, tasksApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
 import { errMsg } from '../../lib/utils'
-import type { Board, Task } from '../../types/api'
+import type { AgentOut, Board, Task } from '../../types/api'
 import { Card } from '../../components/ui/card'
 import { Button } from '../../components/ui/button'
 import { Badge, StatusBadge } from '../../components/ui/badge'
 import { Label } from '../../components/ui/label'
-import { Input } from '../../components/ui/input'
 import { Select } from '../../components/ui/select'
 import { Skeleton } from '../../components/ui/skeleton'
 import { ScopeBadge } from '../../components/ScopeBadge'
@@ -21,8 +20,8 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-  DialogFooter,
 } from '../../components/ui/dialog'
+import TaskCreateForm from './TaskCreateForm'
 
 const OPEN_STATUSES = new Set(['inbox', 'ready', 'in_progress', 'blocked'])
 
@@ -46,6 +45,7 @@ export default function TasksPage() {
   const { activeSpaceId, activeSpaceName } = useSpace()
   const { writeTargetSpaceId, hasWriteTarget } = useWriteTarget()
   const [boards, setBoards] = useState<Board[]>([])
+  const [agents, setAgents] = useState<AgentOut[]>([])
   const [tasks, setTasks] = useState<Task[]>([])
   const [loading, setLoading] = useState(true)
   const [boardId, setBoardId] = useState<string>('')
@@ -54,8 +54,6 @@ export default function TasksPage() {
   const [fRisk, setFRisk] = useState<string>('')
   const [fType, setFType] = useState<string>('')
   const [createOpen, setCreateOpen] = useState(false)
-  const [newTitle, setNewTitle] = useState('')
-  const [creating, setCreating] = useState(false)
 
   const loadBoards = useCallback(async () => {
     if (!activeSpaceId) {
@@ -91,6 +89,10 @@ export default function TasksPage() {
   }, [boardId, activeSpaceId])
 
   useEffect(() => { loadBoards() }, [loadBoards])
+  useEffect(() => {
+    if (!activeSpaceId) { setAgents([]); return }
+    void agentsApi.list({ limit: '100' }).then(setAgents).catch(error => toast.error(errMsg(error)))
+  }, [activeSpaceId])
   useEffect(() => { loadTasks() }, [loadTasks])
 
   const filtered = useMemo(() => {
@@ -124,25 +126,16 @@ export default function TasksPage() {
     return [...s].sort().map(v => ({ value: v, label: v }))
   }, [tasks])
 
-  async function createTask() {
-    if (!newTitle.trim()) {
-      toast.error('Title required')
-      return
-    }
-    setCreating(true)
+  async function createTask(body: Record<string, unknown>) {
+    if (!hasWriteTarget) { toast.error('Select a write target'); return }
     try {
-      const body: Record<string, unknown> = { title: newTitle.trim() }
-      if (boardId) body.board_id = boardId
       const t = await tasksApi.create(body, { spaceId: writeTargetSpaceId ?? undefined })
       toast.success('Task created')
       setCreateOpen(false)
-      setNewTitle('')
       navigate(`/tasks/${t.id}`)
       await loadTasks()
     } catch (e) {
       toast.error(errMsg(e))
-    } finally {
-      setCreating(false)
     }
   }
 
@@ -270,22 +263,13 @@ export default function TasksPage() {
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent>
+        <DialogContent className="max-h-[calc(100vh-2rem)] max-w-2xl overflow-y-auto">
           <DialogHeader>
             <DialogTitle>New task</DialogTitle>
-            <DialogDescription className="sr-only">
-              Create a task in the selected write target.
-            </DialogDescription>
+            <DialogDescription>Start with the goal. The Agent can clarify and structure the contract when you ask it to plan.</DialogDescription>
           </DialogHeader>
-          <div className="space-y-2 py-2">
-            <WriteTargetPicker />
-            <Label>Title</Label>
-            <Input value={newTitle} onChange={e => setNewTitle(e.target.value)} placeholder="What needs to be done?" />
-          </div>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setCreateOpen(false)}>Cancel</Button>
-            <Button onClick={createTask} disabled={creating || !hasWriteTarget}>{creating ? 'Creating…' : 'Create'}</Button>
-          </DialogFooter>
+          <WriteTargetPicker />
+          <TaskCreateForm boards={boards} agents={agents} submitLabel="Create task" onSubmit={createTask} onCancel={() => setCreateOpen(false)} />
         </DialogContent>
       </Dialog>
     </div>

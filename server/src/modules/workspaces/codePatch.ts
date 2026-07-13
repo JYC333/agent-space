@@ -53,8 +53,11 @@ interface CodePatchPayload {
   skipped_count: number;
   base_commit_sha: string | null;
   validation: {
-    status: "skipped";
-    reason: string;
+    status: "passed" | "failed";
+    verifier_type: "code_patch";
+    verifier_version: "verification_engine.v1";
+    check_types: string[];
+    structural_issue_count: number;
   };
 }
 
@@ -175,8 +178,11 @@ export async function collectAndCreateCodePatchProposal(input: {
     skipped_count: collected.skipped.length,
     base_commit_sha: input.baseCommitSha,
     validation: {
-      status: "skipped",
-      reason: "The code patch collector records git text changes; dedicated patch validation remains deferred.",
+      status: collected.skipped.length > 0 ? "failed" : "passed",
+      verifier_type: "code_patch",
+      verifier_version: "verification_engine.v1",
+      check_types: ["file_changed", "no_forbidden_change"],
+      structural_issue_count: collected.skipped.length,
     },
   };
   const proposalRow = await insertProposalRow(input.db, {

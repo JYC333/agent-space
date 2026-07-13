@@ -41,6 +41,8 @@ export interface ServerConfig {
   agentSpaceHome: string;
   /** Instance-owned runtime CLI installation root. */
   cliToolsRoot: string;
+  /** Immutable image used for one-shot Docker CLI execution. */
+  cliSandboxImage: string;
   /** Root for registered workspace directories. */
   workspaceRoot: string;
   /** Root for short-lived run sandboxes (worktrees, ephemeral working dirs). */
@@ -140,6 +142,7 @@ const KNOWN_ENV_KEYS = new Set([
   "SERVER_DATABASE_URL",
   "AGENT_SPACE_HOME",
   "RUNTIME_TOOLS_ROOT",
+  "SERVER_CLI_SANDBOX_IMAGE",
   "WORKSPACE_ROOT",
   "SANDBOX_ROOT",
   "ARTIFACT_STORAGE_ROOT",
@@ -420,6 +423,13 @@ export function loadConfig(env: RawEnv = process.env): ServerConfig {
   const cliToolsRoot = resolve(
     env.RUNTIME_TOOLS_ROOT?.trim() || resolve(agentSpaceHome, "runtime-tools"),
   );
+  const cliSandboxImage = env.SERVER_CLI_SANDBOX_IMAGE?.trim() || "agent-space-sandbox";
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.:/@-]*$/.test(cliSandboxImage)) {
+    throw new ConfigError(
+      "SERVER_CLI_SANDBOX_IMAGE must be a valid local image reference",
+      "invalid_sandbox_image",
+    );
+  }
   const workspaceRoot = resolve(
     env.WORKSPACE_ROOT?.trim() || resolve(agentSpaceHome, "workspaces"),
   );
@@ -636,6 +646,7 @@ export function loadConfig(env: RawEnv = process.env): ServerConfig {
     databaseUrl,
     agentSpaceHome,
     cliToolsRoot,
+    cliSandboxImage,
     workspaceRoot,
     sandboxRoot,
     artifactStorageRoot,
@@ -708,6 +719,7 @@ export function describeConfig(config: ServerConfig): string {
     `notificationMaxPayloadBytes=${config.notificationMaxPayloadBytes}`,
     `agentSpaceHome=${config.agentSpaceHome}`,
     `cliToolsRoot=${config.cliToolsRoot}`,
+    `cliSandboxImage=${config.cliSandboxImage}`,
     `workspaceRoot=${config.workspaceRoot}`,
     `sandboxRoot=${config.sandboxRoot}`,
     `artifactStorageRoot=${config.artifactStorageRoot}`,
@@ -729,7 +741,7 @@ export function describeConfig(config: ServerConfig): string {
 // ---------------------------------------------------------------------------
 
 /** Bumped when the shape of {@link ServerConfig} changes incompatibly. */
-export const CONFIG_SCHEMA_VERSION = 21 as const;
+export const CONFIG_SCHEMA_VERSION = 22 as const;
 
 /**
  * An immutable, hash-identified view of the validated config. Built once at

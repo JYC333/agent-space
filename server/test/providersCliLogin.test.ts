@@ -268,8 +268,8 @@ describe("CLI login engine", () => {
     const cfg: LoginRuntimeConfig = {
       method: "cli",
       // Real subprocess: the CLI writes its login state into $HOME.
-      command: ["sh", "-c", 'mkdir -p "$HOME/.opencode" && printf tok > "$HOME/.opencode/auth.json"'],
-      home_subdir: ".opencode",
+      command: ["sh", "-c", 'mkdir -p "$HOME/.local/share/opencode" && printf tok > "$HOME/.local/share/opencode/auth.json"'],
+      home_subdir: ".local/share/opencode",
       credential_file: "auth.json",
       label: "OpenCode",
     };
@@ -286,10 +286,10 @@ describe("CLI login engine", () => {
     );
 
     // Credentials landed in the aspace login HOME and were synced to the profile…
-    expect(await readFile(join(loginHome, ".opencode", "auth.json"), "utf8")).toBe("tok");
+    expect(await readFile(join(loginHome, ".local/share/opencode", "auth.json"), "utf8")).toBe("tok");
     expect(await readFile(join(profileDir, "auth.json"), "utf8")).toBe("tok");
     // …and the host home was never written to.
-    await expect(readFile(join(hostHome, ".opencode", "auth.json"), "utf8")).rejects.toThrow();
+    await expect(readFile(join(hostHome, ".local/share/opencode", "auth.json"), "utf8")).rejects.toThrow();
     expect(events.at(-1)).toMatchObject({ type: "done", exit_code: 0 });
   });
 

@@ -9,7 +9,7 @@ import type {
   CurrentUser, SpaceWithMembership, SpaceOversightMode, SpaceMember, SpaceInvitationOut, SpaceSnapshotDefaults,
   SpaceRetrievalSettings, SpaceRetrievalSettingsUpdate,
   Job, JobEvent, ActivityInboxRecord,
-  Board, TaskRunCreateBody, Run, RunStatusOut, TaskRunListItem,
+  Board, TaskRunCreateBody, Run, RunStatusOut, TaskRunListItem, RunAttempt, RunSupervisorDecision, RunEvaluation, RunVerificationResult, RunFinalization,
   AgentRunGroup, AgentRunGroupTimeline, AgentRunGroupTrace,
   CreateAgentRunGroupRequest, CreateAgentRunGroupResponse,
   UpdateAgentRunGroupRequest, UpdateAgentRunGroupResponse,
@@ -32,7 +32,8 @@ import type {
   EvolutionSummaryOut, EvolutionTarget, EvolutionTargetCreateBody, EvolutionTargetUpdateBody, EvolutionSignal, EvolutionSignalCreateBody,
   EvolutionRunListItem, EvolutionRunResult, EvolutionProposal, EvolutionValidationResult,
   EvolutionStrategy, EvolutionSelectorDecision, EvolutionExperience,
-  EvolvableAsset, EvolvableAssetVersion, EvolvableAssetPin, EvolvableAssetEvaluationRun, ResolvedEvolvableAssetVersion,
+  EvolvableAsset, EvolvableAssetVersion, EvolvableAssetPin, EvolvableAssetEvaluationRun, EvolvableAssetEvaluationCase, ResolvedEvolvableAssetVersion,
+  EvolutionBundle, PlanSummary, PlanDetail, PlanExecuteBody, PlanExecutionResult, PlanBudgetSource, WorkflowExecutionSummary,
   PromptAssetDetail, PromptAssetSummary, PromptType, PromptVersion,
   PromptDeploymentRef, PromptEvaluationRequest, PromptEvaluationResult,
   PromptPromotionRequest, PromptRenderPreviewRequest, PromptRenderPreviewResult,
@@ -532,6 +533,9 @@ export const tasksApi = {
     get<Page<TaskArtifact>>(`/tasks/${taskId}/artifacts?` + new URLSearchParams(params)),
   proposals: (taskId: string, params: Record<string, string> = {}) =>
     get<Page<TaskProposal>>(`/tasks/${taskId}/proposals?` + new URLSearchParams(params)),
+  requestPlan: (taskId: string, body: { agent_id?: string; prompt?: string; instruction?: string; reference_workflow_version_id?: string | null; budget_sources?: PlanBudgetSource[] } = {}) =>
+    post<Run>(`/tasks/${encodeURIComponent(taskId)}/plan-requests`, body),
+  plan: (taskId: string) => get<PlanDetail | null>(`/tasks/${encodeURIComponent(taskId)}/plan`),
 }
 
 // ── Home (Today Command Center summary) ───────────────────────────────────
@@ -560,6 +564,7 @@ export const runsApi = {
     agent_id?: string
     workspace_id?: string
     project_id?: string
+    workflow_version_id?: string
     limit?: number
     offset?: number
   } = {}) => {
@@ -569,6 +574,7 @@ export const runsApi = {
     if (params.agent_id !== undefined) q.agent_id = params.agent_id
     if (params.workspace_id !== undefined) q.workspace_id = params.workspace_id
     if (params.project_id !== undefined) q.project_id = params.project_id
+    if (params.workflow_version_id !== undefined) q.workflow_version_id = params.workflow_version_id
     if (params.limit !== undefined) q.limit = String(params.limit)
     if (params.offset !== undefined) q.offset = String(params.offset)
     return get<Run[]>('/runs?' + new URLSearchParams(q))
@@ -577,12 +583,33 @@ export const runsApi = {
   status: (id: string) => get<RunStatusOut>(`/runs/${id}/status`),
   stop:   (id: string) => patch<Record<string, unknown>>(`/runs/${id}/stop`),
   executeQueuedRun: (id: string) => post<Run>(`/runs/${id}/execute`),
+  resume: (id: string) => post<{ id: string; status: string; resumed_at: string; resume_kind: string }>(`/runs/${id}/resume`, {}),
+  abandon: (id: string, body: { reason?: string | null } = {}) => post<{ id: string; status: string; abandoned_at: string }>(`/runs/${id}/abandon`, body),
   activities: (id: string, params: Record<string, string> = {}) =>
     get<Page<ActivityRecord>>(`/runs/${id}/activities?` + new URLSearchParams(params)),
   artifacts: (id: string, params: Record<string, string> = {}) =>
     get<Page<Artifact>>(`/runs/${id}/artifacts?` + new URLSearchParams(params)),
   proposals: (id: string, params: Record<string, string> = {}) =>
     get<Page<Proposal>>(`/runs/${id}/proposals?` + new URLSearchParams(params)),
+  attempts: (id: string) => get<{ attempts: RunAttempt[]; supervisor_decisions: RunSupervisorDecision[] }>(`/runs/${id}/attempts`),
+  evaluations: (id: string) => get<RunEvaluation[]>(`/runs/${id}/evaluations`),
+  verifications: (id: string) => get<RunVerificationResult[]>(`/runs/${id}/verifications`),
+  finalizations: (id: string) => get<RunFinalization[]>(`/runs/${id}/finalizations`),
+  routeDecision: (id: string) => get<Record<string, unknown>>(`/runs/${id}/route-decision`),
+}
+
+// ── Plans / structured workflow execution ────────────────────────────────
+export const plansApi = {
+  list: (params: { limit?: number; offset?: number } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    return get<PlanSummary[]>(`/plans?${new URLSearchParams(q)}`)
+  },
+  get: (id: string) => get<PlanDetail>(`/plans/${encodeURIComponent(id)}`),
+  execute: (id: string, body: PlanExecuteBody) =>
+    post<PlanExecutionResult>(`/plans/${encodeURIComponent(id)}/execute`, body),
+  reconcile: (id: string) => post<PlanExecutionResult>(`/plans/${encodeURIComponent(id)}/reconcile`, {}),
 }
 
 // ── Agent Rooms / group runs ──────────────────────────────────────────────
@@ -760,6 +787,10 @@ export const evolutionApi = {
     if (params.offset !== undefined) q.offset = String(params.offset)
     return get<EvolutionSignal[]>(`/evolution/targets/${targetId}/signals?` + new URLSearchParams(q))
   },
+  updateSignal: (signalId: string, body: { triage_status: 'new' | 'acknowledged' | 'dismissed' | 'actioned'; triage_note?: string | null }) =>
+    patch<EvolutionSignal>(`/evolution/signals/${encodeURIComponent(signalId)}`, body),
+  dismissSignal: (signalId: string, body: { triage_note?: string | null } = {}) =>
+    post<EvolutionSignal>(`/evolution/signals/${encodeURIComponent(signalId)}/dismiss`, body),
   createSignal: (targetId: string, body: EvolutionSignalCreateBody) =>
     post<EvolutionSignal>(`/evolution/targets/${targetId}/signals`, body),
   runs: (params: { limit?: number; offset?: number } = {}) => {
@@ -856,6 +887,33 @@ export const evolutionApi = {
     post<ResolvedEvolvableAssetVersion>(`/evolution/assets/${encodeURIComponent(assetId)}/resolve`, body),
   assetEvaluationRuns: (assetId: string) =>
     get<EvolvableAssetEvaluationRun[]>(`/evolution/assets/${encodeURIComponent(assetId)}/evaluation-runs`),
+  evaluationCases: (assetId: string) =>
+    get<EvolvableAssetEvaluationCase[]>(`/evolution/assets/${encodeURIComponent(assetId)}/evaluation-cases`),
+  createEvaluationCase: (assetId: string, body: {
+    name: string
+    description?: string | null
+    input_json?: Record<string, unknown>
+    expectation_json?: Record<string, unknown>
+    verification_recipe_json: Record<string, unknown>
+    baseline_version_id: string
+    baseline_output_json: unknown
+  }) => post<EvolvableAssetEvaluationCase>(`/evolution/assets/${encodeURIComponent(assetId)}/evaluation-cases`, body),
+  createEvaluationCaseFromRun: (assetId: string, body: {
+    name: string
+    description?: string | null
+    input_json?: Record<string, unknown>
+    expectation_json?: Record<string, unknown>
+    verification_recipe_json: Record<string, unknown>
+    baseline_version_id: string
+    source_run_id: string
+  }) => post<EvolvableAssetEvaluationCase>(`/evolution/assets/${encodeURIComponent(assetId)}/evaluation-cases/from-run`, body),
+  executeEvaluation: (assetId: string, versionId: string, caseId: string, body: { candidate_run_id: string }) =>
+    post<{ evaluation_run: EvolvableAssetEvaluationRun; job_id: string; connector_mode: string }>(
+      `/evolution/assets/${encodeURIComponent(assetId)}/versions/${encodeURIComponent(versionId)}/evaluation-cases/${encodeURIComponent(caseId)}/execute`,
+      body,
+    ),
+  updateAssetVersion: (assetId: string, versionId: string, body: { content_json?: Record<string, unknown>; content_ref?: string | null; content_hash?: string | null }) =>
+    patch<EvolvableAssetVersion>(`/evolution/assets/${encodeURIComponent(assetId)}/versions/${encodeURIComponent(versionId)}`, body),
   recordAssetEvaluation: (assetId: string, versionId: string, body: {
     eval_suite_ref: Record<string, unknown>
     evaluator_version: string
@@ -882,6 +940,22 @@ export const evolutionApi = {
     `/evolution/assets/${encodeURIComponent(assetId)}/versions/${encodeURIComponent(versionId)}/promote-proposal`,
     body,
   ),
+  bundles: (params: { limit?: number; offset?: number } = {}) => {
+    const q: Record<string, string> = {}
+    if (params.limit !== undefined) q.limit = String(params.limit)
+    if (params.offset !== undefined) q.offset = String(params.offset)
+    return get<EvolutionBundle[]>(`/evolution/bundles?${new URLSearchParams(q)}`)
+  },
+  createBundle: (body: { title: string; description?: string | null; proposal_ids: string[] }) =>
+    post<EvolutionBundle>('/evolution/bundles', body),
+  bundle: (id: string) => get<EvolutionBundle>(`/evolution/bundles/${encodeURIComponent(id)}`),
+  decideBundle: (id: string, decisions: Array<{ proposal_id: string; decision: 'approve' | 'reject'; note?: string | null }>) =>
+    post<EvolutionBundle>(`/evolution/bundles/${encodeURIComponent(id)}/decide`, { decisions }),
+  rollbackBundle: (id: string) => post<EvolutionBundle>(`/evolution/bundles/${encodeURIComponent(id)}/rollback`, {}),
+  previewWorkflowFromRun: (body: { run_id: string; asset_key?: string | null; display_name?: string | null; description?: string | null; input_schema_json?: Record<string, unknown> | null }) =>
+    post<Record<string, unknown>>('/evolution/workflows/from-run/preview', body),
+  saveWorkflowFromRun: (body: { run_id: string; asset_key?: string | null; display_name?: string | null; description?: string | null; input_schema_json?: Record<string, unknown> | null }) =>
+    post<Record<string, unknown>>('/evolution/workflows/from-run/save', body),
 }
 
 // ── Agents ────────────────────────────────────────────────────────────────
@@ -953,6 +1027,8 @@ export const automationsApi = {
   update: (id: string, data: AutomationUpdateBody) => patch<AutomationOut>(`/spaces/${_spaceId}/automations/${id}`, data),
   fire:   (id: string, body: { prompt?: string; instruction?: string } = {}) =>
     post<AutomationFireResult>(`/spaces/${_spaceId}/automations/${id}/fire`, body),
+  workflowExecutions: (id: string) =>
+    get<WorkflowExecutionSummary[]>(`/spaces/${_spaceId}/automations/${encodeURIComponent(id)}/workflow-executions`),
 }
 
 // ── Workspaces ────────────────────────────────────────────────────────────

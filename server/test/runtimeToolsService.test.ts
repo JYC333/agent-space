@@ -137,6 +137,48 @@ class MissingCodexOptionalInstaller implements RuntimeToolInstallRunner {
   }
 }
 
+class MissingOpenCodeBinaryInstaller implements RuntimeToolInstallRunner {
+  calls: Array<{
+    package_ref: string;
+    prefix: string;
+    cache_dir: string;
+    ignore_scripts?: boolean;
+  }> = [];
+
+  async run(input: {
+    package_ref: string;
+    prefix: string;
+    cache_dir: string;
+    ignore_scripts?: boolean;
+  }): Promise<void> {
+    this.calls.push(input);
+    const nativeMatch = input.package_ref.match(/^(opencode-linux-x64(?:-baseline)?)@/);
+    if (nativeMatch) {
+      const nativeDir = join(input.prefix, "node_modules", nativeMatch[1]);
+      await mkdir(join(nativeDir, "bin"), { recursive: true });
+      await writeFile(join(nativeDir, "bin", "opencode"), "x".repeat(5000));
+      await chmod(join(nativeDir, "bin", "opencode"), 0o755);
+      return;
+    }
+
+    const packageDir = join(input.prefix, "node_modules", "opencode-ai");
+    await mkdir(join(packageDir, "bin"), { recursive: true });
+    await mkdir(join(input.prefix, "node_modules", ".bin"), { recursive: true });
+    await writeFile(join(packageDir, "package.json"), JSON.stringify({
+      version: "1.2.3",
+      optionalDependencies: {
+        "opencode-linux-x64": "1.2.3",
+        "opencode-linux-x64-baseline": "1.2.3",
+        "opencode-linux-x64-musl": "1.2.3",
+        "opencode-linux-x64-baseline-musl": "1.2.3",
+      },
+    }));
+    const bin = join(input.prefix, "node_modules", ".bin", "opencode");
+    await writeFile(bin, "#!/bin/sh\nexit 0\n");
+    await chmod(bin, 0o755);
+  }
+}
+
 describe("RuntimeToolRegistry", () => {
   it("passes npm network proxy config without leaking unrelated secrets", () => {
     expect(npmInstallEnv({
@@ -262,6 +304,26 @@ describe("RuntimeToolRegistry", () => {
     ]);
     expect(result).toMatchObject({
       runtime: "codex_cli",
+      installed: true,
+      installed_version: "1.2.3",
+      activated: true,
+    });
+  });
+
+  it("installs OpenCode with a libc-compatible binary without running its package postinstall", async () => {
+    const cfg = await tempConfig();
+    const installer = new MissingOpenCodeBinaryInstaller();
+    const result = await new RuntimeToolRegistry(cfg, installer).install("opencode", {
+      version: "latest",
+    });
+
+    expect(installer.calls[0]).toMatchObject({
+      package_ref: "opencode-ai@latest",
+      ignore_scripts: true,
+    });
+    expect(installer.calls.slice(1).every(call => !call.package_ref.includes("musl"))).toBe(true);
+    expect(result).toMatchObject({
+      runtime: "opencode",
       installed: true,
       installed_version: "1.2.3",
       activated: true,

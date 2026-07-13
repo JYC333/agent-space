@@ -1,0 +1,79 @@
+export type RouteExecutionMode = "live" | "dry_run";
+export type RouteRiskLevel = "low" | "medium" | "high" | "critical";
+export type RouteTrustLevel = "low" | "medium" | "high";
+export type SandboxLevel = "none" | "dry_run" | "ephemeral" | "worktree" | "one_shot_docker";
+
+export interface RouteHints {
+  preferred_adapter_types: string[];
+  preferred_runtime_profile_id: string | null;
+  required_capabilities: string[];
+  required_tools: string[];
+  required_sandbox_level: SandboxLevel | null;
+  execution_mode: RouteExecutionMode | null;
+  minimum_trust_level: RouteTrustLevel | null;
+  latency_budget_ms: number | null;
+  cost_budget_usd: number | null;
+  sources: string[];
+}
+
+export interface RouteRequest {
+  adapter_types?: string[];
+  runtime_profile_id?: string | null;
+  runtime_profile_is_explicit?: boolean;
+  excluded_runtime_profile_ids?: string[];
+  fallback_runtime_profile_ids?: string[];
+  required_capabilities?: string[];
+  required_tools?: string[];
+  required_sandbox_level: SandboxLevel;
+  execution_mode: RouteExecutionMode;
+  risk_level: RouteRiskLevel;
+  workspace_available: boolean;
+  hints?: RouteHints | null;
+}
+
+export interface RouteCandidate {
+  runtime_profile_id: string;
+  profile_name: string;
+  adapter_type: string;
+  model_provider_id: string | null;
+  model_name: string | null;
+  credential_profile_id: string | null;
+  runtime_config_json: Record<string, unknown>;
+  runtime_policy_json: Record<string, unknown>;
+  enabled: boolean;
+  is_default: boolean;
+  credential_available: boolean;
+  capabilities: string[];
+  tools: string[];
+  minimum_sandbox_level: SandboxLevel;
+  supports_workspace: boolean;
+  supports_one_shot_docker: boolean;
+  supports_live: boolean;
+  supports_dry_run: boolean;
+  trust_level: RouteTrustLevel;
+  conformance_status?: "passed" | "failed" | "partial" | null;
+  estimated_cost_usd: number | null;
+  estimated_latency_ms: number | null;
+  historical_verification_pass_rate: number | null;
+}
+
+export interface RouteRejection {
+  runtime_profile_id: string;
+  adapter_type: string;
+  reasons: string[];
+}
+
+export interface ScoredRouteCandidate {
+  candidate: RouteCandidate;
+  score: number;
+  score_trace: Record<string, number>;
+}
+
+export interface RouteDecision {
+  selected: ScoredRouteCandidate | null;
+  candidates: ScoredRouteCandidate[];
+  fallback_chain: string[];
+  rejected: RouteRejection[];
+  hints: RouteHints;
+  reason: string;
+}

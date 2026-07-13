@@ -11,7 +11,11 @@ Vendor CLIs such as Claude Code and Codex CLI are local CLI runtime adapters.
 the catalog lives in `server/src/modules/runtimeAdapters/specs.ts`.
 Specs cover credential mode, sandbox requirement, context
 target, invocation template, permission bypass capability, usage behavior,
-output parser, and catalog display.
+output parser, catalog display, executor family, and conservative delegation/
+observability/trust claims. Where a runtime exposes a verified config control,
+the local CLI renderer must materialize and verify it before execution; the
+current Claude Code path denies the runtime-internal `Task` tool, while Codex
+remains unknown until conformance evidence exists.
 Runtime adapter database rows are not part of the current product schema. Runtime
 selection uses an Agent's selected/default `AgentRuntimeProfile`, which is
 snapshotted onto each run.
@@ -43,8 +47,11 @@ Vendor context files (`CLAUDE.md`, `AGENTS.md`, `prompt.md`) are generated only
 inside the run worktree. They are never written to the real workspace because
 agent-space remains the source of truth for context snapshots and proposals.
 
-`one_shot_docker` is not implemented. Specs must set
-`supports_one_shot_docker=false` until execution can actually provide it.
+`one_shot_docker` is implemented for local CLI specs through the server's
+`DockerCliCommandExecutor`. It is network-isolated and resource-bounded; the
+executor fails closed if Docker, the configured sandbox image, or an approved
+runtime-tool path is unavailable. Provider-proxy/network-profile execution is
+not permitted in this MVP Docker mode.
 
 Usage providers are runtime-generic. Adapters without a real probe return
 unknown accuracy plus fallback run statistics. Claude Code quota refresh is

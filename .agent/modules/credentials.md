@@ -82,8 +82,11 @@ If no explicit or active-space default profile grant is resolved, runtime
 execution fails before the runtime adapter is invoked with
 `runtime_credential_profile_required`.
 
-`one_shot_docker` is not implemented in this build. Critical-risk runs that
-require that sandbox level fail closed before runtime invocation.
+Critical-risk local-CLI runs use the one-shot Docker executor. The selected
+credential profile is mounted at most once and read-only; no host HOME is
+passed into the container. Runs fail closed when Docker or the configured image
+is unavailable, and networked provider-proxy credentials are rejected by the
+MVP deny-by-default network policy.
 
 ## Initializing a Profile
 

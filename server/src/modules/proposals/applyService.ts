@@ -27,6 +27,7 @@ import type {
   ProposalOut,
 } from "@agent-space/protocol" with { "resolution-mode": "import" };
 import { ActionApprovalGrantService } from "../policy/actionApprovalGrantService";
+import { EvolutionSignalEmitter } from "../evolution/signalEmitters";
 
 export class ProposalApplyHttpError extends Error {
   constructor(
@@ -40,6 +41,18 @@ export class ProposalApplyHttpError extends Error {
 
 export interface ProposalAcceptOptions {
   confirmIncompletePatch?: boolean;
+  /** Only the bundle coordinator may apply a proposal while it owns the member row. */
+  allowBundleMemberDecision?: boolean;
+}
+
+type ProposalTransactionCallback = () => Promise<void>;
+
+export interface ProposalTransactionResult<T> {
+  outcome: T;
+  /** Compensate external side effects if the owning transaction cannot commit. */
+  rollback?: () => Promise<void>;
+  /** Advisory work that runs only after a successful COMMIT. */
+  postCommit?: () => Promise<void>;
 }
 
 interface ApplyProposalRow {
@@ -105,9 +118,36 @@ export class PgProposalApplyService {
     options: ProposalAcceptOptions = {},
   ): Promise<ProposalAcceptOut | null> {
     const client = await this.connect();
-    let rollbackOnFailure: (() => Promise<void>) | null = null;
+    let transactionResult: ProposalTransactionResult<ProposalAcceptOut> | null = null;
     try {
       await client.query("BEGIN");
+      transactionResult = await this.acceptInTransaction(client, proposalId, identity, options);
+      await client.query("COMMIT");
+      if (transactionResult?.postCommit) await transactionResult.postCommit().catch(() => undefined);
+      return transactionResult?.outcome ?? null;
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      if (transactionResult?.rollback) await transactionResult.rollback().catch(() => undefined);
+      throw normalizeApplyError(error);
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Apply a proposal without owning BEGIN/COMMIT. The caller may use the
+   * callback to update a related domain row before this transaction commits.
+   * This is the transaction boundary used by evolution bundles.
+   */
+  async acceptInTransaction(
+    client: PoolClient,
+    proposalId: string,
+    identity: { spaceId: string; userId: string },
+    options: ProposalAcceptOptions = {},
+    afterApply?: ProposalTransactionCallback,
+  ): Promise<ProposalTransactionResult<ProposalAcceptOut> | null> {
+    let rollbackOnFailure: (() => Promise<void>) | null = null;
+    try {
       const proposal = await this.getProposalForUpdate(client, proposalId);
       if (
         !proposal ||
@@ -115,11 +155,9 @@ export class PgProposalApplyService {
         proposal.preview ||
         proposal.space_id !== identity.spaceId ||
         (await contentDecisionFromDb(client, identity, "proposal", proposal.id)) === "deny"
-      ) {
-        await client.query("ROLLBACK");
-        return null;
-      }
+      ) return null;
 
+      await this.assertBundleMemberMayBeDecided(client, proposal.id, options.allowBundleMemberDecision === true);
       assertIncompleteCodePatchConfirmation(
         proposal.proposal_type,
         proposal.payload_json,
@@ -144,7 +182,7 @@ export class PgProposalApplyService {
         userId: identity.userId,
       });
       rollbackOnFailure = result.rollback ?? null;
-      const publicResult = { result_type: result.result_type, result: result.result };
+      if (afterApply) await afterApply();
       await this.markProposalAccepted(client, proposal, identity.userId, result.proposalPayloadPatch);
       const accepted = await new PgProposalRepository(client).getVisible(
         identity.spaceId,
@@ -152,25 +190,14 @@ export class PgProposalApplyService {
         proposalId,
       );
       if (!accepted) throw new Error("accepted proposal is not visible after apply");
-      await client.query("COMMIT");
-      rollbackOnFailure = null;
-      return { proposal: accepted, ...publicResult };
+      return {
+        outcome: { proposal: accepted, result_type: result.result_type, result: result.result },
+        rollback: rollbackOnFailure ?? undefined,
+      };
     } catch (error) {
-      await client.query("ROLLBACK").catch(() => undefined);
-      if (rollbackOnFailure) {
-        await rollbackOnFailure();
-      }
-      if (error instanceof ProposalRiskLevelError) {
-        throw new ProposalApplyHttpError(422, {
-          code: "invalid_proposal_risk_level",
-          risk_value: error.riskValue,
-          message: error.message,
-        });
-      }
-      if (error instanceof ProposalApplyHttpError) throw error;
-      throw error;
-    } finally {
-      client.release();
+      if (rollbackOnFailure) await rollbackOnFailure().catch(() => undefined);
+      rollbackOnFailure = null;
+      throw normalizeApplyError(error);
     }
   }
 
@@ -179,6 +206,7 @@ export class PgProposalApplyService {
     action: { actionId: string; projectId?: string | null; resourceKind?: string | null; resourceId?: string | null },
   ): Promise<ProposalAcceptOut | null> {
     const client = await this.connect();
+    let rollbackOnFailure: (() => Promise<void>) | null = null;
     try {
       await client.query("BEGIN");
       const proposal = await this.getProposalForUpdate(client, proposalId);
@@ -186,6 +214,7 @@ export class PgProposalApplyService {
         await client.query("ROLLBACK");
         return null;
       }
+      await this.assertBundleMemberMayBeDecided(client, proposal.id, false);
       const { SYSTEM_ACTION_REGISTRY } = await import("@agent-space/protocol");
       const definition = SYSTEM_ACTION_REGISTRY.find((item) => item.id === action.actionId);
       const payloadActionId = proposal.payload_json?.action_id;
@@ -218,6 +247,7 @@ export class PgProposalApplyService {
         visibility: proposal.visibility, created_by_user_id: proposal.created_by_user_id,
         created_by_run_id: proposal.created_by_run_id, project_id: proposal.project_id,
       }, userId: grantingUserId });
+      rollbackOnFailure = result.rollback ?? null;
       await client.query(
         `INSERT INTO proposal_approvals (id, proposal_id, approval_type, approver_user_id, action_grant_id, status, metadata_json, created_at)
          VALUES ($1,$2,'action_grant',$3,$4,'approved',$5::jsonb,$6)`,
@@ -228,7 +258,11 @@ export class PgProposalApplyService {
       if (!accepted) throw new Error("accepted proposal is not visible after grant apply");
       await client.query("COMMIT");
       return { proposal: accepted, result_type: result.result_type, result: result.result };
-    } catch (error) { await client.query("ROLLBACK").catch(() => undefined); throw error; }
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      if (rollbackOnFailure) await rollbackOnFailure().catch(() => undefined);
+      throw error;
+    }
     finally { client.release(); }
   }
 
@@ -239,46 +273,72 @@ export class PgProposalApplyService {
     const client = await this.connect();
     try {
       await client.query("BEGIN");
-      const proposal = await this.getProposalForUpdate(client, proposalId);
-      if (
-        !proposal ||
-        proposal.space_id !== identity.spaceId ||
-        proposal.status !== "pending" ||
-        (await contentDecisionFromDb(client, identity, "proposal", proposal.id)) === "deny" ||
-        !(await canRejectProposal(client, proposal, identity.userId))
-      ) {
-        await client.query("ROLLBACK");
+      const rejected = await this.rejectTransaction(client, proposalId, identity);
+      if (!rejected) {
+        await client.query("COMMIT");
         return null;
       }
-      const updated = await client.query(
-        `UPDATE proposals
-            SET status = 'rejected', reviewed_at = $3, reviewed_by = $4, updated_at = $3
-          WHERE id = $1
-            AND space_id = $2
-            AND status = 'pending'`,
-        [proposalId, identity.spaceId, new Date().toISOString(), identity.userId],
-      );
-      if ((updated.rowCount ?? 0) === 0) {
-        await client.query("ROLLBACK");
-        return null;
-      }
-      await releaseRejectedCustomSourceHandlerVersion(client, proposalId, identity.spaceId);
-      await releaseRejectedSourceRecipeVersion(client, proposalId, identity.spaceId);
-      await releaseRejectedSourceConnectionDraft(client, proposal);
-      await releaseRejectedSourceBackfillPlan(client, proposal);
-      const out = await new PgProposalRepository(client).getVisible(
-        identity.spaceId,
-        identity.userId,
-        proposalId,
-      );
       await client.query("COMMIT");
-      return out;
+      if (rejected.postCommit) await rejected.postCommit().catch(() => undefined);
+      return rejected.outcome;
     } catch (error) {
       await client.query("ROLLBACK").catch(() => undefined);
-      throw error;
+      throw normalizeApplyError(error);
     } finally {
       client.release();
     }
+  }
+
+  async rejectInTransaction(
+    client: PoolClient,
+    proposalId: string,
+    identity: { spaceId: string; userId: string },
+    afterReject?: ProposalTransactionCallback,
+  ): Promise<ProposalTransactionResult<ProposalOut> | null> {
+    const rejected = await this.rejectTransaction(client, proposalId, identity, afterReject, true);
+    return rejected;
+  }
+
+  private async rejectTransaction(
+    client: PoolClient,
+    proposalId: string,
+    identity: { spaceId: string; userId: string },
+    afterReject?: ProposalTransactionCallback,
+    allowBundleMemberDecision = false,
+  ): Promise<ProposalTransactionResult<ProposalOut> | null> {
+    const proposal = await this.getProposalForUpdate(client, proposalId);
+    if (
+      !proposal ||
+      proposal.space_id !== identity.spaceId ||
+      proposal.status !== "pending" ||
+      (await contentDecisionFromDb(client, identity, "proposal", proposal.id)) === "deny" ||
+      !(await canRejectProposal(client, proposal, identity.userId))
+    ) return null;
+    await this.assertBundleMemberMayBeDecided(client, proposal.id, allowBundleMemberDecision);
+    const updated = await client.query(
+      `UPDATE proposals
+          SET status = 'rejected', reviewed_at = $3, reviewed_by = $4, updated_at = $3
+        WHERE id = $1 AND space_id = $2 AND status = 'pending'`,
+      [proposalId, identity.spaceId, new Date().toISOString(), identity.userId],
+    );
+    if ((updated.rowCount ?? 0) === 0) return null;
+    await releaseRejectedCustomSourceHandlerVersion(client, proposalId, identity.spaceId);
+    await releaseRejectedSourceRecipeVersion(client, proposalId, identity.spaceId);
+    await releaseRejectedSourceConnectionDraft(client, proposal);
+    await releaseRejectedSourceBackfillPlan(client, proposal);
+    if (afterReject) await afterReject();
+    const out = await new PgProposalRepository(client).getVisible(identity.spaceId, identity.userId, proposalId);
+    if (!out) throw new Error("rejected proposal is not visible after reject");
+    return {
+      outcome: out,
+      postCommit: () => this.emitDecisionSignalBestEffort({
+        spaceId: identity.spaceId,
+        proposalId,
+        status: "rejected",
+        proposalType: proposal.proposal_type,
+        createdByRunId: proposal.created_by_run_id,
+      }),
+    };
   }
 
   async approveEgressGrantingUser(
@@ -462,6 +522,22 @@ export class PgProposalApplyService {
     return getDbPool(this.config.databaseUrl).connect();
   }
 
+  private async emitDecisionSignalBestEffort(input: {
+    spaceId: string;
+    proposalId: string;
+    status: string;
+    proposalType: string | null;
+    createdByRunId: string | null;
+  }): Promise<void> {
+    if (!this.config.databaseUrl) return;
+    try {
+      await new EvolutionSignalEmitter(getDbPool(this.config.databaseUrl)).emitProposalDecision(input);
+    } catch {
+      // Evolution telemetry is advisory and must not change a committed
+      // proposal decision into an API failure.
+    }
+  }
+
   private async getProposalForUpdate(
     client: PoolClient,
     proposalId: string,
@@ -536,6 +612,31 @@ export class PgProposalApplyService {
     );
     if (result.status !== "allow") {
       throw policyResultToHttpError(result);
+    }
+  }
+
+  private async assertBundleMemberMayBeDecided(
+    client: PoolClient,
+    proposalId: string,
+    allowedByBundleCoordinator: boolean,
+  ): Promise<void> {
+    if (allowedByBundleCoordinator) return;
+    const result = await client.query<{ bundle_id: string }>(
+      `SELECT bm.bundle_id
+         FROM evolution_bundle_members bm
+         JOIN evolution_bundles b ON b.id = bm.bundle_id
+        WHERE bm.proposal_id = $1
+          AND bm.status = 'pending'
+          AND b.status IN ('pending_review', 'partially_approved')
+        LIMIT 1`,
+      [proposalId],
+    );
+    if (result.rows[0]) {
+      throw new ProposalApplyHttpError(409, {
+        code: "proposal_bundled",
+        bundle_id: result.rows[0].bundle_id,
+        message: "This proposal is owned by an active evolution bundle; decide it from the bundle inbox.",
+      });
     }
   }
 
@@ -758,6 +859,18 @@ function policyResultToHttpError(result: EnforceResult): ProposalApplyHttpError 
     return new ProposalApplyHttpError(500, result.message ?? result.error_code ?? "Policy audit failed");
   }
   return new ProposalApplyHttpError(403, result.message ?? result.error_code ?? "Policy denied proposal apply");
+}
+
+function normalizeApplyError(error: unknown): unknown {
+  if (error instanceof ProposalRiskLevelError) {
+    return new ProposalApplyHttpError(422, {
+      code: "invalid_proposal_risk_level",
+      risk_value: error.riskValue,
+      message: error.message,
+    });
+  }
+  if (error instanceof ProposalApplyHttpError) return error;
+  return error;
 }
 
 function approvalToOut(row: ApprovalRow): ProposalApprovalOut {

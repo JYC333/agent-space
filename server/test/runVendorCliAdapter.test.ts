@@ -5,7 +5,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { loadConfig } from "../src/config";
 import {
   buildSubprocessEnv,
+  DockerCliCommandExecutor,
   executeVendorCliAdapter,
+  parseOpenCodeOutput,
   type CliCommandExecutor,
   type CliCredentialBrokerPort,
   type CliExecutionResult,
@@ -141,6 +143,13 @@ class FakeExecutor implements CliCommandExecutor {
     env: Record<string, string>;
     run_id: string;
     stdin: string | null;
+    docker?: {
+      image: string;
+      sandbox_cwd: string;
+      cli_tools_root: string;
+      credential_source_path: string | null;
+      credential_target_path: string | null;
+    };
   }> = [];
   result: CliExecutionResult = {
     returncode: 0,
@@ -156,6 +165,13 @@ class FakeExecutor implements CliCommandExecutor {
     env: Record<string, string>;
     run_id: string;
     stdin: string | null;
+    docker?: {
+      image: string;
+      sandbox_cwd: string;
+      cli_tools_root: string;
+      credential_source_path: string | null;
+      credential_target_path: string | null;
+    };
   }): Promise<CliExecutionResult> {
     this.calls.push(input);
     return this.result;
@@ -587,6 +603,10 @@ describe("executeVendorCliAdapter", () => {
       permission_bypass_used: true,
       context_file_type: "CLAUDE.md",
     });
+    const claudeSettings = JSON.parse(await readFile(join(sandbox, ".claude", "settings.json"), "utf8")) as {
+      permissions?: { deny?: string[] };
+    };
+    expect(claudeSettings.permissions?.deny).toContain("Task");
   });
 
   it("fails closed when the credential profile is missing", async () => {
@@ -614,7 +634,7 @@ describe("executeVendorCliAdapter", () => {
     });
   });
 
-  it("fails closed for missing workspace policy, docker sandbox, and planned adapters before credentials", async () => {
+  it("uses the isolated Docker executor for critical CLI runs", async () => {
     const broker = new FakeBroker();
     const executor = new FakeExecutor();
 
@@ -629,30 +649,102 @@ describe("executeVendorCliAdapter", () => {
       error_code: "file_access_adapter_requires_worktree_policy",
     });
 
-    await expect(
-      executeVendorCliAdapter(
-        config(),
-        { run: run({ required_sandbox_level: "one_shot_docker" }), sandbox_cwd: "/tmp/worktree" },
-        { credentialBroker: broker, executor },
-      ),
-    ).resolves.toMatchObject({
-      success: false,
-      error_code: "docker_sandbox_not_implemented",
+    const sandbox = await mkdtemp(join(tmpdir(), "aspace-docker-") );
+    tmpPaths.push(sandbox);
+    const result = await executeVendorCliAdapter(
+      config(),
+      { run: run({ required_sandbox_level: "one_shot_docker" }), sandbox_cwd: sandbox },
+      { credentialBroker: broker, executor, toolRegistry: new FakeTools() },
+    );
+    expect(result).toMatchObject({ success: true });
+    expect(broker.grants[0]?.executorMode).toBe("docker");
+    expect(executor.calls[0]?.docker).toMatchObject({
+      image: "agent-space-sandbox",
+      sandbox_cwd: sandbox,
+      cli_tools_root: "/aspace/runtime-tools",
     });
+  });
 
-    await expect(
-      executeVendorCliAdapter(
-        config(),
-        { run: run({ adapter_type: "opencode" }), sandbox_cwd: "/tmp/worktree" },
-        { credentialBroker: broker, executor },
-      ),
-    ).resolves.toMatchObject({
-      success: false,
-      error_code: "runtime_adapter_not_implemented",
+  it("assembles a fail-closed Docker command with read-only credentials and resource limits", async () => {
+    const launcher = new FakeExecutor();
+    const executor = new DockerCliCommandExecutor(launcher);
+    await executor.runCommand({
+      command: ["/tmp/aspace/runtime-tools/codex_cli/versions/v1/bin/codex", "--dir", "/tmp/aspace/sandboxes/run-1"],
+      cwd: "/tmp/aspace/sandboxes/run-1",
+      timeout_seconds: 30,
+      env: { PATH: "/usr/bin", HOME: "/host/home", ANTHROPIC_AUTH_TOKEN: "must-not-enter" },
+      run_id: "run-1",
+      stdin: null,
+      docker: {
+        image: "agent-space-sandbox",
+        sandbox_cwd: "/tmp/aspace/sandboxes/run-1",
+        sandbox_root: "/tmp/aspace/sandboxes",
+        cli_tools_root: "/tmp/aspace/runtime-tools",
+        credential_root: "/tmp/aspace/secrets",
+        credential_source_path: "/tmp/aspace/secrets/codex",
+        credential_target_path: "/home/agent/.codex",
+      },
     });
+    const command = launcher.calls[0]?.command ?? [];
+    expect(command).toContain("--network");
+    expect(command).toContain("none");
+    expect(command).toContain("--read-only");
+    expect(command).toContain("--cap-drop");
+    expect(command).toContain("ALL");
+    expect(command).toContain("--pids-limit");
+    expect(command).toContain("256");
+    expect(command).toContain("--volume");
+    expect(command).toContain("/tmp/aspace/secrets/codex:/home/sandbox/.codex:ro");
+    expect(command).not.toContain("must-not-enter");
+  });
 
-    expect(broker.grants).toEqual([]);
-    expect(executor.calls).toEqual([]);
+  it("runs OpenCode with a sandbox config that denies Task and locks tools", async () => {
+    const sandbox = await mkdtemp(join(tmpdir(), "aspace-opencode-"));
+    tmpPaths.push(sandbox);
+    const broker = new FakeBroker();
+    const executor = new FakeExecutor();
+    executor.result.stdout = '{"type":"text","text":"structured answer"}\n{"part":{"text":"more"}}';
+    const result = await executeVendorCliAdapter(
+      config(),
+      { run: run({ adapter_type: "opencode" }), sandbox_cwd: sandbox, model: "provider/model" },
+      { credentialBroker: broker, executor, toolRegistry: new FakeTools() },
+    );
+    expect(result).toMatchObject({
+      success: true,
+      adapter_type: "opencode",
+      output_text: "structured answer\nmore",
+      output_json: { format: "opencode_jsonl" },
+    });
+    expect(executor.calls[0]?.command).toEqual([
+      process.execPath,
+      "run",
+      "--format",
+      "json",
+      "--agent",
+      "agent-space-locked",
+      "--dir",
+      sandbox,
+      "--model",
+      "provider/model",
+      "Fix the bug",
+    ]);
+    const configJson = JSON.parse(await readFile(join(sandbox, "opencode.json"), "utf8")) as Record<string, unknown>;
+    expect(configJson).toMatchObject({
+      agent: {
+        "agent-space-locked": {
+          permission: {
+            task: { "*": "deny" },
+            edit: { "*": "allow" },
+            bash: { "*": "allow" },
+            webfetch: "deny",
+          },
+        },
+      },
+    });
+  });
+
+  it("falls back to stdout when an OpenCode stream contains no JSON events", () => {
+    expect(parseOpenCodeOutput("plain output")).toEqual({ text: "plain output", output_json: null, event_count: 0 });
   });
 
   it("maps nonzero and timeout results to CLI adapter failures", async () => {

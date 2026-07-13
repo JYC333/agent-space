@@ -830,7 +830,7 @@ export async function completeProviderText(
   store: ProviderCommandStore,
   spaceId: string,
   input: ProviderTextCompletionInput,
-): Promise<{ text: string; model: string; usage: Record<string, unknown> }> {
+): Promise<{ text: string; provider: string; model: string; usage: Record<string, unknown> }> {
   return completeProviderMessages(store, spaceId, {
     provider_id: input.provider_id,
     model: input.model,
@@ -849,6 +849,7 @@ export async function completeProviderMessages(
   input: ProviderMessagesCompletionInput,
 ): Promise<{
   text: string;
+  provider: string;
   model: string;
   usage: Record<string, unknown>;
   tool_calls?: CanonicalToolCall[];
@@ -873,6 +874,7 @@ export async function completeProviderMessages(
         const result = await completeProviderChat(store, spaceId, chatBody(entry.provider_id, entry.model));
         return {
           text: result.content,
+          provider: result.provider,
           model: result.model,
           usage: result.usage,
           tool_calls: result.tool_calls,
@@ -900,6 +902,7 @@ export async function completeProviderMessages(
   const result = await completeProviderChat(store, spaceId, chatBody(input.provider_id, input.model));
   return {
     text: result.content,
+    provider: result.provider,
     model: result.model,
     usage: result.usage,
     tool_calls: result.tool_calls,

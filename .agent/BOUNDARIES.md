@@ -42,7 +42,7 @@ Load this file for any task that changes structure, models, APIs, or agent behav
 
 ## Execution Boundaries
 
-**B13** — `_SANDBOXED_ADAPTERS` (claude_code, codex_cli, and future coding runtimes) are always sandboxed. Current implemented sandbox routing is git worktree + local executor for file-access CLI runs. one-shot Docker is not implemented in the product path yet; high/critical paths must fail closed rather than silently downgrading. An agent can escalate `risk_level` but cannot remove an adapter from `_SANDBOXED_ADAPTERS`.
+**B13** — `_SANDBOXED_ADAPTERS` (claude_code, codex_cli, and future coding runtimes) are always sandboxed. High-risk file-access CLI runs use a git worktree + local executor; critical local-CLI runs use the one-shot Docker executor. Docker failures are fail-closed rather than silently downgraded. An agent can escalate `risk_level` but cannot remove an adapter from `_SANDBOXED_ADAPTERS`.
 
 **B14** — Vendor context files (CLAUDE.md, AGENTS.md, Cursor rules) are generated artefacts written by ContextCompiler to the sandbox directory. They are not the source of truth and are never written directly to the real workspace by default.
 
@@ -172,7 +172,7 @@ bindings; Product Plugins are optional product feature packages.
 
 **B46** — Every CLI credential grant or denial is audited in `cli_credential_events`. Manual and automation CLI runs require an explicit CredentialBroker profile. Runs with no profile configured fail before adapter invocation and record `credential_source="none"` with `fallback_reason="no_profile_configured"`.
 
-**B47** — Future Docker sandboxes may receive at most one credential profile dir, mounted read-only by default. Write access requires explicit `readonly: false` in the profile config. Until one-shot Docker is implemented, documentation must describe high/critical Docker paths as fail-closed, not available.
+**B47** — One-shot Docker sandboxes receive at most one credential profile dir, mounted read-only. The container has no ambient host HOME and the MVP rejects provider-proxy/network-profile grants because its network namespace is `none`.
 
 **B48** — Credential profiles are never written back from the sandbox automatically. If a CLI updates its login state during a run, only the profile's source directory is affected (via symlink for worktree, via writable volume for Docker). No automatic propagation to other profiles.
 
@@ -201,7 +201,7 @@ schema adds that table.
 
 **B43** — The deployer accepts exactly `rebuild_agent_space`, `restart_agent_space`, and `health_check`; these jobs accept no request arguments. It never accepts arbitrary commands, request-to-environment overrides, self-evolution jobs, code-patch jobs, capability jobs, or caller-selected script paths. The deployer protocol does not validate proposal state. A future product deployment trigger must therefore verify a human-approved proposal in the server authority before submitting one of these jobs and must add durable audit coverage in the same change.
 
-**B44** — The deployer container's Docker socket plus read-write repository mount is host-equivalent authority. Nothing on the evolution, `code_patch`, capability, agent-runtime, automation, job, or scheduler path may reach deployer input or invoke its scripts. High-risk one-shot Docker sandboxing is not currently implemented in the product path and must not be represented as active isolation.
+**B44** — The deployer container's Docker socket plus read-write repository mount is host-equivalent authority. Nothing on the evolution, `code_patch`, capability, agent-runtime, automation, job, or scheduler path may reach deployer input or invoke its scripts. The CLI sandbox executor is a separate run path with a fixed image, fixed resource policy, deny-by-default network, and allowlisted mounts; it is never routed through the deployer protocol.
 
 **B44A** — An agent-space instance must never be directly exposed to the public internet. The current frontend has no production TLS termination, rate limiting, or general CSRF-token hardening. Any move toward internet exposure must first implement and review those controls and update the security boundary documentation.
 

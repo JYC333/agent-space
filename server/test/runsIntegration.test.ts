@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Pool } from "pg";
@@ -15,17 +13,11 @@ import {
 // Real-PostgreSQL integration tests for the server runs repositories. The unit
 // suites use a FakeDb that does not execute SQL, so they cannot catch parameter
 // type inference, CHECK/UNIQUE constraints, varchar length, or CTE column
-// ambiguity — exactly the class of defects that only surfaced on the real
-// stack. These run the actual SQL against a throwaway Postgres (testcontainers)
-// loaded with the real table schema (test/fixtures/runsSchema.sql).
+// ambiguity. These run the actual SQL against the repository's shared
+// PostgreSQL Testcontainers template loaded from migrations/0001_baseline.sql.
 //
 // The whole suite skips gracefully when Docker is unavailable so `npm test`
 // still runs everywhere; where Docker is present (dev, CI) it always runs.
-
-const SCHEMA = readFileSync(
-  join(process.cwd(), "test/fixtures/runsSchema.sql"),
-  "utf8",
-);
 
 let container: TestPostgresDatabase | undefined;
 let pool: Pool | undefined;
@@ -33,9 +25,8 @@ let available = false;
 
 beforeAll(async () => {
   try {
-    container = await getTestPostgres(__filename, { empty: true });
+    container = await getTestPostgres(__filename);
     pool = new Pool({ connectionString: container.getConnectionUri() });
-    await pool.query(SCHEMA);
     available = true;
   } catch (err) {
     console.warn(
@@ -53,13 +44,52 @@ afterAll(async () => {
 
 beforeEach(async () => {
   if (!available || !pool) return;
+  const now = new Date().toISOString();
+  await pool.query("TRUNCATE spaces, users CASCADE");
   await pool.query(
-    "TRUNCATE content_access_grants, space_memberships, actors, agents, agent_versions, agent_runtime_profiles, agent_run_groups, agent_run_group_members, agent_run_messages, context_snapshots, runs, run_delegations, run_steps, run_events, run_execution_locks, run_evaluations, run_finalizations, jobs, job_events, artifacts, tasks, task_runs, task_evaluations CASCADE",
+    "TRUNCATE content_access_grants, space_memberships, actors, agents, agent_versions, agent_runtime_profiles, agent_run_groups, agent_run_group_members, agent_run_messages, context_snapshots, runs, run_delegations, run_steps, run_events, run_execution_locks, run_evaluations, verification_results, run_finalizations, jobs, job_events, artifacts, tasks, task_runs, task_evaluations CASCADE",
+  );
+  await pool.query(
+    `INSERT INTO users (id, display_name, status, created_at, updated_at)
+     VALUES ('user-1', 'Runs Test User', 'active', $1, $1)`,
+    [now],
+  );
+  await pool.query(
+    `INSERT INTO spaces (id, name, type, created_by_user_id, created_at, updated_at)
+     VALUES ('space-1', 'Runs Test Space', 'team', 'user-1', $1, $1)`,
+    [now],
   );
   await pool.query(
     `INSERT INTO space_memberships (id, space_id, user_id, role, status, created_at, updated_at)
-     VALUES ($1, 'space-1', 'user-1', 'owner', 'active', now(), now())`,
-    [randomUUID()],
+     VALUES ($1, 'space-1', 'user-1', 'owner', 'active', $2, $2)`,
+    [randomUUID(), now],
+  );
+  await pool.query(
+    `INSERT INTO agents (
+       id, space_id, owner_user_id, name, status, current_version_id,
+       created_at, updated_at, visibility
+     ) VALUES ('agent-1', 'space-1', 'user-1', 'Runs Test Agent', 'active', NULL, $1, $1, 'space_shared')`,
+    [now],
+  );
+  await pool.query(
+    `INSERT INTO agent_versions (
+       id, agent_id, space_id, version_label, system_prompt,
+       model_config_json, runtime_config_json, context_policy_json,
+       memory_policy_json, capabilities_json, tool_permissions_json,
+       runtime_policy_json, created_at
+     ) VALUES ('version-1', 'agent-1', 'space-1', 'v1', 'You are a test agent.',
+       '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb,
+       '[]'::jsonb, '{}'::jsonb, '{}'::jsonb, $1)`,
+    [now],
+  );
+  await pool.query("UPDATE agents SET current_version_id = 'version-1' WHERE id = 'agent-1'");
+  await pool.query(
+    `INSERT INTO model_providers (
+       id, space_id, owner_user_id, name, provider_type, enabled,
+       capabilities_json, config_json, created_at, updated_at
+     ) VALUES ('provider-1', 'space-1', 'user-1', 'Runs Test Provider', 'openai', true,
+       '{}'::jsonb, '{}'::jsonb, $1, $1)`,
+    [now],
   );
 });
 
@@ -82,8 +112,8 @@ async function seedAgent(
     `INSERT INTO agents (
        id, space_id, owner_user_id, name, status, current_version_id,
        created_at, updated_at, visibility
-     ) VALUES ($1,$2,'user-1','Agent',$3,$4,$5,$5,'space_shared')`,
-    [agentId, spaceId, overrides.status ?? "active", versionId, now],
+     ) VALUES ($1,$2,'user-1','Agent',$3,NULL,$4,$4,'space_shared')`,
+    [agentId, spaceId, overrides.status ?? "active", now],
   );
   await pool!.query(
     `INSERT INTO agent_versions (
@@ -100,6 +130,10 @@ async function seedAgent(
       now,
       JSON.stringify(overrides.runtime_config_json ?? {}),
     ],
+  );
+  await pool!.query(
+    `UPDATE agents SET current_version_id = $2 WHERE id = $1 AND space_id = $3`,
+    [agentId, versionId, spaceId],
   );
   if (!overrides.skip_runtime_profile) {
     const adapterType =
@@ -288,8 +322,11 @@ describe("runs repositories against real PostgreSQL", () => {
     const { agentId } = await seedAgent();
     const providerId = randomUUID();
     await pool!.query(
-      `INSERT INTO model_providers (id, space_id, default_model, enabled, config_json, created_at)
-       VALUES ($1,'space-1','MiniMax-M3',true,'{"is_default": true}'::jsonb,$2)`,
+      `INSERT INTO model_providers (
+         id, space_id, owner_user_id, name, provider_type, default_model,
+         enabled, capabilities_json, config_json, created_at, updated_at
+       ) VALUES ($1,'space-1','user-1','Default Test Provider','openai','MiniMax-M3',
+         true,'{}'::jsonb,'{"is_default": true}'::jsonb,$2,$2)`,
       [providerId, new Date().toISOString()],
     );
     await pool!.query(
@@ -609,8 +646,10 @@ describe("runs repositories against real PostgreSQL", () => {
       [randomUUID(), taskId, runId, now],
     );
     await pool!.query(
-      `INSERT INTO artifacts (id, space_id, run_id, created_at)
-       VALUES ($1,'space-1',$2,$3)`,
+      `INSERT INTO artifacts (
+         id, space_id, run_id, artifact_type, title,
+         export_formats_json, created_at, updated_at
+       ) VALUES ($1,'space-1',$2,'test','Test Artifact','[]'::jsonb,$3,$3)`,
       [artifactId, runId, now],
     );
     await repo.appendRunEvent({

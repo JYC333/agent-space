@@ -10,4 +10,10 @@ export {
   type LocalCliRuntimeAdapterSpec,
   type RuntimeAdapterSpec,
   type RuntimeAdapterType,
+  type RuntimeExecutorFamily,
 } from "./specs";
+export {
+  assertRuntimeSubagentsDisabled,
+  ensureRuntimeSubagentsDisabled,
+  RuntimeSubagentConfigError,
+} from "./subagentConfig";

@@ -28,6 +28,7 @@ import { backupsModule } from "../modules/backups";
 import { providersModule } from "../modules/providers";
 import { networkProfilesModule } from "../modules/networkProfiles";
 import { runtimeToolsModule } from "../modules/runtimeTools";
+import { runtimeConformanceModule } from "../modules/runtimeConformance";
 import { runtimeToolBindingsModule } from "../modules/runtimeToolBindings";
 import { runtimeHostModule } from "../modules/runtimeHost";
 import { usageModule } from "../modules/usage";
@@ -64,6 +65,8 @@ import { deploymentModule } from "../modules/deployment";
 import { frontendSupportModule } from "../modules/frontendSupport";
 // Official optional module control plane — registered before optional product modules.
 import { pluginsModule } from "../modules/plugins";
+import { plansModule } from "../modules/plans";
+import { routingModule } from "../modules/routing";
 // Plugin host — activates built-in official plugins after SERVER_MODULES.
 import type { PluginHost } from "../modules/plugins/host";
 import { registerErrorEnvelopeHandler } from "./errorEnvelope";
@@ -103,6 +106,7 @@ export const SERVER_MODULES: readonly ServerModule[] = [
   streamingModule,
   notificationsModule,
   runtimeToolsModule,
+  runtimeConformanceModule,
   networkProfilesModule,
   providersModule,
   runtimeToolBindingsModule,
@@ -146,6 +150,8 @@ export const SERVER_MODULES: readonly ServerModule[] = [
   // Official optional module control plane.
   // Must appear before optional product modules that depend on the plugin guard.
   pluginsModule,
+  plansModule,
+  routingModule,
   // Note: official optional product modules (e.g. diary) are no longer in
   // SERVER_MODULES. They are loaded and activated via the PluginHost after this list.
 ];

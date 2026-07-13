@@ -10,6 +10,7 @@ import type {
   RunRecord,
   RunStepDetailRecord,
 } from "./repository";
+import type { VerificationResultRecord } from "./verification";
 
 export function runToOut(
   run: RunRecord,
@@ -21,6 +22,7 @@ export function runToOut(
     agent_id: run.agent_id,
     agent_version_id: run.agent_version_id,
     runtime_profile_id: run.runtime_profile_id ?? null,
+    runtime_profile_selection_source: run.runtime_profile_selection_source ?? null,
     context_snapshot_id: run.context_snapshot_id ?? null,
     workspace_id: run.workspace_id ?? null,
     session_id: run.session_id ?? null,
@@ -55,6 +57,9 @@ export function runToOut(
     visibility: run.visibility ?? "space_shared",
     access_level: run.access_level ?? "full",
     project_id: run.project_id ?? null,
+    contract_snapshot_json: run.contract_snapshot_json ?? {},
+    workflow_version_id: run.workflow_version_id ?? null,
+    route_decision_id: run.route_decision_id ?? null,
   };
 }
 
@@ -89,11 +94,29 @@ export function runEvaluationToOut(row: RunEvaluationRecord): Record<string, unk
   };
 }
 
+export function verificationResultToOut(row: VerificationResultRecord): Record<string, unknown> {
+  return {
+    id: row.id,
+    space_id: row.space_id,
+    run_id: row.run_id,
+    verifier_type: row.verifier_type,
+    verifier_version: row.verifier_version,
+    status: row.status,
+    summary: row.summary,
+    evidence_refs_json: row.evidence_refs_json ?? null,
+    details_json: row.details_json ?? null,
+    started_at: row.started_at,
+    completed_at: row.completed_at,
+    created_at: row.created_at,
+  };
+}
+
 export function runFinalizationToOut(row: RunFinalizationRecord): Record<string, unknown> {
   return {
     id: row.id,
     space_id: row.space_id,
     run_id: row.run_id,
+    attempt_number: row.attempt_number,
     finalizer_version: row.finalizer_version,
     status: row.status,
     run_evaluation_id: row.run_evaluation_id,

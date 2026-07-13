@@ -87,6 +87,9 @@ reports in `.agent/reports/` are not source of truth and should be deleted after
 |---|---|
 | [architecture/EXECUTION_MODEL.md](architecture/EXECUTION_MODEL.md) | Run, RunStep, Job, Artifact, Proposal, actor identity, credential resolver |
 | [architecture/RUNS_AND_OUTPUTS.md](architecture/RUNS_AND_OUTPUTS.md) | Run outputs, materialization, boundaries |
+| [architecture/VERIFICATION_ENGINE.md](architecture/VERIFICATION_ENGINE.md) | A2 deterministic verification lifecycle, result authority, and deferred verifier types |
+| [architecture/PLAN_GRAPH_EXECUTION.md](architecture/PLAN_GRAPH_EXECUTION.md) | Task-first Agent Planning, Plan Nodes, fixed Workflow Execution, bounded approval, scheduling, and reconciliation |
+| [architecture/ROUTING.md](architecture/ROUTING.md) | C2 deterministic model–runtime candidate filtering, scoring, fallback, and run stamping |
 
 ### Server / Backend
 
@@ -107,6 +110,7 @@ reports in `.agent/reports/` are not source of truth and should be deleted after
 | [architecture/SHARED_SPACE_MEMORY_ISOLATION.md](architecture/SHARED_SPACE_MEMORY_ISOLATION.md) | Design proposal: shared system assistant + per-user memory isolation in multi-member spaces (personal vs space tier, promotion-gated sharing) |
 | [architecture/PROPOSALS.md](architecture/PROPOSALS.md) | Proposal types, lifecycle, apply flow |
 | [architecture/MEMORY_EVOLUTION_PLAN.md](architecture/MEMORY_EVOLUTION_PLAN.md) | Planned Memory-quality work after Knowledge-first retrieval: duplicate signals, ranking, synthesis + gap loop, consolidation cycle |
+| [architecture/EVOLUTION_SIGNAL_SYSTEM.md](architecture/EVOLUTION_SIGNAL_SYSTEM.md) | Current rule-based evolution signal emitters, target resolution, deduplication, A2 verification facts, and deferred A3/C3 hooks |
 
 ### Workspace / Sandbox / Artifact
 
@@ -123,6 +127,7 @@ are source of truth for active nav and routes. For UI decisions, see the module 
 | Doc | What it covers |
 |---|---|
 | [architecture/FRONTEND_INFORMATION_ARCHITECTURE.md](architecture/FRONTEND_INFORMATION_ARCHITECTURE.md) | Frontend role, dogfooding loop, home direction, module visibility, empty-state policy |
+| [architecture/MANUAL_ACCEPTANCE_TASK_PLAN_WORKFLOW.md](architecture/MANUAL_ACCEPTANCE_TASK_PLAN_WORKFLOW.md) | Clickable manual acceptance paths for Task planning, Agent Plans, and fixed Workflow Automation |
 | [modules/product-shell.md](modules/product-shell.md) | Shell, NavRail, CommandPalette, PanelLayout |
 | [modules/frontend-layout.md](modules/frontend-layout.md) | Responsive layout, mobile variants |
 | [modules/client-server-protocol.md](modules/client-server-protocol.md) | REST, WebSocket, SSE, offline queue protocol |

@@ -1,11 +1,11 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useParams } from 'react-router-dom'
 import { SpaceLink as Link } from '../../core/spaceNav'
-import { ArrowLeft, ExternalLink, FileCode2, FlaskConical } from 'lucide-react'
+import { ArrowLeft, ExternalLink, FileCode2, FlaskConical, Loader2, Save, ShieldCheck, UserRoundCheck, XCircle } from 'lucide-react'
 import { toast } from 'sonner'
-import { artifactsApi, runsApi } from '../../api/client'
+import { artifactsApi, evolutionApi, runsApi } from '../../api/client'
 import { errMsg } from '../../lib/utils'
-import type { ActivityRecord, Artifact, Proposal, Run } from '../../types/api'
+import type { ActivityRecord, Artifact, Proposal, Run, RunAttempt, RunEvaluation, RunFinalization, RunSupervisorDecision, RunVerificationResult } from '../../types/api'
 import { Card } from '../../components/ui/card'
 import { Button } from '../../components/ui/button'
 import { Badge, StatusBadge } from '../../components/ui/badge'
@@ -20,8 +20,21 @@ import { PersonalContextPanel } from './PersonalContextPanel'
 import { isGrantDerivedProposal } from '../memory/EgressReviewNotice'
 import { promptLibraryPath } from '../prompts/paths'
 import { ContentAccessControl } from '../../components/ContentAccessControl'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../../components/ui/dialog'
+import { Input } from '../../components/ui/input'
+import { Label } from '../../components/ui/label'
+import { Textarea } from '../../components/ui/textarea'
 
-type RunDetailTab = 'activities' | 'artifacts' | 'proposals'
+type RunDetailTab = 'activities' | 'artifacts' | 'proposals' | 'contract' | 'verification' | 'route' | 'attempts'
+type OptionalRunResource = 'activities' | 'artifacts' | 'proposals' | 'attempts' | 'evaluations' | 'verifications' | 'finalizations'
+
+async function loadOptionalRunResource<T>(loader: Promise<T>, fallback: T): Promise<{ value: T; error: string | null }> {
+  try {
+    return { value: await loader, error: null }
+  } catch (error) {
+    return { value: fallback, error: errMsg(error) }
+  }
+}
 
 function fmt(dt: string | null | undefined) {
   return dt ? new Date(dt).toLocaleString() : '—'
@@ -40,6 +53,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function stringOrNull(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value : null
+}
+
+function JsonBlock({ value }: { value: unknown }) {
+  return <pre className="max-h-96 overflow-auto rounded-md border border-border bg-muted/40 p-3 text-xs">{JSON.stringify(value ?? {}, null, 2)}</pre>
 }
 
 function promptRefsForRun(run: Run): PromptRef[] {
@@ -75,36 +92,147 @@ export default function RunDetailPage() {
   const { spaces, activeSpaceId, activeSpaceName, personalSpaceId, userId } = useSpace()
   const [reloadKey, setReloadKey] = useState(0)
   const [executingRun, setExecutingRun] = useState(false)
+  const [recoveryBusy, setRecoveryBusy] = useState(false)
+  const [abandonOpen, setAbandonOpen] = useState(false)
+  const [abandonReason, setAbandonReason] = useState('')
   const { run: polled, loading, error } = useRun(runId && activeSpaceId ? runId : null, reloadKey)
   const [activities, setActivities] = useState<ActivityRecord[]>([])
   const [artifacts, setArtifacts] = useState<Artifact[]>([])
   const [proposals, setProposals] = useState<Proposal[]>([])
+  const [attempts, setAttempts] = useState<RunAttempt[]>([])
+  const [supervisorDecisions, setSupervisorDecisions] = useState<RunSupervisorDecision[]>([])
+  const [evaluations, setEvaluations] = useState<RunEvaluation[]>([])
+  const [verifications, setVerifications] = useState<RunVerificationResult[]>([])
+  const [finalizations, setFinalizations] = useState<RunFinalization[]>([])
+  const [subresourceErrors, setSubresourceErrors] = useState<Partial<Record<OptionalRunResource, string>>>({})
+  const [routeDecision, setRouteDecision] = useState<Record<string, unknown> | null>(null)
+  const [routeDecisionError, setRouteDecisionError] = useState<string | null>(null)
+  const [resourceScopeKey, setResourceScopeKey] = useState<string | null>(null)
   const [tabLoading, setTabLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<RunDetailTab>('activities')
+  const [workflowOpen, setWorkflowOpen] = useState(false)
+  const [workflowName, setWorkflowName] = useState('')
+  const [workflowDescription, setWorkflowDescription] = useState('')
+  const [workflowPreview, setWorkflowPreview] = useState<Record<string, unknown> | null>(null)
+  const [workflowPreviewScopeKey, setWorkflowPreviewScopeKey] = useState<string | null>(null)
+  const [workflowBusy, setWorkflowBusy] = useState(false)
+  const loadGeneration = useRef(0)
+  const workflowPreviewGeneration = useRef(0)
+  const workflowPreviewStateRef = useRef({
+    runId,
+    activeSpaceId,
+    name: workflowName.trim() || undefined,
+    description: workflowDescription.trim() || undefined,
+  })
+  workflowPreviewStateRef.current = {
+    runId,
+    activeSpaceId,
+    name: workflowName.trim() || undefined,
+    description: workflowDescription.trim() || undefined,
+  }
+
+  const clearWorkflowPreview = useCallback(() => {
+    setWorkflowPreview(null)
+    setWorkflowPreviewScopeKey(null)
+  }, [])
+
+  const invalidateWorkflowPreview = useCallback(() => {
+    workflowPreviewGeneration.current += 1
+    clearWorkflowPreview()
+    setWorkflowBusy(false)
+  }, [clearWorkflowPreview])
 
   const loadSubs = useCallback(async () => {
-    if (!runId) return
+    const generation = loadGeneration.current + 1
+    loadGeneration.current = generation
+    const requestScopeKey = `${activeSpaceId ?? 'none'}:${runId}`
+    const isCurrentRequest = () => loadGeneration.current === generation
+
+    if (!runId) {
+      setResourceScopeKey(requestScopeKey)
+      return
+    }
     if (!activeSpaceId) {
       setActivities([])
       setArtifacts([])
       setProposals([])
+      setAttempts([])
+      setSupervisorDecisions([])
+      setEvaluations([])
+      setVerifications([])
+      setFinalizations([])
+      setRouteDecision(null)
+      setRouteDecisionError(null)
+      setSubresourceErrors({})
+      setResourceScopeKey(requestScopeKey)
       setTabLoading(false)
       return
     }
+
+    setResourceScopeKey(null)
+    setActivities([])
+    setArtifacts([])
+    setProposals([])
+    setAttempts([])
+    setSupervisorDecisions([])
+    setEvaluations([])
+    setVerifications([])
+    setFinalizations([])
+    setRouteDecision(null)
+    setRouteDecisionError(null)
+    setSubresourceErrors({})
     setTabLoading(true)
     try {
-      const [a, ar, pr] = await Promise.all([
-        runsApi.activities(runId, { limit: '100' }),
-        runsApi.artifacts(runId, { limit: '100' }),
-        runsApi.proposals(runId, { limit: '100' }),
+      const [a, ar, pr, attemptResult, nextEvaluations, nextVerifications, nextFinalizations, nextRoute] = await Promise.all([
+        loadOptionalRunResource(runsApi.activities(runId, { limit: '100' }), { items: [], total: 0, limit: 100, offset: 0 }),
+        loadOptionalRunResource(runsApi.artifacts(runId, { limit: '100' }), { items: [], total: 0, limit: 100, offset: 0 }),
+        loadOptionalRunResource(runsApi.proposals(runId, { limit: '100' }), { items: [], total: 0, limit: 100, offset: 0 }),
+        loadOptionalRunResource(runsApi.attempts(runId), { attempts: [], supervisor_decisions: [] }),
+        loadOptionalRunResource(runsApi.evaluations(runId), []),
+        loadOptionalRunResource(runsApi.verifications(runId), []),
+        loadOptionalRunResource(runsApi.finalizations(runId), []),
+        runsApi.routeDecision(runId)
+          .then(value => ({ value, error: null as string | null }))
+          .catch(error => ({ value: null, error: errMsg(error) })),
       ])
-      setActivities(a.items)
-      setArtifacts(ar.items)
-      setProposals(pr.items)
+      if (!isCurrentRequest()) return
+      setActivities(a.value.items)
+      setArtifacts(ar.value.items)
+      setProposals(pr.value.items)
+      setAttempts(attemptResult.value.attempts)
+      setSupervisorDecisions(attemptResult.value.supervisor_decisions)
+      setEvaluations(nextEvaluations.value)
+      setVerifications(nextVerifications.value)
+      setFinalizations(nextFinalizations.value)
+      setSubresourceErrors({
+        activities: a.error ?? undefined,
+        artifacts: ar.error ?? undefined,
+        proposals: pr.error ?? undefined,
+        attempts: attemptResult.error ?? undefined,
+        evaluations: nextEvaluations.error ?? undefined,
+        verifications: nextVerifications.error ?? undefined,
+        finalizations: nextFinalizations.error ?? undefined,
+      })
+      setRouteDecision(nextRoute.value)
+      setRouteDecisionError(nextRoute.error)
+      setResourceScopeKey(requestScopeKey)
     } catch (e) {
+      if (!isCurrentRequest()) return
+      setActivities([])
+      setArtifacts([])
+      setProposals([])
+      setAttempts([])
+      setSupervisorDecisions([])
+      setEvaluations([])
+      setVerifications([])
+      setFinalizations([])
+      setRouteDecision(null)
+      setRouteDecisionError(null)
+      setSubresourceErrors({})
+      setResourceScopeKey(requestScopeKey)
       toast.error(errMsg(e))
     } finally {
-      setTabLoading(false)
+      if (isCurrentRequest()) setTabLoading(false)
     }
   }, [runId, activeSpaceId])
 
@@ -119,6 +247,13 @@ export default function RunDetailPage() {
   useEffect(() => {
     setReloadKey(k => k + 1)
   }, [activeSpaceId])
+
+  useEffect(() => {
+    invalidateWorkflowPreview()
+    setWorkflowOpen(false)
+    setWorkflowName('')
+    setWorkflowDescription('')
+  }, [runId, activeSpaceId, invalidateWorkflowPreview])
 
   // Sub-resources are created when the run finishes; refetch when polling reaches a terminal status
   // (mount-only loadSubs() would leave tabs empty after queued → succeeded without leaving the page).
@@ -152,7 +287,98 @@ export default function RunDetailPage() {
     }
   }
 
-  if (loading && !polled) {
+  async function resumeWaitingRun() {
+    if (!runId) return
+    setRecoveryBusy(true)
+    try {
+      await runsApi.resume(runId)
+      toast.success('Run resumed and queued')
+      setReloadKey(k => k + 1)
+      await loadSubs()
+    } catch (e) {
+      toast.error(errMsg(e))
+    } finally {
+      setRecoveryBusy(false)
+    }
+  }
+
+  async function abandonWaitingRun() {
+    if (!runId) return
+    setRecoveryBusy(true)
+    try {
+      await runsApi.abandon(runId, { reason: abandonReason.trim() || undefined })
+      toast.success('Run abandoned')
+      setAbandonOpen(false)
+      setAbandonReason('')
+      setReloadKey(k => k + 1)
+      await loadSubs()
+    } catch (e) {
+      toast.error(errMsg(e))
+    } finally {
+      setRecoveryBusy(false)
+    }
+  }
+
+  async function previewWorkflow() {
+    if (!runId || !activeSpaceId) return
+    const generation = workflowPreviewGeneration.current + 1
+    workflowPreviewGeneration.current = generation
+    const requestRunId = runId
+    const requestSpaceId = activeSpaceId
+    const requestName = workflowName.trim() || undefined
+    const requestDescription = workflowDescription.trim() || undefined
+    const isCurrentRequest = () => (
+      workflowPreviewGeneration.current === generation
+      && workflowPreviewStateRef.current.runId === requestRunId
+      && workflowPreviewStateRef.current.activeSpaceId === requestSpaceId
+      && workflowPreviewStateRef.current.name === requestName
+      && workflowPreviewStateRef.current.description === requestDescription
+    )
+
+    clearWorkflowPreview()
+    setWorkflowBusy(true)
+    try {
+      const preview = await evolutionApi.previewWorkflowFromRun({
+        run_id: requestRunId,
+        display_name: requestName,
+        description: requestDescription,
+      })
+      if (isCurrentRequest()) {
+        setWorkflowPreview(preview)
+        setWorkflowPreviewScopeKey(`${requestSpaceId}:${requestRunId}`)
+      }
+    } catch (e) {
+      if (isCurrentRequest()) {
+        clearWorkflowPreview()
+        toast.error(errMsg(e))
+      }
+    } finally {
+      if (workflowPreviewGeneration.current === generation) setWorkflowBusy(false)
+    }
+  }
+
+  async function saveWorkflow() {
+    if (!runId || !activeSpaceId || !workflowPreview || workflowPreviewScopeKey !== `${activeSpaceId}:${runId}`) return
+    setWorkflowBusy(true)
+    try {
+      const result = await evolutionApi.saveWorkflowFromRun({
+        run_id: runId,
+        display_name: workflowName.trim() || undefined,
+        description: workflowDescription.trim() || undefined,
+      })
+      toast.success(result.status === 'proposal_required' ? 'Workflow proposal created for review' : 'Workflow draft saved')
+      setWorkflowOpen(false)
+      clearWorkflowPreview()
+    } catch (e) { toast.error(errMsg(e)) } finally { setWorkflowBusy(false) }
+  }
+
+  const currentResourceScopeKey = `${activeSpaceId ?? 'none'}:${runId}`
+  const resourcesReady = resourceScopeKey === currentResourceScopeKey
+  const polledMatchesScope = Boolean(
+    polled && polled.id === runId && polled.space_id === activeSpaceId,
+  )
+
+  if ((loading && !polled) || (polled !== null && !polledMatchesScope)) {
     return (
       <div className="p-6 space-y-4 max-w-4xl">
         <Skeleton className="h-10 w-64" />
@@ -204,6 +430,7 @@ export default function RunDetailPage() {
   const promptRefs = promptRefsForRun(r)
 
   return (
+    <>
     <div className="p-6 space-y-6 max-w-4xl">
       <Button variant="ghost" size="sm" asChild>
         <Link to="/runs"><ArrowLeft className="size-4" /></Link>
@@ -212,7 +439,7 @@ export default function RunDetailPage() {
       <div className="space-y-3 border-b border-border pb-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <h1 className="text-xl font-semibold tracking-tight font-mono">{r.id}</h1>
-          <ContentAccessControl resourceType="run" resourceId={r.id} ownerUserId={r.owner_user_id ?? null} />
+          <div className="flex flex-wrap items-center gap-2"><ContentAccessControl resourceType="run" resourceId={r.id} ownerUserId={r.owner_user_id ?? null} />{r.status === 'waiting_for_review' && <><Button size="sm" onClick={() => void resumeWaitingRun()} disabled={recoveryBusy}><UserRoundCheck className="size-3.5" /> Resume</Button><Button size="sm" variant="destructive" onClick={() => setAbandonOpen(true)} disabled={recoveryBusy}><XCircle className="size-3.5" /> Abandon</Button></>}{(r.status === 'succeeded' || r.status === 'degraded') && <Button size="sm" variant="outline" onClick={() => setWorkflowOpen(true)}><Save className="size-3.5" /> Save as workflow</Button>}</div>
         </div>
         <p className="text-xs text-muted-foreground">Viewing: {activeSpaceName ?? activeSpaceId ?? 'No operational space selected'}</p>
         <div className="flex flex-wrap gap-1.5 items-center">
@@ -347,10 +574,14 @@ export default function RunDetailPage() {
           <TabsTrigger value="activities">Activities</TabsTrigger>
           <TabsTrigger value="artifacts">Artifacts</TabsTrigger>
           <TabsTrigger value="proposals">Proposals</TabsTrigger>
+          <TabsTrigger value="contract">Contract</TabsTrigger>
+          <TabsTrigger value="verification">Verification</TabsTrigger>
+          <TabsTrigger value="route">Route</TabsTrigger>
+          <TabsTrigger value="attempts">Attempts ({resourcesReady ? attempts.length : 0})</TabsTrigger>
         </TabsList>
 
         <TabsContent value="activities" className="mt-4 space-y-3">
-          {tabLoading ? <Skeleton className="h-24 w-full" /> : activities.length === 0 ? (
+          {tabLoading || !resourcesReady ? <Skeleton className="h-24 w-full" /> : subresourceErrors.activities ? <EmptyState title="Activities unavailable" description={subresourceErrors.activities} /> : activities.length === 0 ? (
             <Card className="p-8 text-center text-sm text-muted-foreground">No activities.</Card>
           ) : (
             activities.map(act => (
@@ -373,7 +604,7 @@ export default function RunDetailPage() {
         </TabsContent>
 
         <TabsContent value="artifacts" className="mt-4 space-y-3">
-          {tabLoading ? <Skeleton className="h-24 w-full" /> : artifacts.length === 0 ? (
+          {tabLoading || !resourcesReady ? <Skeleton className="h-24 w-full" /> : subresourceErrors.artifacts ? <EmptyState title="Artifacts unavailable" description={subresourceErrors.artifacts} /> : artifacts.length === 0 ? (
             <Card className="p-8 text-center text-sm text-muted-foreground">No artifacts.</Card>
           ) : (
             artifacts.map(a => (
@@ -399,7 +630,7 @@ export default function RunDetailPage() {
         </TabsContent>
 
         <TabsContent value="proposals" className="mt-4 space-y-3">
-          {tabLoading ? <Skeleton className="h-24 w-full" /> : proposals.length === 0 ? (
+          {tabLoading || !resourcesReady ? <Skeleton className="h-24 w-full" /> : subresourceErrors.proposals ? <EmptyState title="Proposals unavailable" description={subresourceErrors.proposals} /> : proposals.length === 0 ? (
             <Card className="p-8 text-center text-sm text-muted-foreground">No proposals.</Card>
           ) : (
             proposals.map(p => (
@@ -435,7 +666,36 @@ export default function RunDetailPage() {
             ))
           )}
         </TabsContent>
+
+        <TabsContent value="contract" className="mt-4 space-y-3">
+          <Card className="p-4"><div className="mb-3 flex items-center gap-2"><ShieldCheck className="size-4 text-muted-foreground" /><h2 className="text-sm font-semibold">Immutable run contract</h2></div><div className="mb-3 flex flex-wrap gap-1.5"><Badge variant="outline">sandbox {r.required_sandbox_level ?? 'unknown'}</Badge><Badge variant="secondary">workflow {r.workflow_version_id ?? 'static/fallback'}</Badge></div><JsonBlock value={r.contract_snapshot_json} /></Card>
+        </TabsContent>
+
+        <TabsContent value="verification" className="mt-4 space-y-3">
+          <Card className="p-4"><h2 className="text-sm font-semibold">Verification results</h2>{!resourcesReady ? <Skeleton className="mt-3 h-24 w-full" /> : subresourceErrors.verifications ? <EmptyState title="Verification results unavailable" description={subresourceErrors.verifications} /> : verifications.length === 0 ? <p className="mt-3 text-sm text-muted-foreground">No verification results recorded.</p> : <div className="mt-3 space-y-2">{verifications.map(result => <div key={result.id} className="rounded-md border border-border p-3"><div className="flex flex-wrap items-center gap-1.5"><StatusBadge status={result.status} /><Badge variant="outline">{result.verifier_type}</Badge><span className="text-xs text-muted-foreground">{result.verifier_version}</span></div><p className="mt-1 text-sm text-muted-foreground">{result.summary ?? '—'}</p></div>)}</div>}</Card>
+          <Card className="p-4"><h2 className="text-sm font-semibold">Post-run evaluations</h2>{!resourcesReady ? <Skeleton className="mt-3 h-24 w-full" /> : subresourceErrors.evaluations ? <EmptyState title="Evaluations unavailable" description={subresourceErrors.evaluations} /> : evaluations.length === 0 ? <p className="mt-3 text-sm text-muted-foreground">No evaluation records.</p> : <div className="mt-3 space-y-2">{evaluations.map(evaluation => <div key={evaluation.id} className="rounded-md border border-border p-3"><div className="flex flex-wrap items-center gap-1.5"><StatusBadge status={evaluation.outcome_status} /><Badge variant="outline">{evaluation.evaluator_type}</Badge><span className="text-xs text-muted-foreground">{fmt(evaluation.evaluated_at)}</span></div><p className="mt-1 text-xs text-muted-foreground">{evaluation.failure_reason_code ?? 'No failure reason'}</p></div>)}</div>}</Card>
+          <Card className="p-4"><h2 className="text-sm font-semibold">Finalization history</h2>{!resourcesReady ? <Skeleton className="mt-3 h-24 w-full" /> : subresourceErrors.finalizations ? <EmptyState title="Finalization history unavailable" description={subresourceErrors.finalizations} /> : finalizations.length === 0 ? <p className="mt-3 text-sm text-muted-foreground">No finalization records.</p> : <div className="mt-3 space-y-2">{finalizations.map(finalization => <div key={finalization.id} className="flex flex-wrap items-center gap-1.5 rounded-md border border-border p-3"><Badge variant="outline">attempt {finalization.attempt_number}</Badge><StatusBadge status={finalization.outcome_status} /><span className="text-xs text-muted-foreground">{finalization.finalizer_version}</span></div>)}</div>}</Card>
+        </TabsContent>
+
+        <TabsContent value="route" className="mt-4"><Card className="p-4"><h2 className="mb-3 text-sm font-semibold">Route decision</h2>{!resourcesReady ? <Skeleton className="h-24 w-full" /> : routeDecisionError ? <EmptyState title="Route decision unavailable" description={routeDecisionError} /> : routeDecision ? <JsonBlock value={routeDecision} /> : <EmptyState title="No persisted route decision" description="This run did not produce a durable routing decision." />}</Card></TabsContent>
+
+        <TabsContent value="attempts" className="mt-4 space-y-3"><Card className="p-4"><h2 className="text-sm font-semibold">Execution attempts</h2>{!resourcesReady ? <Skeleton className="h-24 w-full" /> : subresourceErrors.attempts ? <EmptyState title="Attempts unavailable" description={subresourceErrors.attempts} /> : attempts.length === 0 ? <p className="mt-3 text-sm text-muted-foreground">No attempt records.</p> : <div className="mt-3 space-y-2">{attempts.map(attempt => <div key={attempt.id} className="rounded-md border border-border p-3"><div className="flex flex-wrap items-center gap-1.5"><Badge variant="outline">attempt {attempt.attempt_number}</Badge><StatusBadge status={attempt.status} /><span className="text-xs text-muted-foreground">{fmt(attempt.started_at)} → {fmt(attempt.ended_at)}</span></div>{attempt.error_code && <p className="mt-1 text-xs text-destructive">{attempt.error_code}</p>}</div>)}</div>}</Card><Card className="p-4"><h2 className="text-sm font-semibold">Supervisor decisions</h2>{!resourcesReady ? <Skeleton className="h-24 w-full" /> : subresourceErrors.attempts ? <EmptyState title="Supervisor decisions unavailable" description={subresourceErrors.attempts} /> : supervisorDecisions.length === 0 ? <p className="mt-3 text-sm text-muted-foreground">No supervisor decisions.</p> : <div className="mt-3 space-y-2">{supervisorDecisions.map(decision => <div key={decision.id} className="flex flex-wrap items-center gap-1.5 rounded-md border border-border p-3"><Badge variant="secondary">{decision.decision}</Badge><Badge variant="outline">{decision.reason_code}</Badge><span className="text-xs text-muted-foreground">{fmt(decision.created_at)}</span></div>)}</div>}</Card></TabsContent>
       </Tabs>
     </div>
+
+      <Dialog open={workflowOpen} onOpenChange={open => {
+        setWorkflowOpen(open)
+        if (!open) invalidateWorkflowPreview()
+      }}>
+        <DialogContent className="max-w-3xl"><DialogHeader><DialogTitle>Save run as workflow</DialogTitle><DialogDescription>This creates a draft or a proposal depending on the source run's risk. Preview is read-only and uses the server's verified evidence.</DialogDescription></DialogHeader><div className="space-y-4"><div className="space-y-1.5"><Label>Display name</Label><Input value={workflowName} onChange={event => { invalidateWorkflowPreview(); setWorkflowName(event.target.value) }} placeholder="Saved workflow" /></div><div className="space-y-1.5"><Label>Description</Label><Textarea value={workflowDescription} onChange={event => { invalidateWorkflowPreview(); setWorkflowDescription(event.target.value) }} placeholder="What should this workflow be reused for?" /></div>{workflowPreview && workflowPreviewScopeKey === `${activeSpaceId}:${runId}` && <JsonBlock value={workflowPreview} />}</div><DialogFooter><Button variant="outline" onClick={() => void previewWorkflow()} disabled={workflowBusy}>{workflowBusy && <Loader2 className="size-3.5 animate-spin" />} Preview</Button><Button onClick={() => void saveWorkflow()} disabled={workflowBusy || workflowPreviewScopeKey !== `${activeSpaceId}:${runId}` || !workflowPreview}>{workflowBusy && <Loader2 className="size-3.5 animate-spin" />} Save workflow</Button></DialogFooter></DialogContent>
+      </Dialog>
+      <Dialog open={abandonOpen} onOpenChange={open => { if (!recoveryBusy) setAbandonOpen(open) }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Abandon waiting Run</DialogTitle><DialogDescription>This marks the Run cancelled and finalizes its audit record. It cannot be resumed afterwards.</DialogDescription></DialogHeader>
+          <div className="space-y-1.5"><Label>Reason (optional)</Label><Textarea value={abandonReason} onChange={event => setAbandonReason(event.target.value)} placeholder="Why is this review being abandoned?" /></div>
+          <DialogFooter><Button variant="ghost" onClick={() => setAbandonOpen(false)} disabled={recoveryBusy}>Cancel</Button><Button variant="destructive" onClick={() => void abandonWaitingRun()} disabled={recoveryBusy}>{recoveryBusy && <Loader2 className="size-3.5 animate-spin" />} Abandon Run</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }

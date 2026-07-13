@@ -96,6 +96,7 @@ export const tasks = pgTable("tasks", {
 	boardId: varchar("board_id", { length: 36 }),
 	columnId: varchar("column_id", { length: 36 }),
 	parentTaskId: varchar("parent_task_id", { length: 36 }),
+	taskRole: varchar("task_role", { length: 32 }).default('source').notNull(),
 	title: varchar({ length: 512 }).notNull(),
 	description: text(),
 	taskType: varchar("task_type", { length: 64 }).default('general').notNull(),
@@ -138,10 +139,12 @@ export const tasks = pgTable("tasks", {
 	index("ix_tasks_board_id").using("btree", table.boardId.asc().nullsLast()),
 	index("ix_tasks_column_id").using("btree", table.columnId.asc().nullsLast()),
 	index("ix_tasks_parent_task_id").using("btree", table.parentTaskId.asc().nullsLast()),
+	index("ix_tasks_role").using("btree", table.spaceId.asc().nullsLast(), table.taskRole.asc().nullsLast()),
 	index("ix_tasks_owner_user_id").using("btree", table.ownerUserId.asc().nullsLast()),
 	index("ix_tasks_project_id").using("btree", table.projectId.asc().nullsLast()),
 	index("ix_tasks_space_id").using("btree", table.spaceId.asc().nullsLast()),
 	index("ix_tasks_workspace_id").using("btree", table.workspaceId.asc().nullsLast()),
+	unique("uq_tasks_id_space_id").on(table.id, table.spaceId),
 	foreignKey({
 			columns: [table.assignedAgentId],
 			foreignColumns: [agents.id],
@@ -230,6 +233,7 @@ export const tasks = pgTable("tasks", {
 	check("ck_tasks_visibility", sql`visibility IN ('private', 'space_shared', 'selected_users')`),
 	check("ck_tasks_access_level", sql`access_level IN ('full', 'summary')`),
 	check("ck_tasks_private_owner", sql`visibility = 'space_shared' OR owner_user_id IS NOT NULL`),
+	check("ck_tasks_role", sql`task_role IN ('source', 'subtask')`),
 ]);
 
 export const taskArtifacts = pgTable("task_artifacts", {

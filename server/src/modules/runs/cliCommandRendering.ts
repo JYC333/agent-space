@@ -1,4 +1,8 @@
-import type { LocalCliRuntimeAdapterSpec } from "../runtimeAdapters";
+import {
+  assertRuntimeSubagentsDisabled,
+  RuntimeSubagentConfigError,
+  type LocalCliRuntimeAdapterSpec,
+} from "../runtimeAdapters";
 
 export interface RenderedCliCommand {
   argv: string[];
@@ -31,11 +35,25 @@ export async function renderCliCommand(
     sandbox_cwd: string | null;
   },
 ): Promise<RenderedCliCommand> {
+  try {
+    await assertRuntimeSubagentsDisabled(spec, input.sandbox_cwd);
+  } catch (error) {
+    throw new CliRenderError(
+      "runtime_subagents_not_disabled",
+      error instanceof RuntimeSubagentConfigError
+        ? error.message
+        : "Runtime subagent disablement could not be verified.",
+    );
+  }
   const template =
     input.mode === "interactive" && spec.invocation.interactive_command_template
       ? spec.invocation.interactive_command_template
       : spec.invocation.headless_command_template;
-  const values = { executable: input.executable, prompt: input.prompt };
+  const values = {
+    executable: input.executable,
+    prompt: input.prompt,
+    sandbox_cwd: input.sandbox_cwd ?? "",
+  };
   const argv = renderTemplate(template, values);
   const redacted = renderTemplate(template, { ...values, prompt: "[REDACTED_PROMPT]" });
 

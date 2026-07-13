@@ -328,6 +328,8 @@ async function buildWorkflowRunDraft(input: {
       run_type: "agent",
       trigger_origin: "manual",
       project_id: projectId,
+      workflow_template_id: template.id,
+      workflow_config_json: config,
       agent_id: agentId ?? null,
       runtime_profile_id: runtimeProfileId,
       workspace_id: optionalString(request.workspace_id),

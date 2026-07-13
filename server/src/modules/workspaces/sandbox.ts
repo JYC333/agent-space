@@ -54,10 +54,7 @@ export class PgWorkspaceManager implements RunWorkspaceManagerPort {
     if (level === "none" || level === "dry_run") {
       return emptyPreparedWorkspace();
     }
-    if (level === "one_shot_docker") {
-      throw new HttpError(501, "one_shot_docker sandbox execution is not implemented");
-    }
-    if (level !== "worktree" && level !== "ephemeral") {
+    if (level !== "worktree" && level !== "ephemeral" && level !== "one_shot_docker") {
       throw new HttpError(422, `Unsupported sandbox level ${JSON.stringify(level)}`);
     }
 

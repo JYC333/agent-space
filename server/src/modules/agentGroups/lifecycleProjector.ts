@@ -158,7 +158,7 @@ function delegationIds(run: RunRecord): {
 function delegationStatusForRun(status: string): DelegationTerminalStatus | null {
   if (status === "succeeded") return "succeeded";
   if (status === "cancelled") return "cancelled";
-  if (status === "failed" || status === "degraded") return "failed";
+  if (status === "failed" || status === "degraded" || status === "orphaned") return "failed";
   return null;
 }
 
@@ -194,7 +194,7 @@ function stringValue(value: unknown): string | null {
 }
 
 function groupedRunMessageContent(run: RunRecord): string | null {
-  if (run.status === "failed" || run.status === "cancelled") return null;
+  if (run.status === "failed" || run.status === "cancelled" || run.status === "orphaned") return null;
   const output = recordValue(run.output_json);
   const text = stringValue(output.output_text)
     ?? stringValue(output.summary)
@@ -206,7 +206,8 @@ function isTerminalRunStatus(status: string): boolean {
   return status === "succeeded" ||
     status === "failed" ||
     status === "cancelled" ||
-    status === "degraded";
+    status === "degraded" ||
+    status === "orphaned";
 }
 
 function truncateResultSummary(value: string): string {

@@ -6,6 +6,7 @@ import { PgRunRepository } from "./repository";
 import { sharedCliProcessRegistry } from "./processRegistry";
 import { ContextPrepareService } from "../context";
 import { PgCodePatchCollector, PgWorkspaceManager } from "../workspaces";
+import { PgVerificationEngine } from "./verification";
 import type { JobEnvelopeForHandler, JobHandlerRegistry } from "../jobs/handlerRegistry";
 import type { JobHandlerResult } from "../jobs/handlerRegistry";
 import { PgJobQueueRepository } from "../jobs/repository";
@@ -24,6 +25,7 @@ export function registerAgentRunHandler(
     contextPreparer,
     workspaceManager: PgWorkspaceManager.fromConfig(config),
     codePatchCollector: PgCodePatchCollector.fromConfig(config),
+    verificationEngine: PgVerificationEngine.fromConfig(config),
     processRegistry: sharedCliProcessRegistry,
   });
 

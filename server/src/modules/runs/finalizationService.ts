@@ -5,10 +5,17 @@ import {
   type RunRecord,
 } from "./repository";
 import type { EvolutionRunEvaluationForSolidifier } from "../evolution/solidifier";
+import { EvolutionSignalEmitter } from "../evolution/signalEmitters";
+import {
+  hasDeclaredVerificationChecks,
+  summarizeVerificationResults,
+} from "./verification";
+import type { VerificationResultRecord } from "./verification";
+import type { RunSupervisorPort } from "./supervisor";
 
 export const RUN_FINALIZER_VERSION = "post_run_finalization.v1";
 
-const TERMINAL_STATUSES = new Set(["succeeded", "failed", "degraded", "cancelled"]);
+const TERMINAL_STATUSES = new Set(["succeeded", "failed", "degraded", "cancelled", "orphaned"]);
 
 const EXACT_ERROR_CODE_MAP: Record<string, { layer: string; reason: string }> = {
   context_snapshot_population_failed: {
@@ -16,9 +23,17 @@ const EXACT_ERROR_CODE_MAP: Record<string, { layer: string; reason: string }> = 
     reason: "context_snapshot_population_failed",
   },
   sandbox_required: { layer: "sandbox", reason: "sandbox_required" },
-  critical_runtime_requires_unimplemented_one_shot_docker: {
+  docker_sandbox_not_supported: {
     layer: "sandbox",
-    reason: "critical_runtime_requires_unimplemented_one_shot_docker",
+    reason: "docker_sandbox_not_supported",
+  },
+  docker_network_policy_denied: {
+    layer: "sandbox",
+    reason: "docker_network_policy_denied",
+  },
+  docker_sandbox_unavailable: {
+    layer: "sandbox",
+    reason: "docker_sandbox_unavailable",
   },
   file_access_adapter_requires_worktree_policy: {
     layer: "policy",
@@ -27,6 +42,7 @@ const EXACT_ERROR_CODE_MAP: Record<string, { layer: string; reason: string }> = 
   credentials_missing: { layer: "policy", reason: "credentials_missing" },
   adapter_runtime_error: { layer: "runtime", reason: "adapter_runtime_error" },
   runtime_removed: { layer: "runtime", reason: "runtime_removed" },
+  orphaned: { layer: "orchestration", reason: "orphaned" },
   duplicate_execution: { layer: "orchestration", reason: "duplicate_execution" },
   run_cancelled: { layer: "orchestration", reason: "run_cancelled" },
   validation_failed: { layer: "validation", reason: "validation_failed" },
@@ -70,10 +86,22 @@ export interface EvolutionRunEvaluationSolidifier {
   ): Promise<{ id: string } | null>;
 }
 
+export interface RunEstimatedCostReader {
+  getRunEstimatedCost(spaceId: string, runId: string): Promise<number | null>;
+}
+
+export interface ExecutionGraphReconciler {
+  reconcileForRun(spaceId: string, runId: string, userId: string): Promise<void>;
+}
+
 export class PostRunFinalizationService {
   constructor(
     private readonly repository: PgRunRepository,
     private readonly evolutionSolidifier?: EvolutionRunEvaluationSolidifier,
+    private readonly evolutionSignalEmitter?: EvolutionSignalEmitter,
+    private readonly runEstimatedCostReader?: RunEstimatedCostReader,
+    private readonly executionGraphReconciler?: ExecutionGraphReconciler,
+    private readonly supervisor?: RunSupervisorPort,
   ) {}
 
   async finalize(runId: string, spaceId: string): Promise<RunFinalizationRecord> {
@@ -87,14 +115,40 @@ export class PostRunFinalizationService {
       );
     }
 
+    const attemptNumber = await this.currentAttemptNumber(run);
     const existing = await this.repository.getRunFinalizationByVersion(
       spaceId,
       runId,
+      attemptNumber,
       RUN_FINALIZER_VERSION,
     );
-    if (existing) return existing;
+    if (existing) {
+      const verificationResults = await this.repository.listVerificationResults(spaceId, runId);
+      const repeatedEvaluation = {
+        id: existing.run_evaluation_id,
+        outcome_status: existing.outcome_status ?? "unknown",
+        failure_layer: existing.failure_layer,
+        failure_reason_code: isSupervisableStatus(run.status)
+          ? stringValue(recordValue(run.error_json).error_code) ?? existing.failure_reason_code
+          : existing.failure_reason_code,
+        trajectory_status: existing.trajectory_status,
+      };
+      await this.emitSignalsBestEffort({
+        run,
+        estimated_cost_usd: await this.estimatedCostBestEffort(spaceId, runId),
+        evaluation: repeatedEvaluation,
+        verification: summarizeVerificationResults(verificationResults),
+        repeated: true,
+      });
+      if (isSupervisableStatus(run.status)) {
+        await this.superviseBestEffort(run, repeatedEvaluation);
+      }
+      const currentRun = await this.repository.getRun(spaceId, runId);
+      await this.reconcileExecutionGraphBestEffort(currentRun ?? run);
+      return existing;
+    }
 
-    const evaluation = await this.evaluate(run);
+    const evaluation = await this.evaluate(run, attemptNumber);
     const now = new Date().toISOString();
     const taskBridge = await this.repository.bridgeTaskEvaluationForRunEvaluation(
       spaceId,
@@ -105,6 +159,7 @@ export class PostRunFinalizationService {
     const finalization = await this.repository.insertRunFinalization({
       space_id: spaceId,
       run_id: runId,
+      attempt_number: attemptNumber,
       finalizer_version: RUN_FINALIZER_VERSION,
       status: "completed",
       run_evaluation_id: evaluation.id,
@@ -116,10 +171,18 @@ export class PostRunFinalizationService {
       skipped_reasons_json: skippedReasons,
       metadata_json: {
         finalizer_version: RUN_FINALIZER_VERSION,
+        attempt_number: attemptNumber,
         evolution_experience_id: evolutionExperience?.id ?? null,
       },
       finalized_at: now,
       created_at: now,
+    });
+    const verificationResults = await this.repository.listVerificationResults(spaceId, runId);
+    await this.emitSignalsBestEffort({
+      run,
+      estimated_cost_usd: await this.estimatedCostBestEffort(spaceId, runId),
+      evaluation,
+      verification: summarizeVerificationResults(verificationResults),
     });
     try {
       await this.repository.appendRunEvent({
@@ -140,10 +203,64 @@ export class PostRunFinalizationService {
       // RunEvent is an append-only audit log. A missed audit event must not
       // turn a completed finalization into a failed one.
     }
+    await this.superviseBestEffort(run, evaluation);
+    const currentRun = await this.repository.getRun(spaceId, runId);
+    await this.reconcileExecutionGraphBestEffort(currentRun ?? run);
     return finalization;
   }
 
-  private async evaluate(run: RunRecord): Promise<RunEvaluationRecord> {
+  private async superviseBestEffort(
+    run: RunRecord,
+    evaluation: Pick<RunEvaluationRecord, "failure_reason_code" | "outcome_status">,
+  ): Promise<void> {
+    if (!this.supervisor) return;
+    try {
+      await this.supervisor.supervise({ run, evaluation });
+    } catch {
+      // Supervisor recovery is idempotent and retried by explicit finalization
+      // or the worker. A finalized evaluation must remain durable if enqueue
+      // or policy bookkeeping is temporarily unavailable.
+    }
+  }
+
+  private async reconcileExecutionGraphBestEffort(run: RunRecord): Promise<void> {
+    if (!this.executionGraphReconciler) return;
+    const userId = run.owner_user_id ?? run.instructed_by_user_id ?? "system";
+    try {
+      await this.executionGraphReconciler.reconcileForRun(run.space_id, run.id, userId);
+    } catch {
+      // Reconciliation is idempotent and best-effort. A terminal run and its
+      // finalization remain durable even if the scheduler needs a later retry.
+    }
+  }
+
+  private async estimatedCostBestEffort(spaceId: string, runId: string): Promise<number | null> {
+    if (!this.runEstimatedCostReader) return null;
+    try {
+      return await this.runEstimatedCostReader.getRunEstimatedCost(spaceId, runId);
+    } catch {
+      return null;
+    }
+  }
+
+  private async currentAttemptNumber(run: RunRecord): Promise<number> {
+    const getLatestRunAttempt = this.repository.getLatestRunAttempt;
+    if (typeof getLatestRunAttempt !== "function") return 1;
+    const attempt = await getLatestRunAttempt.call(this.repository, run.space_id, run.id);
+    return attempt?.attempt_number && attempt.attempt_number > 0 ? attempt.attempt_number : 1;
+  }
+
+  private async emitSignalsBestEffort(input: Parameters<EvolutionSignalEmitter["emitRunFinalization"]>[0]): Promise<void> {
+    if (!this.evolutionSignalEmitter) return;
+    try {
+      await this.evolutionSignalEmitter.emitRunFinalization(input);
+    } catch {
+      // Evolution telemetry is advisory. A signal write must not change the
+      // run's finalization result or make a retry appear to have failed.
+    }
+  }
+
+  private async evaluate(run: RunRecord, attemptNumber: number): Promise<RunEvaluationRecord> {
     const [steps, events] = await Promise.all([
       this.repository.listRunSteps(run.space_id, run.id),
       this.repository.listRunEvents(run.space_id, run.id),
@@ -160,8 +277,11 @@ export class PostRunFinalizationService {
       ...collectErrorCodes(run.output_json),
       ...stepErrorCodes,
     ]);
-    const mapped = mapFailure(errorCodes);
-    const outcome = outcomeForRun(run, mapped.reason);
+    const verificationResults = await this.repository.listVerificationResults(run.space_id, run.id);
+    const verification = summarizeVerificationResults(verificationResults);
+    const verificationFailure = verificationFailureForRun(run, verificationResults);
+    const mapped = mapFailure(errorCodes, verificationFailure);
+    const outcome = outcomeForRun(run, mapped.reason, verification);
     const now = new Date().toISOString();
     return this.repository.insertRunEvaluation({
       space_id: run.space_id,
@@ -172,18 +292,28 @@ export class PostRunFinalizationService {
       trajectory_status: outcome.trajectory_status,
       evidence_json: {
         run_status: run.status,
+        attempt_number: attemptNumber,
         event_count: events.length,
         step_count: steps.length,
         event_types: events.map((event) => event.event_type),
         error_codes: errorCodes,
         required_sandbox_level: run.required_sandbox_level,
         adapter_type: run.adapter_type,
+        verification,
+        verification_results: verificationResults.map((result) => ({
+          verifier_type: result.verifier_type,
+          verifier_version: result.verifier_version,
+          status: result.status,
+          summary: result.summary,
+        })),
       },
       rule_trace_json: [
         {
           rule: "ts_post_run_finalization.v1",
           terminal_status: run.status,
+          attempt_number: attemptNumber,
           mapped_failure_reason: mapped.reason,
+          verification_status: verification.status,
         },
       ],
       notes: null,
@@ -195,8 +325,18 @@ export class PostRunFinalizationService {
 function outcomeForRun(
   run: RunRecord,
   failureReason: string | null,
+  verification: ReturnType<typeof summarizeVerificationResults>,
 ): { outcome_status: string; trajectory_status: string } {
   if (run.status === "succeeded") {
+    if (failureReason === "verification_missing" || failureReason === "verification_incomplete") {
+      return { outcome_status: "unknown", trajectory_status: "insufficient_evidence" };
+    }
+    if (verification.status === "failed") {
+      return { outcome_status: "failed", trajectory_status: "incomplete" };
+    }
+    if (verification.status === "incomplete") {
+      return { outcome_status: "unknown", trajectory_status: "insufficient_evidence" };
+    }
     return failureReason
       ? { outcome_status: "partial", trajectory_status: "incomplete" }
       : { outcome_status: "passed", trajectory_status: "acceptable" };
@@ -210,13 +350,31 @@ function outcomeForRun(
   return { outcome_status: "failed", trajectory_status: "incomplete" };
 }
 
-function mapFailure(errorCodes: string[]): { layer: string | null; reason: string | null } {
+function mapFailure(
+  errorCodes: string[],
+  verificationFailure: string | null,
+): { layer: string | null; reason: string | null } {
   for (const code of errorCodes) {
     const mapped = EXACT_ERROR_CODE_MAP[code];
     if (mapped) return { layer: mapped.layer, reason: mapped.reason };
   }
+  if (verificationFailure) return { layer: "validation", reason: verificationFailure };
   if (errorCodes.length > 0) return { layer: "unknown", reason: errorCodes[0] };
   return { layer: null, reason: null };
+}
+
+function verificationFailureForRun(
+  run: RunRecord,
+  results: VerificationResultRecord[],
+): string | null {
+  const declared = hasDeclaredVerificationChecks(run);
+  if (!declared) return null;
+  if (results.length === 0) return "verification_missing";
+  if (results.some((result) => result.status === "failed" || result.status === "error")) {
+    return "verification_failed";
+  }
+  if (results.some((result) => result.status === "skipped")) return "verification_incomplete";
+  return null;
 }
 
 function collectErrorCodes(value: unknown): string[] {
@@ -230,4 +388,16 @@ function collectErrorCodes(value: unknown): string[] {
 
 function dedupe(values: string[]): string[] {
   return [...new Set(values)];
+}
+
+function isSupervisableStatus(status: string): boolean {
+  return status === "failed" || status === "degraded" || status === "orphaned";
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }

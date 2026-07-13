@@ -14,7 +14,7 @@ Provide risk-proportionate isolation for agent runs. Two distinct concerns:
 | `dry_run`         | —            | nowhere (no adapter exec)         | —                   | —                 | No             |
 | `ephemeral`       | run          | server throwaway dir (no git)         | ✓ system scratch    | ✗                 | No             |
 | `worktree`        | repo         | server process             | ✓ git worktree      | ✗                 | **No**         |
-| `one_shot_docker` | —            | not currently available           | planned             | planned           | Planned        |
+| `one_shot_docker` | worktree/plain dir | Docker sandbox executor       | ✓                  | ✓                | Yes            |
 
 **File-access adapter rule (`claude_code` / `codex_cli`):** the working-directory
 scope is resolved from workspace binding + risk (working-dir scope ladder, slice-1):
@@ -27,7 +27,8 @@ scope is resolved from workspace binding + risk (working-dir scope ladder, slice
 - **Workspace bound → `worktree`** (repo-scope): requires `risk_level=high`;
   the coding/mutating path with diff → `code_patch` proposal.
 - **`high`/`critical` are never downgraded (B13):** high→worktree (needs a
-  workspace), critical→one_shot_docker (fail-closed, unimplemented).
+  workspace), critical→one_shot_docker. If Docker is unavailable, the run
+  fails closed; it never falls back to a server subprocess.
 
 A file-access adapter that resolves to a non-isolating level (`none`/`dry_run`)
 fails before the `adapter_started` RunStep with
@@ -45,10 +46,14 @@ Provides workspace isolation only — the process has the same access as the
 server container.
 Appropriate for trusted personal/family use where you control the deployment.
 
-**`one_shot_docker` (critical/future):**
-One-shot Docker is the intended hard-isolation path, but it is not currently active in
-the backend product path. Critical/high paths that require Docker process isolation
-must fail closed rather than silently downgrading to worktree execution.
+**`one_shot_docker` (critical):**
+The server prepares the same run-scoped worktree/plain directory used for the
+run, then `DockerCliCommandExecutor` mounts it at `/workspace`. The executor
+mounts the instance runtime-tools tree read-only and at most one credential
+profile read-only. It uses `--network none`, a read-only root, dropped
+capabilities, `no-new-privileges`, PID/CPU/memory limits, and bounded tmpfs.
+Provider-proxy and network-profile execution is rejected until an explicit
+egress-enabled Docker policy is reviewed.
 
 ## Owns
 - `SandboxManager` — creates sandbox environments per run
@@ -73,16 +78,18 @@ diff / artifacts created in sandboxes/{run_id}/
 
 The workspace root must be a git repository; validation fails before sandbox creation if it is not.
 
-## Docker Sandbox Flow (planned)
+## Docker Sandbox Flow
 
 ```
 sandboxes/{run_id}/          ← writable sandbox dir
     ↓  ContextCompiler writes CLAUDE.md / AGENTS.md here
 DockerExecutor: docker run --rm
     -v {host_sandbox_dir}:/workspace      (rw)
-    -v {host_workspace}:/workspace/repo   (ro, optional)
-    --memory=1g --cpus=1
-    --network=bridge
+    -v {host_runtime_tools}:/runtime-tools (ro)
+    -v {host_credential_profile}:/home/sandbox/.runtime-profile (ro, optional)
+    --memory=1g --cpus=1 --pids-limit=256
+    --read-only --cap-drop=ALL --security-opt=no-new-privileges
+    --network=none --tmpfs=/tmp:rw,noexec,nosuid,size=128m
     agent-space-sandbox  claude --print "..."
     ↓  CLI runs inside a new container, isolated from the backend
 diff / artifacts in /workspace → visible on host via volume mount
@@ -95,8 +102,10 @@ Planned one-shot Docker runs use a separately built image:
 docker build --network=host -t agent-space-sandbox sandbox/
 ```
 
-The sandbox image does not bake in vendor CLIs. Future Docker execution must
-mount/resolve the same instance runtime tool installation explicitly.
+The sandbox image does not bake in vendor CLIs. Docker execution mounts and
+resolves the same instance runtime-tool installation explicitly. The image
+reference is configurable through `SERVER_CLI_SANDBOX_IMAGE` and is never
+pulled at run time (`--pull=never`).
 
 ## Concurrency Control
 
@@ -118,7 +127,7 @@ Adapters check `self.sandbox_dir is not None`:
 
 ## Cleanup
 
-- Future Docker container: removed immediately after run (`remove=True` in DockerExecutor)
+- Docker container: removed immediately after run (`--rm --init`)
 - Sandbox dir: `SandboxContext.cleanup()` → `git worktree remove --force` or `shutil.rmtree`
 - Collect artifacts before cleanup
 
@@ -127,8 +136,8 @@ Adapters check `self.sandbox_dir is not None`:
 - `ephemeral` (run-scope) is a system-provisioned throwaway working dir (no git, no persistent workspace), provisioned + torn down by the server under `$SANDBOX_ROOT/ephemeral/<space>/<run>`. No real workspace is touched
 - `worktree` (repo-scope): `risk_level=high` → the agent receives a detached git worktree, never the real workspace directory
 - Workspace roots outside `settings.workspace_root` require `Workspace.allow_external_root=True`; validation fails before sandbox creation otherwise
-- High risk never spawns a new container — CLI runs as a server subprocess inside the sandbox dir
-- Critical one-shot Docker is fail-closed until the product path is implemented and tested
+- High risk remains a server subprocess inside a worktree; critical local-CLI
+  runs always use the Docker executor and are fail-closed if it cannot start
 - CLAUDE.md / AGENTS.md are written to the sandbox dir (worktree or ephemeral), never to the real workspace
 - File changes from a `worktree` run become a `code_patch` proposal; real workspace mutation happens only after the proposal is accepted. (Ephemeral runs have no workspace to diff; their output is materialized to artifacts.)
 
@@ -139,8 +148,9 @@ Adapters check `self.sandbox_dir is not None`:
 - `server/src/modules/runs/orchestrationService.ts` — runtime policy enforcement before execution
 - `server/src/modules/runtimeTools/` — controlled CLI tool install, active version, executable resolution
 - `server/src/modules/runs/vendorCliAdapter.ts` — server generic local CLI runtime path
-- `sandbox/Dockerfile` — base sandbox image for future critical-risk one_shot_docker runs
-- `ops/compose/docker-compose.<mode>.yml` — mounts Docker socket for critical-risk container spawning
+- `sandbox/Dockerfile` — base sandbox image for critical-risk one_shot_docker runs
+- `server/src/modules/runs/localCliExecution.ts` — local and Docker CLI executors
+- `server/src/modules/providers/cli/hostPath.ts` — host path translation for daemon mounts
 
 ## Related Decisions
 - [0005-desktop-runtime.md](../decisions/0005-desktop-runtime.md)

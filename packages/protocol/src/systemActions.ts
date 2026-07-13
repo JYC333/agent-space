@@ -64,6 +64,15 @@ const objectInput = z.record(z.string(), z.unknown());
 const objectOutput = z.record(z.string(), z.unknown());
 const proposalOutput = z.object({ modelResult: z.record(z.string(), z.unknown()), summary: z.record(z.string(), z.unknown()) }).passthrough();
 const proposalInputs:Record<string,z.ZodType>={
+  "task.plan.propose": z.object({
+    task_id: z.string().min(1),
+    plan_id: z.string().min(1).nullable().optional(),
+    definition_json: z.record(z.string(), z.unknown()),
+    reference_workflow_version_id: z.string().min(1).nullable().optional(),
+    budget_cap: z.number().finite().nonnegative().nullable().optional(),
+    budget_sources: z.array(z.record(z.string(), z.unknown())).optional(),
+    planner_metadata: z.record(z.string(), z.unknown()).nullable().optional(),
+  }).strict(),
   "source.connection.propose_create":z.object({connector_key:z.string().min(1),name:z.string().min(1),endpoint_url:z.string().min(1)}).passthrough(),
   "project.source.propose_bind":z.object({source_connection_id:z.string().min(1)}).passthrough(),
   "source.backfill.propose_start":z.object({source_connection_id:z.string().min(1),source_backfill_plan_id:z.string().min(1)}).passthrough(),
@@ -99,6 +108,7 @@ export const SYSTEM_ACTION_REGISTRY = [
   httpAction("source.backfill.preview", "Preview Source history import", "sources", "SourceBackfillPlanningService.preview", "source.backfill.plan", "none"),
   httpAction("source.backfill.create_plan", "Create Source history import plan", "sources", "SourceBackfillPlanningService.create", "source.backfill.plan", "draft"),
   proposalAction("source.backfill.propose_start", "Propose Source history import", "sources", "SourceBackfillPlanningService.proposeStart", "source.backfill.plan", "source_backfill_start"),
+  agentAction("task.plan.propose", "Propose an Agent-generated Task plan", "plans", "PgPlanRepository.createPlanFromAgent", "task.plan.propose", "durable"),
   internalAction("source.backfill.start", "Start approved Source history import", "sources", "SourceBackfillExecutionService.start", "source.backfill.start"),
   httpAction("source.backfill.pause", "Pause Source history import", "sources", "SourceBackfillPlanningService.setPaused", "source.backfill.manage", "durable"),
   httpAction("source.backfill.resume", "Resume Source history import", "sources", "SourceBackfillPlanningService.setPaused", "source.backfill.manage", "durable"),
@@ -166,6 +176,13 @@ function proposalAction<const Id extends string>(id: Id, title: string, owningMo
     allowed_actor_types: ["user", "agent"], input_schema: proposalInputs[id]??objectInput, output_schema: proposalOutput,
     owning_module: owningModule, application_service: applicationService, policy_action: policyAction,
     side_effects: "proposal", idempotency_required: true, proposal_type: proposalType, grantable: true };
+}
+
+function agentAction<const Id extends string>(id: Id, title: string, owningModule: string, applicationService: string, policyAction: PolicyActionId, sideEffects: SystemActionSideEffects): SystemActionDefinition & { readonly id: Id } {
+  return { id, version: 1, title, description: title, visibility: visibility("agent_tool"), allowed_actor_types: ["agent"],
+    input_schema: proposalInputs[id] ?? objectInput, output_schema: proposalOutput, owning_module: owningModule,
+    application_service: applicationService, policy_action: policyAction, side_effects: sideEffects,
+    idempotency_required: true, proposal_type: null, grantable: false };
 }
 
 function internalAction<const Id extends string>(id:Id,title:string,owningModule:string,applicationService:string,policyAction:PolicyActionId):SystemActionDefinition&{readonly id:Id}{

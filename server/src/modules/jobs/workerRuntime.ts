@@ -13,7 +13,9 @@ import { registerSessionCondenseHandler } from "../sessions/condenseJob";
 import { registerRetrievalEmbeddingHandler } from "../retrieval/embedding/job";
 import type { PluginHost } from "../plugins/host";
 import { PgRunRepository } from "../runs/repository";
+import { RunMaterializationService } from "../runs/materializationService";
 import { OperationalAlertService } from "../notifications/operationalAlerts";
+import { registerEvaluationHarnessHandler } from "../evolution/evaluationJob";
 
 const POLL_INTERVAL_MS = 1_000;
 const RECLAIM_INTERVAL_MS = 120_000;
@@ -45,6 +47,7 @@ export function buildJobHandlerRegistry(
   registerSourcePostProcessingHandler(registry, config);
   registerSessionCondenseHandler(registry, config);
   registerRetrievalEmbeddingHandler(registry, config);
+  registerEvaluationHarnessHandler(registry, config);
   // Plugin-contributed job handlers (enablement-gated by the host context).
   pluginHost?.applyJobHandlers(registry);
   return registry;
@@ -83,6 +86,23 @@ export function startJobsWorker(
     try {
       const recovered = await runs.recoverStaleRuns(3600);
       if (recovered > 0) log?.warn(`[jobs-worker] recovered ${recovered} stale run(s)`);
+      const orphaned = await runs.listOrphanedRunIds();
+      if (orphaned.length > 0) {
+        const materializer = RunMaterializationService.fromConfig(config);
+        for (const item of orphaned) {
+          const run = await runs.getRun(item.space_id, item.id);
+          if (!run) continue;
+          try {
+            await materializer.finalizeRun(run);
+          } catch (error) {
+            log?.warn(
+              `[jobs-worker] orphaned run ${item.id} finalization deferred: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            );
+          }
+        }
+      }
     } catch (error) {
       log?.error(
         `[jobs-worker] stale run recovery failed: ${

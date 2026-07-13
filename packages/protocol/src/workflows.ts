@@ -27,6 +27,78 @@ export const WorkflowTemplateSchema = z
   .passthrough();
 export type WorkflowTemplate = z.infer<typeof WorkflowTemplateSchema>;
 
+export const WorkflowNodeSchema = z
+  .object({
+    id: z.string().min(1),
+    title: z.string().min(1),
+    depends_on: z.array(z.string().min(1)).default([]),
+    capability_id: z.string().min(1).nullish(),
+    prompt_asset_key: z.string().min(1).nullish(),
+    agent_id: IdSchema.nullish(),
+    runtime_profile_id: IdSchema.nullish(),
+    verification_recipe_refs: z.array(z.string().min(1)).default([]),
+    approval_checkpoint: z
+      .object({
+        required: z.boolean().default(false),
+        proposal_type: z.string().min(1).nullish(),
+      })
+      .default({ required: false }),
+    contract_json: JsonObjectSchema.default({}),
+    metadata_json: JsonObjectSchema.default({}),
+  })
+  .passthrough();
+export type WorkflowNode = z.infer<typeof WorkflowNodeSchema>;
+
+/** Versioned content stored in evolvable_asset_versions for workflow assets. */
+export const WorkflowDefinitionSchema = z
+  .object({
+    schema_version: z.literal("workflow_definition.v1"),
+    workflow_id: z.string().min(1),
+    name: z.string().min(1),
+    description: z.string(),
+    input_schema_json: JsonObjectSchema,
+    output_artifact_types: z.array(z.string().min(1)),
+    nodes: z.array(WorkflowNodeSchema).min(1).max(30),
+    metadata_json: JsonObjectSchema.default({}),
+  })
+  .passthrough()
+  .superRefine((value, ctx) => {
+    const ids = new Set<string>();
+    for (const node of value.nodes) {
+      if (ids.has(node.id)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: `duplicate workflow node id '${node.id}'`, path: ["nodes"] });
+      }
+      ids.add(node.id);
+    }
+    for (const node of value.nodes) {
+      for (const dependency of node.depends_on) {
+        if (dependency === node.id || !ids.has(dependency)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `workflow node '${node.id}' depends on unknown or itself: '${dependency}'`,
+            path: ["nodes"],
+          });
+        }
+      }
+    }
+    const byId = new Map(value.nodes.map((node) => [node.id, node]));
+    const visiting = new Set<string>();
+    const visited = new Set<string>();
+    const visit = (nodeId: string): void => {
+      if (visited.has(nodeId)) return;
+      if (visiting.has(nodeId)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: `workflow definition contains a dependency cycle at '${nodeId}'`, path: ["nodes"] });
+        return;
+      }
+      visiting.add(nodeId);
+      for (const dependency of byId.get(nodeId)?.depends_on ?? []) visit(dependency);
+      visiting.delete(nodeId);
+      visited.add(nodeId);
+    };
+    for (const node of value.nodes) visit(node.id);
+  });
+export type WorkflowDefinition = z.infer<typeof WorkflowDefinitionSchema>;
+
 export const ProjectWorkflowProfileSchema = z
   .object({
     id: IdSchema,
@@ -69,6 +141,8 @@ export const WorkflowRunCreateBodyDraftSchema = z
     run_type: z.literal("agent"),
     trigger_origin: z.literal("manual"),
     project_id: IdSchema,
+    workflow_template_id: z.string().min(1),
+    workflow_config_json: JsonObjectSchema,
     // Target agent for `POST /api/v1/agents/:agentId/runs`; null until the
     // caller selects one.
     agent_id: IdSchema.nullable(),

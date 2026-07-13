@@ -195,14 +195,29 @@ describe("Evolvable asset evaluation runs + promotion applier (real Postgres)", 
     ).rejects.toMatchObject({ statusCode: 422 });
   });
 
-  it("rejects applying promotion when no evaluation run has passed", async () => {
+  it("allows warn-only promotion without a passed evaluation and reports the warning", async () => {
     if (!available) return;
     const { assetId, versionId } = await createCandidateVersion();
     const proposal = await evalRepo().createPromotionProposal(identity, assetId, versionId, {
       target_scope_type: "project",
       target_scope_id: PROJECT,
     });
-    await expect(applyProposal(proposal.proposal_id as string, OWNER)).rejects.toThrow(/passed evaluation run/i);
+    const applied = await applyProposal(proposal.proposal_id as string, OWNER);
+    expect(applied.result).toMatchObject({
+      version_id: versionId,
+      evaluation: { policy: "warn_only", passed: false, warning: expect.stringContaining("No passed evaluation") },
+    });
+  });
+
+  it("blocks promotion when the proposal explicitly enables the evaluation hard gate", async () => {
+    if (!available) return;
+    const { assetId, versionId } = await createCandidateVersion();
+    const proposal = await evalRepo().createPromotionProposal(identity, assetId, versionId, {
+      target_scope_type: "project",
+      target_scope_id: PROJECT,
+      hard_gate: true,
+    });
+    await expect(applyProposal(proposal.proposal_id as string, OWNER)).rejects.toThrow(/hard gate/i);
   });
 
   it("applies promotion: approves the version, pins it, deprecates the previous approved version, and records an EvolutionExperience", async () => {

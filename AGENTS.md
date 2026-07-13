@@ -63,5 +63,8 @@ change.
   and split along existing ownership boundaries when the extraction is low
   risk.
 - Add or update focused tests when behavior changes.
+- Database-backed behavior tests must reuse the shared real PostgreSQL test
+  infrastructure; do not add fake DB coverage or fall back to fake DB when the
+  shared fixture is unavailable. See `.agent/architecture/TESTING_STRATEGY.md`.
 - Use the smallest verification command that proves the change; broaden only
   when the blast radius requires it.

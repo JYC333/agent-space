@@ -2,9 +2,9 @@
 
 ## Status
 
-Implemented: manual and scheduled triggers; targets `agent_run`,
+Implemented: manual and scheduled triggers; targets `agent_run`, `workflow`,
 `knowledge_retrieval_maintenance`, `context_ops_review_cycle`; optional project
-binding for `agent_run`.
+binding for `agent_run` and `workflow`.
 
 ## Purpose
 
@@ -43,14 +43,28 @@ External/webhook triggers remain deferred (roadmap Capability 6).
 
 ## Project Binding
 
-`project_id` is optional, `agent_run`-target only, and requires project writer
-authority to bind. Fired runs carry the project, so run context pulls project
-evidence/memory and outputs are project-attributed. Preflight fails closed if
-the bound project was deleted.
+`project_id` is optional for `agent_run` and `workflow` targets, and requires
+project writer authority to bind. Fired runs carry the project, so run context
+pulls project evidence/memory and outputs are project-attributed. Preflight
+fails closed if the bound project was deleted.
 
 Scheduled non-agent targets run as owner/admin operational work and save private
 operational reports or packets according to each target's config. Agent-run
 targets use the configured agent and optional configured prompt.
+
+Workflow targets require `config_json.workflow_asset_key` and an explicit
+`workflow_resolution` of `pin` or `follow`. A pin captures the approved
+workflow version when the automation is saved; a manual follow resolves the
+approved version at fire time. Scheduled workflow automations must pin, so an
+unattended trigger cannot silently move to a later workflow version. Workflow
+fire creates a `WorkflowExecution` with an immutable resolved-version and
+definition snapshot, materializes `workflow_execution_nodes`, and records the
+root/child Runs through `automation_runs.workflow_execution_id`. It never
+creates a Plan or `plan_review`; a fixed Workflow is not dynamically planned.
+
+If an automation needs an adaptive execution path, it must explicitly create or
+select a source Task and ask its Agent to plan. That is the separate
+`Task → planning Run → Plan` product path.
 
 ## Cross-Module Boundary
 
@@ -65,6 +79,10 @@ deltas and does not own per-source cursors.
 - `server/src/modules/runs/finalizationService.ts`
 - `server/src/modules/scheduler/`
 - `apps/web/src/modules/automations/AutomationsPage.tsx`
+
+The Automation UI shows recent Workflow Executions, node progress, checkpoint
+state, and root Run links. It does not expose Plan creation or Plan approval as
+part of an Automation fire.
 
 ## Related Architecture
 

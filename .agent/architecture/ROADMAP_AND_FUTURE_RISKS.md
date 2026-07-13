@@ -131,7 +131,9 @@ OpenCode-first Router preference and does not route the managed API path through
 
 **Next work**
 - Implement the planned OpenCode adapter after C1 and run the normal CLI conformance gates.
-- Design the `one_shot_docker` path before allowing critical-risk file execution.
+- Operate and harden the implemented `one_shot_docker` path: add a reviewed
+  egress-enabled profile only if critical CLI workloads require provider
+  networking; the current MVP remains `--network none` and fail-closed.
 - Add external webhook/cron trigger integration only behind preflight and policy gates.
 - Decide whether cross-process subprocess termination is needed after more real CLI runs.
 
@@ -200,6 +202,10 @@ OpenCode-first Router preference and does not route the managed API path through
   drain caps, cursor-safe batched runs, relevance screening, candidate evidence,
   review proposals, and persisted item decisions. The cooldown/backlog cap are
   the minimal form of the P9 trigger-budget vocabulary.
+- The Automation UI now also exposes versioned Workflow targets with explicit
+  pin/follow resolution and input JSON. Scheduled Workflow targets are forced
+  to pin a version; server-side asset ownership, version scope, policy, and
+  budget checks remain authoritative.
 
 **Next work**
 - Design external trigger registry after manual/scheduled/internal-event automation behavior is stable.
@@ -279,6 +285,17 @@ OpenCode-first Router preference and does not route the managed API path through
   that type must switch to a **hard gate** (missing/failed evaluation blocks
   apply). Warn-only must not become the permanent state — revisit at each
   D2 milestone.
+- D2 MVP (2026-07-12): evaluation cases and queued Verification Engine
+  fixture execution are live. Promotion proposals carry an explicit
+  `warn_only`/`hard_gate` policy; the default remains warn-only, high/critical
+  assets automatically switch after five active cases, and the hard gate
+  trusts only executor-produced `verification_engine.v1` results.
+  The fixture executor is intentionally read-only/mock-connector only until
+  sandboxed candidate execution is added.
+- The `/evolution` UI now creates candidate versions, edits drafts, transitions
+  candidate/testing versions, creates Evaluation Cases, queues evaluations
+  against existing successful candidate Runs, shows evidence, and creates the
+  proposal-backed Promotion flow. Automatic candidate-run launch remains D2.1.
 - Decision 3-B (2026-07-11): artifact user-edit/revision tracking is
   deferred. Proposal reject/request-changes signals are the interim
   user-correction evidence. Design an artifact revision model (who edited,

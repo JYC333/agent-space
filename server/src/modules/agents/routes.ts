@@ -20,6 +20,8 @@ import { RunMaterializationService } from "../runs/materializationService";
 import { sharedCliProcessRegistry } from "../runs/processRegistry";
 import { runToOut } from "../runs/runReadModel";
 import { PgCodePatchCollector, PgWorkspaceManager } from "../workspaces";
+import { PgVerificationEngine } from "../runs/verification";
+import { RunBudgetExceededError, RunBudgetSourceReferenceError } from "../runs/budgetEnforcement";
 import { PgContextSnapshotRepository } from "../memory/contextSnapshotRepository";
 import {
   dbPool,
@@ -31,6 +33,9 @@ import { PgProposalRepository } from "../proposals/repository";
 import { PgAgentChatRepository, PgAgentRepository } from "./repository";
 import { loadProjectChatActionPreviews } from "./projectChatActionPreviews";
 import { assertProjectReadable } from "../projects/access";
+import { getBuiltInWorkflowTemplate } from "../capabilities/workflowRegistry";
+import { resolveWorkflowVersionId } from "../capabilities/workflowAssets";
+import { workflowContractInput } from "../capabilities/workflowContract";
 import {
   ChatContextCandidateCollector,
   ChatContextError,
@@ -494,8 +499,22 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       const contextArtifactIds = optionalStringArrayBody(body, "context_artifact_ids");
       const workspaceId = stringValue(body.workspace_id);
       const projectId = stringValue(body.project_id);
+      const workflowTemplateId = stringValue(body.workflow_template_id);
+      const workflowTemplate = workflowTemplateId ? getBuiltInWorkflowTemplate(workflowTemplateId) : null;
+      if (workflowTemplateId && !workflowTemplate) {
+        throw new RunCreateValidationError(`Workflow template '${workflowTemplateId}' not found`, 422);
+      }
+      const workflowVersionId = workflowTemplate
+        ? await resolveWorkflowVersionId(dbPool(context.config), {
+            spaceId: identity.spaceId,
+            userId: identity.userId,
+            projectId,
+            agentId,
+            workflowId: workflowTemplate.id,
+          })
+        : null;
       await validateContextArtifactAttachments(context, identity, contextArtifactIds ?? [], workspaceId, projectId);
-      const run = await repository.createQueuedRun({
+      const run = await repository.createQueuedRunWithBudgetAdmission({
         agent_id: agentId,
         space_id: identity.spaceId,
         user_id: identity.userId,
@@ -513,11 +532,24 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
         capability_id: stringValue(body.capability_id),
         capabilities_json: optionalArrayBody(body, "capabilities_json"),
         context_artifact_ids: contextArtifactIds,
+        workflow_version_id: workflowVersionId,
+        contract_snapshot: workflowTemplate
+          ? workflowContractInput({
+              template: workflowTemplate,
+              workflowVersionId,
+              config: optionalRecordBody(body, "workflow_config_json") ?? {},
+              projectId,
+              workspaceId,
+            })
+          : undefined,
       });
       return reply.code(201).send(runToOut(run));
     } catch (error) {
       if (error instanceof RunCreateValidationError) {
         return reply.code(error.statusCode).send({ detail: error.message });
+      }
+      if (error instanceof RunBudgetExceededError || error instanceof RunBudgetSourceReferenceError) {
+        return sendRouteError(reply, error);
       }
       throw error;
     }
@@ -845,6 +877,7 @@ function agentChatServices(context: ModuleContext): AgentChatServices {
       contextPreparer,
       workspaceManager: PgWorkspaceManager.fromConfig(context.config),
       codePatchCollector: PgCodePatchCollector.fromConfig(context.config),
+      verificationEngine: PgVerificationEngine.fromConfig(context.config),
       processRegistry: sharedCliProcessRegistry,
     }),
   };

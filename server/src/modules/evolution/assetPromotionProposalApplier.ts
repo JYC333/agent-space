@@ -6,6 +6,7 @@ import {
   normalizeVersionScopeForWrite,
   type EvolvableAssetAccessRow,
 } from "./assetAccess";
+import { lockEvolutionAssets } from "./assetLocks";
 
 interface PromotePayload {
   asset_id: string;
@@ -15,6 +16,7 @@ interface PromotePayload {
   pin_after_approval?: boolean;
   deprecate_previous?: boolean;
   evaluation_run_ids?: string[];
+  evaluation_policy?: { hard_gate?: boolean; mode?: string };
   reason?: string;
   deployment_label?: string | null;
 }
@@ -39,6 +41,7 @@ async function applyEvolvableAssetVersionPromote(context: ProposalApplyContext):
   const payload = context.proposal.payload_json as unknown as PromotePayload;
   const spaceId = context.proposal.space_id;
   const db = context.db;
+  await lockEvolutionAssets(db, [payload.asset_id]);
 
   const identity = { spaceId, userId: context.userId };
   const assetResult = await db.query<AssetPromotionRow>(
@@ -70,22 +73,28 @@ async function applyEvolvableAssetVersionPromote(context: ProposalApplyContext):
   await normalizeVersionScopeForWrite(db, identity, candidate.scope_type, candidate.scope_id);
   assertAssetAllowsTargetScope(asset, identity, candidate.scope_type, candidate.scope_id);
 
-  // Evaluation requirement: at least one recorded evaluation run for this
-  // candidate must have passed. Callers may narrow which runs count via
-  // evaluation_run_ids; otherwise any passed run for the candidate qualifies.
+  // Evaluation is warn-only by default. A proposal can opt into the hard
+  // gate, but the applier always recomputes the decision from the database;
+  // the proposal's embedded summary is evidence, not authority.
   const evalParams: unknown[] = [payload.asset_id, payload.candidate_version_id, spaceId];
-  let evalClause = "asset_id = $1 AND candidate_version_id = $2 AND space_id = $3 AND status = 'passed'";
+  let evalClause = "asset_id = $1 AND candidate_version_id = $2 AND space_id = $3";
+  if (payload.evaluation_policy?.hard_gate === true) {
+    evalClause += " AND status = 'passed' AND evaluator_version = 'verification_engine.v1' AND eval_suite_ref_json->>'kind' = 'evaluation_case'";
+  }
   if (payload.evaluation_run_ids && payload.evaluation_run_ids.length > 0) {
     evalParams.push(payload.evaluation_run_ids);
     evalClause += ` AND id = ANY($${evalParams.length})`;
   }
-  const passedEval = await db.query<{ id: string }>(
-    `SELECT id FROM evolvable_asset_evaluation_runs WHERE ${evalClause} LIMIT 1`,
+  const evaluationRows = await db.query<{ id: string; status: string }>(
+    `SELECT id, status FROM evolvable_asset_evaluation_runs WHERE ${evalClause} ORDER BY created_at DESC, id ASC`,
     evalParams,
   );
-  if (!passedEval.rows[0]) {
-    throw new Error("No passed evaluation run found for this candidate version — promotion requires at least one 'passed' evaluation_run");
+  const passedEvaluation = evaluationRows.rows.some((row) => row.status === "passed");
+  const hardGate = payload.evaluation_policy?.hard_gate === true;
+  if (hardGate && !passedEvaluation) {
+    throw new Error("Promotion hard gate requires at least one passed evaluation run for this candidate version");
   }
+  const evaluationSummary = summarizeEvaluationRows(evaluationRows.rows);
 
   const targetScopeType = payload.target_scope_type;
   const targetScopeId = payload.target_scope_id ?? null;
@@ -230,6 +239,29 @@ async function applyEvolvableAssetVersionPromote(context: ProposalApplyContext):
       target_scope_id: normalizedTargetScopeId,
       pinned: Boolean(payload.pin_after_approval && targetScopeType !== "system" && normalizedTargetScopeId),
       deployment_label: deploymentLabel,
+      evaluation: {
+        policy: hardGate ? "hard_gate" : "warn_only",
+        passed: passedEvaluation,
+        summary: evaluationSummary,
+        warning: !passedEvaluation ? "No passed evaluation run was available at promotion time." : null,
+      },
     },
+  };
+}
+
+function summarizeEvaluationRows(rows: Array<{ id: string; status: string }>): Record<string, unknown> {
+  const counts = rows.reduce<Record<string, number>>((out, row) => {
+    out[row.status] = (out[row.status] ?? 0) + 1;
+    return out;
+  }, {});
+  return {
+    total: rows.length,
+    passed: counts.passed ?? 0,
+    failed: counts.failed ?? 0,
+    blocked: counts.blocked ?? 0,
+    queued: counts.queued ?? 0,
+    running: counts.running ?? 0,
+    latest_run_id: rows[0]?.id ?? null,
+    latest_status: rows[0]?.status ?? null,
   };
 }

@@ -23,6 +23,7 @@ describe("loadConfig", () => {
     expect(c.backupDatabaseUrl).toBeNull();
     expect(c.agentSpaceHome).toBe("/aspace");
     expect(c.cliToolsRoot).toBe("/aspace/runtime-tools");
+    expect(c.cliSandboxImage).toBe("agent-space-sandbox");
     expect(c.workspaceRoot).toBe("/aspace/workspaces");
     expect(c.artifactStorageRoot).toBe("/aspace/storage/artifacts");
     expect(c.deployerSocketPath).toBe("/aspace/run/deployer.sock");
@@ -57,6 +58,7 @@ describe("loadConfig", () => {
       SERVER_DEBUG: "true",
       AGENT_SPACE_HOME: "/tmp/aspace",
       RUNTIME_TOOLS_ROOT: "/tmp/aspace/tools",
+      SERVER_CLI_SANDBOX_IMAGE: "registry.example.com/agent-space-sandbox:v1",
       WORKSPACE_ROOT: "/tmp/aspace/workspaces-root",
       ARTIFACT_STORAGE_ROOT: "/tmp/aspace/artifacts-root",
       DEPLOYER_SOCKET_PATH: "/tmp/aspace/run/deployer.sock",
@@ -84,6 +86,7 @@ describe("loadConfig", () => {
     expect(c.debug).toBe(true);
     expect(c.agentSpaceHome).toBe("/tmp/aspace");
     expect(c.cliToolsRoot).toBe("/tmp/aspace/tools");
+    expect(c.cliSandboxImage).toBe("registry.example.com/agent-space-sandbox:v1");
     expect(c.workspaceRoot).toBe("/tmp/aspace/workspaces-root");
     expect(c.artifactStorageRoot).toBe("/tmp/aspace/artifacts-root");
     expect(c.deployerSocketPath).toBe("/tmp/aspace/run/deployer.sock");
@@ -176,7 +179,7 @@ describe("loadConfig", () => {
 describe("config snapshot", () => {
   it("is immutable and identifies the config by schema version + content hash", () => {
     const snapshot = loadConfigSnapshot({});
-    expect(snapshot.schema_version).toBe(21);
+    expect(snapshot.schema_version).toBe(22);
     expect(snapshot.content_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(snapshot.loaded_at).toBeTruthy();
     expect(Object.isFrozen(snapshot)).toBe(true);

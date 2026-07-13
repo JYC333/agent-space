@@ -91,13 +91,18 @@ export interface ApplyProposal {
   id: string;
   space_id: string;
   proposal_type: string;
+  status?: string;
+  risk_level?: string | null;
+  preview?: boolean;
   title: string | null;
   payload_json: Record<string, unknown> | null;
   workspace_id: string | null;
   visibility?: string | null;
   created_by_user_id: string | null;
+  created_by_agent_id?: string | null;
   created_by_run_id?: string | null;
   project_id: string | null;
+  required_approver_role?: string | null;
 }
 
 export interface MemoryAcceptResult {

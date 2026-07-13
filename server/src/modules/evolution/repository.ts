@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Pool } from "../../db/pool";
+import { contentReadSql } from "../access/contentAccessSql";
 import { withTransaction } from "../../db/tx";
 import {
   HttpError,
@@ -269,7 +270,8 @@ export class EvolutionRepository {
               et.target_type, et.capability_key,
               et.metadata_json->>'target_name' AS target_name,
               es.signal_type, es.source_type, es.source_id, es.severity,
-              es.summary, es.payload_json, es.created_at
+              es.summary, es.payload_json, es.triage_status, es.triaged_at,
+              es.triaged_by_user_id, es.triage_note, es.created_at
          FROM evolution_signals es
          JOIN evolution_targets et ON et.id = es.target_id
         WHERE ${clauses.join(" AND ")}
@@ -291,12 +293,14 @@ export class EvolutionRepository {
            severity, summary, payload_json, created_at
          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10)
          RETURNING id, space_id, target_id, signal_type, source_type, source_id,
-                   severity, summary, payload_json, created_at
+                   severity, summary, payload_json, triage_status, triaged_at,
+                   triaged_by_user_id, triage_note, created_at
        )
        SELECT i.id, i.space_id, i.target_id,
               et.target_type, et.capability_key, et.metadata_json->>'target_name' AS target_name,
               i.signal_type, i.source_type, i.source_id, i.severity, i.summary,
-              i.payload_json, i.created_at
+              i.payload_json, i.triage_status, i.triaged_at,
+              i.triaged_by_user_id, i.triage_note, i.created_at
          FROM inserted i
          JOIN evolution_targets et ON et.id = i.target_id`,
       [
@@ -313,6 +317,65 @@ export class EvolutionRepository {
       ],
     );
     return signalToOut(result.rows[0]!);
+  }
+
+  async updateSignalTriage(
+    identity: SpaceUserIdentity,
+    signalId: string,
+    body: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const status = signalTriageStatus(body.triage_status);
+    if (!status) throw new HttpError(422, "triage_status must be one of: new, acknowledged, dismissed, actioned");
+    const now = new Date().toISOString();
+    const hasNote = Object.hasOwn(body, "triage_note");
+    const note = hasNote ? optionalString(body.triage_note) : null;
+    const result = await this.db.query(
+      `UPDATE evolution_signals es
+          SET triage_status = $3,
+              triaged_at = CASE WHEN $3 = 'new' THEN NULL ELSE $4 END,
+              triaged_by_user_id = CASE WHEN $3 = 'new' THEN NULL ELSE $5 END,
+              triage_note = CASE WHEN $6::boolean THEN $7 ELSE triage_note END
+        FROM evolution_targets et
+       WHERE es.id = $1
+         AND es.space_id = $2
+         AND es.target_id = et.id
+         AND (et.space_id = $2 OR et.space_id IS NULL)`,
+      [signalId, identity.spaceId, status, now, identity.userId, hasNote, note],
+    );
+    if ((result.rowCount ?? 0) === 0) throw new HttpError(404, "Evolution signal not found");
+    const row = await this.getSignalRow(identity, signalId);
+    if (!row) throw new HttpError(404, "Evolution signal not found");
+    return signalToOut(row);
+  }
+
+  async dismissSignal(
+    identity: SpaceUserIdentity,
+    signalId: string,
+    body: Record<string, unknown> = {},
+  ): Promise<Record<string, unknown>> {
+    return this.updateSignalTriage(identity, signalId, {
+      ...body,
+      triage_status: "dismissed",
+    });
+  }
+
+  private async getSignalRow(identity: SpaceUserIdentity, signalId: string): Promise<EvolutionSignalRow | null> {
+    const result = await this.db.query<EvolutionSignalRow>(
+      `SELECT es.id, es.space_id, es.target_id,
+              et.target_type, et.capability_key,
+              et.metadata_json->>'target_name' AS target_name,
+              es.signal_type, es.source_type, es.source_id, es.severity,
+              es.summary, es.payload_json, es.triage_status, es.triaged_at,
+              es.triaged_by_user_id, es.triage_note, es.created_at
+         FROM evolution_signals es
+         JOIN evolution_targets et ON et.id = es.target_id
+        WHERE es.id = $1
+          AND es.space_id = $2
+          AND (et.space_id = $2 OR et.space_id IS NULL)
+        LIMIT 1`,
+      [signalId, identity.spaceId],
+    );
+    return result.rows[0] ?? null;
   }
 
   async listStrategies(
@@ -482,6 +545,7 @@ export class EvolutionRepository {
       run_type: "evolution",
       trigger_origin: "manual",
       runtime_profile_id: input.runtimeProfileId,
+      runtime_profile_selection_source: "default",
       workspace_id: input.workspaceId,
       project_id: input.projectId,
       prompt: initialPrompt.user,
@@ -740,12 +804,33 @@ export class EvolutionRepository {
   async listProposals(identity: SpaceUserIdentity, limit: number, offset: number): Promise<Record<string, unknown>[]> {
     const rows = await this.db.query<Record<string, unknown>>(
       `SELECT p.id, p.proposal_type, p.status, p.summary, p.created_at, p.created_by_run_id,
+              (COALESCE(p.payload_json->>'incomplete_patch', 'false') = 'true') AS incomplete_patch,
+              CASE WHEN jsonb_typeof(COALESCE(p.payload_json->'skipped_changes', 'null'::jsonb)) = 'array'
+                   THEN jsonb_array_length(p.payload_json->'skipped_changes') ELSE 0 END AS skipped_count,
+              p.payload_json->>'grant_id' AS grant_id,
+              COALESCE(p.payload_json->>'required_approver_user_id', p.payload_json->>'granting_user_id') AS required_approver_user_id,
+              p.payload_json->>'requires_approval_type' AS requires_approval_type,
+              active_egress_approval.status AS egress_approval_status,
+              pending_member.bundle_id,
+              pending_member.status AS bundle_member_status,
               esd.target_id,
               et.metadata_json->>'target_name' AS target_name,
               et.target_type,
               et.capability_key
          FROM proposals p
          LEFT JOIN runs r ON r.id = p.created_by_run_id AND r.space_id = p.space_id
+         LEFT JOIN evolution_bundle_members pending_member
+           ON pending_member.proposal_id = p.id AND pending_member.status IN ('pending', 'released')
+         LEFT JOIN LATERAL (
+           SELECT pa.status
+             FROM proposal_approvals pa
+            WHERE pa.proposal_id = p.id
+              AND pa.approval_type = 'egress_granting_user'
+              AND pa.status = 'approved'
+              AND pa.revoked_at IS NULL
+            ORDER BY pa.created_at DESC
+            LIMIT 1
+         ) active_egress_approval ON true
          LEFT JOIN LATERAL (
            SELECT *
              FROM evolution_selector_decisions d
@@ -755,15 +840,18 @@ export class EvolutionRepository {
          ) esd ON true
          LEFT JOIN evolution_targets et ON et.id = esd.target_id
         WHERE p.space_id = $1
-          AND (p.proposal_type LIKE 'evolution_%' OR r.run_type = 'evolution')
+          AND p.status = 'pending'
+          AND ${contentReadSql("proposal", "p", "$2")}
         ORDER BY p.created_at DESC
-        LIMIT $2 OFFSET $3`,
-      [identity.spaceId, limit, offset],
+        LIMIT $3 OFFSET $4`,
+      [identity.spaceId, identity.userId, limit, offset],
     );
     return rows.rows.map((row) => ({
       id: row.id,
       proposal_type: row.proposal_type,
       target_id: row.target_id,
+      bundle_id: row.bundle_id ?? null,
+      bundle_member_status: row.bundle_member_status ?? null,
       target_name: row.target_name,
       target_type: row.target_type,
       capability_key: row.capability_key,
@@ -771,6 +859,12 @@ export class EvolutionRepository {
       summary: row.summary,
       created_at: dateIso(row.created_at) ?? new Date(0).toISOString(),
       created_by_run_id: row.created_by_run_id,
+      incomplete_patch: row.incomplete_patch === true,
+      skipped_count: Number(row.skipped_count ?? 0),
+      grant_id: row.grant_id ?? null,
+      required_approver_user_id: row.required_approver_user_id ?? null,
+      requires_approval_type: row.requires_approval_type ?? null,
+      egress_approval_status: row.egress_approval_status ?? null,
     }));
   }
 
@@ -970,8 +1064,19 @@ export function signalToOut(row: EvolutionSignalRow): Record<string, unknown> {
     severity: row.severity,
     summary: row.summary,
     payload_json: objectValue(row.payload_json),
+    triage_status: row.triage_status ?? "new",
+    triaged_at: dateIso(row.triaged_at),
+    triaged_by_user_id: row.triaged_by_user_id,
+    triage_note: row.triage_note,
     created_at: dateIso(row.created_at) ?? new Date(0).toISOString(),
   };
+}
+
+function signalTriageStatus(value: unknown): "new" | "acknowledged" | "dismissed" | "actioned" | null {
+  const status = optionalString(value);
+  return status === "new" || status === "acknowledged" || status === "dismissed" || status === "actioned"
+    ? status
+    : null;
 }
 
 function selectorDecisionToOut(row: EvolutionSelectorDecisionRow): Record<string, unknown> {

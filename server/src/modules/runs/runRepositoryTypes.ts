@@ -17,6 +17,7 @@ export interface RunRecord {
   agent_name?: string | null;
   agent_version_id: string;
   runtime_profile_id?: string | null;
+  runtime_profile_selection_source?: RuntimeProfileSelectionSource | null;
   system_prompt?: string | null;
   context_snapshot_id?: string | null;
   run_type?: string;
@@ -31,6 +32,9 @@ export interface RunRecord {
   run_group_id?: string | null;
   delegation_id?: string | null;
   project_id: string | null;
+  contract_snapshot_json?: unknown;
+  workflow_version_id?: string | null;
+  route_decision_id?: string | null;
   scheduled_at?: string | null;
   adapter_type: string | null;
   capability_id?: string | null;
@@ -57,6 +61,8 @@ export interface RunRecord {
   access_level?: string;
 }
 
+export type RuntimeProfileSelectionSource = "explicit" | "default";
+
 export interface RunListFilters {
   space_id: string;
   user_id: string;
@@ -65,6 +71,7 @@ export interface RunListFilters {
   agent_id?: string | null;
   workspace_id?: string | null;
   project_id?: string | null;
+  workflow_version_id?: string | null;
   limit: number;
   offset: number;
 }
@@ -133,6 +140,7 @@ export interface RunFinalizationRecord {
   id: string;
   space_id: string;
   run_id: string;
+  attempt_number: number;
   finalizer_version: string;
   status: string;
   run_evaluation_id: string | null;
@@ -250,11 +258,15 @@ export interface RunCreateInput {
   instruction?: string | null;
   scheduled_at?: string | null;
   parent_run_id?: string | null;
+  root_run_id?: string | null;
   runtime_profile_id?: string | null;
+  runtime_profile_selection_source?: RuntimeProfileSelectionSource;
   capability_id?: string | null;
   capabilities_json?: unknown[] | null;
   model_override_json?: Record<string, unknown> | null;
   context_artifact_ids?: string[] | null;
+  contract_snapshot?: import("./contractSnapshot").RunContractSnapshotInput;
+  workflow_version_id?: string | null;
 }
 
 export interface DelegatedChildRunCreateInput {
@@ -273,6 +285,7 @@ export interface DelegatedChildRunCreateInput {
   instruction?: string | null;
   scheduled_at?: string | null;
   runtime_profile_id?: string | null;
+  runtime_profile_selection_source?: RuntimeProfileSelectionSource;
   capability_id?: string | null;
   capabilities_json?: unknown[] | null;
   model_override_json?: Record<string, unknown> | null;
@@ -294,13 +307,32 @@ export class RunCreateValidationError extends Error {
 export interface RunTerminalUpdate {
   run_id: string;
   space_id: string;
-  status: "succeeded" | "failed" | "degraded" | "cancelled";
+  status: "succeeded" | "failed" | "degraded" | "cancelled" | "orphaned";
   output_text?: string | null;
   output_json?: unknown;
   error_json?: unknown;
   exit_code?: number | null;
   completed_at: string;
   usage_json?: unknown;
+}
+
+export interface RunAttemptRecord {
+  id: string;
+  space_id: string;
+  run_id: string;
+  attempt_number: number;
+  status: string;
+  started_at: string | null;
+  ended_at: string | null;
+  last_activity_at: string | null;
+  cancel_requested_at: string | null;
+  cancel_confirmed_at: string | null;
+  exit_code: number | null;
+  error_code: string | null;
+  error_json: unknown;
+  usage_json: unknown;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface RunEventRecord {

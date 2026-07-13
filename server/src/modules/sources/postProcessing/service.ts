@@ -11,6 +11,7 @@ import { RunMaterializationService } from "../../runs/materializationService";
 import { RunOrchestrationService } from "../../runs/orchestrationService";
 import { sharedCliProcessRegistry } from "../../runs/processRegistry";
 import { PgCodePatchCollector, PgWorkspaceManager } from "../../workspaces";
+import { PgVerificationEngine } from "../../runs/verification";
 import {
   HttpError,
   optionalString,
@@ -1131,6 +1132,7 @@ export class SourcePostProcessingService {
       materializer: RunMaterializationService.fromConfig(this.config),
       workspaceManager: PgWorkspaceManager.fromConfig(this.config),
       codePatchCollector: PgCodePatchCollector.fromConfig(this.config),
+      verificationEngine: PgVerificationEngine.fromConfig(this.config),
       processRegistry: sharedCliProcessRegistry,
     });
     await orchestration.executeRun({

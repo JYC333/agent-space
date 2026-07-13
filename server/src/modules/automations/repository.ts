@@ -68,6 +68,7 @@ export interface AutomationRepositoryPort {
   createAutomationRun(input: {
     automationId: string;
     runId: string;
+    workflowExecutionId?: string | null;
     triggeredByUserId: string;
     triggerType: string;
     preflightSnapshot: Record<string, unknown>;
@@ -371,6 +372,7 @@ export class PgAutomationRepository implements AutomationRepositoryPort {
   async createAutomationRun(input: {
     automationId: string;
     runId: string;
+    workflowExecutionId?: string | null;
     triggeredByUserId: string;
     triggerType: string;
     preflightSnapshot: Record<string, unknown>;
@@ -380,13 +382,14 @@ export class PgAutomationRepository implements AutomationRepositoryPort {
     const now = new Date().toISOString();
     await this.db.query(
       `INSERT INTO automation_runs (
-         id, automation_id, run_id, triggered_by_user_id, trigger_type,
+         id, automation_id, run_id, workflow_execution_id, triggered_by_user_id, trigger_type,
          preflight_snapshot_json, trigger_context_json, created_at
-       ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8)`,
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9)`,
       [
         id,
         input.automationId,
         input.runId,
+        input.workflowExecutionId ?? null,
         input.triggeredByUserId,
         input.triggerType,
         JSON.stringify(input.preflightSnapshot),
@@ -395,6 +398,40 @@ export class PgAutomationRepository implements AutomationRepositoryPort {
       ],
     );
     return id;
+  }
+
+  async listWorkflowExecutions(spaceId: string, automationId: string): Promise<Record<string, unknown>[]> {
+    const result = await this.db.query<{
+      id: string; automation_id: string; workflow_version_id: string; root_run_id: string | null;
+      status: string; trigger_type: string; input_json: unknown; resolution_trace_json: unknown;
+      created_at: string; started_at: string | null; ended_at: string | null;
+      node_count: string; pending_node_count: string;
+    }>(
+      `SELECT e.id, e.automation_id, e.workflow_version_id, e.root_run_id, e.status,
+              e.trigger_type, e.input_json, e.resolution_trace_json, e.created_at,
+              e.started_at, e.ended_at, count(n.id)::text AS node_count,
+              count(n.id) FILTER (WHERE n.status NOT IN ('done', 'failed', 'cancelled'))::text AS pending_node_count
+         FROM workflow_executions e
+         LEFT JOIN workflow_execution_nodes n ON n.execution_id = e.id AND n.space_id = e.space_id
+        WHERE e.space_id = $1 AND e.automation_id = $2
+        GROUP BY e.id ORDER BY e.created_at DESC`,
+      [spaceId, automationId],
+    );
+    return result.rows.map((row) => ({
+      workflow_execution_id: row.id,
+      automation_id: row.automation_id,
+      workflow_version_id: row.workflow_version_id,
+      root_run_id: row.root_run_id,
+      status: row.status,
+      trigger_type: row.trigger_type,
+      input_json: row.input_json,
+      resolution_trace_json: row.resolution_trace_json,
+      node_count: Number(row.node_count),
+      pending_node_count: Number(row.pending_node_count),
+      created_at: row.created_at,
+      started_at: row.started_at,
+      ended_at: row.ended_at,
+    }));
   }
 
   private async revokeGrants(spaceId: string, automationId: string, actorUserId: string): Promise<void> {

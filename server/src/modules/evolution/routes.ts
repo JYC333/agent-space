@@ -15,13 +15,37 @@ import { PgAgentRepository } from "../agents/repository";
 import { PgRunRepository } from "../runs/repository";
 import { RunOrchestrationService } from "../runs/orchestrationService";
 import { RunMaterializationService } from "../runs/materializationService";
+import { PgVerificationEngine } from "../runs/verification";
 import { resolveRequestId } from "../../gateway/requestContext";
 import { EvolutionRepository } from "./repository";
 import { registerEvolvableAssetRoutes } from "./assetRoutes";
+import { RunWorkflowService, type SaveRunAsWorkflowInput } from "./runWorkflowService";
+import { registerEvolutionBundleRoutes } from "./bundleRoutes";
 
 export function registerRoutes(app: FastifyInstance, context: ModuleContext): void {
   const repository = () => new EvolutionRepository(dbPool(context.config));
   registerEvolvableAssetRoutes(app, context);
+  registerEvolutionBundleRoutes(app, context);
+
+  app.post("/api/v1/evolution/workflows/from-run/preview", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      return reply.send(await new RunWorkflowService(dbPool(context.config)).preview(identity, jsonBody(request) as unknown as SaveRunAsWorkflowInput));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.post("/api/v1/evolution/workflows/from-run/save", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      return reply.code(201).send(await new RunWorkflowService(dbPool(context.config)).save(identity, jsonBody(request) as unknown as SaveRunAsWorkflowInput));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
 
   app.get("/api/v1/evolution/summary", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
@@ -92,6 +116,34 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     try {
       const { limit, offset } = parsePage(query(request), 50);
       return reply.send(await repository().listSignals(identity, params(request).targetId ?? "", limit, offset));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.patch("/api/v1/evolution/signals/:signalId", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      return reply.send(await repository().updateSignalTriage(
+        identity,
+        params(request).signalId ?? "",
+        jsonBody(request),
+      ));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.post("/api/v1/evolution/signals/:signalId/dismiss", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      return reply.send(await repository().dismissSignal(
+        identity,
+        params(request).signalId ?? "",
+        jsonBody(request),
+      ));
     } catch (error) {
       return sendRouteError(reply, error);
     }
@@ -185,6 +237,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       const runRepo = PgRunRepository.fromConfig(context.config);
       const orch = new RunOrchestrationService(context.config, runRepo, {
         materializer: RunMaterializationService.fromConfig(context.config),
+        verificationEngine: PgVerificationEngine.fromConfig(context.config),
       });
       await orch.executeRun({
         run_id: setup.runId,

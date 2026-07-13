@@ -3,12 +3,27 @@
 ## 1. Frontend Role
 
 The frontend is the primary command surface for the agent-space product loop. It provides
-access to: capture, activity inbox, proposals, runs, tasks, memory, workspaces, and runtime
-status.
+access to: capture, activity inbox, proposals, runs, tasks, memory, workspaces, runtime
+status, structured Plan execution, Automation scheduling, and the self-evolution review loop.
 
 The frontend must respect backend security and access boundaries at all times. Every data
 call is made inside `RequireAuth`; the backend enforces space-scoped visibility, and the
 frontend must not expose information about objects the user cannot access.
+
+Detail and review panels distinguish an unavailable read from an empty result. In particular,
+Run Detail attempts, evaluations, verifications, finalizations, and route decisions show an
+explicit unavailable state with the server error when their read model fails; an empty history
+means the read succeeded and contains no records. Evolution Inbox also preserves historical
+bundle ownership for released members so they cannot be selected into a new bundle when the
+database uniqueness rule still owns that proposal's history.
+
+Run Detail child-resource loading is scoped by `(spaceId, runId)` and a request generation;
+late responses from a previous Run or Space are ignored, and a new scope cannot render the
+previous scope's child records while loading. Workflow-save previews are cleared when preview
+starts, when preview inputs change, and when preview fails; a response is accepted only when
+its generation, `(spaceId, runId)` scope, and normalized name/description snapshot still match
+the current dialog. Changing Run or Space closes and resets the dialog, so Save always requires
+a successful preview for the current Run and input.
 
 The frontend should guide users through the product loop rather than act as an app gallery.
 The goal is a working system the user interacts with daily — not a navigation menu of features.
@@ -167,8 +182,8 @@ not be navigable.
 | Capture | Enabled | Functional |
 | Activity Inbox | Enabled | Functional |
 | Sessions | Enabled | Functional |
-| Tasks | Enabled | Functional |
-| Runs | Enabled | Functional |
+| Tasks | Enabled | Functional; New Task is a compact natural-language form with a few routing selectors and server-applied execution defaults. Task Detail keeps generated acceptance criteria, required outputs, policy, and metadata out of manual JSON inputs; advanced execution limits are collapsed and editable when needed. |
+| Runs | Enabled | Functional; Run Detail exposes contract/evidence panels and `waiting_for_review` Resume/Abandon actions with explicit failure states. |
 | Proposals | Enabled | Functional |
 | Artifacts | Enabled | Functional |
 | Shared Content | Enabled | Space-scoped targeted publication inbox/outbox at `/publications`; import creates an independent private copy. |
@@ -182,6 +197,10 @@ not be navigable.
 | Settings | Enabled | Functional |
 | Capabilities | Enabled | Capability/skill control-plane; developer-heavy but user-visible for review |
 | Prompt Library | Enabled | Space-admin prompt control plane at `/prompts`; lists prompt assets and versions, previews/evaluates immutable prompt versions, manages staging/production deployment refs, supports proposal-backed production promotion and rollback, and shows distinct prompt sets plus read-only workflow/capability usage context for auto research assets |
+| Agent Plans | Enabled | `/plans` is a read/review surface for Agent-generated Plans. Plan creation and revision start from Task Detail's Ask Agent to plan action; Plan Detail shows Source Task, review Proposal, Execute, Reconcile, versions, Plan Nodes, node Runs, and root Run. No raw-definition or New Plan form exists. |
+| Automations | Enabled | Space-scoped manual/scheduled Automation surface at `/automations`; supports agent runs, maintenance targets, and fixed Workflow targets with pin/follow resolution, version selection, input JSON, Run now, Pause/Resume, Archive, recent Workflow Executions, node progress, checkpoints, and root Run links. Scheduled Workflow targets are pinned. |
+| Evolution | Enabled | `/evolution`; manages candidate asset versions, draft editing, direct candidate/testing transitions, Evaluation Cases, queued evaluations over existing candidate Runs, evaluation evidence, and proposal-backed Promotion. |
+| Evolution Inbox | Enabled | `/evolution/inbox`; consolidates signals, all visible pending proposal evidence (including ordinary memory/code/workflow proposals), D3 bundles, evaluation evidence, and standard approval actions. Bundle decisions remain server-governed and the UI never applies proposals directly. |
 | Providers | Enabled | Functional; provider cards and create/edit forms show capability labels for Chat, Embeddings, and Native rerank, and creation is split into chat-provider, embedding-provider, and rerank-provider flows so retrieval-only providers are not confused with ordinary chat providers |
 | Token Usage | Enabled | Reached from personal Settings (`/settings` → Usage card) at `/usage`, visible to every active member — not a primary rail destination, since it is a lower-frequency review surface and Space Settings is admin-gated and would hide it from ordinary members. Defaults to `Mine` and supports `Shared in space` and `All visible`; all server aggregations are permission-filtered before grouping. The dashboard shows model token usage, estimated cost, accuracy, platform attribution, sessions, dimensions, read-only budget preview, and private local CLI history imports without exposing prompt or completion content. |
 | Runtime (CLI Adapters) | Enabled | Functional |
@@ -322,7 +341,28 @@ offer grants at full base level because grants never narrow disclosure.
 
 ---
 
-## 8. Future Modules — Prerequisites Before Enabling
+## 8. Orchestration and self-evolution command paths
+
+The clickable dogfooding path is intentionally structured rather than canvas-based:
+
+- `/tasks` → New task (natural-language goal + optional selectors) → Task Detail → Ask Agent to plan or create queued run → `/runs/:id`.
+- `/tasks/:taskId` → Ask Agent to plan → planning Run → current Plan/Plan
+  Detail → pending `plan_review` Proposal → Execute approved Plan → root Run →
+  Reconcile. `/plans` is the cross-Task review index for this flow.
+- `/automations` → Workflow target → template/version/resolution/input → Run now
+  or schedule → Workflow Execution → child Runs/checkpoint → root Run; the
+  backend revalidates all asset and policy constraints and never creates a
+  Plan.
+- `/evolution` → select asset → Create candidate version → Candidate/Testing →
+  Evaluation Case → existing candidate Run evaluation → Promotion Proposal →
+  `/evolution/inbox` approval.
+- `/runs/:id` → `waiting_for_review` → Resume or Abandon; abandon requires no
+  database-side recovery and is terminal.
+
+These surfaces use structured forms plus Advanced JSON for extensibility. The client
+does not apply proposals or infer approval; all mutations go through the server authority.
+
+## 9. Future Modules — Prerequisites Before Enabling
 
 | Module | Backend prerequisite |
 |---|---|
@@ -330,5 +370,5 @@ offer grants at full base level because grants never narrow disclosure.
 | Time | Time entry model + activity linkage |
 | Editor | File editor backend + save API |
 | Calendar | Calendar/scheduling model |
-| Automation | Trigger/workflow model |
+| External Automation triggers | Trigger registry, webhook/cron ownership, policy, budget, and credential model |
 | Knowledge Graph | Graph query API |

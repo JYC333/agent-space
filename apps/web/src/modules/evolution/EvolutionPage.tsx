@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Copy as CopyIcon, GitBranch, Loader2, Pencil, Play, Plus, RefreshCw } from 'lucide-react'
+import { Copy as CopyIcon, GitBranch, Inbox as InboxIcon, Loader2, Pencil, Play, Plus, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 import { evolutionApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
+import { SpaceLink as Link } from '../../core/spaceNav'
 import { errMsg } from '../../lib/utils'
 import type {
   EvolutionExperience,
@@ -48,6 +49,7 @@ import {
   fmt,
   riskVariant,
 } from './EvolutionPageParts'
+import AssetLifecyclePanel from './AssetLifecyclePanel'
 
 function assetLabel(asset: EvolvableAsset): string {
   return asset.display_name || asset.asset_key
@@ -93,35 +95,6 @@ function AssetList({
           </div>
           <p className="mt-1 truncate text-xs text-muted-foreground">{asset.asset_key}</p>
         </button>
-      ))}
-    </div>
-  )
-}
-
-function AssetVersionList({ versions }: { versions: EvolvableAssetVersion[] }) {
-  if (versions.length === 0) {
-    return <EmptyState title="No versions." description="Create a candidate version before evaluation and promotion." />
-  }
-  return (
-    <div className="space-y-2">
-      {versions.map(version => (
-        <div key={version.id} className="rounded-md border border-border p-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="secondary">v{version.version}</Badge>
-              <StatusBadge status={version.status} />
-              <Badge variant="outline">{version.scope_type}{version.scope_id ? `:${version.scope_id.slice(-6)}` : ''}</Badge>
-              {version.stale_parent && <Badge variant="warning">stale parent</Badge>}
-            </div>
-            <span className="text-xs text-muted-foreground">{fmt(version.updated_at)}</span>
-          </div>
-          <div className="mt-2 grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
-            <span>source {version.source}</span>
-            <span>parent {version.parent_version_id?.slice(-8) ?? '-'}</span>
-            <span>hash {version.content_hash ?? '-'}</span>
-            <span>content {version.content_ref ?? jsonSummary(version.content_json)}</span>
-          </div>
-        </div>
       ))}
     </div>
   )
@@ -558,10 +531,13 @@ export default function EvolutionPage() {
             <p className="text-xs text-muted-foreground">当前空间：{viewSpaceName}</p>
           </div>
         </div>
-        <Button size="sm" variant="outline" onClick={load} disabled={loading || !viewSpaceId}>
-          {loading ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
-          Refresh
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" variant="outline" asChild><Link to="/evolution/inbox"><InboxIcon className="size-3.5" /> Evolution Inbox</Link></Button>
+          <Button size="sm" variant="outline" onClick={load} disabled={loading || !viewSpaceId}>
+            {loading ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
+            Refresh
+          </Button>
+        </div>
       </div>
 
       {loading ? (
@@ -748,7 +724,7 @@ export default function EvolutionPage() {
                       <TabsTrigger value="evaluations">Evaluations</TabsTrigger>
                     </TabsList>
                     <TabsContent value="versions" className="mt-4">
-                      <AssetVersionList versions={assetVersions} />
+                      <AssetLifecyclePanel asset={selectedAsset} versions={assetVersions} evaluations={assetEvaluations} onReload={() => loadAssetDetails(selectedAsset.id)} />
                     </TabsContent>
                     <TabsContent value="pins" className="mt-4">
                       <AssetPinList pins={assetPins} />

@@ -4,6 +4,7 @@ import {
   HttpError,
   countFromRow,
   numberValue,
+  objectValue,
   optionalObject,
   optionalString,
   page,
@@ -14,6 +15,9 @@ import {
   type Queryable,
 } from "../routeUtils/common";
 import { PgRunRepository } from "../runs/repository";
+import { PgJobQueueRepository } from "../jobs/repository";
+import { assertBudgetSourcesAvailable } from "../runs/budgetEnforcement";
+import { contractRouteHints, type RunBudgetSource } from "../runs/contractSnapshot";
 import { runToOut } from "../runs/runReadModel";
 import { PgRunContextRepository } from "../context/repository";
 import { contentReadSql } from "../access/contentAccessSql";
@@ -29,6 +33,12 @@ import {
   taskProposalOut,
   taskRunOutFromList,
 } from "./taskRepositoryMappers";
+
+const DEFAULT_TASK_LIMITS = {
+  maxRuns: 3,
+  maxCost: 10,
+  maxDurationSeconds: 3600,
+} as const;
 import {
   BOARD_COLUMNS,
   BOARD_COLUMN_COLUMNS,
@@ -226,10 +236,22 @@ export class PgTaskRepository {
     const now = new Date().toISOString();
     const visibility = optionalString(body.visibility) ?? "private";
     if (!isContentVisibility(visibility)) throw new HttpError(422, "Invalid visibility");
+    const taskRole = optionalString(body.task_role) ?? "source";
+    if (taskRole !== "source" && taskRole !== "subtask") throw new HttpError(422, "task_role must be 'source' or 'subtask'");
+    const parentTaskId = optionalString(body.parent_task_id);
+    if (taskRole === "source" && parentTaskId) throw new HttpError(422, "Source tasks cannot have a parent task");
+    if (taskRole === "subtask") {
+      if (!parentTaskId) throw new HttpError(422, "Subtasks require a parent task");
+      const parent = await this.pool.query<{ id: string }>(
+        `SELECT id FROM tasks WHERE id = $1 AND space_id = $2 AND deleted_at IS NULL`,
+        [parentTaskId, identity.spaceId],
+      );
+      if (!parent.rows[0]) throw new HttpError(404, "Parent task not found");
+    }
     const result = await this.pool.query<TaskRow>(
       `INSERT INTO tasks (
          id, space_id, workspace_id, project_id, board_id, column_id, parent_task_id,
-         title, description, task_type, status, priority, risk_level, visibility,
+         task_role, title, description, task_type, status, priority, risk_level, visibility,
          owner_user_id, created_by_user_id, assigned_user_id, assigned_agent_id,
          source_activity_id, source_run_id, source_proposal_id, source_artifact_id,
          acceptance_criteria_json, definition_of_done, required_outputs_json,
@@ -237,12 +259,12 @@ export class PgTaskRepository {
          policy_json, metadata_json, tags, created_at, updated_at
        ) VALUES (
          $1, $2, $3, $4, $5, $6, $7,
-         $8, $9, $10, $11, $12, $13, $14,
-         $15, $15, $16, $17,
-         $18, $19, $20, $21,
-         $22::jsonb, $23, $24::jsonb,
-         $25::timestamptz, $26::timestamptz, $27::int, $28::float, $29::int,
-         $30::jsonb, $31::jsonb, $32::jsonb, $33, $33
+         $8, $9, $10, $11, $12, $13, $14, $15,
+         $16, $16, $17, $18,
+         $19, $20, $21, $22,
+         $23::jsonb, $24, $25::jsonb,
+         $26::timestamptz, $27::timestamptz, $28::int, $29::float, $30::int,
+         $31::jsonb, $32::jsonb, $33::jsonb, $34, $34
        ) RETURNING ${TASK_COLUMNS}`,
       [
         randomUUID(),
@@ -251,7 +273,8 @@ export class PgTaskRepository {
         optionalString(body.project_id),
         optionalString(body.board_id),
         optionalString(body.column_id),
-        optionalString(body.parent_task_id),
+        parentTaskId,
+        taskRole,
         requiredString(body.title, "title"),
         optionalString(body.description),
         optionalString(body.task_type) ?? "general",
@@ -271,9 +294,9 @@ export class PgTaskRepository {
         JSON.stringify(Array.isArray(body.required_outputs_json) ? body.required_outputs_json : null),
         toDbDate(body.due_at),
         toDbDate(body.start_after),
-        numberValue(body.max_runs),
-        numberValue(body.max_cost),
-        numberValue(body.max_duration_seconds),
+        defaultNumber(body.max_runs, DEFAULT_TASK_LIMITS.maxRuns),
+        defaultNumber(body.max_cost, DEFAULT_TASK_LIMITS.maxCost),
+        defaultNumber(body.max_duration_seconds, DEFAULT_TASK_LIMITS.maxDurationSeconds),
         JSON.stringify(optionalObject(body.policy_json)),
         JSON.stringify(optionalObject(body.metadata_json)),
         JSON.stringify(Array.isArray(body.tags) ? body.tags : null),
@@ -289,7 +312,20 @@ export class PgTaskRepository {
   }
 
   async updateTask(identity: SpaceUserIdentity, taskId: string, body: Record<string, unknown>) {
-    if (!(await getVisibleTaskRow(this.pool, identity, taskId))) throw new HttpError(404, "Task not found");
+    const currentTask = await getVisibleTaskRow(this.pool, identity, taskId);
+    if (!currentTask) throw new HttpError(404, "Task not found");
+    if (Object.hasOwn(body, "parent_task_id")) {
+      const parentTaskId = optionalString(body.parent_task_id);
+      if (parentTaskId && parentTaskId === taskId) throw new HttpError(422, "A task cannot be its own parent");
+      if (parentTaskId) {
+        const parent = await this.pool.query<{ id: string }>(
+          `SELECT id FROM tasks WHERE id = $1 AND space_id = $2 AND deleted_at IS NULL`,
+          [parentTaskId, identity.spaceId],
+        );
+        if (!parent.rows[0]) throw new HttpError(404, "Parent task not found");
+      }
+      if (currentTask.task_role === "source" && parentTaskId) throw new HttpError(422, "Source tasks cannot have a parent task");
+    }
     const now = new Date().toISOString();
     await this.pool.query(
       `UPDATE tasks SET
@@ -311,18 +347,21 @@ export class PgTaskRepository {
          completed_at = CASE WHEN $28::boolean THEN $29::timestamptz ELSE completed_at END,
          cancelled_at = CASE WHEN $30::boolean THEN $31::timestamptz ELSE cancelled_at END,
          blocked_reason = CASE WHEN $32::boolean THEN $33 ELSE blocked_reason END,
-         due_at = CASE WHEN $34::boolean THEN $35::timestamptz ELSE due_at END,
-         start_after = CASE WHEN $36::boolean THEN $37::timestamptz ELSE start_after END,
-         estimated_effort = CASE WHEN $38::boolean THEN $39 ELSE estimated_effort END,
-         actual_effort = CASE WHEN $40::boolean THEN $41 ELSE actual_effort END,
-         max_runs = CASE WHEN $42::boolean THEN $43::int ELSE max_runs END,
-         max_cost = CASE WHEN $44::boolean THEN $45::float ELSE max_cost END,
-         max_duration_seconds = CASE WHEN $46::boolean THEN $47::int ELSE max_duration_seconds END,
-         policy_json = CASE WHEN $48::boolean THEN $49::jsonb ELSE policy_json END,
-         metadata_json = CASE WHEN $50::boolean THEN $51::jsonb ELSE metadata_json END,
-         tags = CASE WHEN $52::boolean THEN $53::jsonb ELSE tags END,
-         deleted_at = CASE WHEN $54::boolean THEN $55::timestamptz ELSE deleted_at END,
-         updated_at = $56
+         acceptance_criteria_json = CASE WHEN $34::boolean THEN $35::jsonb ELSE acceptance_criteria_json END,
+         definition_of_done = CASE WHEN $36::boolean THEN $37 ELSE definition_of_done END,
+         required_outputs_json = CASE WHEN $38::boolean THEN $39::jsonb ELSE required_outputs_json END,
+         due_at = CASE WHEN $40::boolean THEN $41::timestamptz ELSE due_at END,
+         start_after = CASE WHEN $42::boolean THEN $43::timestamptz ELSE start_after END,
+         estimated_effort = CASE WHEN $44::boolean THEN $45 ELSE estimated_effort END,
+         actual_effort = CASE WHEN $46::boolean THEN $47 ELSE actual_effort END,
+         max_runs = CASE WHEN $48::boolean THEN $49::int ELSE max_runs END,
+         max_cost = CASE WHEN $50::boolean THEN $51::float ELSE max_cost END,
+         max_duration_seconds = CASE WHEN $52::boolean THEN $53::int ELSE max_duration_seconds END,
+         policy_json = CASE WHEN $54::boolean THEN $55::jsonb ELSE policy_json END,
+         metadata_json = CASE WHEN $56::boolean THEN $57::jsonb ELSE metadata_json END,
+         tags = CASE WHEN $58::boolean THEN $59::jsonb ELSE tags END,
+         deleted_at = CASE WHEN $60::boolean THEN $61::timestamptz ELSE deleted_at END,
+         updated_at = $62
        WHERE space_id = $1 AND id = $2`,
       [
         identity.spaceId,
@@ -358,6 +397,12 @@ export class PgTaskRepository {
         toDbDate(body.cancelled_at),
         Object.hasOwn(body, "blocked_reason"),
         optionalString(body.blocked_reason),
+        Object.hasOwn(body, "acceptance_criteria_json"),
+        JSON.stringify(optionalObject(body.acceptance_criteria_json)),
+        Object.hasOwn(body, "definition_of_done"),
+        optionalString(body.definition_of_done),
+        Object.hasOwn(body, "required_outputs_json"),
+        JSON.stringify(Array.isArray(body.required_outputs_json) ? body.required_outputs_json : null),
         Object.hasOwn(body, "due_at"),
         toDbDate(body.due_at),
         Object.hasOwn(body, "start_after"),
@@ -390,13 +435,30 @@ export class PgTaskRepository {
     return withDbTransaction(this.pool, async (client) => {
       const task = await getVisibleTaskRow(client, identity, taskId);
       if (!task) throw new HttpError(404, "Task not found");
-      if (task.max_runs !== null) {
-        const existing = await client.query<{ total: string }>(
-          `SELECT count(*)::text AS total FROM task_runs WHERE space_id = $1 AND task_id = $2`,
-          [identity.spaceId, taskId],
-        );
-        if (countFromRow(existing.rows[0]) >= task.max_runs) throw new HttpError(409, "Task max_runs exceeded");
-      }
+      // Serialize admissions for this task. The max_runs check and the
+      // task_runs insert must observe one state, otherwise two concurrent
+      // requests can both pass the preflight check.
+      const lockedTask = await client.query<{ max_runs: number | null }>(
+        `SELECT max_runs FROM tasks WHERE space_id = $1 AND id = $2 FOR UPDATE`,
+        [identity.spaceId, taskId],
+      );
+      const maxRuns = lockedTask.rows[0] ? lockedTask.rows[0].max_runs : task.max_runs;
+      const taskPolicy = objectValue(task.policy_json);
+      const budgetSources: RunBudgetSource[] = [
+        {
+          source: { kind: "task", id: task.id },
+          precedence: numberValue(taskPolicy.budget_precedence),
+          max_runs: maxRuns,
+          max_attempts: positiveIntegerOrNull(taskPolicy.max_attempts),
+          max_cost: typeof task.max_cost === "number" ? task.max_cost : null,
+          max_duration_seconds: typeof task.max_duration_seconds === "number" ? task.max_duration_seconds : null,
+        },
+        ...budgetSourcesFromPolicy(taskPolicy.budget_sources),
+      ];
+      // Resolve and enforce every effective inherited source before creating
+      // either the Run or its task_runs link. Dispatch must never be the first
+      // place that discovers an Automation/Workflow cap.
+      await assertBudgetSourcesAvailable(client, identity.spaceId, budgetSources);
       const agentId = optionalString(body.agent_id) ?? task.assigned_agent_id;
       if (!agentId) throw new HttpError(422, "agent_id is required when task has no assigned_agent_id");
       const contextArtifactIds = contextArtifactIdsFromBody(body.context_artifact_ids);
@@ -411,12 +473,28 @@ export class PgTaskRepository {
         trigger_origin: optionalString(body.trigger_origin) ?? "manual",
         session_id: optionalString(body.session_id),
         workspace_id: workspaceId,
-        project_id: null,
+        project_id: task.project_id,
         prompt: optionalString(body.prompt),
         instruction: optionalString(body.instruction) ?? defaultTaskInstruction(task),
         scheduled_at: toDbDate(body.scheduled_at),
         parent_run_id: optionalString(body.parent_run_id),
         context_artifact_ids: contextArtifactIds,
+        contract_snapshot: {
+          source: { kind: "task", id: task.id },
+          project_id: task.project_id,
+          workspace_id: workspaceId,
+          acceptance_criteria_json: task.acceptance_criteria_json,
+          definition_of_done: task.definition_of_done,
+          required_outputs_json: task.required_outputs_json,
+          risk_level: task.risk_level,
+          max_runs: maxRuns,
+          max_attempts: positiveIntegerOrNull(body.max_attempts) ?? positiveIntegerOrNull(taskPolicy.max_attempts),
+          max_cost: task.max_cost,
+          max_duration_seconds: task.max_duration_seconds,
+          budget_precedence: numberValue(taskPolicy.budget_precedence),
+          budget_sources: budgetSourcesFromPolicy(taskPolicy.budget_sources),
+          route_hints_json: contractRouteHints(task.policy_json),
+        },
       });
       const now = new Date().toISOString();
       await client.query(
@@ -428,6 +506,94 @@ export class PgTaskRepository {
       if (body.set_task_in_progress !== false && !["done", "cancelled"].includes(task.status)) {
         await client.query(`UPDATE tasks SET status = 'in_progress', updated_at = $3 WHERE space_id = $1 AND id = $2`, [identity.spaceId, taskId, now]);
       }
+      return runToOut(run);
+    });
+  }
+
+  async requestPlanningRun(identity: SpaceUserIdentity, taskId: string, body: Record<string, unknown>) {
+    return withDbTransaction(this.pool, async (client) => {
+      const taskResult = await client.query<TaskRow>(
+        `SELECT ${TASK_COLUMNS} FROM tasks t WHERE t.space_id = $1 AND t.id = $2 AND t.deleted_at IS NULL FOR UPDATE`,
+        [identity.spaceId, taskId],
+      );
+      const task = taskResult.rows[0];
+      if (!task) throw new HttpError(404, "Task not found");
+      if (task.task_role !== "source") throw new HttpError(409, "Only source tasks can request Agent planning");
+      const agentId = optionalString(body.agent_id) ?? task.assigned_agent_id;
+      if (!agentId) throw new HttpError(422, "agent_id is required when the Task has no assigned agent");
+      const agent = await client.query<{ id: string }>(
+        `SELECT id FROM agents WHERE id = $1 AND space_id = $2 AND status = 'active'`,
+        [agentId, identity.spaceId],
+      );
+      if (!agent.rows[0]) throw new HttpError(404, "Planning Agent not found or inactive in this Space");
+      const referenceWorkflowVersionId = optionalString(body.reference_workflow_version_id);
+      if (referenceWorkflowVersionId) {
+        const reference = await client.query<{ id: string }>(
+          `SELECT v.id
+             FROM evolvable_asset_versions v
+             JOIN evolvable_assets a ON a.id = v.asset_id
+            WHERE v.id = $1
+              AND a.asset_type = 'workflow_template'
+              AND v.status = 'approved'
+              AND (v.space_id IS NULL OR v.space_id = $2)
+              AND (
+                v.scope_type = 'system'
+                OR (v.scope_type = 'space' AND v.scope_id = $2)
+                OR (v.scope_type = 'project' AND v.scope_id IS NOT DISTINCT FROM $3)
+              )`,
+          [referenceWorkflowVersionId, identity.spaceId, task.project_id],
+        );
+        if (!reference.rows[0]) throw new HttpError(404, "Reference Workflow Version not found or not visible in this Space");
+      }
+      const budgetSources: RunBudgetSource[] = [{
+        source: { kind: "task", id: task.id },
+        max_runs: task.max_runs,
+        max_cost: typeof task.max_cost === "number" ? task.max_cost : null,
+        max_duration_seconds: typeof task.max_duration_seconds === "number" ? task.max_duration_seconds : null,
+      }];
+      await assertBudgetSourcesAvailable(client, identity.spaceId, budgetSources);
+      const run = await new PgRunRepository(client).createQueuedRun({
+        agent_id: agentId,
+        space_id: identity.spaceId,
+        user_id: identity.userId,
+        mode: "live",
+        run_type: "planning",
+        trigger_origin: "manual",
+        workspace_id: task.workspace_id,
+        project_id: task.project_id,
+        prompt: optionalString(body.prompt) ?? `Plan Task: ${task.title}`,
+        instruction: optionalString(body.instruction) ?? planningInstruction(task, referenceWorkflowVersionId),
+        workflow_version_id: referenceWorkflowVersionId,
+        capabilities_json: ["task.plan.propose"],
+        contract_snapshot: {
+          source: { kind: "task", id: task.id },
+          project_id: task.project_id,
+          workspace_id: task.workspace_id,
+          acceptance_criteria_json: task.acceptance_criteria_json,
+          definition_of_done: task.definition_of_done,
+          required_outputs_json: task.required_outputs_json,
+          risk_level: task.risk_level,
+          max_runs: task.max_runs,
+          max_cost: task.max_cost,
+          max_duration_seconds: task.max_duration_seconds,
+          budget_sources: budgetSources,
+          route_hints_json: { planning_task_id: task.id, reference_workflow_version_id: referenceWorkflowVersionId },
+        },
+      });
+      const now = new Date().toISOString();
+      await client.query(
+        `INSERT INTO task_runs (id, space_id, task_id, run_id, role, created_at)
+         VALUES ($1, $2, $3, $4, 'planning', $5) ON CONFLICT (task_id, run_id) DO NOTHING`,
+        [randomUUID(), identity.spaceId, task.id, run.id, now],
+      );
+      await new PgJobQueueRepository(client).enqueue({
+        job_type: "agent_run",
+        space_id: identity.spaceId,
+        user_id: identity.userId,
+        agent_id: agentId,
+        workspace_id: task.workspace_id,
+        payload: { run_id: run.id, task_id: task.id, planning: true },
+      });
       return runToOut(run);
     });
   }
@@ -448,7 +614,8 @@ export class PgTaskRepository {
               r.id, r.space_id, r.agent_id, r.agent_version_id, r.context_snapshot_id, r.run_type,
               r.status, r.mode, r.prompt, r.instruction, r.workspace_id, r.session_id,
               r.parent_run_id, r.project_id, r.scheduled_at, r.adapter_type, r.capability_id,
-              r.model_provider_id, r.model_override_json, r.required_sandbox_level, r.trigger_origin,
+              r.model_provider_id, r.model_override_json, r.required_sandbox_level,
+              r.contract_snapshot_json, r.workflow_version_id, r.trigger_origin,
               r.instructed_by_user_id, r.error_message, r.error_json, r.output_json, r.usage_json,
               r.started_at, r.ended_at, r.created_at, r.updated_at,
               r.owner_user_id, r.visibility, r.access_level
@@ -616,6 +783,22 @@ export class PgTaskRepository {
   }
 }
 
+function budgetSourcesFromPolicy(value: unknown): RunBudgetSource[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is RunBudgetSource => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+    const source = (item as { source?: unknown }).source;
+    if (!source || typeof source !== "object" || Array.isArray(source)) return false;
+    const kind = (source as { kind?: unknown }).kind;
+    return kind === "direct"
+      || kind === "task"
+      || kind === "automation"
+      || kind === "workflow"
+      || kind === "delegation"
+      || kind === "plan";
+  });
+}
+
 function contextArtifactIdsFromBody(value: unknown): string[] {
   if (value === null || value === undefined) return [];
   if (!Array.isArray(value)) throw new HttpError(422, "context_artifact_ids must be an array");
@@ -677,4 +860,23 @@ function buildTaskWhere(identity: SpaceUserIdentity, filters: { boardId: string 
   if (filters.assignedToMe) clauses.push("(t.assigned_user_id = $2 OR t.claimed_by_user_id = $2)");
   if (filters.q) clauses.push(`(t.title ILIKE ${add(`%${filters.q}%`)} OR t.description ILIKE $${params.length})`);
   return { where: `WHERE ${clauses.join(" AND ")}`, params };
+}
+
+function positiveIntegerOrNull(value: unknown): number | null {
+  const parsed = numberValue(value);
+  return parsed !== null && Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function defaultNumber(value: unknown, fallback: number): number | null {
+  return value === undefined ? fallback : numberValue(value);
+}
+
+function planningInstruction(task: TaskRow, referenceWorkflowVersionId: string | null): string {
+  return [
+    `Create a structured execution Plan for source Task '${task.title}'.`,
+    task.description ? `Goal: ${task.description}` : null,
+    `Task contract: ${JSON.stringify({ acceptance_criteria_json: task.acceptance_criteria_json ?? null, definition_of_done: task.definition_of_done ?? null, required_outputs_json: task.required_outputs_json ?? null, risk_level: task.risk_level, max_runs: task.max_runs, max_cost: task.max_cost, max_duration_seconds: task.max_duration_seconds })}`,
+    referenceWorkflowVersionId ? `Use workflow version '${referenceWorkflowVersionId}' as an optional reference only; do not treat it as the execution source.` : null,
+    "Use the task.plan.propose tool with a validated workflow_definition.v1 object. Do not claim that any node has already executed.",
+  ].filter(Boolean).join("\n\n");
 }

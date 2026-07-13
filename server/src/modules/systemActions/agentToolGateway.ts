@@ -30,13 +30,14 @@ import { readSpaceRetrievalSettings } from "../retrieval/settings";
 import { SourceConnectionService } from "../sources/sourceConnectionService";
 import { ProjectSourceProposalService } from "../projects/projectSourceProposalService";
 import { SourceBackfillPlanningService } from "../sources/sourceBackfillService";
+import { PgPlanRepository } from "../plans/repository";
 
 export interface AgentToolGatewayDeps extends ManagedApiRetrievalToolDeps {
   agentDelegationTools?: AgentDelegationToolDeps;
   actionEventSink?: (eventType: "action_invoked" | "action_completed", call: CanonicalToolCall, metadata?: Record<string, unknown>) => Promise<void>;
 }
 
-const GENERIC_PROPOSAL_ACTION_IDS = ["source.connection.propose_create", "project.source.propose_bind", "source.backfill.propose_start"];
+const GENERIC_PROPOSAL_ACTION_IDS = ["source.connection.propose_create", "project.source.propose_bind", "source.backfill.propose_start", "task.plan.propose"];
 
 /** Managed-run adapter over the registry-driven action surface. */
 export class AgentToolGateway {
@@ -299,6 +300,26 @@ export class AgentToolGateway {
         summary: { tool_name: "source.backfill.propose_start", ok: true, proposal_id: (result.proposal as { id?: string }).id, auto_applied: result.auto_applied },
       };
     });
+
+    executors.set("task.plan.propose" as SystemActionId, async (input, context) => {
+      const body = input as Record<string, unknown>;
+      const plan = await new PgPlanRepository(db).createPlanFromAgent(identity, {
+        sourceTaskId: String(body.task_id ?? ""),
+        planId: typeof body.plan_id === "string" ? body.plan_id : null,
+        planningRunId: run.id,
+        planningToolCallId: context.idempotency_key ?? "",
+        agentId: run.agent_id,
+        definitionJson: body.definition_json,
+        referenceWorkflowVersionId: typeof body.reference_workflow_version_id === "string" ? body.reference_workflow_version_id : null,
+        budgetCap: typeof body.budget_cap === "number" ? body.budget_cap : null,
+        budgetSources: Array.isArray(body.budget_sources) ? body.budget_sources as never : undefined,
+        plannerMetadata: body.planner_metadata && typeof body.planner_metadata === "object" && !Array.isArray(body.planner_metadata) ? body.planner_metadata as Record<string, unknown> : null,
+      });
+      return {
+        modelResult: { ok: true, plan },
+        summary: { tool_name: "task.plan.propose", ok: true, plan_id: (plan as { id?: string }).id, plan_version_id: (plan as { current_version?: { id?: string } }).current_version?.id },
+      };
+    });
   }
 
   private async enforcePolicyForAction(
@@ -359,9 +380,11 @@ export class AgentToolGateway {
     }
 
     if (GENERIC_PROPOSAL_ACTION_IDS.includes(definition.id) && this.config.databaseUrl) {
-      const resourceType = definition.id === "source.backfill.propose_start" ? "source_backfill_plan" : definition.owning_module;
+      const resourceType = definition.id === "source.backfill.propose_start" ? "source_backfill_plan" : definition.id === "task.plan.propose" ? "plan" : definition.owning_module;
       const resourceId = definition.id === "source.backfill.propose_start"
         ? String((input as Record<string, unknown>).source_backfill_plan_id ?? run.id)
+        : definition.id === "task.plan.propose"
+          ? String((input as Record<string, unknown>).task_id ?? run.id)
         : (run.project_id ?? run.id);
       const decision = await enforce({ databaseUrl: this.config.databaseUrl }, await loadActionRegistry(), {
         action: definition.policy_action,
@@ -438,7 +461,17 @@ export function filterGenericActionCapabilities(capabilities: string[], permissi
 
 export function proposalActionJsonSchema(actionId: string): Record<string, unknown> {
   const properties: Record<string, unknown> =
-    actionId === "source.connection.propose_create"
+      actionId === "task.plan.propose"
+        ? {
+            task_id: { type: "string" },
+            plan_id: { type: ["string", "null"] },
+            definition_json: { type: "object" },
+            reference_workflow_version_id: { type: ["string", "null"] },
+            budget_cap: { type: ["number", "null"] },
+            budget_sources: { type: "array" },
+            planner_metadata: { type: ["object", "null"] },
+          }
+        : actionId === "source.connection.propose_create"
       ? { connector_key: { type: "string" }, name: { type: "string" }, endpoint_url: { type: "string" } }
       : actionId === "project.source.propose_bind"
         ? { source_connection_id: { type: "string" } }

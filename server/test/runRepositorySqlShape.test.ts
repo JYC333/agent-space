@@ -168,6 +168,9 @@ class RunCreateSqlShapeDb implements Queryable {
     if (sql.includes("UPDATE context_snapshots")) {
       return { rows: [], rowCount: 1 };
     }
+    if (sql.includes("INSERT INTO run_attempts")) {
+      return { rows: [], rowCount: 1 };
+    }
     throw new Error(`Unexpected SQL: ${sql}`);
   }
 }
@@ -189,10 +192,28 @@ describe("PgRunRepository SQL shape", () => {
     expect(runInsert).toBeTruthy();
     const { columns, values } = insertColumnsAndValues(runInsert!.sql);
     expect(values).toHaveLength(columns.length);
-    expect(runInsert!.params).toHaveLength(31);
+    expect(runInsert!.params).toHaveLength(34);
+    expect(runInsert!.params[33]).toBe("default");
     expect(columns.slice(14, 17)).toEqual(["run_type", "trigger_origin", "status"]);
     expect(values.slice(14, 17)).toEqual(["$15", "$16", "'queued'"]);
     expect(runInsert!.params.slice(14, 17)).toEqual(["agent", "manual", "live"]);
+  });
+
+  it("persists an explicitly selected runtime profile as explicit", async () => {
+    const db = new RunCreateSqlShapeDb();
+    await new PgRunRepository(db).createQueuedRun({
+      agent_id: "agent-1",
+      space_id: "space-1",
+      user_id: "user-1",
+      mode: "live",
+      run_type: "agent",
+      trigger_origin: "manual",
+      runtime_profile_id: "profile-1",
+      prompt: "hello",
+    });
+
+    const runInsert = db.calls.find((call) => call.sql.includes("INSERT INTO runs"));
+    expect(runInsert?.params[33]).toBe("explicit");
   });
 
   it("creates grouped agent runs with root and group lineage", async () => {

@@ -511,6 +511,16 @@ export class PgUsageRepository {
     return result.rows[0] ?? null;
   }
 
+  async getRunEstimatedCost(spaceId: string, runId: string): Promise<number | null> {
+    const result = await this.db.query<{ estimated_cost_usd: string | number | null }>(
+      `SELECT sum(estimated_cost_usd)::numeric AS estimated_cost_usd
+         FROM token_usage_events
+        WHERE space_id = $1 AND run_id = $2`,
+      [spaceId, runId],
+    );
+    return numberOrNull(result.rows[0]?.estimated_cost_usd);
+  }
+
   async aggregate(filters: UsageQueryFilters): Promise<{ totals: UsageTotals; items: UsageBreakdownRow[] }> {
     const group = groupExpression(filters.groupBy ?? "provider", effectiveAccessLevelSql(filters));
     const where = buildWhere(filters);

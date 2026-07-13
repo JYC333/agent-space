@@ -264,6 +264,8 @@ const PROPOSAL_TYPE_RISK: Record<string, RiskLevel> = {
   memory_update: "medium",
   memory_archive: "medium",
   follow_up_task: "medium",
+  plan_review: "medium",
+  plan_checkpoint: "medium",
   code_patch: "high",
   policy_change: "high",
   egress_review: "high",
@@ -296,6 +298,7 @@ const PROPOSAL_TYPE_RISK: Record<string, RiskLevel> = {
   custom_source_credentialed_source: "high",
   custom_source_repair_activation: "medium",
   source_recipe_activation: "medium",
+  evolution_bundle_rollback: "high",
 };
 
 export const SUPPORTED_PROPOSAL_TYPES: ReadonlySet<string> = new Set(

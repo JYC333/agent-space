@@ -24,6 +24,7 @@ function sourcesConfig(): ServerConfig {
     agentSpaceHome: "/tmp/aspace",
     workspaceRoot: "/tmp/aspace/workspaces",
     cliToolsRoot: "/tmp/aspace/runtime-tools",
+    cliSandboxImage: "agent-space-sandbox",
     sandboxRoot: "/tmp/aspace/sandboxes",
     deployerSocketPath: "/tmp/aspace/run/deployer.sock",
     artifactStorageRoot: "/tmp/aspace/storage/artifacts",

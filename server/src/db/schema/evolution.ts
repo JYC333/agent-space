@@ -4,6 +4,74 @@ import { runs } from "./runs";
 import { spaces } from "./spaces";
 import { proposals } from "./proposals";
 import { capabilityVersions } from "./capabilities";
+import { users } from "./auth";
+
+export const evolutionBundles = pgTable("evolution_bundles", {
+	id: varchar({ length: 36 }).primaryKey().notNull(),
+	spaceId: varchar("space_id", { length: 36 }).notNull(),
+	title: varchar({ length: 256 }).notNull(),
+	description: text(),
+	status: varchar({ length: 32 }).default("pending_review").notNull(),
+	riskLevel: varchar("risk_level", { length: 32 }).notNull(),
+	createdByUserId: varchar("created_by_user_id", { length: 36 }).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).notNull(),
+	decidedAt: timestamp("decided_at", { withTimezone: true, mode: 'string' }),
+	rolledBackAt: timestamp("rolled_back_at", { withTimezone: true, mode: 'string' }),
+	rollbackError: text("rollback_error"),
+}, (table): PgTableExtraConfigValue[] => [
+	index("ix_evolution_bundles_space_status_updated").using("btree", table.spaceId.asc().nullsLast(), table.status.asc().nullsLast(), table.updatedAt.desc().nullsFirst()),
+	index("ix_evolution_bundles_created_by_user").using("btree", table.createdByUserId.asc().nullsLast()),
+	foreignKey({
+			columns: [table.spaceId],
+			foreignColumns: [spaces.id],
+			name: "evolution_bundles_space_id_fkey"
+		}),
+	foreignKey({
+			columns: [table.createdByUserId],
+			foreignColumns: [users.id],
+			name: "evolution_bundles_created_by_user_id_fkey"
+		}),
+	check("ck_evolution_bundles_status", sql`(status)::text = ANY (ARRAY[('pending_review'::character varying)::text, ('partially_approved'::character varying)::text, ('applied'::character varying)::text, ('rejected'::character varying)::text, ('rolled_back'::character varying)::text, ('rollback_failed'::character varying)::text])`),
+	check("ck_evolution_bundles_risk_level", sql`(risk_level)::text = ANY (ARRAY[('low'::character varying)::text, ('medium'::character varying)::text, ('high'::character varying)::text, ('critical'::character varying)::text])`),
+]);
+
+export const evolutionBundleMembers = pgTable("evolution_bundle_members", {
+	id: varchar({ length: 36 }).primaryKey().notNull(),
+	bundleId: varchar("bundle_id", { length: 36 }).notNull(),
+	proposalId: varchar("proposal_id", { length: 36 }).notNull(),
+	position: integer().notNull(),
+	status: varchar({ length: 32 }).default("pending").notNull(),
+	decisionNote: text("decision_note"),
+	decidedByUserId: varchar("decided_by_user_id", { length: 36 }),
+	decidedAt: timestamp("decided_at", { withTimezone: true, mode: 'string' }),
+	beforeSnapshotJson: jsonb("before_snapshot_json").default({}).notNull(),
+	afterSnapshotJson: jsonb("after_snapshot_json").default({}).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).notNull(),
+}, (table): PgTableExtraConfigValue[] => [
+	index("ix_evolution_bundle_members_bundle_position").using("btree", table.bundleId.asc().nullsLast(), table.position.asc().nullsLast()),
+	index("ix_evolution_bundle_members_proposal_id").using("btree", table.proposalId.asc().nullsLast()),
+	uniqueIndex("uq_evolution_bundle_members_proposal").using("btree", table.proposalId.asc().nullsLast()),
+	foreignKey({
+			columns: [table.bundleId],
+			foreignColumns: [evolutionBundles.id],
+			name: "evolution_bundle_members_bundle_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.proposalId],
+			foreignColumns: [proposals.id],
+			name: "evolution_bundle_members_proposal_id_fkey"
+		}),
+	foreignKey({
+			columns: [table.decidedByUserId],
+			foreignColumns: [users.id],
+			name: "evolution_bundle_members_decided_by_user_id_fkey"
+		}).onDelete("set null"),
+	check("ck_evolution_bundle_members_status", sql`(status)::text = ANY (ARRAY[('pending'::character varying)::text, ('approved'::character varying)::text, ('rejected'::character varying)::text, ('released'::character varying)::text, ('rolled_back'::character varying)::text, ('rollback_failed'::character varying)::text])`),
+	check("ck_evolution_bundle_members_position", sql`position > 0`),
+	check("ck_evolution_bundle_members_before_snapshot_object", sql`jsonb_typeof(before_snapshot_json) = 'object'::text`),
+	check("ck_evolution_bundle_members_after_snapshot_object", sql`jsonb_typeof(after_snapshot_json) = 'object'::text`),
+]);
 
 export const evolutionSignals = pgTable("evolution_signals", {
 	id: varchar({ length: 36 }).primaryKey().notNull(),
@@ -15,6 +83,10 @@ export const evolutionSignals = pgTable("evolution_signals", {
 	severity: varchar({ length: 32 }).notNull(),
 	summary: text(),
 	payloadJson: jsonb("payload_json").notNull(),
+	triageStatus: varchar("triage_status", { length: 32 }).default("new").notNull(),
+	triagedAt: timestamp("triaged_at", { withTimezone: true, mode: 'string' }),
+	triagedByUserId: varchar("triaged_by_user_id", { length: 36 }),
+	triageNote: text("triage_note"),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).notNull(),
 }, (table): PgTableExtraConfigValue[] => [
 	index("ix_evolution_signals_severity").using("btree", table.severity.asc().nullsLast()),
@@ -23,6 +95,7 @@ export const evolutionSignals = pgTable("evolution_signals", {
 	index("ix_evolution_signals_source_type").using("btree", table.sourceType.asc().nullsLast()),
 	index("ix_evolution_signals_space_id").using("btree", table.spaceId.asc().nullsLast()),
 	index("ix_evolution_signals_space_target_type_created").using("btree", table.spaceId.asc().nullsLast(), table.targetId.asc().nullsLast(), table.signalType.asc().nullsLast(), table.createdAt.asc().nullsLast()),
+	index("ix_evolution_signals_space_triage_created").using("btree", table.spaceId.asc().nullsLast(), table.triageStatus.asc().nullsLast(), table.createdAt.asc().nullsLast()),
 	index("ix_evolution_signals_target_id").using("btree", table.targetId.asc().nullsLast()),
 	foreignKey({
 			columns: [table.spaceId],
@@ -34,6 +107,7 @@ export const evolutionSignals = pgTable("evolution_signals", {
 			foreignColumns: [evolutionTargets.id],
 			name: "evolution_signals_target_id_fkey"
 		}),
+	check("ck_evolution_signals_triage_status", sql`(triage_status)::text = ANY (ARRAY[('new'::character varying)::text, ('acknowledged'::character varying)::text, ('dismissed'::character varying)::text, ('actioned'::character varying)::text])`),
 ]);
 
 export const evolutionTargets = pgTable("evolution_targets", {

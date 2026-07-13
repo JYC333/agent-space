@@ -730,3 +730,56 @@ CREATE TABLE public.jobs (
 CREATE INDEX ix_jobs_space_id ON public.jobs USING btree (space_id);
 CREATE INDEX ix_jobs_status ON public.jobs USING btree (status);
 CREATE INDEX ix_jobs_job_type ON public.jobs USING btree (job_type);
+
+-- Proposal apply checks whether an ordinary proposal belongs to an active
+-- Evolution bundle. These tables are not exercised as a feature in the
+-- Source tests, but the canonical proposal boundary reads them on every
+-- accept/reject. Keep the fixture aligned with the production baseline so
+-- unrelated proposal flows do not fail with a missing-relation error.
+CREATE TABLE public.evolution_bundles (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    title character varying(256) NOT NULL,
+    description text,
+    status character varying(32) DEFAULT 'pending_review' NOT NULL,
+    risk_level character varying(32) NOT NULL,
+    created_by_user_id character varying(36) NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    decided_at timestamp with time zone,
+    rolled_back_at timestamp with time zone,
+    rollback_error text,
+    CONSTRAINT evolution_bundles_pkey PRIMARY KEY (id),
+    CONSTRAINT ck_evolution_bundles_status CHECK (((status)::text = ANY ((ARRAY['pending_review'::character varying, 'partially_approved'::character varying, 'applied'::character varying, 'rejected'::character varying, 'rolled_back'::character varying, 'rollback_failed'::character varying])::text[]))),
+    CONSTRAINT ck_evolution_bundles_risk_level CHECK (((risk_level)::text = ANY ((ARRAY['low'::character varying, 'medium'::character varying, 'high'::character varying, 'critical'::character varying])::text[])))
+);
+
+CREATE TABLE public.evolution_bundle_members (
+    id character varying(36) NOT NULL,
+    bundle_id character varying(36) NOT NULL,
+    proposal_id character varying(36) NOT NULL,
+    position integer NOT NULL,
+    status character varying(32) DEFAULT 'pending' NOT NULL,
+    decision_note text,
+    decided_by_user_id character varying(36),
+    decided_at timestamp with time zone,
+    before_snapshot_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    after_snapshot_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    CONSTRAINT evolution_bundle_members_pkey PRIMARY KEY (id),
+    CONSTRAINT ck_evolution_bundle_members_status CHECK (((status)::text = ANY ((ARRAY['pending'::character varying, 'approved'::character varying, 'rejected'::character varying, 'released'::character varying, 'rolled_back'::character varying, 'rollback_failed'::character varying])::text[]))),
+    CONSTRAINT ck_evolution_bundle_members_position CHECK (position > 0),
+    CONSTRAINT ck_evolution_bundle_members_before_snapshot_object CHECK (jsonb_typeof(before_snapshot_json) = 'object'::text),
+    CONSTRAINT ck_evolution_bundle_members_after_snapshot_object CHECK (jsonb_typeof(after_snapshot_json) = 'object'::text)
+);
+
+CREATE INDEX ix_evolution_bundles_space_status_updated
+    ON public.evolution_bundles (space_id, status, updated_at DESC);
+CREATE INDEX ix_evolution_bundles_created_by_user
+    ON public.evolution_bundles (created_by_user_id);
+CREATE INDEX ix_evolution_bundle_members_bundle_position
+    ON public.evolution_bundle_members (bundle_id, position);
+CREATE INDEX ix_evolution_bundle_members_proposal_id
+    ON public.evolution_bundle_members (proposal_id);
+CREATE UNIQUE INDEX uq_evolution_bundle_members_proposal
+    ON public.evolution_bundle_members (proposal_id);

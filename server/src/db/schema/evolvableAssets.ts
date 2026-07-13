@@ -232,3 +232,54 @@ export const evolvableAssetEvaluationRuns = pgTable("evolvable_asset_evaluation_
 	check("ck_evolvable_asset_evaluation_runs_metrics_object", sql`jsonb_typeof(metrics_json) = 'object'::text`),
 	check("ck_evolvable_asset_evaluation_runs_blockers_array", sql`jsonb_typeof(blockers_json) = 'array'::text`),
 ]);
+
+export const evaluationCases = pgTable("evaluation_cases", {
+	id: varchar({ length: 36 }).primaryKey().notNull(),
+	spaceId: varchar("space_id", { length: 36 }).notNull(),
+	assetId: varchar("asset_id", { length: 36 }).notNull(),
+	name: varchar({ length: 160 }).notNull(),
+	description: text(),
+	inputJson: jsonb("input_json").default({}).notNull(),
+	expectationJson: jsonb("expectation_json").default({}).notNull(),
+	verificationRecipeJson: jsonb("verification_recipe_json").notNull(),
+	baselineOutputJson: jsonb("baseline_output_json").notNull(),
+	baselineVersionId: varchar("baseline_version_id", { length: 36 }).notNull(),
+	sourceRunId: varchar("source_run_id", { length: 36 }),
+	status: varchar({ length: 16 }).default('active').notNull(),
+	createdByUserId: varchar("created_by_user_id", { length: 36 }),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).notNull(),
+}, (table): PgTableExtraConfigValue[] => [
+	index("ix_evaluation_cases_space_id").using("btree", table.spaceId.asc().nullsLast()),
+	index("ix_evaluation_cases_asset_id").using("btree", table.assetId.asc().nullsLast(), table.createdAt.desc().nullsFirst()),
+	index("ix_evaluation_cases_source_run_id").using("btree", table.sourceRunId.asc().nullsLast()),
+	foreignKey({
+			columns: [table.spaceId],
+			foreignColumns: [spaces.id],
+			name: "evaluation_cases_space_id_fkey"
+		}),
+	foreignKey({
+			columns: [table.assetId],
+			foreignColumns: [evolvableAssets.id],
+			name: "evaluation_cases_asset_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.baselineVersionId],
+			foreignColumns: [evolvableAssetVersions.id],
+			name: "evaluation_cases_baseline_version_id_fkey"
+		}).onDelete("restrict"),
+	foreignKey({
+			columns: [table.sourceRunId],
+			foreignColumns: [runs.id],
+			name: "evaluation_cases_source_run_id_fkey"
+		}).onDelete("set null"),
+	foreignKey({
+			columns: [table.createdByUserId],
+			foreignColumns: [users.id],
+			name: "evaluation_cases_created_by_user_id_fkey"
+		}).onDelete("set null"),
+	check("ck_evaluation_cases_status", sql`(status)::text = ANY (ARRAY[('active'::character varying)::text, ('archived'::character varying)::text])`),
+	check("ck_evaluation_cases_input_object", sql`jsonb_typeof(input_json) = 'object'::text`),
+	check("ck_evaluation_cases_expectation_object", sql`jsonb_typeof(expectation_json) = 'object'::text`),
+	check("ck_evaluation_cases_recipe_object", sql`jsonb_typeof(verification_recipe_json) = 'object'::text`),
+]);

@@ -92,6 +92,8 @@ export interface WorkflowRunDraft {
     run_type: "agent";
     trigger_origin: "manual";
     project_id: string;
+    workflow_template_id: string;
+    workflow_config_json: Record<string, unknown>;
     agent_id: string | null;
     runtime_profile_id?: string | null;
     workspace_id?: string | null;

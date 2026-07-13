@@ -121,6 +121,17 @@ describe("proposal applier registry", () => {
     expect(createDefaultProposalApplierRegistry().registeredTypes()).toContain("code_patch");
   });
 
+  it("registers plan review and checkpoint appliers", () => {
+    const registered = Array.from(createDefaultProposalApplierRegistry().registeredTypes());
+    expect(registered).toEqual(expect.arrayContaining(["plan_review", "plan_checkpoint"]));
+  });
+
+  it("registers the audited evolution bundle rollback applier", () => {
+    expect(createDefaultProposalApplierRegistry().registeredTypes()).toContain(
+      "evolution_bundle_rollback",
+    );
+  });
+
   it("registers capability lifecycle proposal appliers", () => {
     const registered = createDefaultProposalApplierRegistry().registeredTypes();
     expect(registered).toContain("skill_import_approve");

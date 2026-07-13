@@ -1,13 +1,13 @@
 import { useState, useEffect, useId } from 'react'
 import { Archive, Clock, Loader2, Pause, Play, Plus, ShieldCheck } from 'lucide-react'
 import { toast } from 'sonner'
-import { automationsApi, agentsApi, projectsApi } from '../../api/client'
-import type { AutomationOut, AutomationTargetType, AutomationTriggerType, AgentOut, Project } from '../../types/api'
+import { automationsApi, agentsApi, evolutionApi, projectsApi } from '../../api/client'
+import type { AutomationOut, AutomationTargetType, AutomationTriggerType, AgentOut, EvolvableAsset, EvolvableAssetVersion, Project, WorkflowExecutionSummary } from '../../types/api'
 import { useSpace } from '../../contexts/SpaceContext'
 import { Card, CardTitle } from '../../components/ui/card'
 import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
-import { Badge } from '../../components/ui/badge'
+import { Badge, StatusBadge } from '../../components/ui/badge'
 import { errMsg } from '../../lib/utils'
 
 const BROWSER_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
@@ -45,24 +45,28 @@ function automationTarget(auto: AutomationOut): AutomationTargetType {
   const target = cfgString(auto.config_json, 'target_type')
   if (target === 'knowledge_retrieval_maintenance') return 'knowledge_retrieval_maintenance'
   if (target === 'context_ops_review_cycle') return 'context_ops_review_cycle'
+  if (target === 'workflow') return 'workflow'
   return 'agent_run'
 }
 
 function shortTargetLabel(target: AutomationTargetType): string {
   if (target === 'knowledge_retrieval_maintenance') return 'knowledge maintenance'
   if (target === 'context_ops_review_cycle') return 'context ops review cycle'
+  if (target === 'workflow') return 'workflow'
   return 'agent run'
 }
 
 function defaultName(target: AutomationTargetType): string {
   if (target === 'knowledge_retrieval_maintenance') return 'Knowledge maintenance scan'
   if (target === 'context_ops_review_cycle') return 'Context Review Cycle'
+  if (target === 'workflow') return 'Workflow automation'
   return 'Automation'
 }
 
-function AddAutomationForm({ agents, projects, onAdded, canCreate }: {
+function AddAutomationForm({ agents, projects, workflowAssets, onAdded, canCreate }: {
   agents: AgentOut[]
   projects: Project[]
+  workflowAssets: EvolvableAsset[]
   onAdded: () => void
   canCreate: boolean
 }) {
@@ -77,11 +81,25 @@ function AddAutomationForm({ agents, projects, onAdded, canCreate }: {
   const [prompt, setPrompt] = useState('')
   const [createPacket, setCreatePacket] = useState(false)
   const [includeMemoryMaintenance, setIncludeMemoryMaintenance] = useState(true)
+  const [workflowAssetKey, setWorkflowAssetKey] = useState('')
+  const [workflowVersionId, setWorkflowVersionId] = useState('')
+  const [workflowResolution, setWorkflowResolution] = useState<'pin' | 'follow'>('pin')
+  const [workflowInputJson, setWorkflowInputJson] = useState('{}')
+  const [workflowVersions, setWorkflowVersions] = useState<EvolvableAssetVersion[]>([])
   const [saving, setSaving] = useState(false)
+
+  const selectedWorkflowAsset = workflowAssets.find(asset => asset.asset_key === workflowAssetKey) ?? null
+
+  useEffect(() => {
+    if (!selectedWorkflowAsset) { setWorkflowVersions([]); setWorkflowVersionId(''); return }
+    let active = true
+    void evolutionApi.assetVersions(selectedWorkflowAsset.id).then(versions => { if (active) setWorkflowVersions(versions.filter(version => ['approved', 'candidate', 'testing'].includes(version.status))) }).catch(err => { if (active) toast.error(errMsg(err)) })
+    return () => { active = false }
+  }, [selectedWorkflowAsset])
 
   function reset() {
     setName(''); setAgentId(''); setProjectId(''); setTargetType('agent_run'); setTriggerType('schedule')
-    setCron('0 9 * * *'); setTimezone(BROWSER_TZ); setPrompt(''); setCreatePacket(false); setIncludeMemoryMaintenance(true); setExpanded(false)
+    setCron('0 9 * * *'); setTimezone(BROWSER_TZ); setPrompt(''); setCreatePacket(false); setIncludeMemoryMaintenance(true); setWorkflowAssetKey(''); setWorkflowVersionId(''); setWorkflowResolution('pin'); setWorkflowInputJson('{}'); setWorkflowVersions([]); setExpanded(false)
   }
 
   function handleTargetChange(next: AutomationTargetType) {
@@ -91,6 +109,7 @@ function AddAutomationForm({ agents, projects, onAdded, canCreate }: {
       setIncludeMemoryMaintenance(true)
     }
     if (next === 'knowledge_retrieval_maintenance') setCreatePacket(false)
+    if (next === 'workflow' && triggerType === 'schedule') setWorkflowResolution('pin')
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -98,6 +117,15 @@ function AddAutomationForm({ agents, projects, onAdded, canCreate }: {
     if (!canCreate) { toast.error('Select an operational space first'); return }
     if (!agentId) { toast.error('Pick an agent for this automation'); return }
     if (triggerType === 'schedule' && !cron.trim()) { toast.error('A cron expression is required'); return }
+    if (targetType === 'workflow') {
+      if (!workflowAssetKey) { toast.error('Pick a workflow template'); return }
+      if (workflowResolution === 'pin' && !workflowVersionId) { toast.error('Pinned workflow automation requires a version'); return }
+      if (triggerType === 'schedule' && workflowResolution === 'follow') { toast.error('Scheduled workflow automations must use a pinned version'); return }
+      try {
+        const parsed = JSON.parse(workflowInputJson)
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error()
+      } catch { toast.error('Workflow input must be a JSON object'); return }
+    }
 
     const config: Record<string, unknown> = { target_type: targetType }
     if (triggerType === 'schedule') { config.cron = cron.trim(); config.timezone = timezone.trim() || 'UTC' }
@@ -109,13 +137,19 @@ function AddAutomationForm({ agents, projects, onAdded, canCreate }: {
       config.create_packets = createPacket
       config.include_memory_maintenance = includeMemoryMaintenance
     }
+    if (targetType === 'workflow') {
+      config.workflow_asset_key = workflowAssetKey
+      config.workflow_resolution = workflowResolution
+      if (workflowVersionId) config.workflow_version_id = workflowVersionId
+      config.input_json = JSON.parse(workflowInputJson)
+    }
 
     setSaving(true)
     try {
       await automationsApi.create({
         name: name.trim() || defaultName(targetType),
         agent_id: agentId,
-        project_id: targetType === 'agent_run' && projectId ? projectId : undefined,
+        project_id: (targetType === 'agent_run' || targetType === 'workflow') && projectId ? projectId : undefined,
         trigger_type: triggerType,
         config_json: config,
       })
@@ -150,7 +184,7 @@ function AddAutomationForm({ agents, projects, onAdded, canCreate }: {
           <p className="text-xs text-muted-foreground">No agents yet — create one on the Agents page first.</p>
         )}
         {targetType !== 'agent_run' && (
-          <p className="text-xs text-muted-foreground">Used for run attribution only. Pick an active agent with a current version; the scan does not run the agent runtime.</p>
+          <p className="text-xs text-muted-foreground">Workflow automation uses the selected agent for execution; maintenance targets use it for attribution only.</p>
         )}
       </div>
 
@@ -160,10 +194,11 @@ function AddAutomationForm({ agents, projects, onAdded, canCreate }: {
           <option value="agent_run">Agent run</option>
           <option value="knowledge_retrieval_maintenance">Knowledge maintenance scan</option>
           <option value="context_ops_review_cycle">Context Review Cycle</option>
+          <option value="workflow">Workflow</option>
         </select>
       </div>
 
-      {targetType === 'agent_run' && (
+      {(targetType === 'agent_run' || targetType === 'workflow') && (
         <div className="space-y-1.5">
           <label className={fieldLabel}>Project (optional)</label>
           <select value={projectId} onChange={e => setProjectId(e.target.value)} className={selectCls}>
@@ -173,6 +208,8 @@ function AddAutomationForm({ agents, projects, onAdded, canCreate }: {
           <p className="text-xs text-muted-foreground">Bound runs read project evidence and memory, and their outputs are attributed to the project.</p>
         </div>
       )}
+
+      {targetType === 'workflow' && <div className="space-y-3 rounded-md border border-border p-3"><div className="space-y-1.5"><label className={fieldLabel}>Workflow template</label><select value={workflowAssetKey} onChange={e => { setWorkflowAssetKey(e.target.value); setWorkflowVersionId('') }} className={selectCls}><option value="">Select workflow…</option>{workflowAssets.map(asset => <option key={asset.id} value={asset.asset_key}>{asset.display_name}</option>)}</select></div><div className="grid gap-3 md:grid-cols-2"><div className="space-y-1.5"><label className={fieldLabel}>Resolution</label><select value={workflowResolution} onChange={e => setWorkflowResolution(e.target.value as 'pin' | 'follow')} className={selectCls} disabled={triggerType === 'schedule'}><option value="pin">Pin version</option><option value="follow">Follow approved version</option></select></div><div className="space-y-1.5"><label className={fieldLabel}>Version</label><select value={workflowVersionId} onChange={e => setWorkflowVersionId(e.target.value)} className={selectCls} disabled={workflowResolution !== 'pin'}><option value="">Select version…</option>{workflowVersions.map(version => <option key={version.id} value={version.id}>v{version.version} · {version.status}</option>)}</select></div></div><div className="space-y-1.5"><label className={fieldLabel}>Workflow input JSON</label><textarea value={workflowInputJson} onChange={e => setWorkflowInputJson(e.target.value)} rows={5} className="flex w-full rounded-md border border-border bg-input px-3 py-2 font-mono text-xs" /></div>{triggerType === 'schedule' && <p className="text-xs text-muted-foreground">Scheduled workflow automations are pinned so future executions remain reproducible.</p>}</div>}
 
       <div className="space-y-1.5">
         <label className={fieldLabel}>Name</label>
@@ -275,6 +312,7 @@ function AutomationCard({ auto, agentName, projectName, projects, onChanged }: {
   const [busy, setBusy] = useState(false)
   const [projectDraft, setProjectDraft] = useState(auto.project_id ?? '')
   const [savingProject, setSavingProject] = useState(false)
+  const [executions, setExecutions] = useState<WorkflowExecutionSummary[]>([])
   const isSchedule = auto.trigger_type === 'schedule'
   const archived = auto.status === 'archived'
   const target = automationTarget(auto)
@@ -282,6 +320,13 @@ function AutomationCard({ auto, agentName, projectName, projects, onChanged }: {
   useEffect(() => {
     setProjectDraft(auto.project_id ?? '')
   }, [auto.project_id])
+
+  useEffect(() => {
+    if (target !== 'workflow') { setExecutions([]); return }
+    let active = true
+    void automationsApi.workflowExecutions(auto.id).then(rows => { if (active) setExecutions(rows.slice(0, 5)) }).catch(() => { if (active) setExecutions([]) })
+    return () => { active = false }
+  }, [auto.id, target])
 
   async function act(fn: () => Promise<unknown>, ok: string) {
     setBusy(true)
@@ -352,10 +397,19 @@ function AutomationCard({ auto, agentName, projectName, projects, onChanged }: {
       {target !== 'agent_run' && (
         <p className="text-xs mb-3 flex items-center gap-1.5 text-muted-foreground">
           <ShieldCheck className="size-3.5" />
-          {target === 'context_ops_review_cycle'
+          {target === 'workflow'
+            ? `Workflow ${cfgString(auto.config_json, 'workflow_asset_key') || '—'} · ${cfgString(auto.config_json, 'workflow_resolution') || 'pin'}${cfgString(auto.config_json, 'workflow_version_id') ? ` · version ${cfgString(auto.config_json, 'workflow_version_id').slice(-8)}` : ''}`
+            : target === 'context_ops_review_cycle'
             ? `Context Review Cycle report${cfgBool(auto.config_json, 'create_packets') ? ' + review packets' : ''} · memory ${cfgBoolDefault(auto.config_json, 'include_memory_maintenance', true) ? 'on' : 'off'}`
             : `Private report${cfgBool(auto.config_json, 'create_packet') ? ' + proposal packet' : ''}`}
         </p>
+      )}
+
+      {target === 'workflow' && (
+        <div className="mb-3 rounded-md border border-border p-3">
+          <div className="flex items-center justify-between gap-2"><p className="text-xs font-medium">Workflow executions</p><span className="text-[10px] text-muted-foreground">{executions.length} recent</span></div>
+          {executions.length === 0 ? <p className="mt-2 text-xs text-muted-foreground">No Workflow Execution has been fired yet.</p> : <div className="mt-2 space-y-1.5">{executions.map(execution => <div key={execution.workflow_execution_id} className="flex flex-wrap items-center justify-between gap-2 text-xs"><span className="font-mono text-muted-foreground">{execution.workflow_execution_id.slice(0, 8)}…</span><span>{execution.completed_node_count}/{execution.node_count} nodes</span><StatusBadge status={execution.status} /><span className="text-muted-foreground">{fmt(execution.created_at)}</span>{execution.root_run_id && <a href={`/runs/${execution.root_run_id}`} className="text-accent-foreground hover:underline">root run</a>}</div>)}</div>}
+        </div>
       )}
 
       {!archived && (
@@ -369,7 +423,7 @@ function AutomationCard({ auto, agentName, projectName, projects, onChanged }: {
                   target === 'agent_run' ? { prompt: cfgString(auto.config_json, 'prompt') || undefined } : {},
                 )
                 if (result.skipped) toast.info(result.skip_reason ? `Skipped — ${result.skip_reason}` : 'Skipped')
-                else toast.success(target === 'agent_run' ? 'Run queued' : 'Scan completed')
+                else toast.success(target === 'agent_run' || target === 'workflow' ? 'Run queued' : 'Scan completed')
                 onChanged()
               } catch (err) {
                 toast.error(errMsg(err))
@@ -377,7 +431,7 @@ function AutomationCard({ auto, agentName, projectName, projects, onChanged }: {
                 setBusy(false)
               }
             }}>
-            <Play className="size-3.5 mr-1" /> {target === 'agent_run' ? 'Run now' : 'Scan now'}
+            <Play className="size-3.5 mr-1" /> {target === 'agent_run' || target === 'workflow' ? 'Run now' : 'Scan now'}
           </Button>
           {auto.status === 'active' ? (
             <Button size="sm" variant="outline" disabled={busy}
@@ -405,6 +459,7 @@ export default function AutomationsPage() {
   const [autos, setAutos] = useState<AutomationOut[]>([])
   const [agents, setAgents] = useState<AgentOut[]>([])
   const [projects, setProjects] = useState<Project[]>([])
+  const [workflowAssets, setWorkflowAssets] = useState<EvolvableAsset[]>([])
   const [loading, setLoading] = useState(true)
   const headingId = useId()
 
@@ -413,15 +468,17 @@ export default function AutomationsPage() {
   async function loadAll() {
     setLoading(true)
     try {
-      if (!activeSpaceId) { setAutos([]); setAgents([]); setProjects([]); return }
-      const [a, ag, pr] = await Promise.all([
+      if (!activeSpaceId) { setAutos([]); setAgents([]); setProjects([]); setWorkflowAssets([]); return }
+      const [a, ag, pr, assets] = await Promise.all([
         automationsApi.list(),
         agentsApi.list(),
         projectsApi.list({ status: 'active' }),
+        evolutionApi.assets({ asset_type: 'workflow_template' }),
       ])
       setAutos(a)
       setAgents(ag)
       setProjects(pr.items)
+      setWorkflowAssets(assets)
     } catch (err) {
       toast.error(errMsg(err))
     } finally {
@@ -452,7 +509,7 @@ export default function AutomationsPage() {
         </div>
       ) : (
         <div className="space-y-4">
-          <AddAutomationForm agents={agents} projects={projects} onAdded={loadAll} canCreate={Boolean(activeSpaceId)} />
+          <AddAutomationForm agents={agents} projects={projects} workflowAssets={workflowAssets} onAdded={loadAll} canCreate={Boolean(activeSpaceId)} />
           {visible.length === 0 ? (
             <Card>
               <p className="text-sm text-muted-foreground p-4">

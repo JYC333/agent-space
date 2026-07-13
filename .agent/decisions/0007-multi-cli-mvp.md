@@ -99,6 +99,8 @@ Vendor files are never the source of truth and are never written to the real wor
 - Users can switch CLI tools on a per-run basis without losing context.
 - Quota awareness is manual but practical (no API access to subscription data needed).
 - Precise token accounting is not available for subscription CLI runtimes.
-- `one_shot_docker` is not implemented.
+- `one_shot_docker` was not implemented in the original C1 MVP. C3 now provides
+  the executor path; it remains deny-by-default (`--network none`) and
+  fail-closed when Docker/image/path prerequisites are unavailable.
 - Adding a new CLI adapter should usually mean adding a RuntimeAdapterSpec, not
   a new runtime class.

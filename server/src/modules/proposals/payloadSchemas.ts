@@ -150,6 +150,32 @@ const followUpTask = z
   .object({ proposal_type: z.literal("follow_up_task") })
   .passthrough();
 
+const planReview = z
+  .object({
+    proposal_type: z.literal("plan_review"),
+    plan_id: z.string().min(1),
+    plan_version_id: z.string().min(1),
+  })
+  .passthrough();
+
+const planCheckpoint = z
+  .object({
+    proposal_type: z.literal("plan_checkpoint"),
+    plan_id: z.string().min(1),
+    plan_version_id: z.string().min(1),
+    node_id: z.string().min(1),
+  })
+  .passthrough();
+
+const workflowExecutionCheckpoint = z
+  .object({
+    proposal_type: z.literal("workflow_execution_checkpoint"),
+    workflow_execution_id: z.string().min(1),
+    node_id: z.string().min(1),
+    automation_id: z.string().min(1).optional(),
+  })
+  .passthrough();
+
 const codePatch = z
   .object({ proposal_type: z.literal("code_patch") })
   .passthrough();
@@ -302,6 +328,24 @@ const evolvableAssetVersionPromote = z
   })
   .passthrough();
 
+const workflowSave = z
+  .object({
+    proposal_type: z.literal("workflow_save"),
+    asset_key: z.string().min(1).max(160),
+    display_name: z.string().min(1).max(512),
+    description: z.string().max(2048),
+    content_json: z.record(z.unknown()),
+    content_hash: z.string().min(1).max(128),
+  })
+  .passthrough();
+
+const evolutionBundleRollback = z
+  .object({
+    proposal_type: z.literal("evolution_bundle_rollback"),
+    bundle_id: z.string().min(1),
+  })
+  .passthrough();
+
 export const ProposalPayloadSchema = z.discriminatedUnion("proposal_type", [
   memoryCreate,
   memoryUpdate,
@@ -326,6 +370,9 @@ export const ProposalPayloadSchema = z.discriminatedUnion("proposal_type", [
   objectKindDeprecate,
   objectKindArchive,
   followUpTask,
+  planReview,
+  planCheckpoint,
+  workflowExecutionCheckpoint,
   codePatch,
   claimCandidatePacket,
   relationDiscoveryPacket,
@@ -340,6 +387,8 @@ export const ProposalPayloadSchema = z.discriminatedUnion("proposal_type", [
   sourceBackfillStart,
   sourceRecipeActivation,
   evolvableAssetVersionPromote,
+  workflowSave,
+  evolutionBundleRollback,
 ]);
 
 export type ProposalPayload = z.infer<typeof ProposalPayloadSchema>;

@@ -1,8 +1,10 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { constants } from "node:fs";
+import { constants, readFileSync } from "node:fs";
 import {
   access,
+  chmod,
+  copyFile,
   lstat,
   mkdir,
   readdir,
@@ -94,7 +96,12 @@ export interface RuntimeToolResolverPort {
 }
 
 export interface RuntimeToolInstallRunner {
-  run(input: { package_ref: string; prefix: string; cache_dir: string }): Promise<void>;
+  run(input: {
+    package_ref: string;
+    prefix: string;
+    cache_dir: string;
+    ignore_scripts?: boolean;
+  }): Promise<void>;
 }
 
 export const RUNTIME_TOOL_DEFINITIONS: Record<string, RuntimeToolDefinition> = {
@@ -116,6 +123,16 @@ export const RUNTIME_TOOL_DEFINITIONS: Record<string, RuntimeToolDefinition> = {
     bin_name: "codex",
     bin_relative_path: join("node_modules", ".bin", "codex"),
     package_json_relative_path: join("node_modules", "@openai", "codex", "package.json"),
+    default_version: "latest",
+  },
+  opencode: {
+    runtime: "opencode",
+    label: "OpenCode",
+    source: "npm",
+    package_name: "opencode-ai",
+    bin_name: "opencode",
+    bin_relative_path: join("node_modules", ".bin", "opencode"),
+    package_json_relative_path: join("node_modules", "opencode-ai", "package.json"),
     default_version: "latest",
   },
 };
@@ -251,6 +268,9 @@ async function runtimeToolVersionReady(
   if (!(await executableExists(resolve(versionRoot, definition.bin_relative_path)))) {
     return false;
   }
+  if (definition.runtime === "opencode" && !(await openCodeBinaryReady(versionRoot))) {
+    return false;
+  }
   const nativePackagePath = nativeOptionalPackagePath(definition, versionRoot);
   if (nativePackagePath && !(await exists(nativePackagePath))) {
     return false;
@@ -320,6 +340,68 @@ function isMuslRuntime(): boolean {
   return Boolean(header && !header.glibcVersionRuntime);
 }
 
+function linuxSupportsAvx2(): boolean {
+  if (process.platform !== "linux" || process.arch !== "x64") return false;
+  try {
+    return /(^|\s)avx2(\s|$)/i.test(readFileSync("/proc/cpuinfo", "utf8"));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * OpenCode's npm postinstall has its own libc probe and can select a musl
+ * package even when the Node runtime is glibc-based. Keep the selection in
+ * the server installer, where the runtime that will execute the tool is
+ * authoritative, and never mix libc variants in the fallback list.
+ */
+function openCodeNativePackageNames(): string[] {
+  const libcSuffix = isMuslRuntime() ? "-musl" : "";
+  if (process.platform === "linux") {
+    if (process.arch === "x64") {
+      const base = "opencode-linux-x64";
+      return linuxSupportsAvx2()
+        ? [`${base}${libcSuffix}`, `${base}-baseline${libcSuffix}`]
+        : [`${base}-baseline${libcSuffix}`, `${base}${libcSuffix}`];
+    }
+    if (process.arch === "arm64") return [`opencode-linux-arm64${libcSuffix}`];
+    return [];
+  }
+  if (process.platform === "darwin") {
+    if (process.arch === "x64") return ["opencode-darwin-x64", "opencode-darwin-x64-baseline"];
+    if (process.arch === "arm64") return ["opencode-darwin-arm64"];
+    return [];
+  }
+  if (process.platform === "win32") {
+    if (process.arch === "x64") return ["opencode-windows-x64", "opencode-windows-x64-baseline"];
+    if (process.arch === "arm64") return ["opencode-windows-arm64"];
+    return [];
+  }
+  return [];
+}
+
+function openCodeNativeBinaryName(): string {
+  return process.platform === "win32" ? "opencode.exe" : "opencode";
+}
+
+function openCodeWrapperBinaryPath(prefix: string): string {
+  return join(prefix, "node_modules", "opencode-ai", "bin", "opencode.exe");
+}
+
+function openCodeNativeBinaryPath(prefix: string, packageName: string): string {
+  return join(packageInstallPath(prefix, packageName), "bin", openCodeNativeBinaryName());
+}
+
+async function openCodeBinaryReady(prefix: string): Promise<boolean> {
+  if (!(await executableExists(openCodeWrapperBinaryPath(prefix)))) return false;
+  const nativeBinaryChecks = await Promise.all(
+    openCodeNativePackageNames().map(packageName =>
+      executableExists(openCodeNativeBinaryPath(prefix, packageName)),
+    ),
+  );
+  return nativeBinaryChecks.some(Boolean);
+}
+
 function nativeOptionalPackageName(definition: RuntimeToolDefinition): string | null {
   if (definition.runtime === "codex_cli") return codexNativePackageName();
   if (definition.runtime === "claude_code") return claudeNativePackageName();
@@ -382,6 +464,7 @@ async function runNpmInstall(input: {
   package_ref: string;
   prefix: string;
   cache_dir: string;
+  ignore_scripts?: boolean;
 }): Promise<void> {
   await mkdir(input.cache_dir, { recursive: true, mode: 0o700 });
   const args = [
@@ -399,6 +482,7 @@ async function runNpmInstall(input: {
     input.cache_dir,
     input.package_ref,
   ];
+  if (input.ignore_scripts) args.splice(1, 0, "--ignore-scripts");
   const safeEnv = npmInstallEnv();
   await new Promise<void>((resolvePromise, reject) => {
     let output = "";
@@ -567,6 +651,10 @@ export class RuntimeToolRegistry implements RuntimeToolResolverPort {
         executablePath = resolve(versionRoot, definition.bin_relative_path);
         executableOk = await executableExists(executablePath);
         if (!executableOk) warnings.push("active executable is missing or not executable");
+        if (definition.runtime === "opencode" && !(await openCodeBinaryReady(versionRoot))) {
+          executableOk = false;
+          warnings.push("OpenCode libc-compatible native binary is missing; reinstall the OpenCode runtime tool.");
+        }
         const nativePackageName = nativeOptionalPackageName(definition);
         const nativePackagePath = nativeOptionalPackagePath(definition, versionRoot);
         if (nativePackagePath && !(await exists(nativePackagePath))) {
@@ -725,6 +813,7 @@ export class RuntimeToolRegistry implements RuntimeToolResolverPort {
         package_ref: packageRef(definition, requestedVersion),
         prefix: tmpDir,
         cache_dir: join(this.config.agentSpaceHome, "cache", "npm"),
+        ignore_scripts: definition.runtime === "opencode",
       });
       const packageJson = await readJsonFile<{
         version?: string;
@@ -736,6 +825,12 @@ export class RuntimeToolRegistry implements RuntimeToolResolverPort {
         packageJson?.version ?? requestedVersion,
         "installed_version",
       );
+      if (definition.runtime === "opencode") {
+        await this.ensureOpenCodeBinary(
+          tmpDir,
+          packageJson?.optionalDependencies ?? {},
+        );
+      }
       const binPath = join(tmpDir, definition.bin_relative_path);
       if (!(await executableExists(binPath))) {
         throw new RuntimeToolError(
@@ -832,6 +927,38 @@ export class RuntimeToolRegistry implements RuntimeToolResolverPort {
     }
   }
 
+  private async ensureOpenCodeBinary(
+    prefix: string,
+    optionalDependencies: Record<string, string>,
+  ): Promise<void> {
+    const candidates = openCodeNativePackageNames();
+    const target = openCodeWrapperBinaryPath(prefix);
+    for (const packageName of candidates) {
+      const packagePath = packageInstallPath(prefix, packageName);
+      if (!(await exists(packagePath))) {
+        const packageSpec = optionalDependencies[packageName];
+        if (!packageSpec) continue;
+        await this.runner.run({
+          package_ref: `${packageName}@${packageSpec}`,
+          prefix,
+          cache_dir: join(this.config.agentSpaceHome, "cache", "npm"),
+          ignore_scripts: true,
+        });
+      }
+      const source = openCodeNativeBinaryPath(prefix, packageName);
+      if (!(await exists(source))) continue;
+      await mkdir(dirname(target), { recursive: true, mode: 0o700 });
+      await copyFile(source, target);
+      await chmod(target, 0o755);
+      return;
+    }
+    throw new RuntimeToolError(
+      "runtime_tool_optional_dependency_missing",
+      `No libc-compatible OpenCode binary was installed. Tried: ${candidates.join(", ") || "none"}.`,
+      502,
+    );
+  }
+
   private async ensureClaudePostinstall(prefix: string): Promise<void> {
     if (await claudePlacedBinaryReady(prefix)) return;
     await runNodePostinstall(claudePostinstallPath(prefix), claudeWrapperPackagePath(prefix));
@@ -880,6 +1007,10 @@ export class RuntimeToolRegistry implements RuntimeToolResolverPort {
     const manifest = await this.readManifest(definition.runtime, cleanVersion);
     let executableOk = await executableExists(executablePath);
     if (!executableOk) warnings.push("executable is missing or not executable");
+    if (definition.runtime === "opencode" && !(await openCodeBinaryReady(versionRoot))) {
+      executableOk = false;
+      warnings.push("OpenCode libc-compatible native binary is missing");
+    }
     const nativePackageName = nativeOptionalPackageName(definition);
     const nativePackagePath = nativeOptionalPackagePath(definition, versionRoot);
     if (nativePackagePath && !(await exists(nativePackagePath))) {

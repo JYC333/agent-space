@@ -24,7 +24,7 @@ export function workingDirScopeForLevel(
   level: string | null | undefined,
 ): WorkingDirScope {
   if (level === "ephemeral") return "ephemeral";
-  if (level === "worktree") return "worktree";
+  if (level === "worktree" || level === "one_shot_docker") return "worktree";
   return "none";
 }
 

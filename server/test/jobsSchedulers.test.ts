@@ -1089,6 +1089,9 @@ class MaintenanceAutomationFakePool implements Queryable {
         ] as Row[],
       };
     }
+    if (sql.includes("INSERT INTO run_attempts")) {
+      return { rowCount: 1, rows: [] };
+    }
     if (sql.includes("UPDATE context_snapshots")) {
       return { rowCount: 1, rows: [] };
     }
@@ -1241,6 +1244,9 @@ class AgentAutomationFireFakePool implements Queryable {
           },
         ] as Row[],
       };
+    }
+    if (sql.includes("INSERT INTO run_attempts")) {
+      return { rowCount: 1, rows: [] };
     }
     if (sql.includes("UPDATE context_snapshots")) {
       return { rowCount: 1, rows: [] };

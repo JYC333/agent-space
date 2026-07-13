@@ -18,6 +18,12 @@ workflow templates, imported skill packages, project workflow profiles, governed
 skill lifecycle proposals, runtime skill rendering, and workflow run draft
 creation. It does not make the native `capability` runtime executable.
 
+Terminology for runtime binaries, adapters, extensions, tool bindings, skill
+bindings, and product plugins is defined in
+[GLOSSARY.md](GLOSSARY.md). These are separate ownership boundaries; an
+imported Open Skill is source material and is not a plugin or a runtime
+permission grant.
+
 ## Concepts
 
 ### Open Skill
@@ -123,6 +129,20 @@ Users generally choose workflows or modes rather than raw capabilities.
 Templates declare input schema, default config, output artifact types, proposal
 policy, and recommended runtime adapters.
 
+### WorkflowDefinition v1
+
+`workflow_definition.v1` is the versioned workflow-as-data shape stored in an
+`evolvable_asset_versions.content_json` row whose asset type is
+`workflow_template`. It contains bounded nodes, explicit dependency edges,
+capability/prompt/agent/runtime bindings, verification-recipe references, node
+contract metadata, and approval checkpoints. The protocol schema rejects
+duplicate/unknown dependencies and cycles, and caps definitions at 30 nodes.
+
+The built-in research templates are synchronized as system evolvable assets
+with approved built-in versions. User or space versions use the existing draft
+→ evaluation → promotion-proposal → approval path; the generic evolvable asset
+APIs do not grant approval directly.
+
 ### ProjectWorkflowProfile / Saved Workflow Preset
 
 `ProjectWorkflowProfile` is the database/API name for a saved project workflow
@@ -176,6 +196,12 @@ an enabled saved workflow preset plus request config, into a normal agents
 merged config, artifact expectations, optional selected Agent runtime profile,
 the primary capability id stored in `runs.capability_id`, and the complete
 workflow capability list stored in `runs.capabilities_json`.
+
+When a workflow draft is submitted, the server resolves the approved
+evolvable workflow version and records its id as `runs.workflow_version_id`.
+If the system baseline has not been seeded yet, the static built-in template
+remains the launch fallback and the pointer is null; this fallback is
+deliberately frozen while graph execution is deferred to B2.
 
 Workflow drafts are launch inputs only. Runs still execute through the existing
 agent/run/orchestration path. The product launcher should select `agent_id` and
@@ -353,3 +379,11 @@ a native execution path exists.
   persist the full workflow capability list in `runs.capabilities_json`.
 - Native runtime skill execution is not implemented; rendering only supplies
   adapter-specific instructions or prompt blocks.
+- `RuntimeAdapterSpec` entries declare the executor family consumed by runs
+  orchestration. Adapter capability and trust declarations are conservative;
+  conformance-backed route enforcement remains scoped to C3.
+- Runtime-internal CLI subagents are not represented uniformly by the current
+  capability model. Managed API delegation remains group-scoped and
+  policy-gated. Claude runs render and verify a run-scoped settings file that
+  denies the `Task` tool; Codex remains `unknown` until C3 verifies an
+  equivalent control, and planned runtimes are not executable by declaration.
