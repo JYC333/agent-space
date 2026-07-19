@@ -58,7 +58,8 @@ beforeEach(async () => {
     `TRUNCATE evolution_bundle_members, evolution_bundles,
               jobs, retrieval_edges, retrieval_chunks, retrieval_aliases, retrieval_objects,
               policy_decision_records, proposal_approvals, proposals, runs, space_memberships,
-              source_handler_runs, source_handler_versions, source_recipe_versions, source_connections,
+              source_handler_runs, source_handler_versions, source_recipe_versions, source_channel_item_links,
+              source_channel_user_subscriptions, source_channels, source_connections,
               source_connectors, scheduler_tasks, settings, artifacts, extraction_jobs, source_items,
               source_snapshots, extracted_evidence, credentials`,
   );
@@ -131,7 +132,9 @@ async function createDryRunActivatedRecipeSource(endpointUrl: string) {
   });
   expect(created.connection.handler_kind).toBe("recipe");
   expect(created.connection.status).toBe("paused");
-  expect(created.connection.next_check_at).toEqual(expect.any(String));
+  // Paused channels intentionally do not carry an active scheduler rule;
+  // activation applies the requested schedule atomically.
+  expect(created.connection.schedule_rule).toBeNull();
 
   const dryRun = await dryRunService!.dryRunRecipeVersion(IDENTITY, created.connection.id, {
     recipe_version_id: created.recipe_version.id,
@@ -197,7 +200,7 @@ describe("SourceRecipeCreateService (real Postgres)", () => {
     expect(activation.recipe_version.status).toBe("active");
 
     const repo = new PgSourcesRepository(pool!, config!);
-    const queued = await repo.scanConnection(IDENTITY, created.connection.id);
+    const queued = await repo.scanChannel(IDENTITY, created.connection.source_channel_id);
     expect(queued.metadata_json).toMatchObject({
       implementation: "recipe",
       recipe_version_id: dryRun.recipe_version.id,
@@ -220,7 +223,7 @@ describe("SourceRecipeCreateService (real Postgres)", () => {
       { title: "Two", source_external_id: "guid-2", content_state: "excerpt_saved", metadata_json: { capture_method: "source_recipe" } },
     ]);
 
-    const sourceRuns = await listSourceRuns(pool!, IDENTITY, created.connection.id, { limit: 10, offset: 0 });
+    const sourceRuns = await listSourceRuns(pool!, IDENTITY, created.connection.source_channel_id, { limit: 10, offset: 0 });
     expect(sourceRuns.items).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

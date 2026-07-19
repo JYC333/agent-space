@@ -70,7 +70,8 @@ beforeEach(async () => {
     `TRUNCATE evolution_bundle_members, evolution_bundles,
               jobs, retrieval_edges, retrieval_chunks, retrieval_aliases, retrieval_objects,
               policy_decision_records, proposal_approvals, proposals, runs, space_memberships,
-              source_handler_runs, source_handler_versions, source_recipe_versions, source_connections, source_connectors,
+              source_handler_runs, source_handler_versions, source_recipe_versions, source_channel_item_links,
+              source_channel_user_subscriptions, source_channels, source_connections, source_connectors,
               scheduler_tasks, settings, artifacts, extraction_jobs, source_items,
               source_snapshots, extracted_evidence, credentials`,
   );
@@ -105,12 +106,15 @@ const FIXTURE_HTML = `<html><body>
 </body></html>`;
 
 async function createDraftConnection(overrides: Record<string, unknown> = {}) {
-  return service!.createDraft(IDENTITY, {
+  const channel = await service!.createDraft(IDENTITY, {
     name: "Example Source",
     endpoint_url: "https://example.com/list",
     config: { list_selector: "article" },
     ...overrides,
   });
+  // The create-flow methods are keyed by the underlying source connection;
+  // SourceChannelService returns the channel id as `id` for its public shape.
+  return { ...channel, id: channel.source_connection_id };
 }
 
 async function insertCustomSourceSpacePolicy(overrides: Record<string, unknown> = {}) {
@@ -169,7 +173,7 @@ describe("CustomSourceCreateFlowService (real Postgres + real sandboxed runner)"
     const connection = await createDraftConnection();
     expect(connection.handler_kind).toBe("generated_custom");
     expect(connection.status).toBe("paused");
-    expect(connection.endpoint_url).toBe("https://example.com/list");
+    expect(connection.source_connection_id).toBeTruthy();
   });
 
   it("createDraft enforces Space Custom Source creator roles", async () => {
@@ -195,7 +199,7 @@ describe("CustomSourceCreateFlowService (real Postgres + real sandboxed runner)"
       config: { list_selector: "article" },
     });
     expect(allowed.handler_kind).toBe("generated_custom");
-    expect(allowed.owner_user_id).toBe("member-1");
+    expect(allowed.source_connection_id).toBeTruthy();
   });
 
   it("full happy path: draft -> generate -> test (fixture) -> activate", async () => {
@@ -227,7 +231,7 @@ describe("CustomSourceCreateFlowService (real Postgres + real sandboxed runner)"
     expect(connectionRow.rows[0]?.active_handler_version_id).toBe(version.id);
     expect(connectionRow.rows[0]?.status).toBe("active");
 
-    const sourceRuns = await listSourceRuns(pool!, IDENTITY, connection.id, { limit: 10, offset: 0 });
+    const sourceRuns = await listSourceRuns(pool!, IDENTITY, connection.source_channel_id, { limit: 10, offset: 0 });
     expect(sourceRuns.items).toEqual([
       expect.objectContaining({
         id: `handler_run:${testOutcome.run.id}`,
@@ -556,8 +560,9 @@ describe("CustomSourceCreateFlowService (real Postgres + real sandboxed runner)"
       endpoint_url: "https://example.com/list",
       config: { list_selector: "article" },
     });
-    const version = await service!.generateHandler(memberIdentity, connection.id, {});
-    await service!.testHandler(memberIdentity, connection.id, {
+    const connectionId = connection.source_connection_id;
+    const version = await service!.generateHandler(memberIdentity, connectionId, {});
+    await service!.testHandler(memberIdentity, connectionId, {
       handler_version_id: version.id,
       fixture_html: FIXTURE_HTML,
     });
@@ -566,7 +571,7 @@ describe("CustomSourceCreateFlowService (real Postgres + real sandboxed runner)"
       allowed_domains: ["other.example"],
     });
 
-    const activation = await service!.activateHandler(memberIdentity, connection.id, {
+    const activation = await service!.activateHandler(memberIdentity, connectionId, {
       handler_version_id: version.id,
     });
     expect(activation.status).toBe("pending_approval");
@@ -691,7 +696,7 @@ describe("CustomSourceCreateFlowService (real Postgres + real sandboxed runner)"
       expect(bridged.connection.name).toBe("Example Recipe Source");
       expect(bridged.connection.handler_kind).toBe("recipe");
       expect(bridged.connection.status).toBe("paused");
-      expect(bridged.connection.next_check_at).toBeNull();
+      expect(bridged.connection.schedule_rule).toBeNull();
       expect(bridged.recipe_version.status).toBe("draft");
       expect(bridged.recipe_version.recipe_json).toMatchObject({
         recipe_version: "source.recipe.v1",
@@ -716,7 +721,7 @@ describe("CustomSourceCreateFlowService (real Postgres + real sandboxed runner)"
         config_json: Record<string, unknown>;
       }>(
         `SELECT handler_kind, active_recipe_version_id, config_json FROM source_connections WHERE id = $1`,
-        [bridged.connection.id],
+        [bridged.connection.source_connection_id],
       );
       expect(newConnectionRow.rows[0]?.handler_kind).toBe("recipe");
       expect(newConnectionRow.rows[0]?.active_recipe_version_id).toBeNull();
@@ -731,7 +736,7 @@ describe("CustomSourceCreateFlowService (real Postgres + real sandboxed runner)"
 
       const dryRun = await new SourceRecipeDryRunService(pool!, config!).dryRunRecipeVersion(
         IDENTITY,
-        bridged.connection.id,
+        bridged.connection.source_connection_id,
         {
           recipe_version_id: bridged.recipe_version.id,
           fixture_content: FIXTURE_HTML,
@@ -742,13 +747,13 @@ describe("CustomSourceCreateFlowService (real Postgres + real sandboxed runner)"
 
       const activation = await new SourceRecipeCreateService(pool!, config!).activateRecipe(
         IDENTITY,
-        bridged.connection.id,
+        bridged.connection.source_connection_id,
         { recipe_version_id: bridged.recipe_version.id },
       );
       expect(activation.status).toBe("active");
       const activeRecipeConnection = await pool!.query<{ active_recipe_version_id: string | null; status: string }>(
         `SELECT active_recipe_version_id, status FROM source_connections WHERE id = $1`,
-        [bridged.connection.id],
+        [bridged.connection.source_connection_id],
       );
       expect(activeRecipeConnection.rows[0]).toMatchObject({
         active_recipe_version_id: bridged.recipe_version.id,

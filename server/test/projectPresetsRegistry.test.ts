@@ -6,7 +6,6 @@ describe("project preset registry", () => {
     const preset = getBuiltInProjectPreset("academic_research");
     expect(preset).toMatchObject({
       key: "academic_research",
-      source_preset_ids: ["arxiv"],
       extraction_profile_key: "academic_paper_v1",
       graph_lens_id: "academic_citation_v1",
     });

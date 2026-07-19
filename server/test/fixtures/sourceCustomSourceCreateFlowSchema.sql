@@ -1,17 +1,32 @@
 -- Schema fixture for server Custom Source create-flow integration tests
 -- (testcontainers). SOURCE OF TRUTH: server/migrations/0001_baseline.sql.
 -- Superset of sourceCustomSourceHandlersSchema.sql /
--- sourceCustomSourceMaterializerSchema.sql plus source_connectors,
--- extraction_jobs, source_connection_user_subscriptions (createConnection
--- auto-subscribes the creator and every connection read LEFT JOINs it), and
+-- sourceCustomSourceMaterializerSchema.sql plus source catalog,
+-- extraction_jobs, source_channel_user_subscriptions (Source Channel creation
+-- auto-subscribes the creator), and
 -- source_item_user_states (every item read LEFT JOINs per-user library/read
 -- state), since CustomSourceCreateFlowService exercises
--- PgSourcesRepository.createConnection (connector lookup) and the scan-job
+-- SourceChannelService (provider mapping lookup) and the scan-job
 -- orchestration (extraction_jobs pairing). CHECK / NOT NULL / UNIQUE
 -- constraints are kept verbatim; unrelated FKs (spaces, users, runs,
 -- proposals) are stripped except the proposals table needed for Phase 6's
 -- Custom Source approval flow. Regenerate when these tables'
 -- columns/constraints change.
+
+CREATE TABLE public.source_providers (
+    id character varying(36) NOT NULL,
+    provider_key character varying(128) NOT NULL,
+    display_name character varying(256) NOT NULL,
+    provider_kind character varying(32) NOT NULL,
+    category character varying(64) NOT NULL,
+    status character varying(32) NOT NULL,
+    capabilities_json jsonb NOT NULL,
+    config_schema_json jsonb,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT source_providers_pkey PRIMARY KEY (id),
+    CONSTRAINT source_providers_provider_key_key UNIQUE (provider_key)
+);
 
 CREATE TABLE public.source_connectors (
     id character varying(36) NOT NULL,
@@ -27,6 +42,32 @@ CREATE TABLE public.source_connectors (
     CONSTRAINT source_connectors_pkey PRIMARY KEY (id),
     CONSTRAINT source_connectors_connector_key_key UNIQUE (connector_key)
 );
+
+CREATE TABLE public.source_provider_connectors (
+    id character varying(36) NOT NULL,
+    provider_id character varying(36) NOT NULL,
+    connector_id character varying(36) NOT NULL,
+    status character varying(32) NOT NULL,
+    priority integer DEFAULT 0 NOT NULL,
+    capabilities_json jsonb NOT NULL,
+    config_schema_json jsonb,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT source_provider_connectors_pkey PRIMARY KEY (id),
+    CONSTRAINT uq_source_provider_connectors_provider_connector UNIQUE (provider_id, connector_id)
+);
+
+INSERT INTO public.source_providers (id, provider_key, display_name, provider_kind, category, status, capabilities_json, created_at, updated_at)
+VALUES
+  ('provider-arxiv', 'arxiv', 'arXiv', 'named', 'academic', 'active', '{}'::jsonb, now(), now()),
+  ('provider-rss', 'generic_rss', 'RSS', 'generic', 'feed', 'active', '{}'::jsonb, now(), now()),
+  ('provider-custom-source', 'custom_source', 'Custom Source', 'generic', 'custom', 'active', '{}'::jsonb, now(), now());
+
+INSERT INTO public.source_provider_connectors (id, provider_id, connector_id, status, priority, capabilities_json, created_at, updated_at)
+VALUES
+  ('mapping-arxiv', 'provider-arxiv', 'connector-arxiv', 'active', 0, '{}'::jsonb, now(), now()),
+  ('mapping-rss', 'provider-rss', 'connector-rss', 'active', 0, '{}'::jsonb, now(), now()),
+  ('mapping-custom-source', 'provider-custom-source', 'connector-custom-source', 'active', 0, '{}'::jsonb, now(), now());
 
 CREATE TABLE public.credentials (
     id character varying(36) NOT NULL,
@@ -44,22 +85,19 @@ CREATE TABLE public.credentials (
 CREATE TABLE public.source_connections (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
-    connector_id character varying(36) NOT NULL,
+    provider_connector_id character varying(36) NOT NULL,
     owner_user_id character varying(36) NOT NULL,
     credential_id character varying(36),
     visibility character varying(32) DEFAULT 'private'::character varying NOT NULL,
     access_level character varying(16) DEFAULT 'full'::character varying NOT NULL,
     name character varying(512) NOT NULL,
-    endpoint_url text,
     status character varying(32) NOT NULL,
-    fetch_frequency character varying(32) NOT NULL,
     capture_policy character varying(64) NOT NULL,
     trust_level character varying(32) NOT NULL,
     topic_hints_json jsonb,
     consent_json jsonb NOT NULL,
     policy_json jsonb NOT NULL,
     config_json jsonb NOT NULL,
-    schedule_rule_json jsonb,
     handler_kind character varying(32) NOT NULL DEFAULT 'built_in',
     active_handler_version_id character varying(36),
     active_recipe_version_id character varying(36),
@@ -70,24 +108,47 @@ CREATE TABLE public.source_connections (
     deleted_at timestamp with time zone,
     CONSTRAINT source_connections_pkey PRIMARY KEY (id),
     CONSTRAINT ck_source_connections_capture_policy CHECK (((capture_policy)::text = ANY ((ARRAY['reference_only'::character varying, 'extract_text'::character varying, 'archive_original'::character varying])::text[]))),
-    CONSTRAINT ck_source_connections_fetch_frequency CHECK (((fetch_frequency)::text = ANY ((ARRAY['manual'::character varying, 'hourly'::character varying, 'daily'::character varying, 'weekly'::character varying])::text[]))),
     CONSTRAINT ck_source_connections_status CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'paused'::character varying, 'archived'::character varying])::text[]))),
     CONSTRAINT ck_source_connections_trust_level CHECK (((trust_level)::text = ANY ((ARRAY['trusted'::character varying, 'normal'::character varying, 'untrusted'::character varying])::text[]))),
     CONSTRAINT ck_source_connections_handler_kind CHECK (((handler_kind)::text = ANY ((ARRAY['built_in'::character varying, 'generated_custom'::character varying, 'recipe'::character varying])::text[]))),
     CONSTRAINT ck_source_connections_repair_status CHECK (((repair_status)::text = ANY ((ARRAY['ok'::character varying, 'repair_required'::character varying, 'repair_pending'::character varying, 'disabled'::character varying])::text[]))),
     CONSTRAINT ck_source_connections_visibility CHECK (visibility IN ('private', 'space_shared', 'selected_users')),
     CONSTRAINT ck_source_connections_access_level CHECK (access_level IN ('full', 'summary')),
-    CONSTRAINT source_connections_connector_id_fkey FOREIGN KEY (connector_id) REFERENCES public.source_connectors(id)
+    CONSTRAINT source_connections_provider_connector_id_fkey FOREIGN KEY (provider_connector_id) REFERENCES public.source_provider_connectors(id)
 );
 
--- createConnection auto-subscribes the creator, and every connection read
--- (getConnectionRow / the readable-item EXISTS clause) LEFT JOINs this
--- table, so it must exist even though these tests don't exercise
--- multi-user subscription fan-out directly.
-CREATE TABLE public.source_connection_user_subscriptions (
+CREATE UNIQUE INDEX uq_source_connections_active_owner_mapping
+  ON public.source_connections (space_id, owner_user_id, provider_connector_id, name)
+  WHERE deleted_at IS NULL AND status <> 'archived';
+
+CREATE TABLE public.source_channels (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
     source_connection_id character varying(36) NOT NULL,
+    created_by_user_id character varying(36) NOT NULL,
+    name character varying(512) NOT NULL,
+    channel_type character varying(32) NOT NULL,
+    endpoint_url text,
+    query_json jsonb NOT NULL,
+    provider_query_json jsonb NOT NULL,
+    query_fingerprint character varying(128) NOT NULL,
+    status character varying(32) NOT NULL,
+    fetch_frequency character varying(32) NOT NULL,
+    schedule_rule_json jsonb,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT source_channels_pkey PRIMARY KEY (id),
+    CONSTRAINT uq_source_channels_id_space UNIQUE (id, space_id)
+);
+
+-- Source Channel creation auto-subscribes the creator, and channel-scoped
+-- reads may LEFT JOIN this table, so it must exist even though these tests
+-- don't exercise
+-- multi-user subscription fan-out directly.
+CREATE TABLE public.source_channel_user_subscriptions (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    source_channel_id character varying(36) NOT NULL,
     user_id character varying(36) NOT NULL,
     status character varying(32) NOT NULL,
     library_enabled boolean DEFAULT true NOT NULL,
@@ -97,9 +158,23 @@ CREATE TABLE public.source_connection_user_subscriptions (
     last_notified_at timestamp with time zone,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
-    CONSTRAINT source_connection_user_subscriptions_pkey PRIMARY KEY (id),
-    CONSTRAINT uq_source_connection_user_subscriptions_space_connection_user UNIQUE (space_id, source_connection_id, user_id),
-    CONSTRAINT ck_source_connection_user_subscriptions_status CHECK (((status)::text = ANY ((ARRAY['subscribed'::character varying, 'pending'::character varying, 'dismissed'::character varying, 'muted'::character varying])::text[])))
+    CONSTRAINT source_channel_user_subscriptions_pkey PRIMARY KEY (id),
+    CONSTRAINT uq_source_channel_user_subscriptions_space_channel_user UNIQUE (space_id, source_channel_id, user_id),
+    CONSTRAINT ck_source_channel_user_subscriptions_status CHECK (((status)::text = ANY ((ARRAY['subscribed'::character varying, 'pending'::character varying, 'dismissed'::character varying, 'muted'::character varying])::text[])))
+);
+
+CREATE TABLE public.source_channel_item_links (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    source_channel_id character varying(36) NOT NULL,
+    source_item_id character varying(36) NOT NULL,
+    status character varying(32) NOT NULL DEFAULT 'active',
+    matched_at timestamp with time zone NOT NULL,
+    match_reason text,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT source_channel_item_links_pkey PRIMARY KEY (id),
+    CONSTRAINT uq_source_channel_item_links_channel_item UNIQUE (source_channel_id, source_item_id)
 );
 
 -- Mirrors the Level 2 recipe portion of server/migrations/0001_baseline.sql.
@@ -137,6 +212,7 @@ CREATE TABLE public.scheduler_tasks (
     next_run_at timestamp with time zone,
     last_run_at timestamp with time zone,
     state_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    metadata_json jsonb DEFAULT '{}'::jsonb NOT NULL,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     CONSTRAINT scheduler_tasks_pkey PRIMARY KEY (id),
@@ -539,6 +615,7 @@ CREATE TABLE public.project_source_bindings (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
     project_id character varying(36) NOT NULL,
+    source_channel_id character varying(36),
     source_connection_id character varying(36) NOT NULL,
     status character varying(32) NOT NULL,
     priority integer NOT NULL,
@@ -553,6 +630,7 @@ CREATE TABLE public.project_source_item_links (
     space_id character varying(36) NOT NULL,
     project_id character varying(36) NOT NULL,
     project_source_binding_id character varying(36) NOT NULL,
+    source_channel_id character varying(36),
     source_connection_id character varying(36),
     source_item_id character varying(36) NOT NULL,
     status character varying(32) DEFAULT 'active' NOT NULL,

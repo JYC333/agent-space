@@ -1,4 +1,4 @@
-import { pgTable, index, unique, check, foreignKey, varchar, text, integer, jsonb, timestamp, type PgTableExtraConfigValue } from "drizzle-orm/pg-core";
+import { pgTable, index, uniqueIndex, unique, check, foreignKey, varchar, text, integer, jsonb, timestamp, type PgTableExtraConfigValue } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { spaces } from "./spaces";
 import { projects } from "./projects";
@@ -22,6 +22,11 @@ export const projectOperations = pgTable("project_operations", {
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).notNull(),
 }, (t): PgTableExtraConfigValue[] => [
 	index("ix_project_operations_project_status").on(t.projectId, t.status),
+	uniqueIndex("uq_project_operations_active_research_workflow").using(
+		"btree",
+		t.spaceId.asc().nullsLast(),
+		sql`(progress_json->>'workflow_id')`,
+	).where(sql`kind = 'research' AND status IN ('active', 'waiting_review') AND progress_json->>'workflow_id' IS NOT NULL`),
 	foreignKey({ columns: [t.projectId, t.spaceId], foreignColumns: [projects.id, projects.spaceId], name: "project_operations_project_fkey" }),
 	foreignKey({ columns: [t.spaceId], foreignColumns: [spaces.id], name: "project_operations_space_fkey" }),
 	foreignKey({ columns: [t.createdByUserId], foreignColumns: [users.id], name: "project_operations_user_fkey" }),
@@ -62,5 +67,5 @@ export const projectOperationLinks = pgTable("project_operation_links", {
 	index("ix_project_operation_links_target").on(t.spaceId, t.targetType, t.targetId),
 	foreignKey({ columns: [t.operationId, t.spaceId], foreignColumns: [projectOperations.id, projectOperations.spaceId], name: "project_operation_links_operation_fkey" }).onDelete("cascade"),
 	unique("uq_project_operation_links_target").on(t.operationId, t.targetType, t.targetId),
-	check("ck_project_operation_links_target_type", sql`target_type IN ('run','job','proposal','artifact','source_backfill_plan','project_source_binding','corpus_sync')`),
+	check("ck_project_operation_links_target_type", sql`target_type IN ('run','job','proposal','artifact','source_backfill_plan','project_source_binding','corpus_sync','research_workflow')`),
 ]);

@@ -1,6 +1,41 @@
 // API response shapes shared with the server HTTP contracts.
 
 export type SpaceType      = 'personal' | 'household' | 'team'
+
+export interface CustomSourceCredentialDTO {
+  id: string
+  space_id: string
+  owner_user_id?: string | null
+  name: string
+  header_name: string
+  header_value_prefix: string
+  created_at: string
+  updated_at: string
+}
+
+export interface ResearchNotebookSection {
+  id: string; section_key: 'understanding' | 'questions' | 'ideas' | 'experiments'; content_json: Record<string, unknown>
+  normalized_text: string; content_hash: string; refs_json: string[]; version: number; updated_by_user_id: string | null; updated_by_run_id: string | null; updated_at: string
+}
+export type ResearchNotebookOp =
+  | { op: 'append'; markdown: string }
+  | { op: 'insert'; index: number; markdown: string }
+  | { op: 'replace'; index: number; count: number; markdown: string }
+  | { op: 'delete'; index: number; count: number }
+export interface ResearchNotebookRevision {
+  id: string; version: number; content_json: Record<string, unknown>; normalized_text: string; refs_json: string[]
+  source: 'user_edit' | 'ai_monitoring' | 'ai_adhoc' | 'seed' | 'rollback'
+  diff_json: { ops?: ResearchNotebookOp[]; base_version?: number; conflict?: boolean; rolled_back_to_version?: number } | null
+  created_by_user_id: string | null; created_by_run_id: string | null; created_at: string
+}
+export interface ResearchChecklistItem { id: string; text: string; status: 'open' | 'done' | 'dismissed'; sort_order: number; origin: 'user' | 'agent'; origin_run_id: string | null; created_at: string; updated_at: string }
+export interface ResearchPaperCard { id: string; source_item_id: string; object_id: string | null; why_md: string; how_md: string; what_md: string; edited_by_user: boolean; stance: 'supports' | 'contradicts' | 'new_direction' | null; comparison_detail: string | null }
+export interface ResearchWorkspace {
+  notebook: { id: string; project_id: string; sections: ResearchNotebookSection[] }
+  checklist: ResearchChecklistItem[]
+  reports: Array<{ id: string; research_question: string; research_question_version: number; status: string; run_kind: string; created_at: string }>
+}
+export interface ResearchReadingList { items: Array<ProjectCorpusItem & { paper_card: ResearchPaperCard | null }>; total: number; limit: number; offset: number }
 export type MemberRole     = 'owner' | 'admin' | 'reviewer' | 'member' | 'guest' | 'viewer'
 export type InviteStatus   = 'pending' | 'accepted' | 'revoked' | 'expired'
 /** Immutable after Space creation; personal Spaces are always 'none'. */
@@ -931,137 +966,172 @@ export interface SourceConnector {
   updated_at: string
 }
 
+export interface SourceProvider {
+  id: string
+  provider_key: string
+  display_name: string
+  provider_kind: 'named' | 'generic'
+  category: string
+  status: 'active' | 'disabled'
+  capabilities: Record<string, unknown>
+  config_schema: Record<string, unknown> | null
+  setup_schema?: SourceProviderSetupSchema | null
+}
+
+export interface SourceQueryPreview {
+  provider_key: string
+  compiled_query: string
+  approximate_hit_count: number
+  samples: Array<{ title: string; source_uri: string | null; occurred_at: string | null }>
+}
+
+export interface SourceProviderCategoryOption {
+  value: string
+  label: string
+}
+
+export interface SourceProviderCategoryGroup {
+  group: string
+  options: SourceProviderCategoryOption[]
+}
+
+export interface SourceProviderSetupSchema {
+  category_groups?: SourceProviderCategoryGroup[]
+}
+
+export interface SourceCatalogProvider extends SourceProvider {
+  connector_mapping: {
+    id: string
+    connector_key: string
+    priority: number
+    status: 'active' | 'disabled'
+    capabilities: Record<string, unknown>
+  } | null
+}
+
+export interface SourceCatalogMapping {
+  id: string
+  provider_id: string
+  provider_key: string
+  connector_id: string
+  connector_key: string
+  status: 'active' | 'disabled'
+  priority: number
+  capabilities_json: Record<string, unknown>
+  config_schema_json: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
+export interface SourceCatalog {
+  providers: SourceCatalogProvider[]
+  connectors: SourceConnector[]
+  mappings: SourceCatalogMapping[]
+}
+
+export interface SourceChannel {
+  id: string
+  space_id: string
+  source_connection_id: string
+  source_name: string
+  name: string
+  channel_type: 'search' | 'feed' | 'web_page' | 'custom_source'
+  endpoint_url: string | null
+  query: Record<string, unknown>
+  provider_query: Record<string, unknown>
+  query_fingerprint: string
+  status: 'active' | 'paused' | 'archived'
+  fetch_frequency: 'manual' | 'hourly' | 'daily' | 'weekly'
+  schedule_rule: SourceScheduleRule | Record<string, unknown> | null
+  provider: { key: string | null; display_name: string | null }
+  connection_status: string | null
+  capture_policy: SourceCapturePolicy | null
+  scan_state: {
+    status: string | null
+    cursor: Record<string, unknown>
+    watermark: Record<string, unknown>
+    next_run_at: string | null
+    last_run_at: string | null
+  }
+  created_by_user_id?: string
+  created_at?: string
+  updated_at?: string
+}
+
+export interface ProjectResearchInitialIntakeInput {
+  research_question: string
+  source_channel_ids: string[]
+  history_mode: 'bounded_range' | 'all_available'
+  from?: string
+  to?: string
+  max_items: number
+  monitoring_field: 'submittedDate' | 'lastUpdatedDate'
+  report_depth: 'quick' | 'full'
+  question_refine_skipped: boolean
+  search_strategy_id?: string
+  question_refinement?: ProjectResearchQuestionRefinement | null
+  execution: {
+    model_provider_id?: string
+    model_name?: string
+  }
+}
+
+export interface ResearchEngineSearchResult {
+  strategy: {
+    id: string
+    status: 'completed' | 'partial' | 'failed'
+    providers: Array<{ provider_key: 'arxiv' | 'openalex' | 'semantic_scholar' | 'web_search'; query: Record<string, unknown>; rationale: string }>
+    hit_counts: Record<string, number>
+    provider_errors: Record<string, string>
+    result_count: number
+  }
+  candidates: Array<{
+    candidate_id: string
+    kind: 'academic_paper' | 'web_page'
+    title: string
+    authors: string[]
+    source_uri: string | null
+    occurred_at: string | null
+    excerpt: string | null
+    providers: string[]
+    trust_level: 'normal' | 'untrusted'
+  }>
+  monitor_suggestions: Array<{
+    provider_key: string
+    rationale: string
+    approximate_hit_count: number
+    samples: SourceQueryPreview['samples']
+    create_body: Record<string, unknown>
+  }>
+}
+
+export interface ResearchEngineMonitorResult {
+  strategy_id: string
+  channels: SourceChannel[]
+  bindings: ProjectSourceBinding[]
+}
+
+export interface ProjectResearchQuestionRefinement {
+  assessment: {
+    answerable: boolean
+    finer: { feasible: number; interesting: number; novel: number; ethical: number; relevant: number }
+    issues: string[]
+  }
+  suggested_questions: string[]
+  sub_questions: string[]
+  scope: { in: string[]; out: string[] }
+  clarifying_questions: Array<{ question: string; options: string[]; allow_multiple: boolean }>
+}
+
 export type SourceCapturePolicy =
   | 'reference_only'
   | 'extract_text'
   | 'archive_original'
 
-export interface SourceConnection {
-  id: string
-  space_id: string
-  connector_id: string
-  connector_key?:string|null
-  owner_user_id: string
-  credential_id: string | null
-  visibility: ContentVisibility
-  access_level: ContentAccessLevel
-  name: string
-  endpoint_url: string | null
-  status: 'active' | 'paused' | 'archived'
-  fetch_frequency: 'manual' | 'hourly' | 'daily' | 'weekly'
-  capture_policy: SourceCapturePolicy
-  trust_level: 'trusted' | 'normal' | 'untrusted'
-  topic_hints_json: string[] | null
-  consent_json: Record<string, unknown>
-  policy_json: Record<string, unknown>
-  config_json: Record<string, unknown>
-  last_checked_at: string | null
-  next_check_at: string | null
-  schedule_rule_json?: SourceScheduleRule | null
-  handler_kind?: 'built_in' | 'generated_custom' | 'recipe'
-  active_handler_version_id?: string | null
-  active_recipe_version_id?: string | null
-  repair_status?: 'ok' | 'repair_required' | 'repair_pending' | 'disabled'
-  last_handler_run_id?: string | null
-  subscription_status?: 'subscribed' | 'pending' | 'dismissed' | 'muted' | null
-  library_enabled?: boolean | null
-  digest_enabled?: boolean | null
-  recommended_by_user_id?: string | null
-  recommendation_message?: string | null
-  last_notified_at?: string | null
-  created_at: string
-  updated_at: string
-}
-
 export type SourceScheduleRule =
   | { frequency: 'hourly'; minute: number }
   | { frequency: 'daily'; hour: number; minute: number }
   | { frequency: 'weekly'; weekday: number; hour: number; minute: number }
-
-export interface SourceConnectionCreate {
-  connector_key: string
-  name: string
-  endpoint_url?: string | null
-  credential_id?: string | null
-  visibility?: 'private' | 'space_shared'
-  fetch_frequency?: 'manual' | 'hourly' | 'daily' | 'weekly'
-  next_check_at?: string | null
-  schedule_rule?: SourceScheduleRule | null
-  capture_policy?: SourceCapturePolicy
-  trust_level?: 'trusted' | 'normal' | 'untrusted'
-  topic_hints?: string[] | null
-  consent?: Record<string, unknown>
-  policy?: Record<string, unknown>
-  config?: Record<string, unknown>
-}
-
-export interface SourcePreset {
-  id: string
-  category: string
-  display_name: string
-  description: string
-  connector_key: string
-  fields: string[]
-  category_options?: SourcePresetCategoryGroup[]
-}
-
-export interface SourcePresetCategoryOption {
-  value: string
-  label: string
-}
-
-export interface SourcePresetCategoryGroup {
-  group: string
-  options: SourcePresetCategoryOption[]
-}
-
-export interface SourcePresetListResponse {
-  items: SourcePreset[]
-}
-
-export type ArxivPresetMode = 'search' | 'recent_by_category'
-
-export interface ArxivPresetPreviewRequest {
-  mode?: ArxivPresetMode
-  search_query?: string
-  categories?: string[]
-  max_results?: number
-  sort_by?: 'relevance' | 'lastUpdatedDate' | 'submittedDate'
-  sort_order?: 'ascending' | 'descending'
-}
-
-export interface ArxivPresetPaper {
-  arxiv_id: string
-  arxiv_version: string | null
-  title: string
-  authors: string[]
-  summary: string | null
-  published_at: string | null
-  updated_at: string | null
-  categories: string[]
-  primary_category: string | null
-  doi: string | null
-  journal_ref: string | null
-  comment: string | null
-  abs_url: string
-  html_url: string
-  pdf_url: string
-}
-
-export interface ArxivPresetPreviewResponse {
-  preset_id: 'arxiv'
-  query_url: string
-  items: ArxivPresetPaper[]
-  warnings: string[]
-}
-
-export interface ArxivPresetCreateRequest extends ArxivPresetPreviewRequest {
-  name?: string
-  fetch_frequency?: 'manual' | 'hourly' | 'daily' | 'weekly'
-  next_check_at?: string | null
-  schedule_rule?: SourceScheduleRule | null
-  capture_policy?: SourceCapturePolicy
-}
 
 export interface SourceItem {
   id: string
@@ -1404,7 +1474,7 @@ export interface SourceRecipeCreateRequest extends SourceRecipePlanRequest {
 }
 
 export interface SourceRecipeCreateResponse {
-  connection: SourceConnection
+  connection: SourceChannel
   recipe_version: SourceRecipeVersion
 }
 
@@ -1415,7 +1485,7 @@ export interface SourceRecipePipelineBridgeRequest {
 }
 
 export interface SourceRecipePipelineBridgeResponse {
-  connection: SourceConnection
+  connection: SourceChannel
   recipe_version: SourceRecipeVersion
   bridged_from_connection_id: string
   bridged_from_handler_version_id: string
@@ -1520,7 +1590,7 @@ export interface ProjectSourceBinding {
   id: string
   space_id: string
   project_id: string
-  source_connection_id: string
+  source_channel_id: string
   binding_key: string
   status: string
   priority: number
@@ -1550,6 +1620,7 @@ export interface ProjectSourceItem {
   space_id: string
   project_id: string
   project_source_binding_id: string
+  source_channel_id: string
   source_connection_id: string | null
   source_item_id: string
   status: 'active' | 'archived'
@@ -1564,6 +1635,7 @@ export interface SourceHealth {
   binding_id?: string
   project_id?: string
   source_connection_id: string
+  source_channel_id?: string
   source_name: string
   status: 'healthy' | 'running' | 'attention' | 'failing' | 'paused'
   last_success_at: string | null
@@ -1578,6 +1650,7 @@ export interface SourceHealth {
 
 export interface SourceBackfillStrategy {
   window_unit: 'date_window' | 'page_cursor' | 'id_cursor'
+  history_mode?: 'bounded_range' | 'all_available'
   from: string | null
   to: string | null
   window_size: number
@@ -1606,7 +1679,7 @@ export interface SourceBackfillPreview {
 
 export interface SourceBackfillPlan {
   id: string
-  source_connection_id: string
+  source_channel_id: string
   project_source_binding_id: string | null
   project_operation_id: string | null
   proposal_id: string | null
@@ -1629,9 +1702,17 @@ export interface ProjectOperation {
   kind: 'source_setup' | 'source_backfill' | 'research' | 'custom'
   title: string
   status: 'draft' | 'active' | 'waiting_review' | 'completed' | 'failed' | 'cancelled'
-  progress_json: { total?: number; completed?: number; failed?: number; pending?: number }
+  progress_json: Record<string, unknown> & { total?: number; completed?: number; failed?: number; pending?: number }
   created_at: string
   updated_at: string
+  steps?: Array<{
+    id: string
+    operation_id: string
+    seq: number
+    title: string
+    status: 'pending' | 'active' | 'blocked' | 'done' | 'skipped'
+    detail_json?: Record<string, unknown> | null
+  }>
   links?: Array<{ target_type: string; target_id: string; role: string }>
 }
 
@@ -2315,12 +2396,27 @@ export interface RunResolvedModel {
   disclosure_note?: string | null
 }
 
+export interface RunUsage {
+  agent_run_count: number
+  completed_agent_run_count: number
+  input_tokens: number | null
+  output_tokens: number | null
+  total_tokens: number | null
+  estimated_cost_usd: number | null
+  cost_known: boolean
+  model_names: string[]
+}
+
 export interface Run {
   id: string
   space_id: string
   agent_id: string
   agent_version_id: string
-  runtime_profile_id?: string | null
+  run_role: 'execution' | 'coordinator'
+  requested_runtime_profile_id?: string | null
+  selected_runtime_profile_id?: string | null
+  runtime_profile_selection_source?: 'explicit' | 'default' | null
+  active_route_decision_id?: string | null
   context_snapshot_id: string | null
   workspace_id: string | null
   session_id: string | null
@@ -2344,11 +2440,11 @@ export interface Run {
   error_message: string | null
   error_json: Record<string, unknown> | null
   output_json: Record<string, unknown> | null
-  usage_json: Record<string, unknown> | null
-  adapter_type?: string | null
+  usage: RunUsage | null
+  selected_adapter_type?: string | null
   capability_id?: string | null
   capabilities_json?: string[]
-  model_provider_id?: string | null
+  selected_model_provider_id?: string | null
   resolved_model?: RunResolvedModel | null
   visibility?: ObjectVisibility
   access_level?: ContentAccessLevel
@@ -2357,7 +2453,6 @@ export interface Run {
   required_sandbox_level?: string | null
   contract_snapshot_json?: Record<string, unknown>
   workflow_version_id?: string | null
-  route_decision_id?: string | null
 }
 
 export interface RunAttempt {
@@ -2374,7 +2469,6 @@ export interface RunAttempt {
   exit_code: number | null
   error_code: string | null
   error_json: Record<string, unknown> | null
-  usage_json: Record<string, unknown> | null
   created_at: string
   updated_at: string
 }
@@ -2791,6 +2885,7 @@ export interface Artifact {
   run_id: string | null
   proposal_id: string | null
   artifact_type: string
+  surface_role: 'user_output' | 'operational' | 'system_archive'
   title: string
   mime_type: string | null
   exportable: boolean
@@ -3888,7 +3983,6 @@ export interface ProjectPresetDescriptor {
   name: string
   description: string
   sections: string[]
-  source_preset_ids: string[]
   extraction_profile_key: string | null
   graph_lens_id: string | null
 }
@@ -3931,6 +4025,44 @@ export interface ProjectResearchWorkflow {
   updated_at: string
 }
 
+/** One aggregated monitoring outcome per (workflow, UTC day); a missing day means no scan was recorded. */
+export interface ProjectResearchScanSummary {
+  workflow_id: string
+  scan_date: string
+  scanned_at: string
+  new_item_count: number
+  relevant_count: number
+  maybe_count: number
+  excluded_count: number
+  supports_count: number
+  contradicts_count: number
+  new_direction_count: number
+  comparisons: Array<{ source_item_id: string; stance: 'supports' | 'contradicts' | 'new_direction'; detail: string; affected_sections: string[] }>
+  integrity_alerts: Array<{ id: string; doi: string; event_type: 'retraction' | 'correction' | 'expression_of_concern' | 'reinstatement'; source: string; notice_doi: string | null; detected_at: string }>
+  scan_count: number
+}
+
+export interface ProjectResearchQuestionImpact {
+  workflow_id: string
+  previous_question: string | null
+  current_question: string | null
+  previous_version: number
+  screened_papers: number
+  reports: number
+}
+
+export type ProjectResearchQuestionResolutionStrategy = 'rescreen' | 'synthesis_only' | 'apply_forward'
+
+export interface ProjectResearchInitialIntakeResponse {
+  workflow: ProjectResearchWorkflow | null
+  operation: ProjectOperation
+  source_channel: SourceChannel | null
+  source_channels: SourceChannel[]
+  source_binding: ProjectSourceBinding | null
+  source_bindings: ProjectSourceBinding[]
+  status: string
+}
+
 export interface ProjectResearchCheckpoint {
   id: string
   project_id: string
@@ -3939,6 +4071,7 @@ export interface ProjectResearchCheckpoint {
   checkpoint_type: string
   status: string
   machine_result_json: Record<string, unknown> | null
+  review: ProjectResearchCheckpointReview | null
   user_decision: string | null
   decision_reason: string | null
   decided_by_user_id: string | null
@@ -3947,22 +4080,94 @@ export interface ProjectResearchCheckpoint {
   updated_at: string
 }
 
-export interface ProjectResearchArtifactLink {
+export interface ProjectResearchCheckpointReview {
+  type: 'screening' | 'ideas'
+  title: string
+  description: string
+  decision_scope: 'batch'
+  decision_help: string
+  summary: {
+    total?: number
+    classified?: number
+    unclassified?: number
+    relevant?: number
+    maybe?: number
+    excluded?: number
+    missing_full_text?: number
+    evidence_count?: number
+    failed_items?: number
+    processing_status?: 'complete' | 'incomplete' | 'empty'
+    partial?: boolean
+  }
+  usage?: {
+    agent_run_count: number
+    completed_agent_run_count: number
+    input_tokens: number | null
+    output_tokens: number | null
+    total_tokens: number | null
+    estimated_cost_usd: number | null
+    cost_known: boolean
+    model_names: string[]
+  }
+  next_step?: {
+    key: string
+    label: string
+    description: string
+  }
+  items: Array<{
+    source_item_id?: string
+    title: string
+    source_uri?: string | null
+    external_id?: string | null
+    author?: string | null
+    occurred_at?: string | null
+    recommendation?: 'relevant' | 'maybe' | 'not_relevant' | 'unreviewed'
+    confidence?: number | null
+    reason?: string | null
+    full_text_status?: string
+    evidence_available?: boolean
+    human_triage?: string
+    problem?: string | null
+    novelty?: string | null
+    testability?: string | null
+    reference_count?: number
+  }>
+  item_count: number
+  displayed_item_count: number
+  truncated: boolean
+}
+
+export interface ProjectResearchReport {
   id: string
   project_id: string
-  workflow_id: string | null
-  stage_key: string | null
-  artifact_id: string
-  artifact_type: string
-  created_by_user_id: string | null
-  created_by_run_id: string | null
+  workflow_id: string
+  operation_id: string
+  synthesis_run_id: string
+  run_kind: 'baseline' | 'historical_backfill' | 'incremental' | 'question_rescreen' | 'synthesis_only'
+  research_question: string
+  research_question_version: number
+  status: 'awaiting_review' | 'complete' | 'rejected'
+  current_research_question?: string | null
   created_at: string
-  artifact: {
-    id: string
-    title: string | null
-    content: string | null
-    created_at: string | null
-  }
+  updated_at: string
+  content?: ResearchReportV1
+  reader_document?: Record<string, unknown>
+  normalized_text?: string
+  content_hash?: string
+  integrity?: { artifact_id: string | null; status: 'available' | 'not_run' }
+  provenance?: { workflow_id: string; operation_id: string; synthesis_run_id: string }
+  archive_descriptors?: Array<{ kind: 'archive' | 'literature_matrix' | 'integrity'; artifact_id: string }>
+  resolved_references?: Array<{ id: string; availability: 'available' | 'unavailable'; title?: string; authors?: string[]; year?: number | null; library_path?: string; academic_path?: string; external_url?: string; excerpts?: Array<{ id: string; title?: string }> }>
+}
+
+export interface ResearchReportV1 {
+  schema_version: 'research_report.v1'
+  research_question: string
+  summary: string
+  findings: Array<{ claim: string; support: string; references: Array<Record<string, string>> }>
+  sources: Array<{ title: string; authors: string[]; year?: number | null; relevance: 'relevant' | 'maybe' | 'not_relevant'; summary?: string; references: Array<Record<string, string>> }>
+  limitations: string[]
+  ideas: Array<{ title: string; problem: string; novelty: string; testability: string; references: Array<Record<string, string>> }>
 }
 
 export interface ProjectResearchScreeningCriteria {
@@ -4491,6 +4696,7 @@ export interface ApiError {
   error: string
   message?: string | Record<string, unknown>
   detail?: unknown
+  request_id?: string
 }
 
 // ── Workspace Console ──────────────────────────────────────────────────────
@@ -4903,7 +5109,7 @@ export interface SourcePostProcessingTriggerConfig {
 export interface SourcePostProcessingRule {
   id: string
   space_id: string
-  source_connection_id: string
+  source_channel_id: string
   agent_id: string
   project_id: string | null
   name: string
@@ -4924,7 +5130,7 @@ export interface SourcePostProcessingRun {
   id: string
   space_id: string
   rule_id: string | null
-  source_connection_id: string
+  source_channel_id: string
   agent_id: string
   project_id: string | null
   agent_run_id: string | null
@@ -4950,7 +5156,7 @@ export interface SourcePostProcessingRun {
 export interface SourcePostProcessingItemDecision {
   id: string
   space_id: string
-  source_connection_id: string
+  source_channel_id: string
   rule_id: string | null
   run_id: string
   project_id: string | null
@@ -4993,14 +5199,14 @@ export interface SourcePostProcessingBacklogRule {
 }
 
 export interface SourcePostProcessingBacklog {
-  source_connection_id: string
+  source_channel_id: string
   rules: SourcePostProcessingBacklogRule[]
 }
 
 /** One Library brief entry: a source's aggregated output for one local day.
  *  Documented in .agent/modules/library.md. */
 export interface SourcePostProcessingBriefingDaySummary {
-  source_connection_id: string
+  source_channel_id: string
   connection_name: string
   project_id: string | null
   date: string
@@ -5013,7 +5219,7 @@ export interface SourcePostProcessingBriefingDaySummary {
 }
 
 export interface SourcePostProcessingBriefingDetail {
-  source_connection_id: string
+  source_channel_id: string
   connection_name: string
   project_id: string | null
   date: string
@@ -5090,9 +5296,8 @@ export interface ReaderDocumentPayload {
 export interface ReaderAnnotation {
   id: string
   space_id: string
-  source_item_id: string | null
-  artifact_id: string | null
-  source_snapshot_id: string | null
+  document_type: 'source_item' | 'source_snapshot' | 'research_report'
+  document_id: string
   annotation_type: 'highlight' | 'comment' | 'excerpt' | 'bookmark'
   quote_text: string
   anchor_json: ReaderAnchorJson
@@ -5125,9 +5330,8 @@ export interface ReaderAnnotationsResponse {
 }
 
 export interface ReaderAnnotationCreate {
-  source_item_id?: string
-  artifact_id?: string
-  source_snapshot_id?: string
+  document_type: 'source_item' | 'source_snapshot' | 'research_report'
+  document_id: string
   annotation_type: 'highlight' | 'comment' | 'excerpt' | 'bookmark'
   quote_text: string
   anchor_json: ReaderAnchorJson

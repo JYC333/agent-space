@@ -374,6 +374,37 @@ function runtimeSkillCandidate(over: Partial<RuntimeSkillCandidate> = {}): Runti
 }
 
 describe("ContextPrepareService", () => {
+  it("renders bounded upstream inputs with provenance into the runtime prompt", async () => {
+    const repo = new FakeContextRepo();
+    repo.run = {
+      ...repo.run!,
+      contract_snapshot_json: {
+        upstream_inputs_json: {
+          bindings: [{
+            name: "answer",
+            from_node: "research",
+            source: "output_json",
+            source_run_id: "run-upstream",
+            value: 42,
+            truncated: false,
+          }],
+        },
+      },
+    };
+    const result = await new ContextPrepareService(config(), repo).prepare({
+      runId: "run-1",
+      spaceId: "space-1",
+      adapterType: "model_api",
+      sandboxCwd: null,
+      targetFormat: "generic",
+      workspacePath: null,
+    });
+    expect(result.runtime_prompt).toContain("## Upstream inputs");
+    expect(result.runtime_prompt).toContain("Source node: research");
+    expect(result.runtime_prompt).toContain("Source run: run-upstream");
+    expect(result.runtime_prompt).toContain("42");
+  });
+
   it("populates the run snapshot, logs context memory reads, and keeps grant text ephemeral", async () => {
     const repo = new FakeContextRepo();
     const service = new ContextPrepareService(config(), repo);

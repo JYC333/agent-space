@@ -13,6 +13,7 @@ export interface ArtifactOut {
   run_id: string | null;
   proposal_id: string | null;
   artifact_type: string;
+  surface_role: "user_output" | "operational" | "system_archive";
   title: string;
   mime_type: string | null;
   exportable: boolean;
@@ -44,6 +45,7 @@ interface ArtifactRow {
   run_id: string | null;
   proposal_id: string | null;
   artifact_type: string;
+  surface_role: "user_output" | "operational" | "system_archive";
   title: string;
   content: string | null;
   storage_ref: string | null;
@@ -66,6 +68,7 @@ export interface ArtifactListFilters {
   runId?: string | null;
   projectId?: string | null;
   workspaceId?: string | null;
+  includeSystemArchives?: boolean;
   limit: number;
   offset: number;
 }
@@ -215,6 +218,7 @@ function buildWhere(
     `a.space_id = $1`,
     contentReadSql("artifact", "a", "$2"),
   ];
+  if (!filters.includeSystemArchives) clauses.push(`a.surface_role <> 'system_archive'`);
   if (filters.artifactType) clauses.push(`a.artifact_type = ${add(filters.artifactType)}`);
   if (filters.runId) clauses.push(`a.run_id = ${add(filters.runId)}`);
   if (filters.projectId) clauses.push(`a.project_id = ${add(filters.projectId)}`);
@@ -223,7 +227,7 @@ function buildWhere(
 }
 
 function artifactSelectSql(): string {
-  return `SELECT a.id, a.space_id, a.run_id, a.proposal_id, a.artifact_type,
+  return `SELECT a.id, a.space_id, a.run_id, a.proposal_id, a.artifact_type, a.surface_role,
                  a.title, a.content, a.storage_ref, a.storage_path, a.mime_type,
                  a.exportable, a.preview, a.metadata_json, a.visibility, a.access_level,
                  a.owner_user_id, a.created_at, a.updated_at, a.project_id, a.workspace_id
@@ -237,6 +241,7 @@ function artifactToOut(row: ArtifactRow, includeContent: boolean): ArtifactOut {
     run_id: row.run_id,
     proposal_id: row.proposal_id,
     artifact_type: row.artifact_type,
+    surface_role: row.surface_role,
     title: row.title,
     mime_type: row.mime_type,
     exportable: Boolean(row.exportable),

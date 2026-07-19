@@ -12,6 +12,8 @@ import { type RunBudgetSource } from "../runs/contractSnapshot";
 import { decidePlanApproval, materializePlanGraph, planNodeContentHash, type MaterializedPlanGraph } from "./graph";
 import { verifyIntegrationNode, verifyPlanIntegration } from "./integrationVerification";
 import { ExecutionGraphScheduler } from "../execution/executionGraphScheduler";
+import { InputBindingResolutionError, resolveNodeInputs } from "../execution/nodeInputResolver";
+import type { WorkflowNodeInputBinding } from "@agent-space/protocol" with { "resolution-mode": "import" };
 
 export interface AgentPlanProposalInput {
   sourceTaskId: string;
@@ -87,6 +89,7 @@ interface PlanNodeRow {
   acceptance_criteria_json: unknown;
   definition_of_done: string | null;
   required_outputs_json: unknown;
+  input_bindings_json: WorkflowNodeInputBinding[];
   max_runs: number | null;
   max_cost: number | null;
   max_duration_seconds: number | null;
@@ -183,6 +186,7 @@ export class PgPlanRepository {
                   n.description, n.status, n.assigned_agent_id, n.runtime_profile_id,
                   n.capability_id, n.prompt_asset_key, n.risk_level,
                   n.acceptance_criteria_json, n.definition_of_done, n.required_outputs_json,
+                  n.input_bindings_json,
                   n.max_runs, n.max_cost, n.max_duration_seconds, n.policy_json,
                   n.verification_recipe_refs_json, n.metadata_json, n.blocked_reason,
                   n.content_hash, n.approval_proposal_id, n.created_at, n.updated_at,
@@ -198,7 +202,7 @@ export class PgPlanRepository {
                     WHERE re.run_id = r.id AND re.space_id = r.space_id
                     ORDER BY re.evaluated_at DESC, re.id DESC LIMIT 1
                  ) evaluation ON true
-                WHERE pnr.node_id = n.id AND pnr.space_id = n.space_id
+                WHERE pnr.plan_node_id = n.id AND pnr.space_id = n.space_id
                 ORDER BY pnr.created_at DESC, pnr.id DESC LIMIT 1
              ) latest ON true
             WHERE n.space_id = $1 AND n.plan_version_id = $2
@@ -392,7 +396,7 @@ export class PgPlanRepository {
         return { plan_id: planId, root_run_id: plan.root_run_id, scheduled_node_ids: [], idempotent: true, root_status: root.rows[0].status };
       }
       await assertBudgetSourcesAvailable(client, identity.spaceId, budgetSourcesFromPlan(plan.version_budget_json));
-      const root = await new PgRunRepository(client).createQueuedRun({
+      const root = await new PgRunRepository(client).createCoordinatorRun({
         agent_id: agentId,
         space_id: identity.spaceId,
         user_id: identity.userId,
@@ -440,7 +444,7 @@ export class PgPlanRepository {
                 p.created_by_user_id, p.created_by_agent_id, p.created_at, p.updated_at,
                 v.id AS version_id, v.status AS version_status, v.budget_json AS version_budget_json,
                 p.created_by_agent_id AS root_agent_id, root.prompt AS root_prompt,
-                root.runtime_profile_id AS root_runtime_profile_id
+                root.requested_runtime_profile_id AS root_runtime_profile_id
            FROM plans p JOIN plan_versions v ON v.id = p.current_plan_version_id AND v.space_id = p.space_id
            LEFT JOIN runs root ON root.id = p.root_run_id AND root.space_id = p.space_id
           WHERE p.space_id = $1 AND p.id = $2 FOR UPDATE OF p, v`,
@@ -486,16 +490,17 @@ export class PgPlanRepository {
     });
   }
 
-  async reconcileForRun(spaceId: string, runId: string): Promise<void> {
-    const result = await this.db.query<{ plan_id: string }>(
-      `SELECT DISTINCT p.id AS plan_id
+  async reconcileForRun(spaceId: string, runId: string, userId?: string): Promise<void> {
+    const result = await this.db.query<{ plan_id: string; owner_user_id: string | null }>(
+      `SELECT DISTINCT p.id AS plan_id, root.owner_user_id
          FROM plan_node_runs pnr JOIN plan_nodes n ON n.id = pnr.plan_node_id AND n.space_id = pnr.space_id
          JOIN plan_versions v ON v.id = n.plan_version_id AND v.space_id = n.space_id
          JOIN plans p ON p.id = v.plan_id AND p.space_id = v.space_id
+         LEFT JOIN runs root ON root.id = p.root_run_id AND root.space_id = p.space_id
         WHERE pnr.space_id = $1 AND pnr.run_id = $2`,
       [spaceId, runId],
     );
-    for (const row of result.rows) await this.reconcilePlan({ spaceId, userId: "system" }, row.plan_id);
+    for (const row of result.rows) await this.reconcilePlan({ spaceId, userId: userId ?? row.owner_user_id ?? "system" }, row.plan_id);
   }
 
   private async assertPlanningRun(client: Queryable, identity: SpaceUserIdentity, input: AgentPlanProposalInput): Promise<void> {
@@ -517,7 +522,7 @@ export class PgPlanRepository {
            FROM plan_nodes n
            JOIN LATERAL (
              SELECT pnr.run_id FROM plan_node_runs pnr
-              WHERE pnr.node_id = n.id AND pnr.space_id = n.space_id
+              WHERE pnr.plan_node_id = n.id AND pnr.space_id = n.space_id
               ORDER BY pnr.created_at DESC, pnr.id DESC LIMIT 1
            ) link ON true
            JOIN runs r ON r.id = link.run_id AND r.space_id = n.space_id
@@ -560,6 +565,7 @@ export class PgPlanRepository {
               n.description, n.status, n.assigned_agent_id, n.runtime_profile_id,
               n.capability_id, n.prompt_asset_key, n.risk_level,
               n.acceptance_criteria_json, n.definition_of_done, n.required_outputs_json,
+              n.input_bindings_json,
               n.max_runs, n.max_cost, n.max_duration_seconds, n.policy_json,
               n.verification_recipe_refs_json, n.metadata_json, n.blocked_reason,
               n.content_hash, n.approval_proposal_id, n.created_at, n.updated_at,
@@ -606,6 +612,27 @@ export class PgPlanRepository {
         continue;
       }
       const childAgentId = node.assigned_agent_id ?? input.agentId;
+      let resolvedInputs;
+      try {
+        resolvedInputs = await resolveNodeInputs(client, {
+          spaceId: identity.spaceId,
+          bindings: node.input_bindings_json,
+          sourceTable: "plan_nodes",
+          linkTable: "plan_node_runs",
+          linkNodeColumn: "plan_node_id",
+          scopeColumn: "plan_version_id",
+          scopeId: input.planVersionId,
+        });
+      } catch (error) {
+        if (!(error instanceof InputBindingResolutionError)) throw error;
+        const now = new Date().toISOString();
+        await client.query(
+          `UPDATE plan_nodes SET status = 'failed', blocked_reason = $3, updated_at = $4 WHERE space_id = $1 AND id = $2`,
+          [identity.spaceId, node.id, `input_binding_unresolved:${error.bindingName}:${error.reason}`, now],
+        );
+        scheduled.push(node.id);
+        continue;
+      }
       const nodeBudgetSources = budgetSourcesForNode(node, input.budgetSources);
       await assertBudgetSourcesAvailable(client, identity.spaceId, nodeBudgetSources, { excludeExecutionRootId: input.rootRunId });
       const child = await new PgRunRepository(client).createQueuedRun({
@@ -624,6 +651,7 @@ export class PgPlanRepository {
         runtime_profile_id: node.runtime_profile_id ?? input.runtimeProfileId,
         runtime_profile_selection_source: node.runtime_profile_id ? "explicit" : input.runtimeProfileSelectionSource,
         capability_id: node.capability_id,
+        context_artifact_ids: resolvedInputs.contextArtifactIds,
         contract_snapshot: {
           source: { kind: "plan", id: input.planId },
           project_id: input.projectId,
@@ -637,11 +665,12 @@ export class PgPlanRepository {
           max_duration_seconds: node.max_duration_seconds,
           budget_sources: nodeBudgetSources,
           workflow_input_json: input.workflowInputJson,
+          upstream_inputs_json: resolvedInputs,
           route_hints_json: { plan_id: input.planId, plan_version_id: input.planVersionId, plan_node_id: node.id, node_key: node.node_key, verification_recipe_refs: node.verification_recipe_refs_json },
         },
       });
       const now = new Date().toISOString();
-      await client.query(`INSERT INTO plan_node_runs (id, space_id, plan_node_id, run_id, role, created_at) VALUES ($1, $2, $3, $4, 'primary', $5) ON CONFLICT (plan_node_id, run_id) DO NOTHING`, [randomUUID(), identity.spaceId, node.id, child.id, now]);
+      await client.query(`INSERT INTO plan_node_runs (id, space_id, plan_node_id, run_id, role, resolved_inputs_json, created_at) VALUES ($1, $2, $3, $4, 'primary', $5::jsonb, $6) ON CONFLICT (plan_node_id, run_id) DO NOTHING`, [randomUUID(), identity.spaceId, node.id, child.id, JSON.stringify(resolvedInputs), now]);
       await client.query(`UPDATE plan_nodes SET status = 'in_progress', updated_at = $3 WHERE space_id = $1 AND id = $2`, [identity.spaceId, node.id, now]);
       await queue.enqueue({ job_type: "agent_run", space_id: identity.spaceId, user_id: identity.userId, agent_id: childAgentId, workspace_id: input.workspaceId, payload: { run_id: child.id, plan_id: input.planId, plan_version_id: input.planVersionId, plan_node_id: node.id } });
       scheduled.push(node.id);
@@ -690,16 +719,16 @@ async function insertPlanNodes(client: Queryable, spaceId: string, planVersionId
       `INSERT INTO plan_nodes (
          id, space_id, plan_version_id, node_key, node_kind, title, description, status,
          assigned_agent_id, runtime_profile_id, capability_id, prompt_asset_key, risk_level,
-         acceptance_criteria_json, definition_of_done, required_outputs_json, max_runs,
+         acceptance_criteria_json, definition_of_done, required_outputs_json, input_bindings_json, max_runs,
          max_cost, max_duration_seconds, policy_json, verification_recipe_refs_json,
          metadata_json, content_hash, created_at, updated_at
        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb,
-                 $15, $16::jsonb, $17, $18, $19, $20::jsonb, $21::jsonb, $22::jsonb, $23, $24, $24)`,
+                 $15, $16::jsonb, $17::jsonb, $18, $19, $20, $21::jsonb, $22::jsonb, $23::jsonb, $24, $25, $25)`,
       [id, spaceId, planVersionId, node.key, node.kind, node.title, node.description,
         versionStatus === "approved" ? "inbox" : "blocked", node.agentId, node.runtimeProfileId,
         node.capabilityId, node.promptAssetKey, stringValue(node.contractJson.risk_level) ?? "low",
         JSON.stringify(node.contractJson.acceptance_criteria_json ?? null), stringValue(node.contractJson.definition_of_done),
-        JSON.stringify(node.contractJson.required_outputs_json ?? null), positiveIntegerOrNull(node.contractJson.max_runs),
+        JSON.stringify(node.contractJson.required_outputs_json ?? null), JSON.stringify(node.inputBindings), positiveIntegerOrNull(node.contractJson.max_runs),
         nonNegativeNumberOrNull(node.contractJson.max_cost), positiveIntegerOrNull(node.contractJson.max_duration_seconds),
         JSON.stringify(node.contractJson.policy_json ?? node.contractJson.route_hints_json ?? {}), JSON.stringify(node.verificationRecipeRefs),
         JSON.stringify(node.metadataJson), planNodeContentHash(node), now],
@@ -786,7 +815,6 @@ function finishPlan(client: Queryable, spaceId: string, planId: string, rootRunI
       error_json: status === "failed" ? { error_code: "plan_node_failed", error_text: summary } : {},
       exit_code: status === "failed" ? 1 : 0,
       completed_at: now,
-      usage_json: {},
     });
   })();
 }

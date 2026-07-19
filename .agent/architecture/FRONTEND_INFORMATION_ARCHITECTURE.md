@@ -163,6 +163,29 @@ Frontend pages must preserve the user's local navigation context while mutations
   mutation from a non-default tab and assert the active tab remains selected and the page does
   not re-run the full initial load unless that is intentionally required.
 
+### Module-scoped refresh invariant
+
+The frontend uses minimum-scope refresh as a product invariant, not only as a performance
+optimization. A mutation must update the smallest data module that it can affect and must not
+re-run a page-level aggregate loader as a shortcut.
+
+- A mutation response is the first source for the updated entity: upsert it into local state,
+  remove it locally when the response is terminal, and update only the affected collection.
+- When a response cannot contain the complete read model, refresh the owning module only — for
+  example, Project Research refreshes operations/workflows/checkpoints/artifacts, Project Sources
+  refreshes bindings/health/items/corpus, and workspace linking refreshes workspace links and
+  the workspace summary.
+- Unrelated page data such as activities, memory, providers, agents, workspaces, and other
+  project summaries must not be re-requested after a mutation unless that mutation explicitly
+  changes that data.
+- `loadAll`/page-level loaders are reserved for first load, route/entity/space changes, or an
+  explicitly requested full refresh. They must not be used as the default mutation callback.
+- Background polling follows the same boundary: poll the active module's operation/read model,
+  preserve existing content, and never toggle the page's initial loading state.
+- New mutation callbacks should identify their affected module in their name and contract (for
+  example `refreshProjectSources` or `refreshResearchState`) so a later caller cannot silently
+  widen the refresh scope.
+
 ---
 
 ## 4. Module Visibility Policy
@@ -210,7 +233,8 @@ not be navigable.
 | **Inbox** (Activity) | Enabled | Capture inputs (rail label "Inbox"; route `/activity`) |
 | **Library** | Enabled | Space-scoped, per-user reading surface at `/library` for Sources-derived items and digests. `/library` is a shell that defaults to `/library/items`; scene-sidebar routes keep `All Items` and `Digests` as siblings, with soft type filters under `All Items` (`/library/items/articles`, `/library/items/emails`, `/library/items/videos`, `/library/items/podcasts`, `/library/items/pdfs`). It only shows items/digests from sources the current user follows, plus that user's manual unconnected URLs. Source digest detail routes live under `/library/digests/:connectionId/:date`; single-item readers live under `/library/items/:itemId` or the day-scoped `/library/digests/:connectionId/:date/items/:itemId`. |
 | **Sources** | Enabled | Space-scoped information stream control plane at `/sources`; owns RSS/Atom/web page connections, owner/visibility metadata, opt-in delivery subscriptions, source-level health, scan state, and source governance. Pending source recommendations show source metadata and Follow/Dismiss/Mute actions without exposing the item stream until the user follows. Project item feeds do not live here. |
-| **Project Sources** | Enabled | Project workflow surface at `/projects/:projectId/sources`; binds existing Sources directly to a Project, shows project source health, runs scans/backfills, pauses/removes bindings, renders the materialized project source item collection from `/sources/project-items`, syncs the Project corpus from source links/evidence/decisions, and links to the project graph lens. Academic projects open Graph with `lens_id=academic_citation_v1`. |
+| **Project Sources** | Enabled | Acquisition/control surface at `/projects/:projectId/sources`; binds existing Sources, shows health, runs scans/backfills, pauses/removes bindings, renders newly materialized source items, and syncs Project Corpus. It does not own article-level corpus review. |
+| **Research Workspace** | Enabled | Academic Project living-document surface at `/projects/:projectId/research`; four-section Notebook with per-section version history, AI-edit diff highlight, and one-click rollback, filterable Reading List with triage/read, WHY/HOW/WHAT, and monitoring stance cards, draggable Checklist with agent-origin badges, immutable Reports snapshots, scoped Ask AI (daily-capped, direct co-edit), and a recent-monitoring rail. Project overview shows daily support/contradiction/new-direction columns plus publication-integrity warnings; Project Sources remains acquisition-only with a pointer to the Reading List. |
 | **Project Presets** | Enabled | Creation-time Project shape selector for code-owned workflow packs. The optional `academic_research` preset is selected when creating a Project and then drives the Project-specific shell, visual treatment, and primary operations; it is not a post-create enable toggle. It reuses Project Sources, Project Corpus, and Project Graph for literature monitoring, paper screening, corpus triage, and citation/relation visualization. |
 | **Review** (Proposals + Memory) | Enabled | Governance area (rail label "Review"; routes `/proposals` and `/memory`). The scene sidebar links real surfaces; proposal-type filters live inside `/proposals`. |
 | **Knowledge** | Enabled | First-level unified module (rail label "Knowledge"; route `/knowledge`). `/knowledge` redirects to the last-used workspace (default `/knowledge/notes`); `/knowledge/home` is an optional overview hub, never the forced landing. Sub-areas switch via an in-header breadcrumb (no scene sidebar): **Notes** (working-knowledge workspace — configurable collection tree + open-note tabs), **Wiki** (canonical, KnowledgeItem-backed, `/knowledge/wiki`), **Sources** (backend source CRUD exists; current frontend is list-only evidence browsing), **Cards** |
@@ -269,7 +293,7 @@ The frontend is ready for personal dogfooding. The core product loop is usable:
 - Project creation includes a Project type selector. Selecting Academic Research
   stores `settings_json.preset = "academic_research"` and routes the resulting
   Project into an Academic Research shell with literature monitoring, paper
-  screening/corpus, arXiv source setup, and citation graph actions. The preset
+  screening/corpus, arXiv provider monitors, and citation graph actions. The preset
   is not exposed as a post-create enable/use/clear toggle. Project detail pages
   include a Research workflow panel that creates
   optional project-scoped saved workflow presets, builds run drafts directly

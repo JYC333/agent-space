@@ -21,20 +21,17 @@ CREATE TABLE public.space_memberships (
 CREATE TABLE public.source_connections (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
-    connector_id character varying(36) NOT NULL,
+    provider_connector_id character varying(36) NOT NULL,
     owner_user_id character varying(36) NOT NULL,
     credential_id character varying(36),
     name character varying(512) NOT NULL,
-    endpoint_url text,
     status character varying(32) NOT NULL,
-    fetch_frequency character varying(32) NOT NULL,
     capture_policy character varying(64) NOT NULL,
     trust_level character varying(32) NOT NULL,
     topic_hints_json jsonb,
     consent_json jsonb NOT NULL,
     policy_json jsonb NOT NULL,
     config_json jsonb NOT NULL,
-    schedule_rule_json jsonb,
     handler_kind character varying(32) NOT NULL DEFAULT 'built_in',
     active_handler_version_id character varying(36),
     repair_status character varying(32) NOT NULL DEFAULT 'ok',
@@ -45,6 +42,29 @@ CREATE TABLE public.source_connections (
     CONSTRAINT source_connections_pkey PRIMARY KEY (id),
     CONSTRAINT ck_source_connections_handler_kind CHECK (((handler_kind)::text = ANY ((ARRAY['built_in'::character varying, 'generated_custom'::character varying])::text[]))),
     CONSTRAINT ck_source_connections_repair_status CHECK (((repair_status)::text = ANY ((ARRAY['ok'::character varying, 'repair_required'::character varying, 'repair_pending'::character varying, 'disabled'::character varying])::text[])))
+);
+
+CREATE UNIQUE INDEX uq_source_connections_active_owner_mapping
+  ON public.source_connections (space_id, owner_user_id, provider_connector_id, name)
+  WHERE deleted_at IS NULL AND status <> 'archived';
+
+CREATE TABLE public.source_channels (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    source_connection_id character varying(36) NOT NULL,
+    created_by_user_id character varying(36) NOT NULL,
+    name character varying(512) NOT NULL,
+    channel_type character varying(32) NOT NULL,
+    endpoint_url text,
+    query_json jsonb NOT NULL,
+    provider_query_json jsonb NOT NULL,
+    query_fingerprint character varying(128) NOT NULL,
+    status character varying(32) NOT NULL,
+    fetch_frequency character varying(32) NOT NULL,
+    schedule_rule_json jsonb,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT source_channels_pkey PRIMARY KEY (id)
 );
 
 CREATE TABLE public.scheduler_tasks (
@@ -59,6 +79,7 @@ CREATE TABLE public.scheduler_tasks (
     next_run_at timestamp with time zone,
     last_run_at timestamp with time zone,
     state_json jsonb DEFAULT '{}'::jsonb NOT NULL,
+    metadata_json jsonb DEFAULT '{}'::jsonb NOT NULL,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     CONSTRAINT scheduler_tasks_pkey PRIMARY KEY (id),

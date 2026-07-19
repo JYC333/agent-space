@@ -16,21 +16,15 @@ import {
   type SpaceUserIdentity,
 } from "../routeUtils/common";
 import { SourceExtractionWorker } from "./extractionWorker";
-import { CustomSourceCredentialService } from "./customSources/customSourceCredentialService";
 import { runCustomSourceHandlerScanJob } from "./customSources/customSourceScanWorker";
 import { RECIPE_SCAN_JOB_IMPLEMENTATION, runSourceRecipeScanJob } from "./sourceRecipes/recipeScanWorker";
 import { insertProposalRow } from "../proposals/reviewPackets";
 import {
-  contentOwnerFilterSql,
   contentReadSql,
-  contentVisibilityFilterSql,
 } from "../access/contentAccessSql";
-import { contentDecisionFromDb } from "../access/contentAccessQuery";
 import { inheritContentAccessGrants } from "../access/contentAccessInheritance";
 import {
   buildSummary,
-  connectionOut,
-  connectorOut,
   evidenceLinkOut,
   evidenceOut,
   itemOut,
@@ -44,7 +38,6 @@ import {
 } from "./sourceRepositoryMappers";
 import {
   CONNECTION_COLUMNS,
-  CONNECTOR_COLUMNS,
   EVIDENCE_COLUMNS,
   EVIDENCE_LINK_COLUMNS,
   ITEM_COLUMNS,
@@ -57,20 +50,12 @@ import {
   type ExtractionJobRow,
   type SourceItemRow,
   type SourceConnectionRow,
-  type SourceConnectorRow,
+  type SourceChannelConnectionRow,
 } from "./sourceRepositoryRows";
-import {
-  getSourceConnectionScanTask,
-  sourceConnectionWithSchedule,
-  upsertSourceConnectionScanTask,
-} from "./sourceConnectionScheduler";
-import { resolveRequestedSourceSchedule } from "./sourceScheduleInput";
 import {
   enforceSourceDerivedImportTarget,
   enforceSourceRetentionPolicy,
-  normalizeSourceConnectionCreateGovernance,
   normalizeSourceConnectionReadGovernance,
-  normalizeSourceConnectionUpdateGovernance,
 } from "./sourceConsent";
 import {
   reindexExtractedEvidenceAndParentForRetrieval,
@@ -89,8 +74,6 @@ const EVIDENCE_LINK_TYPES = new Set([
   "used_in_context",
 ]);
 const EVIDENCE_STATUSES = new Set(["candidate", "active", "rejected", "archived"]);
-const SOURCE_CONNECTION_VISIBILITIES = new Set(["private", "space_shared"]);
-const SOURCE_CONNECTION_SUBSCRIPTION_STATUSES = new Set(["subscribed", "pending", "dismissed", "muted"]);
 const SOURCE_ITEM_LIBRARY_STATUSES = new Set(["open", "new", "triaged", "selected", "ignored", "archived"]);
 const SOURCE_ITEM_READ_STATUSES = new Set(["unread", "skimmed", "read", "discussed"]);
 
@@ -112,18 +95,6 @@ function itemColumnsWithCurrentUserState(itemAlias: string): string {
     "suis.last_opened_at",
     "suis.progress_json",
   ].join(", ");
-}
-
-function sourceConnectionVisibility(body: Record<string, unknown>, connectorKey: string): string {
-  const requested = optionalString(body.visibility);
-  if (requested) {
-    if (!SOURCE_CONNECTION_VISIBILITIES.has(requested)) {
-      throw new HttpError(422, "visibility must be one of: private, space_shared");
-    }
-    return requested;
-  }
-  if (optionalString(body.credential_id) || connectorKey === "custom_source") return "private";
-  return "space_shared";
 }
 
 function isManualUrlItem(item: SourceItemRow): boolean {
@@ -195,337 +166,6 @@ export class PgSourcesRepository {
     private readonly db: Queryable,
     private readonly config: ServerConfig,
   ) {}
-
-  async listConnectors() {
-    const rows = await this.db.query<SourceConnectorRow>(
-      `SELECT ${CONNECTOR_COLUMNS} FROM source_connectors WHERE status = 'active' ORDER BY display_name, connector_key`,
-    );
-    return rows.rows.map(connectorOut);
-  }
-
-  async listConnections(identity: SpaceUserIdentity, filters: { view: string | null; status: string | null; limit: number; offset: number }) {
-    const params: unknown[] = [identity.spaceId, identity.userId];
-    const clauses = ["sc.space_id = $1", "sc.deleted_at IS NULL"];
-    if (filters.status) {
-      params.push(filters.status);
-      clauses.push(`sc.status = $${params.length}`);
-    }
-    const view = filters.view ?? "subscribed";
-    if (view === "subscribed") {
-      clauses.push("scus.status = 'subscribed'");
-    } else if (view === "pending") {
-      clauses.push("scus.status = 'pending'");
-    } else if (view === "owned") {
-      clauses.push(contentOwnerFilterSql("source_connection", "sc", "$2"));
-    } else if (view === "available") {
-      clauses.push(contentVisibilityFilterSql("sc", ["space_shared"]));
-      clauses.push(`NOT (${contentOwnerFilterSql("source_connection", "sc", "$2")})`);
-      clauses.push("(scus.status IS NULL OR scus.status IN ('pending', 'dismissed'))");
-    } else if (view === "manageable") {
-      clauses.push(`(
-        ${contentOwnerFilterSql("source_connection", "sc", "$2")}
-        OR EXISTS (
-          SELECT 1 FROM space_memberships sm
-           WHERE sm.space_id = sc.space_id
-             AND sm.user_id = $2
-             AND sm.status = 'active'
-             AND sm.role IN ('owner', 'admin')
-        )
-      )`);
-    } else {
-      throw new HttpError(422, "view must be one of: subscribed, pending, owned, available, manageable");
-    }
-    if (view !== "manageable") clauses.push(contentReadSql("source_connection", "sc", "$2"));
-    const where = `WHERE ${clauses.join(" AND ")}`;
-    const join = `LEFT JOIN source_connection_user_subscriptions scus
-                    ON scus.space_id = sc.space_id
-                   AND scus.source_connection_id = sc.id
-                   AND scus.user_id = $2`;
-    const total = await this.db.query<{ total: string }>(
-      `SELECT count(*)::text AS total FROM source_connections sc ${join} ${where}`,
-      params,
-    );
-    const rows = await this.db.query<SourceConnectionRow>(
-      `SELECT ${connectionColumnsWithConnectorForAlias("sc", "c")}, ${CONNECTION_SUBSCRIPTION_SELECT}
-         FROM source_connections sc
-         JOIN source_connectors c ON c.id = sc.connector_id
-         ${join}
-       ${where}
-       ORDER BY sc.updated_at DESC, sc.id DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
-      [...params, filters.limit, filters.offset],
-    );
-    const rowsWithSchedule = await this.withConnectionSchedules(rows.rows);
-    return page(rowsWithSchedule.map(connectionOut), countFromRow(total.rows[0]), filters.limit, filters.offset);
-  }
-
-  async createConnection(
-    identity: SpaceUserIdentity,
-    body: Record<string, unknown>,
-  ) {
-    const connectorKey = requiredString(body.connector_key, "connector_key");
-    const connector = await this.db.query<{ id: string }>(
-      `SELECT id FROM source_connectors WHERE connector_key = $1 AND status = 'active'`,
-      [connectorKey],
-    );
-    if (!connector.rows[0]) throw new HttpError(404, "Source connector not found");
-    const now = new Date().toISOString();
-    const governance = normalizeSourceConnectionCreateGovernance(identity, body);
-    const visibility = sourceConnectionVisibility(body, connectorKey);
-    const fetchFrequency = optionalString(body.fetch_frequency) ?? "manual";
-    const initialStatus = body._initial_status === "paused" ? "paused" : "active";
-    const schedule = resolveRequestedSourceSchedule({
-      body,
-      status: initialStatus,
-      fetchFrequency,
-    });
-    const result = await this.db.query<SourceConnectionRow>(
-      `INSERT INTO source_connections (
-         id, space_id, connector_id, owner_user_id, credential_id, visibility, name, endpoint_url,
-         status, fetch_frequency, capture_policy, trust_level, topic_hints_json,
-         consent_json, policy_json, config_json, schedule_rule_json, created_at, updated_at
-       ) VALUES (
-         $1, $2, $3, $4, $5, $6, $7, $8,
-         $9, $10, $11, $12, $13::jsonb,
-         $14::jsonb, $15::jsonb, $16::jsonb, $17::jsonb, $18, $18
-       ) RETURNING ${CONNECTION_COLUMNS}`,
-      [
-        randomUUID(),
-        identity.spaceId,
-        connector.rows[0].id,
-        identity.userId,
-        optionalString(body.credential_id),
-        visibility,
-        requiredString(body.name, "name"),
-        optionalString(body.endpoint_url),
-        initialStatus,
-        fetchFrequency,
-        governance.capturePolicy,
-        governance.trustLevel,
-        JSON.stringify(Array.isArray(body.topic_hints) ? body.topic_hints : null),
-        JSON.stringify(governance.consent),
-        JSON.stringify(governance.policy),
-        JSON.stringify(objectValue(body.config)),
-        JSON.stringify(schedule.scheduleRule),
-        now,
-      ],
-    );
-    const row = result.rows[0]!;
-    await this.upsertConnectionSubscription({
-      spaceId: identity.spaceId,
-      connectionId: row.id,
-      userId: identity.userId,
-      status: "subscribed",
-      libraryEnabled: true,
-      digestEnabled: true,
-      recommendedByUserId: null,
-      recommendationMessage: null,
-      notify: false,
-      now,
-    });
-    await this.createDefaultPendingSubscriptions(identity, row, now);
-    const task = await upsertSourceConnectionScanTask(this.db, {
-      connection: row,
-      nextRunAt: schedule.nextRunAt,
-      updatedAt: now,
-    });
-    const out = await this.getConnection(identity, sourceConnectionWithSchedule(row, task).id);
-    if (!out) throw new Error("Created source connection could not be reloaded");
-    return out;
-  }
-
-  async getConnection(identity: SpaceUserIdentity, connectionId: string) {
-    const row = await this.getConnectionRow(identity, connectionId);
-    if (!row) return null;
-    if (!(await this.canViewConnectionMetadata(identity, row))) return null;
-    return connectionOut(await this.withConnectionSchedule(row));
-  }
-
-  async updateConnection(identity: SpaceUserIdentity, connectionId: string, body: Record<string, unknown>) {
-    const existing = await this.getConnectionRow(identity, connectionId);
-    if (!existing) throw new HttpError(404, "Source connection not found");
-    if (body.visibility !== undefined || body.access_level !== undefined || body.grants !== undefined) {
-      throw new HttpError(422, "Use the content-access API to update Source permissions");
-    }
-    if (Object.hasOwn(body, "credential_id") && body.credential_id != null) {
-      if (existing.handler_kind !== "generated_custom") {
-        throw new HttpError(422, "credential_id can only be set on a Custom Source connection");
-      }
-      // Mirrors createDraft's validation — without this, a generic
-      // source.connection.manage caller (not necessarily a space admin)
-      // could attach an arbitrary/cross-space/wrong-type credentials row id
-      // that a Custom Source handler version would later carry into its
-      // policy envelope's credential_ref.
-      await new CustomSourceCredentialService(this.db, this.config).requireOwnCredential(
-        identity,
-        requiredString(body.credential_id, "credential_id"),
-      );
-    }
-    const now = new Date().toISOString();
-    const requestedStatus = optionalString(body.status) ?? existing.status;
-    const requestedFrequency = optionalString(body.fetch_frequency) ?? existing.fetch_frequency;
-    const schedule = resolveRequestedSourceSchedule({
-      body,
-      status: requestedStatus,
-      fetchFrequency: requestedFrequency,
-      existingNextCheckAt: existing.next_check_at,
-      existingScheduleRule: existing.schedule_rule_json,
-      now: new Date(now),
-    });
-    const governance = normalizeSourceConnectionUpdateGovernance(identity, existing, body);
-    const result = await this.db.query<SourceConnectionRow>(
-      `UPDATE source_connections SET
-         name = COALESCE($3, name),
-         status = COALESCE($4::varchar(32), status),
-         credential_id = CASE WHEN $5::boolean THEN $6 ELSE credential_id END,
-         fetch_frequency = COALESCE($7, fetch_frequency),
-         capture_policy = COALESCE($8, capture_policy),
-         trust_level = COALESCE($9, trust_level),
-         topic_hints_json = CASE WHEN $10::boolean THEN $11::jsonb ELSE topic_hints_json END,
-         consent_json = CASE WHEN $12::boolean THEN $13::jsonb ELSE consent_json END,
-         policy_json = CASE WHEN $14::boolean THEN $15::jsonb ELSE policy_json END,
-         config_json = CASE WHEN $16::boolean THEN $17::jsonb ELSE config_json END,
-         schedule_rule_json = $18::jsonb,
-         deleted_at = CASE WHEN $4::varchar(32) = 'archived' THEN $19::timestamptz ELSE deleted_at END,
-         updated_at = $19
-       WHERE space_id = $1 AND id = $2
-       RETURNING ${CONNECTION_COLUMNS}`,
-      [
-        identity.spaceId,
-        connectionId,
-        optionalString(body.name),
-        optionalString(body.status),
-        Object.hasOwn(body, "credential_id"),
-        optionalString(body.credential_id),
-        optionalString(body.fetch_frequency),
-        governance.capturePolicy,
-        governance.trustLevel,
-        Object.hasOwn(body, "topic_hints"),
-        JSON.stringify(Array.isArray(body.topic_hints) ? body.topic_hints : null),
-        governance.consent !== null,
-        JSON.stringify(governance.consent),
-        governance.policy !== null,
-        JSON.stringify(governance.policy),
-        Object.hasOwn(body, "config"),
-        JSON.stringify(optionalObject(body.config)),
-        JSON.stringify(schedule.scheduleRule),
-        now,
-      ],
-    );
-    const row = result.rows[0]!;
-    await upsertSourceConnectionScanTask(this.db, {
-      connection: row,
-      nextRunAt: schedule.nextRunAt,
-      updatedAt: now,
-    });
-    const out = await this.getConnection(identity, row.id);
-    if (!out) throw new Error("Updated source connection could not be reloaded");
-    return out;
-  }
-
-  async recommendConnection(identity: SpaceUserIdentity, connectionId: string, body: Record<string, unknown>) {
-    const connection = await this.getConnectionRow(identity, connectionId);
-    if (!connection) throw new HttpError(404, "Source connection not found");
-    if (!(await this.canViewConnectionMetadata(identity, connection))) {
-      throw new HttpError(404, "Source connection not found");
-    }
-    const targets = await this.resolveRecommendationTargets(identity, body);
-    if (!targets.length) throw new HttpError(422, "No recommendation targets");
-    const message = optionalString(body.message) ?? optionalString(body.recommendation_message);
-    const now = new Date().toISOString();
-    let notified = 0;
-    for (const userId of targets) {
-      if (userId === identity.userId) continue;
-      const changed = await this.upsertConnectionSubscription({
-        spaceId: identity.spaceId,
-        connectionId,
-        userId,
-        status: "pending",
-        libraryEnabled: true,
-        digestEnabled: true,
-        recommendedByUserId: identity.userId,
-        recommendationMessage: message ?? null,
-        notify: true,
-        now,
-      });
-      if (!changed) continue;
-      await this.upsertSourceRecommendationActivity({
-        spaceId: identity.spaceId,
-        targetUserId: userId,
-        connection,
-        recommendedByUserId: identity.userId,
-        recommendationMessage: message ?? null,
-        now,
-      });
-      notified += 1;
-    }
-    return { source_connection_id: connectionId, recommended: notified };
-  }
-
-  async updateConnectionSubscription(identity: SpaceUserIdentity, connectionId: string, body: Record<string, unknown>) {
-    const connection = await this.getConnectionRow(identity, connectionId);
-    if (!connection) throw new HttpError(404, "Source connection not found");
-    if (!(await this.canViewConnectionMetadata(identity, connection))) throw new HttpError(404, "Source connection not found");
-    const action = requiredString(body.action, "action");
-    if (!["subscribe", "dismiss", "mute", "unsubscribe"].includes(action)) {
-      throw new HttpError(422, "action must be one of: subscribe, dismiss, mute, unsubscribe");
-    }
-    const now = new Date().toISOString();
-    const libraryEnabled = typeof body.library_enabled === "boolean" ? body.library_enabled : action === "unsubscribe" ? false : true;
-    const digestEnabled = typeof body.digest_enabled === "boolean" ? body.digest_enabled : action === "unsubscribe" ? false : true;
-    const status = action === "subscribe"
-      ? "subscribed"
-      : action === "dismiss"
-        ? "dismissed"
-        : action === "mute"
-          ? "muted"
-          : "dismissed";
-    await this.upsertConnectionSubscription({
-      spaceId: identity.spaceId,
-      connectionId,
-      userId: identity.userId,
-      status,
-      libraryEnabled,
-      digestEnabled,
-      recommendedByUserId: connection.recommended_by_user_id ?? null,
-      recommendationMessage: connection.recommendation_message ?? null,
-      notify: false,
-      now,
-    });
-    return this.getConnection(identity, connectionId);
-  }
-
-  async scanConnection(identity: SpaceUserIdentity, connectionId: string) {
-    const connection = await this.getConnection(identity, connectionId);
-    if (!connection) throw new HttpError(404, "Source connection not found");
-    if (connection.handler_kind === "generated_custom") {
-      if (!connection.active_handler_version_id) {
-        throw new HttpError(409, "Custom Source connection has no active handler version");
-      }
-      return this.createCustomSourceScanJob({
-        identity,
-        connectionId,
-        handlerVersionId: connection.active_handler_version_id,
-        metadata: { created_by: "manual_scan", handler_kind: "generated_custom" },
-      });
-    }
-    if (connection.handler_kind === "recipe") {
-      if (!connection.active_recipe_version_id) {
-        throw new HttpError(409, "Recipe Source connection has no active recipe version");
-      }
-      return this.createJob({
-        identity,
-        connectionId,
-        sourceItemId: null,
-        jobType: "connection_scan",
-        metadata: {
-          created_by: "manual_scan",
-          implementation: RECIPE_SCAN_JOB_IMPLEMENTATION,
-          recipe_version_id: connection.active_recipe_version_id,
-        },
-      });
-    }
-    return this.createJob({ identity, connectionId, sourceItemId: null, jobType: "connection_scan", metadata: { created_by: "manual_scan" } });
-  }
 
   async listItems(identity: SpaceUserIdentity, filters: {
     libraryStatus: string | null;
@@ -1122,7 +762,7 @@ export class PgSourcesRepository {
 
   async listProjectItems(identity: SpaceUserIdentity, filters: {
     projectId: string;
-    sourceConnectionId: string | null;
+    sourceChannelId: string | null;
     itemType: string | null;
     sourceDomain: string | null;
     matchedDate: string | null;
@@ -1149,7 +789,7 @@ export class PgSourcesRepository {
       params.push(value);
       return `$${params.length}`;
     };
-    if (filters.sourceConnectionId) clauses.push(`psil.source_connection_id = ${add(filters.sourceConnectionId)}`);
+    if (filters.sourceChannelId) clauses.push(`psil.source_channel_id = ${add(filters.sourceChannelId)}`);
     if (filters.itemType) clauses.push(`si.item_type = ${add(filters.itemType)}`);
     if (filters.sourceDomain) clauses.push(`si.source_domain = ${add(filters.sourceDomain)}`);
     if (filters.matchedDate) {
@@ -1183,6 +823,7 @@ export class PgSourcesRepository {
               psil.space_id AS project_link_space_id,
               psil.project_id AS project_link_project_id,
               psil.project_source_binding_id AS project_link_project_source_binding_id,
+              psil.source_channel_id AS project_link_source_channel_id,
               psil.source_connection_id AS project_link_source_connection_id,
               psil.source_item_id AS project_link_source_item_id,
               psil.status AS project_link_status,
@@ -1224,7 +865,7 @@ export class PgSourcesRepository {
     }, {});
     const recentItems = await this.listProjectItems(identity, {
       projectId,
-      sourceConnectionId: null,
+      sourceChannelId: null,
       itemType: null,
       sourceDomain: null,
       matchedDate: null,
@@ -1243,21 +884,23 @@ export class PgSourcesRepository {
     };
   }
 
-  async sourceHealth(identity: SpaceUserIdentity, filters: { connectionId: string | null }) {
+  async sourceHealth(identity: SpaceUserIdentity, filters: { channelId: string | null }) {
     const params: unknown[] = [identity.spaceId, identity.userId];
     const clauses = [
       "sc.space_id = $1",
       "sc.deleted_at IS NULL",
       contentReadSql("source_connection", "sc", "$2"),
     ];
-    if (filters.connectionId) {
-      params.push(filters.connectionId);
-      clauses.push(`sc.id = $${params.length}`);
+    if (filters.channelId) {
+      params.push(filters.channelId);
+      clauses.push(`ch.id = $${params.length}`);
     }
     const rows = await this.db.query<{
+      source_channel_id: string;
       source_connection_id: string;
       source_name: string;
       connection_status: string;
+      channel_status: string;
       scheduler_status: string | null;
       next_run_at: unknown;
       last_run_at: unknown;
@@ -1270,52 +913,57 @@ export class PgSourcesRepository {
       consecutive_failures: string;
     }>(
       `WITH last_success AS (
-         SELECT DISTINCT ON (space_id, connection_id) space_id, connection_id, completed_at
+         SELECT DISTINCT ON (space_id, metadata_json->>'source_channel_id')
+                space_id, metadata_json->>'source_channel_id' AS source_channel_id, completed_at
            FROM extraction_jobs
-          WHERE space_id = $1 AND connection_id IS NOT NULL AND status = 'succeeded'
-          ORDER BY space_id, connection_id, completed_at DESC NULLS LAST, created_at DESC
+          WHERE space_id = $1 AND metadata_json->>'source_channel_id' IS NOT NULL AND status = 'succeeded'
+          ORDER BY space_id, metadata_json->>'source_channel_id', completed_at DESC NULLS LAST, created_at DESC
        ),
        last_failure AS (
-         SELECT DISTINCT ON (space_id, connection_id) space_id, connection_id, completed_at, error_message
+         SELECT DISTINCT ON (space_id, metadata_json->>'source_channel_id')
+                space_id, metadata_json->>'source_channel_id' AS source_channel_id, completed_at, error_message
            FROM extraction_jobs
-          WHERE space_id = $1 AND connection_id IS NOT NULL AND status = 'failed'
-          ORDER BY space_id, connection_id, completed_at DESC NULLS LAST, created_at DESC
+          WHERE space_id = $1 AND metadata_json->>'source_channel_id' IS NOT NULL AND status = 'failed'
+          ORDER BY space_id, metadata_json->>'source_channel_id', completed_at DESC NULLS LAST, created_at DESC
        )
-       SELECT sc.id AS source_connection_id,
-              sc.name AS source_name,
+       SELECT ch.id AS source_channel_id,
+              sc.id AS source_connection_id,
+              ch.name AS source_name,
               sc.status AS connection_status,
+              ch.status AS channel_status,
               st.status AS scheduler_status,
               st.next_run_at,
               st.last_run_at,
               ls.completed_at AS last_success_at,
               lf.completed_at AS last_failure_at,
               lf.error_message AS last_error,
-              (SELECT count(*)::text FROM extraction_jobs ej WHERE ej.space_id = sc.space_id AND ej.connection_id = sc.id AND ej.status = 'pending') AS queued_jobs,
-              (SELECT count(*)::text FROM extraction_jobs ej WHERE ej.space_id = sc.space_id AND ej.connection_id = sc.id AND ej.status = 'running') AS running_jobs,
-              (SELECT count(*)::text FROM source_items si WHERE si.space_id = sc.space_id AND si.connection_id = sc.id AND si.deleted_at IS NULL AND si.first_seen_at >= now() - interval '24 hours') AS recent_new_items,
+              (SELECT count(*)::text FROM extraction_jobs ej WHERE ej.space_id = ch.space_id AND ej.metadata_json->>'source_channel_id' = ch.id AND ej.status = 'pending') AS queued_jobs,
+              (SELECT count(*)::text FROM extraction_jobs ej WHERE ej.space_id = ch.space_id AND ej.metadata_json->>'source_channel_id' = ch.id AND ej.status = 'running') AS running_jobs,
+              (SELECT count(*)::text FROM source_channel_item_links chil JOIN source_items si ON si.id = chil.source_item_id WHERE chil.space_id = ch.space_id AND chil.source_channel_id = ch.id AND si.deleted_at IS NULL AND si.first_seen_at >= now() - interval '24 hours') AS recent_new_items,
               (SELECT count(*)::text
                  FROM extraction_jobs failed
-                WHERE failed.space_id = sc.space_id
-                  AND failed.connection_id = sc.id
+                WHERE failed.space_id = ch.space_id
+                  AND failed.metadata_json->>'source_channel_id' = ch.id
                   AND failed.status = 'failed'
                   AND (ls.completed_at IS NULL OR failed.completed_at > ls.completed_at)) AS consecutive_failures
-         FROM source_connections sc
-         LEFT JOIN source_connection_user_subscriptions scus
-           ON scus.space_id = sc.space_id
-          AND scus.source_connection_id = sc.id
+         FROM source_channels ch
+         JOIN source_connections sc ON sc.id = ch.source_connection_id
+         LEFT JOIN source_channel_user_subscriptions scus
+           ON scus.space_id = ch.space_id
+          AND scus.source_channel_id = ch.id
           AND scus.user_id = $2
          LEFT JOIN scheduler_tasks st
-           ON st.space_id = sc.space_id
-          AND st.task_type = 'source_connection_scan'
-          AND st.task_key = sc.id
+           ON st.space_id = ch.space_id
+          AND st.task_type = 'source_channel_scan'
+          AND st.task_key = ch.id
          LEFT JOIN last_success ls
-           ON ls.space_id = sc.space_id
-          AND ls.connection_id = sc.id
+           ON ls.space_id = ch.space_id
+          AND ls.source_channel_id = ch.id
          LEFT JOIN last_failure lf
-           ON lf.space_id = sc.space_id
-          AND lf.connection_id = sc.id
+           ON lf.space_id = ch.space_id
+          AND lf.source_channel_id = ch.id
         WHERE ${clauses.join(" AND ")}
-        ORDER BY sc.updated_at DESC, sc.id DESC`,
+        ORDER BY ch.updated_at DESC, ch.id DESC`,
       params,
     );
     return rows.rows.map((row) => {
@@ -1325,7 +973,7 @@ export class PgSourcesRepository {
       const lastFailureAt = dateIso(row.last_failure_at);
       const lastSuccessAt = dateIso(row.last_success_at);
       let status = "healthy";
-      if (row.connection_status === "paused" || row.scheduler_status === "paused") {
+      if (row.channel_status === "paused" || row.connection_status === "paused" || row.scheduler_status === "paused") {
         status = "paused";
       } else if (runningJobs > 0 || queuedJobs > 0) {
         status = "running";
@@ -1337,6 +985,7 @@ export class PgSourcesRepository {
       return {
         binding_id: null,
         project_id: null,
+        source_channel_id: row.source_channel_id,
         source_connection_id: row.source_connection_id,
         source_name: row.source_name,
         status,
@@ -1509,18 +1158,23 @@ export class PgSourcesRepository {
   }
 
   private async getConnectionRow(identity: SpaceUserIdentity, connectionId: string) {
-    const result = await this.db.query<SourceConnectionRow>(
-      `SELECT ${connectionColumnsWithConnectorForAlias("sc", "c")}, ${CONNECTION_SUBSCRIPTION_SELECT}
+    const result = await this.db.query<SourceChannelConnectionRow>(
+      `SELECT ${connectionColumnsWithConnectorForAlias("sc", "c")},
+              ch.id AS source_channel_id,
+              ch.endpoint_url, ch.fetch_frequency, ch.schedule_rule_json,
+              ${CONNECTION_SUBSCRIPTION_SELECT}
          FROM source_connections sc
-         JOIN source_connectors c ON c.id = sc.connector_id
-         LEFT JOIN source_connection_user_subscriptions scus
-           ON scus.space_id = sc.space_id
-          AND scus.source_connection_id = sc.id
+         JOIN source_provider_connectors spc ON spc.id = sc.provider_connector_id
+         JOIN source_connectors c ON c.id = spc.connector_id
+         JOIN source_channels ch ON ch.source_connection_id = sc.id AND ch.status <> 'archived'
+         LEFT JOIN source_channel_user_subscriptions scus
+           ON scus.space_id = ch.space_id
+          AND scus.source_channel_id = ch.id
           AND scus.user_id = $3
         WHERE sc.space_id = $1 AND sc.id = $2 AND sc.deleted_at IS NULL`,
       [identity.spaceId, connectionId, identity.userId],
     );
-    return result.rows[0] ? this.withConnectionSchedule(result.rows[0]) : null;
+    return result.rows[0] ?? null;
   }
 
   private async assertConnectionSubscribed(
@@ -1530,9 +1184,9 @@ export class PgSourcesRepository {
   ): Promise<void> {
     const result = await this.db.query<{ id: string }>(
       `SELECT id
-         FROM source_connection_user_subscriptions
+         FROM source_channel_user_subscriptions
         WHERE space_id = $1
-          AND source_connection_id = $2
+          AND source_channel_id IN (SELECT id FROM source_channels WHERE space_id=$1 AND source_connection_id=$2 AND status <> 'archived')
           AND user_id = $3
           AND status = 'subscribed'
           ${requireLibraryEnabled ? "AND library_enabled = true" : ""}
@@ -1542,8 +1196,52 @@ export class PgSourcesRepository {
     if (!result.rows[0]) throw new HttpError(404, "Source connection not found");
   }
 
-  private async canViewConnectionMetadata(identity: SpaceUserIdentity, connection: SourceConnectionRow): Promise<boolean> {
-    return (await contentDecisionFromDb(this.db, identity, "source_connection", connection.id)) !== "deny";
+  async scanChannel(identity: SpaceUserIdentity, channelId: string) {
+    const channel = await this.db.query<{
+      id: string;
+      space_id: string;
+      source_connection_id: string;
+      handler_kind: string;
+      active_handler_version_id: string | null;
+      active_recipe_version_id: string | null;
+      status: string;
+    }>(
+      `SELECT ch.id, ch.space_id, ch.source_connection_id, sc.handler_kind,
+              sc.active_handler_version_id, sc.active_recipe_version_id, ch.status
+         FROM source_channels ch
+         JOIN source_connections sc ON sc.id = ch.source_connection_id
+        WHERE ch.id=$1 AND ch.space_id=$2 AND ch.status='active' AND sc.status='active' AND sc.deleted_at IS NULL`,
+      [channelId, identity.spaceId],
+    );
+    const row = channel.rows[0];
+    if (!row) throw new HttpError(404, "Source channel not found");
+    if (row.handler_kind === "generated_custom" && !row.active_handler_version_id) {
+      throw new HttpError(409, "Custom Source Channel has no active handler version");
+    }
+    if (row.handler_kind === "recipe" && !row.active_recipe_version_id) {
+      throw new HttpError(409, "Recipe Source Channel has no active recipe version");
+    }
+    const metadata: Record<string, unknown> = { created_by: "manual_scan", source_channel_id: row.id };
+    if (row.handler_kind === "generated_custom") metadata.handler_kind = "generated_custom";
+    if (row.handler_kind === "recipe") {
+      metadata.implementation = RECIPE_SCAN_JOB_IMPLEMENTATION;
+      metadata.recipe_version_id = row.active_recipe_version_id;
+    }
+    const now = new Date().toISOString();
+    const job = await this.db.query<ExtractionJobRow>(
+      `INSERT INTO extraction_jobs (id, space_id, connection_id, source_item_id, job_type, status, metadata_json, created_at)
+       VALUES ($1,$2,$3,NULL,'connection_scan','pending',$4::jsonb,$5)
+       RETURNING ${JOB_COLUMNS}`,
+      [randomUUID(), row.space_id, row.source_connection_id, JSON.stringify(metadata), now],
+    );
+    if (row.handler_kind === "generated_custom") {
+      await this.db.query(
+        `INSERT INTO source_handler_runs (id, space_id, source_connection_id, handler_version_id, extraction_job_id, status, created_at)
+         VALUES ($1,$2,$3,$4,$5,'queued',$6)`,
+        [randomUUID(), row.space_id, row.source_connection_id, row.active_handler_version_id, job.rows[0]!.id, now],
+      );
+    }
+    return jobOut(job.rows[0]!);
   }
 
   private async upsertItemUserState(
@@ -1588,217 +1286,6 @@ export class PgSourcesRepository {
     );
   }
 
-  private async upsertConnectionSubscription(input: {
-    spaceId: string;
-    connectionId: string;
-    userId: string;
-    status: string;
-    libraryEnabled: boolean;
-    digestEnabled: boolean;
-    recommendedByUserId: string | null;
-    recommendationMessage: string | null;
-    notify: boolean;
-    now: string;
-  }): Promise<boolean> {
-    if (!SOURCE_CONNECTION_SUBSCRIPTION_STATUSES.has(input.status)) {
-      throw new HttpError(422, "invalid source subscription status");
-    }
-    const result = await this.db.query<{ status: string }>(
-      `INSERT INTO source_connection_user_subscriptions (
-         id, space_id, source_connection_id, user_id, status,
-         library_enabled, digest_enabled, recommended_by_user_id,
-         recommendation_message, last_notified_at, created_at, updated_at
-       ) VALUES (
-         $1, $2, $3, $4, $5,
-         $6, $7, $8, $9, CASE WHEN $10::boolean THEN $11::timestamptz ELSE NULL END, $11, $11
-       )
-       ON CONFLICT (space_id, source_connection_id, user_id) DO UPDATE SET
-         status = CASE
-           WHEN source_connection_user_subscriptions.status IN ('muted', 'subscribed') AND $5::varchar(32) = 'pending'
-             THEN source_connection_user_subscriptions.status
-           ELSE $5::varchar(32)
-         END,
-         library_enabled = CASE
-           WHEN source_connection_user_subscriptions.status IN ('muted', 'subscribed') AND $5::varchar(32) = 'pending'
-             THEN source_connection_user_subscriptions.library_enabled
-           ELSE $6::boolean
-         END,
-         digest_enabled = CASE
-           WHEN source_connection_user_subscriptions.status IN ('muted', 'subscribed') AND $5::varchar(32) = 'pending'
-             THEN source_connection_user_subscriptions.digest_enabled
-           ELSE $7::boolean
-         END,
-         recommended_by_user_id = CASE
-           WHEN source_connection_user_subscriptions.status IN ('muted', 'subscribed') AND $5::varchar(32) = 'pending'
-             THEN source_connection_user_subscriptions.recommended_by_user_id
-           ELSE $8
-         END,
-         recommendation_message = CASE
-           WHEN source_connection_user_subscriptions.status IN ('muted', 'subscribed') AND $5::varchar(32) = 'pending'
-             THEN source_connection_user_subscriptions.recommendation_message
-           ELSE $9
-         END,
-         last_notified_at = CASE
-           WHEN source_connection_user_subscriptions.status IN ('muted', 'subscribed') AND $5::varchar(32) = 'pending'
-             THEN source_connection_user_subscriptions.last_notified_at
-           WHEN $10::boolean THEN $11::timestamptz
-           ELSE source_connection_user_subscriptions.last_notified_at
-         END,
-         updated_at = $11
-       RETURNING status`,
-      [
-        randomUUID(),
-        input.spaceId,
-        input.connectionId,
-        input.userId,
-        input.status,
-        input.libraryEnabled,
-        input.digestEnabled,
-        input.recommendedByUserId,
-        input.recommendationMessage,
-        input.notify,
-        input.now,
-      ],
-    );
-    return result.rows[0]?.status === input.status;
-  }
-
-  private async createDefaultPendingSubscriptions(
-    identity: SpaceUserIdentity,
-    connection: SourceConnectionRow,
-    now: string,
-  ): Promise<void> {
-    if (connection.visibility !== "space_shared" || connection.credential_id) return;
-    const space = await this.db.query<{ type: string }>(
-      `SELECT type FROM spaces WHERE id = $1 LIMIT 1`,
-      [identity.spaceId],
-    );
-    if (space.rows[0]?.type === "personal") return;
-    const members = await this.db.query<{ user_id: string }>(
-      `SELECT user_id
-         FROM space_memberships
-        WHERE space_id = $1
-          AND status = 'active'
-          AND role <> 'guest'
-          AND user_id <> $2`,
-      [identity.spaceId, identity.userId],
-    );
-    for (const member of members.rows) {
-      const changed = await this.upsertConnectionSubscription({
-        spaceId: identity.spaceId,
-        connectionId: connection.id,
-        userId: member.user_id,
-        status: "pending",
-        libraryEnabled: true,
-        digestEnabled: true,
-        recommendedByUserId: identity.userId,
-        recommendationMessage: null,
-        notify: true,
-        now,
-      });
-      if (!changed) continue;
-      await this.upsertSourceRecommendationActivity({
-        spaceId: identity.spaceId,
-        targetUserId: member.user_id,
-        connection,
-        recommendedByUserId: identity.userId,
-        recommendationMessage: null,
-        now,
-      });
-    }
-  }
-
-  private async resolveRecommendationTargets(
-    identity: SpaceUserIdentity,
-    body: Record<string, unknown>,
-  ): Promise<string[]> {
-    const rawTargets = Array.isArray(body.target_user_ids)
-      ? body.target_user_ids.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-      : [];
-    if (body.all_space === true) {
-      const members = await this.db.query<{ user_id: string }>(
-        `SELECT user_id
-           FROM space_memberships
-          WHERE space_id = $1
-            AND status = 'active'
-            AND role <> 'guest'`,
-        [identity.spaceId],
-      );
-      return [...new Set(members.rows.map((row) => row.user_id))];
-    }
-    if (!rawTargets.length) throw new HttpError(422, "target_user_ids or all_space is required");
-    const uniqueTargets = [...new Set(rawTargets)];
-    const members = await this.db.query<{ user_id: string }>(
-      `SELECT user_id
-         FROM space_memberships
-        WHERE space_id = $1
-          AND status = 'active'
-          AND user_id = ANY($2::varchar[])`,
-      [identity.spaceId, uniqueTargets],
-    );
-    const found = new Set(members.rows.map((row) => row.user_id));
-    if (found.size !== uniqueTargets.length) throw new HttpError(404, "Recommendation target not found");
-    return uniqueTargets;
-  }
-
-  private async upsertSourceRecommendationActivity(input: {
-    spaceId: string;
-    targetUserId: string;
-    connection: SourceConnectionRow;
-    recommendedByUserId: string;
-    recommendationMessage: string | null;
-    now: string;
-  }): Promise<void> {
-    const aggregateKey = `source_recommendation:${input.connection.id}:${input.targetUserId}`;
-    const title = `Source recommended: ${input.connection.name}`;
-    const content = input.recommendationMessage ?? "A source was recommended for your Library.";
-    const payload = {
-      pointer_type: "source_recommendation",
-      source_connection_id: input.connection.id,
-      source_connection_name: input.connection.name,
-      recommended_by_user_id: input.recommendedByUserId,
-      recommendation_message: input.recommendationMessage,
-    };
-    await this.db.query(
-      `INSERT INTO activity_records (
-         id, space_id, user_id, activity_type, title, content, payload_json,
-         occurred_at, created_at, status, updated_at, source_kind, source_trust,
-         visibility, owner_user_id, subject_user_id, aggregate_key
-       ) VALUES (
-         $1, $2, $3, 'source_recommendation', $4, $5, $6::jsonb,
-         $7, $7, 'raw', $7, 'source', 'internal_system',
-         'private', $3, $3, $8
-       )
-       ON CONFLICT (space_id, aggregate_key) WHERE aggregate_key IS NOT NULL DO UPDATE SET
-         title = EXCLUDED.title,
-         content = EXCLUDED.content,
-         payload_json = EXCLUDED.payload_json,
-         status = 'raw',
-         updated_at = EXCLUDED.updated_at,
-         occurred_at = EXCLUDED.occurred_at,
-         discarded_at = NULL`,
-      [
-        randomUUID(),
-        input.spaceId,
-        input.targetUserId,
-        title,
-        content,
-        JSON.stringify(payload),
-        input.now,
-        aggregateKey,
-      ],
-    );
-  }
-
-  private async withConnectionSchedules(rows: SourceConnectionRow[]): Promise<SourceConnectionRow[]> {
-    return Promise.all(rows.map((row) => this.withConnectionSchedule(row)));
-  }
-
-  private async withConnectionSchedule(row: SourceConnectionRow): Promise<SourceConnectionRow> {
-    const task = await getSourceConnectionScanTask(this.db, row.id);
-    return sourceConnectionWithSchedule(row, task);
-  }
-
   private async getEvidenceRow(identity: SpaceUserIdentity, evidenceId: string) {
     const result = await this.db.query<EvidenceRow>(
       `SELECT ${evidenceColumnsForAlias("ee")}
@@ -1829,42 +1316,6 @@ export class PgSourcesRepository {
        ) VALUES ($1, $2, $3, $4, $5, 'pending', $6::jsonb, $7)
        RETURNING ${JOB_COLUMNS}`,
       [randomUUID(), input.identity.spaceId, input.connectionId, input.sourceItemId, input.jobType, JSON.stringify(input.metadata), now],
-    );
-    return jobOut(result.rows[0]!);
-  }
-
-  private async createCustomSourceScanJob(input: {
-    identity: SpaceUserIdentity;
-    connectionId: string;
-    handlerVersionId: string;
-    metadata: Record<string, unknown>;
-  }) {
-    const now = new Date().toISOString();
-    const jobId = randomUUID();
-    const runId = randomUUID();
-    const result = await this.db.query<ExtractionJobRow>(
-      `WITH inserted_job AS (
-         INSERT INTO extraction_jobs (
-           id, space_id, connection_id, source_item_id, job_type, status,
-           metadata_json, created_at
-         ) VALUES ($1, $2, $3, NULL, 'connection_scan', 'pending', $4::jsonb, $5)
-         RETURNING ${JOB_COLUMNS}
-       ), inserted_run AS (
-         INSERT INTO source_handler_runs (
-           id, space_id, source_connection_id, handler_version_id, extraction_job_id, status, created_at
-         )
-         SELECT $6, space_id, connection_id, $7, id, 'queued', $5 FROM inserted_job
-       )
-       SELECT ${JOB_COLUMNS} FROM inserted_job`,
-      [
-        jobId,
-        input.identity.spaceId,
-        input.connectionId,
-        JSON.stringify(input.metadata),
-        now,
-        runId,
-        input.handlerVersionId,
-      ],
     );
     return jobOut(result.rows[0]!);
   }

@@ -21,6 +21,7 @@ function runEvent(index: number) {
     id: `event-${index}`,
     space_id: "personal",
     run_id: "run-1",
+    attempt_number: null,
     event_index: index,
     event_type: "adapter_completed",
     status: "succeeded",

@@ -95,7 +95,7 @@ describe("Run contract snapshots", () => {
       project_id: "project-1",
       workspace_id: "workspace-1",
       required_outputs_json: {
-        artifact_types: ["research_brief.v1", "research_source_table.v1"],
+        artifact_types: ["research_report.archive.v1"],
       },
       max_duration_seconds: 120,
       max_runs: 4,

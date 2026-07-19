@@ -73,9 +73,9 @@ const proposalInputs:Record<string,z.ZodType>={
     budget_sources: z.array(z.record(z.string(), z.unknown())).optional(),
     planner_metadata: z.record(z.string(), z.unknown()).nullable().optional(),
   }).strict(),
-  "source.connection.propose_create":z.object({connector_key:z.string().min(1),name:z.string().min(1),endpoint_url:z.string().min(1)}).passthrough(),
-  "project.source.propose_bind":z.object({source_connection_id:z.string().min(1)}).passthrough(),
-  "source.backfill.propose_start":z.object({source_connection_id:z.string().min(1),source_backfill_plan_id:z.string().min(1)}).passthrough(),
+  "source.channel.propose_activation":z.object({source_channel_id:z.string().min(1)}).passthrough(),
+  "project.source.propose_bind":z.object({source_channel_id:z.string().min(1)}).passthrough(),
+  "source.backfill.propose_start":z.object({source_channel_id:z.string().min(1),source_backfill_plan_id:z.string().min(1)}).passthrough(),
 };
 const visibility = (...values: SystemActionVisibility[]) => new Set(values);
 
@@ -94,14 +94,11 @@ export const SYSTEM_ACTION_REGISTRY = [
   httpAction("source.recipe.create", "Create a Source recipe draft", "sources", "SourceRecipeService.createSource", "source.recipe.create", "draft"),
   httpAction("source.recipe.dry_run", "Dry-run a Source recipe", "sources", "SourceRecipeService.dryRunRecipeVersion", "source.recipe.dry_run", "none"),
   httpAction("source.recipe.activate", "Activate a Source recipe", "sources", "SourceRecipeService.activateRecipe", "source.recipe.activate", "durable"),
-  httpAction("source.connection.create", "Create a Source connection", "sources", "SourceConnectionService.createConnection", "source.connection.manage", "durable"),
-  httpAction("source.connection.update", "Update a Source connection", "sources", "SourceConnectionService.updateConnection", "source.connection.manage", "durable"),
   httpAction("project.source.bind", "Bind a Source to a Project", "projects", "ProjectSourceBindingService.createBinding", "project.source.bind", "durable"),
   httpAction("policy.action_grant.create", "Create an action approval grant", "policy", "ActionApprovalGrantService.create", "policy.action_grant.create", "durable"),
   httpAction("policy.action_grant.revoke", "Revoke an action approval grant", "policy", "ActionApprovalGrantService.revoke", "policy.action_grant.revoke", "durable"),
-  proposalAction("source.connection.propose_create", "Propose Source connection activation", "sources", "SourceConnectionService.proposeCreate", "source.connection.manage", "source_connection_create"),
+  proposalAction("source.channel.propose_activation", "Propose Source Channel activation", "sources", "SourceChannelService.proposeActivation", "source.connection.manage", "source_channel_activation"),
   proposalAction("project.source.propose_bind", "Propose binding a Source to a Project", "projects", "ProjectSourceBindingService.proposeBind", "project.source.bind", "project_source_bind"),
-  httpAction("source.connection.activate", "Activate a reviewed Source connection", "sources", "SourceConnectionService.activate", "source.connection.activate", "durable"),
   httpAction("project.operation.read", "Read Project operation progress", "projects", "ProjectOperationService.get", "project.operation.manage", "none"),
   httpAction("project.operation.create", "Create a Project operation", "projects", "ProjectOperationService.create", "project.operation.manage", "durable"),
   httpAction("project.operation.cancel", "Cancel a Project operation", "projects", "ProjectOperationService.cancel", "project.operation.manage", "durable"),

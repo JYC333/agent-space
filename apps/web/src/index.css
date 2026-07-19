@@ -375,6 +375,23 @@ pre {
   background: color-mix(in oklch, var(--foreground) 4%, transparent);
 }
 
+/* "[ref-N]" citation tokens decorated by the reader; click jumps to the
+   matching entry in the References panel. */
+.reader-ref-citation {
+  color: var(--primary);
+  cursor: pointer;
+  text-underline-offset: 0.18em;
+}
+
+.reader-ref-citation:hover {
+  text-decoration: underline;
+}
+
+.reference-flash {
+  background: color-mix(in oklch, var(--primary) 14%, transparent);
+  transition: background-color 600ms ease;
+}
+
 .reader-surface h1,
 .reader-surface h2,
 .reader-surface h3 {

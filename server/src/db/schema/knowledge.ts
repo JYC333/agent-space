@@ -122,6 +122,13 @@ export const extractedEvidence = pgTable("extracted_evidence", {
 	index("ix_extracted_evidence_status").using("btree", table.status.asc().nullsLast()),
 	index("ix_extracted_evidence_trust_level").using("btree", table.trustLevel.asc().nullsLast()),
 	index("ix_extracted_evidence_visibility").using("btree", table.visibility.asc().nullsLast()),
+	uniqueIndex("uq_extracted_evidence_source_content").using(
+		"btree",
+		table.spaceId.asc().nullsLast(),
+		table.sourceItemId.asc().nullsLast(),
+		table.extractionMethod.asc().nullsLast(),
+		table.contentHash.asc().nullsLast(),
+	).where(sql`content_hash IS NOT NULL`),
 	foreignKey({
 			columns: [table.artifactId],
 			foreignColumns: [artifacts.id],

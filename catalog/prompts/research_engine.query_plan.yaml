@@ -1,0 +1,37 @@
+asset_key: research_engine.query_plan
+display_name: Research Engine Query Plan
+description: Produces a bounded, reproducible multi-provider search plan.
+content:
+  schema_version: prompt_asset.v1
+  prompt_type: workflow
+  template: |-
+    Research question: {research_question}
+    Requested scope: {research_scope}
+
+    Build a concise multi-source search plan. Use arxiv, openalex, and semantic_scholar
+    for scholarly questions. Add web_search for general, current, industry, policy, or
+    other non-academic evidence. Queries must preserve the question's core concepts while
+    using each provider's plain-text syntax. Keep preview limits small (20 academic, 10 web),
+    do not invent credentials. Query objects must use exactly these shapes:
+    arxiv {"search_query": string, "max_results": 20, "sort_by": "relevance",
+    "sort_order": "descending"}; openalex {"search": string, "per_page": 20,
+    "sort": "publication_date:desc"}; semantic_scholar {"query": string,
+    "limit": 20}; web_search {"q": string, "count": 10}. Return only the
+    required JSON object with exactly these top-level keys: providers, filters,
+    time_window. providers is an array whose items have exactly the keys
+    provider_key, query, rationale. filters is one shared object and
+    time_window is one shared {"from": string|null, "to": string|null}; never
+    place filters, time_window, or any other extra key inside a provider item,
+    and never rename providers or provider_key.
+  variables_schema:
+    type: object
+    required: [research_question, research_scope]
+    properties:
+      research_question: { type: string }
+      research_scope: { type: string }
+  output_schema: {}
+  model_config: {}
+  rendering: { engine: plain }
+  safety:
+    untrusted_data_delimiters: true
+    requires_proposal_for_promotion: false

@@ -38,7 +38,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
         "RuntimeHostExecuteRequestSchema",
         jsonBody(request),
       );
-      const response = await executeRuntimeHost(context.config, body);
+      const response = await executeRuntimeHost(context.config, body, request.log);
       const protocol = await loadProtocol();
       return reply.send(protocol.RuntimeHostExecuteResponseSchema.parse(response));
     } catch (error) {

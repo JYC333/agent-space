@@ -203,10 +203,10 @@ async function seedRun(
   await pool!.query(
     `INSERT INTO runs (
        id, space_id, agent_id, agent_version_id, run_type, trigger_origin,
-       status, mode, usage_accuracy, adapter_type, model_provider_id,
+       status, mode, adapter_type, model_provider_id,
        instructed_by_user_id, required_sandbox_level, created_at, updated_at
      ) VALUES ($1,$2,'agent-1','version-1','agent','manual',$3,'live',
-       'estimated',$4,$5,$6,$7,$8,$8)`,
+       $4,$5,$6,$7,$8,$8)`,
     [
       id,
       overrides.space_id ?? "space-1",
@@ -295,7 +295,7 @@ describe("runs repositories against real PostgreSQL", () => {
     });
   });
 
-  it("requires an enabled runtime profile instead of falling back to AgentVersion runtime config", async (ctx) => {
+  it("creates an unrouted Run without copying AgentVersion runtime config", async (ctx) => {
     if (!available) return ctx.skip();
     const repo = new PgRunRepository(pool!);
     const { agentId } = await seedAgent({
@@ -303,20 +303,21 @@ describe("runs repositories against real PostgreSQL", () => {
       skip_runtime_profile: true,
     });
 
-    await expect(
-      repo.createQueuedRun({
-        agent_id: agentId,
-        space_id: "space-1",
-        user_id: "user-1",
-        mode: "live",
-        run_type: "agent",
-        trigger_origin: "manual",
-        prompt: "hi",
-      }),
-    ).rejects.toThrow("has no enabled runtime profile");
+    const run = await repo.createQueuedRun({
+      agent_id: agentId,
+      space_id: "space-1",
+      user_id: "user-1",
+      mode: "live",
+      run_type: "agent",
+      trigger_origin: "manual",
+      prompt: "hi",
+    });
+    expect(run.requested_runtime_profile_id).toBeNull();
+    expect(run.runtime_profile_id).toBeNull();
+    expect(run.adapter_type).toBeNull();
   });
 
-  it("resolves the space default ModelProvider when the version has none", async (ctx) => {
+  it("leaves the space default ModelProvider to Router selection", async (ctx) => {
     if (!available) return ctx.skip();
     const repo = new PgRunRepository(pool!);
     const { agentId } = await seedAgent();
@@ -347,13 +348,12 @@ describe("runs repositories against real PostgreSQL", () => {
       prompt: "hi",
     });
 
-    // model_api requires a provider; with none on the version it falls back to
-    // the enabled space default (config_json.is_default) — the chat-turn fix.
-    expect(run.adapter_type).toBe("model_api");
-    expect(run.model_provider_id).toBe(providerId);
+    expect(run.adapter_type).toBeNull();
+    expect(run.model_provider_id).toBeNull();
+    expect(run.route_decision_id).toBeNull();
   });
 
-  it("defaults no-workspace CLI runs to an ephemeral sandbox", async (ctx) => {
+  it("does not stamp CLI execution state before Router selection", async (ctx) => {
     if (!available) return ctx.skip();
     const repo = new PgRunRepository(pool!);
     const { agentId } = await seedAgent({
@@ -370,12 +370,12 @@ describe("runs repositories against real PostgreSQL", () => {
       prompt: "chat",
     });
 
-    expect(run.adapter_type).toBe("claude_code");
+    expect(run.adapter_type).toBeNull();
     expect(run.workspace_id).toBeNull();
-    expect(run.required_sandbox_level).toBe("ephemeral");
+    expect(run.required_sandbox_level).toBe("none");
   });
 
-  it("uses a selected agent runtime profile and snapshots its runtime config", async (ctx) => {
+  it("persists a requested runtime profile without preselecting or snapshotting it", async (ctx) => {
     if (!available) return ctx.skip();
     const repo = new PgRunRepository(pool!);
     const { agentId } = await seedAgent({
@@ -402,18 +402,10 @@ describe("runs repositories against real PostgreSQL", () => {
       prompt: "review",
     });
 
-    expect(run.runtime_profile_id).toBe(profileId);
-    expect(run.adapter_type).toBe("codex_cli");
-    expect(run.required_sandbox_level).toBe("ephemeral");
-    expect(run.runtime_profile_snapshot_json).toMatchObject({
-      id: profileId,
-      name: "CLI review",
-      adapter_type: "codex_cli",
-      runtime_config_json: {
-        adapter_type: "codex_cli",
-        runtime_tool_version: "1.2.3",
-      },
-    });
+    expect(run.requested_runtime_profile_id).toBe(profileId);
+    expect(run.runtime_profile_id).toBeNull();
+    expect(run.adapter_type).toBeNull();
+    expect(run.runtime_profile_snapshot_json).toBeNull();
 
     await pool!.query(
       `UPDATE agent_runtime_profiles
@@ -422,10 +414,9 @@ describe("runs repositories against real PostgreSQL", () => {
       [profileId],
     );
     const loaded = await repo.getRun("space-1", run.id);
-    expect(loaded?.runtime_config_json).toMatchObject({
-      adapter_type: "codex_cli",
-      runtime_tool_version: "1.2.3",
-    });
+    expect(loaded?.requested_runtime_profile_id).toBe(profileId);
+    expect(loaded?.runtime_profile_id).toBeNull();
+    expect(loaded?.runtime_config_json).toEqual({});
   });
 
   it("appends run events with a DB-computed monotonic event_index", async (ctx) => {

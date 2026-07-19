@@ -10,9 +10,9 @@ import { fetchCustomSourceEndpointHtml } from "../customSources/customSourceEndp
 import { cleanupSandbox } from "../customSources/customSourceRunner";
 import { computeNextCheckAt } from "../scanSchedule";
 import {
-  getSourceConnectionScanTask,
-  listDueSourceConnectionScanTasks,
-  upsertSourceConnectionScanTask,
+  getSourceChannelScanTask,
+  listDueSourceChannelScanTasks,
+  upsertSourceChannelScanTask,
 } from "../sourceConnectionScheduler";
 import { runSourceRecipe } from "./recipeInterpreter";
 
@@ -33,26 +33,27 @@ export const RECIPE_SCAN_JOB_IMPLEMENTATION = "recipe";
 
 export async function enqueueDueSourceRecipeScans(db: Queryable, batchLimit = 25): Promise<number> {
   const now = new Date().toISOString();
-  const tasks = await listDueSourceConnectionScanTasks(db, now, batchLimit);
+  const tasks = await listDueSourceChannelScanTasks(db, now, batchLimit);
   let enqueued = 0;
   for (const task of tasks) {
     if (!task.space_id) continue;
-    const due = await db.query<{ id: string; space_id: string; active_recipe_version_id: string }>(
-      `SELECT sc.id, sc.space_id, sc.active_recipe_version_id
-         FROM source_connections sc
-        WHERE sc.status = 'active'
+    const due = await db.query<{ id: string; channel_id: string; space_id: string; active_recipe_version_id: string }>(
+      `SELECT sc.id, ch.id AS channel_id, sc.space_id, sc.active_recipe_version_id
+         FROM source_channels ch
+         JOIN source_connections sc ON sc.id = ch.source_connection_id
+        WHERE ch.status = 'active' AND sc.status = 'active'
           AND sc.deleted_at IS NULL
           AND sc.space_id = $1
-          AND sc.id = $2
+          AND ch.id = $2
           AND sc.handler_kind = 'recipe'
           AND sc.active_recipe_version_id IS NOT NULL
           AND sc.repair_status <> 'disabled'
-          AND sc.fetch_frequency <> 'manual'
+          AND ch.fetch_frequency <> 'manual'
           AND NOT EXISTS (
             SELECT 1
               FROM extraction_jobs ej
-             WHERE ej.space_id = sc.space_id
-               AND ej.connection_id = sc.id
+             WHERE ej.space_id = ch.space_id
+               AND ej.metadata_json->>'source_channel_id' = ch.id
                AND ej.job_type = 'connection_scan'
                AND ej.status IN ('pending', 'running')
           )
@@ -71,6 +72,7 @@ export async function enqueueDueSourceRecipeScans(db: Queryable, batchLimit = 25
         row.id,
         JSON.stringify({
           created_by: "source_recipe_scheduler",
+          source_channel_id: row.channel_id,
           implementation: RECIPE_SCAN_JOB_IMPLEMENTATION,
           recipe_version_id: row.active_recipe_version_id,
         }),
@@ -87,6 +89,7 @@ interface PendingRecipeJobRow {
   space_id: string;
   connection_id: string;
   metadata_json: unknown;
+  source_channel_id: string;
 }
 
 export async function runPendingSourceRecipeScans(
@@ -95,7 +98,7 @@ export async function runPendingSourceRecipeScans(
   batchLimit = 10,
 ): Promise<number> {
   const pending = await db.query<PendingRecipeJobRow>(
-    `SELECT id, space_id, connection_id, metadata_json
+    `SELECT id, space_id, connection_id, metadata_json, metadata_json->>'source_channel_id' AS source_channel_id
        FROM extraction_jobs
       WHERE status = 'pending'
         AND job_type = 'connection_scan'
@@ -124,7 +127,7 @@ export async function runSourceRecipeScanJob(
   spaceId: string,
 ): Promise<boolean> {
   const result = await db.query<PendingRecipeJobRow>(
-    `SELECT id, space_id, connection_id, metadata_json
+    `SELECT id, space_id, connection_id, metadata_json, metadata_json->>'source_channel_id' AS source_channel_id
        FROM extraction_jobs
       WHERE id = $1
         AND space_id = $2
@@ -157,15 +160,19 @@ async function runOne(db: Queryable, config: ServerConfig, job: PendingRecipeJob
     schedule_rule_json: unknown;
     status: string;
     active_recipe_version_id: string | null;
+    channel_id: string;
   }>(
-    `SELECT id, space_id, owner_user_id, name, endpoint_url, fetch_frequency, schedule_rule_json, status, active_recipe_version_id
-       FROM source_connections
-      WHERE id = $1 AND space_id = $2`,
-    [job.connection_id, job.space_id],
+    `SELECT sc.id, sc.space_id, sc.owner_user_id, sc.name,
+            ch.id AS channel_id, ch.endpoint_url, ch.fetch_frequency, ch.schedule_rule_json,
+            ch.status, sc.active_recipe_version_id
+       FROM source_connections sc
+       JOIN source_channels ch ON ch.source_connection_id = sc.id AND ch.id = $3
+      WHERE sc.id = $1 AND sc.space_id = $2`,
+    [job.connection_id, job.space_id, job.source_channel_id],
   );
   const connection = connectionResult.rows[0];
   if (!connection) throw new Error(`Source connection ${job.connection_id} not found`);
-  const scheduleTask = await getSourceConnectionScanTask(db, connection.id);
+  const scheduleTask = await getSourceChannelScanTask(db, connection.channel_id);
 
   try {
     const recipeVersionId = metadataString(job.metadata_json, "recipe_version_id") ?? connection.active_recipe_version_id;
@@ -254,6 +261,7 @@ async function runOne(db: Queryable, config: ServerConfig, job: PendingRecipeJob
       if (result.status === "succeeded" && result.itemsCreated > 0) {
         await emitSourcePostProcessingEvent(db, {
           spaceId: job.space_id,
+          sourceChannelId: job.source_channel_id,
           sourceConnectionId: job.connection_id,
           newItemCount: result.itemsCreated,
         });
@@ -267,8 +275,14 @@ async function runOne(db: Queryable, config: ServerConfig, job: PendingRecipeJob
     // Always advance the schedule, even on failed runs — otherwise a
     // permanently broken source would be re-enqueued on every tick.
     const completedAt = new Date().toISOString();
-    await upsertSourceConnectionScanTask(db, {
-      connection,
+    await upsertSourceChannelScanTask(db, {
+      channel: {
+        id: connection.channel_id,
+        space_id: connection.space_id,
+        owner_user_id: connection.owner_user_id,
+        status: connection.status,
+        fetch_frequency: connection.fetch_frequency,
+      },
       nextRunAt: computeNextCheckAt(connection.fetch_frequency, completedAt, {
         existingNextCheckAt: scheduleTask?.next_run_at,
         scheduleRule: connection.schedule_rule_json,

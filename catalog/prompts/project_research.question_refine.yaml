@@ -1,0 +1,40 @@
+asset_key: project_research.question_refine
+display_name: Project Research Question Refinement Prompt
+description: FINER-based refinement of a candidate research question before intake starts.
+content:
+  schema_version: prompt_asset.v1
+  prompt_type: workflow
+  template: |-
+    Project: {project_name}
+    Project description: {project_description}
+    Existing corpus: {corpus_summary}
+    Candidate research question: {research_question}
+    Conversation so far: {conversation_history}
+
+    Assess whether the candidate is answerable and score FINER dimensions from 1 to 5.
+    Prefer concrete, bounded questions with an explicit population/system, intervention or phenomenon,
+    comparison where useful, outcome, and evidence window. Identify scope defects without pretending
+    novelty can be proven from the supplied context. Return 2-3 actionable rewrites, useful sub-questions,
+    explicit in/out scope, and no more than three clarifying questions. Each clarifying question must
+    list 2-6 concrete, mutually distinct answer options when the answer space is enumerable, and set
+    allow_multiple=true only when combining options is a coherent answer; use an empty options list for
+    genuinely open questions. Do not restate the options inside the question text. For an input such as
+    "agent", answerable must be false and all suggested questions must be independently researchable.
+    Return only the JSON object required by the output schema. Its top level must contain exactly the
+    keys assessment, suggested_questions, sub_questions, scope, and clarifying_questions; never nest
+    suggested_questions or any other sibling key inside assessment.
+  variables_schema:
+    type: object
+    required: [project_name, project_description, corpus_summary, research_question, conversation_history]
+    properties:
+      project_name: { type: string }
+      project_description: { type: string }
+      corpus_summary: { type: string }
+      research_question: { type: string }
+      conversation_history: { type: string }
+  output_schema: {}
+  model_config: {}
+  rendering: { engine: plain }
+  safety:
+    untrusted_data_delimiters: false
+    requires_proposal_for_promotion: false

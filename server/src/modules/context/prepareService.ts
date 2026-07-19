@@ -309,6 +309,7 @@ export class ContextPrepareService {
         const composedRuntimePrompt = composeRuntimePrompt(
           run.prompt ?? "",
           pkg.personal_context_block,
+          upstreamInputsBlock(run.contract_snapshot_json),
         );
         const routingManifest = await this.loadRoutingManifestForRun(run, userId);
         const touchedFiles = contextTouchedFilesForRun(run);
@@ -1038,16 +1039,29 @@ function contextTouchedFilesForRun(run: RunContextRecord): string[] {
   ].slice(0, 100);
 }
 
-function composeRuntimePrompt(userPrompt: string, personalContextBlock: string): string {
-  const block = personalContextBlock.trim();
-  if (!block) return userPrompt;
-  return [
-    userPrompt,
-    PERSONAL_CONTEXT_HEADER,
-    PERSONAL_CONTEXT_WARNING,
-    block,
-    PERSONAL_CONTEXT_FOOTER,
-  ].join("\n\n");
+function composeRuntimePrompt(userPrompt: string, personalContextBlock: string, upstreamBlock = ""): string {
+  const parts = [userPrompt];
+  const personal = personalContextBlock.trim();
+  if (personal) parts.push(PERSONAL_CONTEXT_HEADER, PERSONAL_CONTEXT_WARNING, personal, PERSONAL_CONTEXT_FOOTER);
+  if (upstreamBlock.trim()) parts.push("## Upstream inputs", upstreamBlock.trim());
+  return parts.filter(Boolean).join("\n\n");
+}
+
+function upstreamInputsBlock(contract: unknown): string {
+  const upstream = recordValue(recordValue(contract).upstream_inputs_json);
+  const bindings = Array.isArray(upstream.bindings) ? upstream.bindings : [];
+  if (bindings.length === 0) return "";
+  return bindings.map((item) => {
+    const binding = recordValue(item);
+    const value = typeof binding.value === "string" ? binding.value : JSON.stringify(binding.value ?? null);
+    return [
+      `### ${String(binding.name ?? "input")}`,
+      `Source node: ${String(binding.from_node ?? "unknown")}`,
+      `Source run: ${String(binding.source_run_id ?? "none")}`,
+      value,
+      binding.truncated === true ? "[input was truncated by the context budget]" : "",
+    ].filter(Boolean).join("\n");
+  }).join("\n\n");
 }
 
 function sha256(text: string): string {

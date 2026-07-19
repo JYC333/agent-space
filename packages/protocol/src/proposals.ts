@@ -90,6 +90,7 @@ export const ProposalAcceptResultTypeSchema = z.enum([
   "custom_source_handler_version",
   "source_recipe_version",
   "source_connection",
+  "source_channel",
   "project_source_binding",
   "source_backfill_plan",
   "evolvable_asset_version",

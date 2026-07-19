@@ -8,6 +8,7 @@ import {
   type ProviderCommandStore,
   type ProviderHttpClient,
 } from "../src/modules/providers";
+import { executeRuntimeHost } from "../src/modules/runtimeHost";
 import type { UsageObservation } from "../src/modules/usage";
 import { resolveTestUsageAttribution } from "./support/usageAttribution";
 
@@ -43,6 +44,7 @@ function fakeStore(
   calls: string[],
   providerType = "openai",
   usageObservations: UsageObservation[] = [],
+  openAiCompatibleBaseUrl: string | null = null,
 ): ProviderCommandStore {
   return {
     async getInvocationTarget(_spaceId: string, providerId?: string | null) {
@@ -54,6 +56,7 @@ function fakeStore(
           name: "Main",
           provider_type: providerType,
           base_url: "https://api.example.test/v1",
+          openai_compatible_base_url: openAiCompatibleBaseUrl,
           default_model: "gpt-4o-mini",
           available_models: ["gpt-4o-mini"],
           enabled: true,
@@ -195,6 +198,395 @@ describe("runtime host internal route", () => {
         dimensions: { mode: "live", tool_mode: "disabled" },
       }),
     ]);
+  });
+
+  it("requests native JSON Schema output and exposes the parsed object", async () => {
+    const calls: string[] = [];
+    const bodies: Array<Record<string, unknown>> = [];
+    __setProviderCommandStoreForTests(fakeStore(calls));
+    __setProviderHttpClientForTests({
+      async fetch(_url, init) {
+        bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: '{"schema":"research.test.v1","value":"ok"}' } }],
+          model: "gpt-4o-mini",
+          usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      },
+    });
+    app = buildServer(config(), { logger: false });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/runtime-host/execute",
+      headers: { "x-agent-space-internal-token": "internal-token" },
+      payload: requestBody({
+        output_format: {
+          type: "json_schema",
+          schema_id: "research.test.v1",
+          schema: { type: "object", properties: { value: { type: "string" } }, required: ["value"] },
+          strict: true,
+        },
+      }),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(bodies[0]).toMatchObject({
+      response_format: {
+        type: "json_schema",
+        json_schema: { name: "research_test_v1", strict: true },
+      },
+    });
+    expect(res.json()).toMatchObject({
+      success: true,
+      output_json: { schema: "research.test.v1", value: "ok" },
+    });
+  });
+
+  it("removes a leading reasoning envelope before parsing structured output", async () => {
+    const calls: string[] = [];
+    __setProviderCommandStoreForTests(fakeStore(calls));
+    __setProviderHttpClientForTests({
+      async fetch() {
+        return new Response(JSON.stringify({
+          choices: [{
+            finish_reason: "stop",
+            message: {
+              content: '<think>internal reasoning</think>\n{"schema":"research.test.v1","value":"ok"}',
+            },
+          }],
+          model: "gpt-4o-mini",
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      },
+    });
+    app = buildServer(config(), { logger: false });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/runtime-host/execute",
+      headers: { "x-agent-space-internal-token": "internal-token" },
+      payload: requestBody({
+        output_format: {
+          type: "json_schema",
+          schema_id: "research.test.v1",
+          schema: { type: "object", properties: { value: { type: "string" } }, required: ["value"] },
+          strict: true,
+        },
+      }),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      success: true,
+      output_json: { schema: "research.test.v1", value: "ok" },
+    });
+  });
+
+  it("fails structured-output runs when the provider returns plain text", async () => {
+    const calls: string[] = [];
+    __setProviderCommandStoreForTests(fakeStore(calls));
+    __setProviderHttpClientForTests({
+      async fetch() {
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: "not json" } }],
+          model: "gpt-4o-mini",
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      },
+    });
+    app = buildServer(config(), { logger: false });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/runtime-host/execute",
+      headers: { "x-agent-space-internal-token": "internal-token" },
+      payload: requestBody({
+        output_format: {
+          type: "json_schema",
+          schema_id: "research.test.v1",
+          schema: { type: "object" },
+          strict: true,
+        },
+      }),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      success: false,
+      error_code: "structured_output_invalid",
+      output_json: {
+        structured_output_diagnostics: {
+          transport: "openai_compatible",
+          response_kind: "message_content",
+          content_length: 8,
+          first_non_whitespace: "n",
+          last_non_whitespace: "n",
+          parse_result: "invalid_json",
+        },
+      },
+    });
+    expect(res.json().error_text).toContain("stage=managed_api schema=research.test.v1 provider=provider-1 model=gpt-4o-mini attempt=1");
+  });
+
+  it("logs the complete structured-output response with secret patterns redacted", async () => {
+    const calls: string[] = [];
+    const providerText = "line one\napi_key=secret-value\nline three";
+    __setProviderCommandStoreForTests(fakeStore(calls));
+    __setProviderHttpClientForTests({
+      async fetch() {
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: providerText } }],
+          model: "gpt-4o-mini",
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      },
+    });
+    const logs: Array<{ details: Record<string, unknown>; message: string }> = [];
+
+    const result = await executeRuntimeHost(
+      config(),
+      requestBody({
+        output_format: {
+          type: "json_schema",
+          schema_id: "research.test.v1",
+          schema: { type: "object" },
+          strict: true,
+        },
+      }) as Parameters<typeof executeRuntimeHost>[1],
+      {
+        error(details, message) {
+          logs.push({ details, message });
+        },
+      },
+    );
+
+    expect(result.success).toBe(false);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({ message: "managed API structured output failed" });
+    expect(logs[0]!.details.provider_response_text).toBe("line one\n[REDACTED_SECRET]\nline three");
+  });
+
+  it("rejects structured objects that violate the declared schema", async () => {
+    const calls: string[] = [];
+    __setProviderCommandStoreForTests(fakeStore(calls));
+    __setProviderHttpClientForTests({
+      async fetch() {
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: JSON.stringify({ value: 7 }) } }],
+          model: "gpt-4o-mini",
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      },
+    });
+    app = buildServer(config(), { logger: false });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/runtime-host/execute",
+      headers: { "x-agent-space-internal-token": "internal-token" },
+      payload: requestBody({
+        output_format: {
+          type: "json_schema",
+          schema_id: "research.test.v1",
+          stage: "synthesis",
+          schema: {
+            type: "object",
+            properties: { value: { type: "string" } },
+            required: ["value"],
+            additionalProperties: false,
+          },
+          strict: true,
+        },
+      }),
+    });
+
+    expect(res.json()).toMatchObject({
+      success: false,
+      error_code: "structured_output_invalid",
+    });
+    expect(res.json().error_text).toContain("stage=synthesis");
+    expect(res.json().error_text).toContain("at $.value:type:string");
+  });
+
+  it("uses a forced Anthropic tool for structured output", async () => {
+    const calls: string[] = [];
+    const bodies: Array<Record<string, unknown>> = [];
+    __setProviderCommandStoreForTests(fakeStore(calls, "anthropic"));
+    __setProviderHttpClientForTests({
+      async fetch(_url, init) {
+        bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return new Response(JSON.stringify({
+          content: [{ type: "tool_use", id: "structured-1", name: "research_test_v1", input: { value: "ok" } }],
+          model: "claude-3-5-sonnet-latest",
+          usage: { input_tokens: 3, output_tokens: 2 },
+          stop_reason: "tool_use",
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      },
+    });
+    app = buildServer(config(), { logger: false });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/runtime-host/execute",
+      headers: { "x-agent-space-internal-token": "internal-token" },
+      payload: requestBody({
+        output_format: {
+          type: "json_schema",
+          schema_id: "research.test.v1",
+          schema: { type: "object", properties: { value: { type: "string" } }, required: ["value"] },
+          strict: true,
+        },
+      }),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(bodies[0]).toMatchObject({
+      tool_choice: { type: "tool", name: "research_test_v1" },
+      tools: [{ name: "research_test_v1" }],
+    });
+    expect(res.json()).toMatchObject({
+      success: true,
+      output_json: { value: "ok" },
+    });
+  });
+
+  it("prefers an advertised OpenAI-compatible endpoint for an Anthropic provider", async () => {
+    const calls: string[] = [];
+    const bodies: Array<Record<string, unknown>> = [];
+    __setProviderCommandStoreForTests(fakeStore(calls, "anthropic", [], "https://api.example.test/openai/v1"));
+    __setProviderHttpClientForTests({
+      async fetch(url, init) {
+        calls.push(`url:${url}`);
+        bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: '{"value":"ok"}' } }],
+          model: "compatible-model",
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      },
+    });
+    app = buildServer(config(), { logger: false });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/runtime-host/execute",
+      headers: { "x-agent-space-internal-token": "internal-token" },
+      payload: requestBody({
+        output_format: {
+          type: "json_schema",
+          schema_id: "research.test.v1",
+          schema: { type: "object", properties: { value: { type: "string" } }, required: ["value"] },
+          strict: true,
+        },
+      }),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(calls).toContain("url:https://api.example.test/openai/v1/chat/completions");
+    expect(bodies[0]).toMatchObject({
+      response_format: { type: "json_schema" },
+    });
+    expect(res.json()).toMatchObject({
+      success: true,
+      output_json: { value: "ok" },
+    });
+  });
+
+  it("normalizes a single structured Anthropic tool block from a compatible gateway", async () => {
+    const calls: string[] = [];
+    __setProviderCommandStoreForTests(fakeStore(calls, "anthropic"));
+    __setProviderHttpClientForTests({
+      async fetch() {
+        return new Response(JSON.stringify({
+          content: [{ type: "tool_use", id: "structured-1", name: "json_schema", input: { value: "ok" } }],
+          model: "compatible-anthropic-model",
+          stop_reason: "tool_use",
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      },
+    });
+    app = buildServer(config(), { logger: false });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/runtime-host/execute",
+      headers: { "x-agent-space-internal-token": "internal-token" },
+      payload: requestBody({
+        output_format: {
+          type: "json_schema",
+          schema_id: "research.test.v1",
+          schema: { type: "object", properties: { value: { type: "string" } }, required: ["value"] },
+          strict: true,
+        },
+      }),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      success: true,
+      output_json: { value: "ok" },
+    });
+  });
+
+  it("reports safe Anthropic structured-output diagnostics when no tool block is returned", async () => {
+    const calls: string[] = [];
+    __setProviderCommandStoreForTests(fakeStore(calls, "anthropic"));
+    __setProviderHttpClientForTests({
+      async fetch() {
+        return new Response(JSON.stringify({
+          content: [{ type: "text", text: "I cannot provide that format." }],
+          model: "claude-test",
+          stop_reason: "end_turn",
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      },
+    });
+    app = buildServer(config(), { logger: false });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/runtime-host/execute",
+      headers: { "x-agent-space-internal-token": "internal-token" },
+      payload: requestBody({
+        output_format: {
+          type: "json_schema",
+          schema_id: "research.test.v1",
+          schema: { type: "object" },
+          strict: true,
+        },
+      }),
+    });
+
+    expect(res.json()).toMatchObject({
+      success: false,
+      error_code: "structured_output_invalid",
+    });
+    expect(res.json().error_text).toContain("finish_reason=end_turn");
+    expect(res.json().error_text).toContain("content_blocks=text");
+    expect(res.json().error_text).toContain("tool_names=none");
+    expect(res.json().error_text).not.toContain("I cannot provide");
+  });
+
+  it("rejects structured output before network access for unsupported providers", async () => {
+    const calls: string[] = [];
+    __setProviderCommandStoreForTests(fakeStore(calls, "cohere"));
+    __setProviderHttpClientForTests(fakeHttpClient(calls));
+    app = buildServer(config(), { logger: false });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/runtime-host/execute",
+      headers: { "x-agent-space-internal-token": "internal-token" },
+      payload: requestBody({
+        output_format: {
+          type: "json_schema",
+          schema_id: "research.test.v1",
+          schema: { type: "object" },
+          strict: true,
+        },
+      }),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      success: false,
+      error_code: "structured_output_unsupported",
+    });
+    expect(calls).toEqual(["target:provider-1"]);
   });
 
   it("returns provider network errors instead of a generic runtime host failure", async () => {

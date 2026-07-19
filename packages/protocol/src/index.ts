@@ -112,6 +112,11 @@ export * from "./plugins.js";
 export * from "./capabilities.js";
 export * from "./workflows.js";
 export * from "./skills.js";
+export * from "./projectResearch.js";
+export * from "./reader.js";
+
+// Source provider / connector / search channel contracts
+export * from "./sourceChannels.js";
 
 // Source Custom Source handler contracts
 export * from "./sourceCustomSourceHandlers.js";

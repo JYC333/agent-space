@@ -261,10 +261,20 @@ export class PostRunFinalizationService {
   }
 
   private async evaluate(run: RunRecord, attemptNumber: number): Promise<RunEvaluationRecord> {
-    const [steps, events] = await Promise.all([
+    const [allSteps, allEvents] = await Promise.all([
       this.repository.listRunSteps(run.space_id, run.id),
       this.repository.listRunEvents(run.space_id, run.id),
     ]);
+    // Steps/events are stamped with the attempt that produced them. Evaluation
+    // classifies one attempt, so a prior attempt's failure evidence must not
+    // leak into a retry's classification. Unstamped rows (written while no
+    // attempt row existed) stay included.
+    const steps = allSteps.filter(
+      (step) => step.attempt_number === null || step.attempt_number === attemptNumber,
+    );
+    const events = allEvents.filter(
+      (event) => event.attempt_number === null || event.attempt_number === attemptNumber,
+    );
     const eventErrorCodes = events
       .map((event) => event.error_code)
       .filter((code): code is string => Boolean(code));

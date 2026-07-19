@@ -208,8 +208,7 @@ stamped for that attempt; an explicit profile remains a hard pin.
 The deterministic MVP retries only classified transient failures and respects
 the `max_attempts` cap and aggregate run cost cap. Exhaustion, non-retryable
 failures, missing retry identity, and budget exhaustion move the logical Run to
-`waiting_for_review`. Cost is read from the append-only usage ledger rather than
-from `runs.usage_json`.
+`waiting_for_review`. Cost is read from the append-only usage ledger.
 
 Runs in `waiting_for_review` have explicit human controls: `POST /resume`
 requeues after approval (`same_attempt` for an in-flight policy pause,

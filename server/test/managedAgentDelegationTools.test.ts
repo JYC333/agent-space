@@ -46,7 +46,6 @@ function run(overrides: Partial<RunRecord> = {}): RunRecord {
     error_message: null,
     error_json: null,
     output_json: null,
-    usage_json: null,
     started_at: "2026-07-05T00:00:00.000Z",
     ended_at: null,
     created_at: "2026-07-05T00:00:00.000Z",
@@ -242,6 +241,20 @@ describe("managed agent delegation tools", () => {
         if (sql.includes("FROM runs r") && sql.includes("WHERE r.space_id = $1 AND r.id = $2")) {
           const row = params[1] === "run-reviewer" ? dependencyRun : null;
           return { rows: row ? [row as Row] : [], rowCount: row ? 1 : 0 };
+        }
+        if (sql.includes("WITH scoped_runs AS")) {
+          return {
+            rows: [{
+              agent_run_count: 1,
+              completed_agent_run_count: 0,
+              input_tokens: null,
+              output_tokens: null,
+              total_tokens: null,
+              estimated_cost_usd: null,
+              model_names: [],
+            }] as Row[],
+            rowCount: 1,
+          };
         }
         throw new Error(`Unexpected SQL: ${sql}`);
       },

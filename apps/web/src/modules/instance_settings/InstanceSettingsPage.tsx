@@ -3,6 +3,7 @@ import { useAuth } from '../../contexts/AuthContext'
 import { Card, CardTitle } from '../../components/ui/card'
 import { InstanceRuntimeToolsPanel } from '../runtime_tools/RuntimeToolsPage'
 import { CustomSourceRunnerSettingsPanel } from './CustomSourceRunnerSettingsPanel'
+import { SourceCatalogPanel } from './SourceCatalogPanel'
 
 export default function InstanceSettingsPage() {
   const { currentUser } = useAuth()
@@ -37,6 +38,7 @@ export default function InstanceSettingsPage() {
         </Card>
       ) : (
         <>
+          <SourceCatalogPanel />
           <CustomSourceRunnerSettingsPanel />
           <InstanceRuntimeToolsPanel />
         </>

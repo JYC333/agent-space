@@ -207,12 +207,12 @@ class AgentGroupServiceDb {
       const row = runRecord(String(params[0]), {
         agent_id: String(params[2]),
         agent_version_id: String(params[3]),
-        runtime_profile_id: params[4] === null ? null : String(params[4]),
-        parent_run_id: params[8] === null ? null : String(params[8]),
-        root_run_id: params[9] === null ? null : String(params[9]),
-        run_group_id: params[10] === null ? null : String(params[10]),
-        prompt: params[17] === null ? null : String(params[17]),
-        instruction: params[18] === null ? null : String(params[18]),
+        runtime_profile_id: params[6] === null ? null : String(params[6]),
+        parent_run_id: params[10] === null ? null : String(params[10]),
+        root_run_id: params[11] === null ? null : String(params[11]),
+        run_group_id: params[12] === null ? null : String(params[12]),
+        prompt: params[19] === null ? null : String(params[19]),
+        instruction: params[20] === null ? null : String(params[20]),
       });
       this.insertedRuns.set(row.id, row);
       return {
@@ -343,7 +343,6 @@ function runRecord(id: string, overrides: Partial<RunRecord> = {}): RunRecord {
     error_message: null,
     error_json: null,
     output_json: null,
-    usage_json: null,
     started_at: null,
     ended_at: null,
     created_at: "2026-07-05T00:00:00.000Z",
@@ -511,8 +510,8 @@ describe("AgentGroupRunService", () => {
     const runInsert = db.calls.find((call) => call.sql.includes("INSERT INTO runs"));
     expect(runInsert?.params[2]).toBe("agent-manager");
     expect(runInsert?.params.slice(8, 11)).toEqual([null, null, null]);
-    expect(runInsert?.params[17]).toBe("Start the room");
-    expect(runInsert?.params[18]).toBe("Coordinate the work");
+    expect(runInsert?.params[19]).toBe("Start the room");
+    expect(runInsert?.params[20]).toBe("Coordinate the work");
 
     expect(db.calls.some((call) => call.sql.includes("UPDATE runs"))).toBe(true);
     expect(db.calls.some((call) => call.sql.includes("UPDATE agent_run_groups"))).toBe(true);
@@ -545,8 +544,8 @@ describe("AgentGroupRunService", () => {
     );
 
     const runInsert = db.calls.find((call) => call.sql.includes("INSERT INTO runs"));
-    expect(runInsert?.params[17]).toBe("Start without goal");
-    expect(runInsert?.params[18]).toBeNull();
+    expect(runInsert?.params[19]).toBe("Start without goal");
+    expect(runInsert?.params[20]).toBeNull();
   });
 
   it("creates and enqueues a default manager run for user room messages", async () => {
@@ -575,9 +574,9 @@ describe("AgentGroupRunService", () => {
     expect(result.message.mentions_json).toEqual([{ agent_id: "agent-manager" }]);
     const runInsert = db.calls.find((call) => call.sql.includes("INSERT INTO runs"));
     expect(runInsert?.params[2]).toBe("agent-manager");
-    expect(runInsert?.params.slice(8, 11)).toEqual(["run-root", "run-root", "group-1"]);
-    expect(runInsert?.params[17]).toBe("Continue the room");
-    expect(runInsert?.params[18]).toBe("Coordinate the work");
+    expect(runInsert?.params.slice(10, 13)).toEqual(["run-root", "run-root", "group-1"]);
+    expect(runInsert?.params[19]).toBe("Continue the room");
+    expect(runInsert?.params[20]).toBe("Coordinate the work");
 
     const jobInsert = db.calls.find((call) => call.sql.includes("INSERT INTO jobs"));
     expect(jobInsert?.params[4]).toBe("agent-manager");
@@ -622,7 +621,7 @@ describe("AgentGroupRunService", () => {
 
     const runInsert = db.calls.find((call) => call.sql.includes("INSERT INTO runs"));
     expect(runInsert?.params[2]).toBe("agent-reviewer");
-    expect(runInsert?.params[17]).toBe("inspect this draft");
+    expect(runInsert?.params[19]).toBe("inspect this draft");
 
     const jobInsert = db.calls.find((call) => call.sql.includes("INSERT INTO jobs"));
     expect(jobInsert?.params[4]).toBe("agent-reviewer");
@@ -663,7 +662,7 @@ describe("AgentGroupRunService", () => {
     expect(jobInserts).toHaveLength(2);
     expect(runInserts.map((call) => call.params[2])).toEqual(["agent-manager", "agent-reviewer"]);
     expect(jobInserts.map((call) => call.params[4])).toEqual(["agent-manager", "agent-reviewer"]);
-    expect(runInserts.map((call) => call.params[17])).toEqual(["compare notes", "compare notes"]);
+    expect(runInserts.map((call) => call.params[19])).toEqual(["compare notes", "compare notes"]);
     expect(result.message.mentions_json).toEqual([
       { agent_id: "agent-manager" },
       { agent_id: "agent-reviewer" },
@@ -701,7 +700,7 @@ describe("AgentGroupRunService", () => {
 
     const runInserts = db.calls.filter((call) => call.sql.includes("INSERT INTO runs"));
     expect(runInserts.map((call) => call.params[2])).toEqual(["agent-manager", "agent-reviewer"]);
-    expect(runInserts.map((call) => call.params[17])).toEqual(["check logic", "check style"]);
+    expect(runInserts.map((call) => call.params[19])).toEqual(["check logic", "check style"]);
     expect(result.message.metadata_json).toMatchObject({
       routing_mode: "direct",
       routing_segments: [
@@ -737,11 +736,11 @@ describe("AgentGroupRunService", () => {
     expect(runInserts).toHaveLength(2);
     expect(jobInserts).toHaveLength(2);
     expect(runInserts[0]?.params[2]).toBe("agent-reviewer");
-    expect(runInserts[0]?.params[17]).toBe("answer 1+1");
+    expect(runInserts[0]?.params[19]).toBe("answer 1+1");
     expect(runInserts[1]?.params[2]).toBe("agent-manager");
-    expect(runInserts[1]?.params[17]).toBe("summarize the result");
-    const reviewerOverride = JSON.parse(String(runInserts[0]?.params[25]));
-    const managerOverride = JSON.parse(String(runInserts[1]?.params[25]));
+    expect(runInserts[1]?.params[19]).toBe("summarize the result");
+    const reviewerOverride = JSON.parse(String(runInserts[0]?.params[27]));
+    const managerOverride = JSON.parse(String(runInserts[1]?.params[27]));
     expect(reviewerOverride.chat_context_preamble).toContain("reviewer (this run)");
     expect(managerOverride.chat_context_preamble).toContain("manager (this run)");
     expect(managerOverride.chat_context_preamble).toContain("Original user message");
@@ -789,7 +788,7 @@ describe("AgentGroupRunService", () => {
     const runInserts = db.calls.filter((call) => call.sql.includes("INSERT INTO runs"));
     expect(runInserts).toHaveLength(1);
     expect(runInserts[0]?.params[2]).toBe("agent-manager");
-    expect(runInserts[0]?.params[17]).toBe("@Reviewer inspect this draft and coordinate any follow-up");
+    expect(runInserts[0]?.params[19]).toBe("@Reviewer inspect this draft and coordinate any follow-up");
     expect(result.message.mentions_json).toEqual([{ agent_id: "agent-manager" }]);
     expect(result.message.metadata_json).toMatchObject({
       routing_mode: "agent_coordination",

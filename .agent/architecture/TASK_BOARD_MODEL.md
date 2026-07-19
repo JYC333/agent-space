@@ -13,7 +13,7 @@ This document describes the **agent-native task board** domain layer. It is back
 - **Plan Node** — An internal step in an Agent Plan. It lives in
   `plan_nodes`, not in `tasks`, and links to physical Runs through
   `plan_node_runs`. It is not shown in the Task board.
-- **Run** — One **execution attempt** for an agent (or system workflow). A task may have many runs over time (retries, validation passes, reviews).
+- **Run** — One **logical execution** for an agent (or system workflow), carrying an immutable contract snapshot. A task may have many runs over time (re-execution, validation passes, reviews). Physical retries live one level below: a Run owns `run_attempts` rows, and Supervisor retries create a new attempt under the same Run rather than a new Run (see EXECUTION_MODEL.md).
 - **Job** — An **infrastructure queue row** (`jobs` table). Used for workers, retries, and dispatch plumbing. **Jobs are not product tasks** and must not be used as the source of truth for user-visible task state.
 - **Artifact** — Output attached to a run or task (files, reports, logs). Linked to tasks through `task_artifacts` when needed.
 - **Proposal** — A requested system change (for example memory updates). Linked to tasks through `task_proposals`. **Task done does not imply a proposal was applied** — approval is a separate workflow.
@@ -47,13 +47,13 @@ Boards and tasks are scoped by **space** (and optionally **workspace**). Assignm
 ## Task ↔ Run linkage
 
 - **Canonical:** `task_runs` (`TaskRun` ORM) — every product association between a `Task` and a `Run` that the task board should list or join on **must** go through this table. `GET /api/v1/tasks/{id}/runs` is implemented by querying `TaskRun`, then loading `Run` rows by id.
-- **Shortcut:** `runs.task_id` (nullable string on `Run`, no FK in the canonical baseline) is an **optional denormalized hint** for a single “primary” task context (traceability, read-model helpers). It is **not** a second source of truth: do not filter “runs for this task” using only `Run.task_id`. Task context for listings should attach through `TaskService` / `TaskRun` (and related link tables), not by assuming `Run.task_id` is always populated for every role or link.
+- There is **no `runs.task_id` column** in the canonical schema. `task_runs` is the only Task ↔ Run linkage; do not reintroduce a denormalized shortcut column on `runs`.
 
-**Task is not Job.** `Run.task_id` holds a **Task.id** when set, not a `jobs.id`.
+**Task is not Job.** Jobs (`jobs` table) are infrastructure queue rows with their own `attempts` counter; that counter is queue plumbing and is unrelated to `run_attempts`. The Supervisor enqueues retry jobs with `max_attempts: 1` so the queue layer never adds a second retry loop on top of Run attempts.
 
 ## Execution boundary
 
-`POST /api/v1/tasks/{id}/runs` creates a **queued** `Run` through `RunService.create_run`, inserts a `task_runs` row (canonical), sets `Run.task_id` only as the **primary-task shortcut**, and may move the task to `in_progress`. It does **not** call runtime adapters or enqueue infrastructure jobs.
+`POST /api/v1/tasks/{id}/runs` creates a **queued** `Run` (plus its initial attempt) through the runs repository inside one transaction with the `max_runs` admission lock, inserts a `task_runs` row (canonical), and may move the task to `in_progress`. It does **not** call runtime adapters or enqueue infrastructure jobs. Running the same Task again always creates a new Run and a new `task_runs` row; a terminal Run is never reopened by user request.
 
 ## Frontend
 

@@ -69,6 +69,7 @@ describe("DTO schema validation", () => {
         space_id: "s1",
         agent_id: "ag1",
         agent_version_id: "av1",
+        run_role: "execution",
         status: "queued",
         run_type: "agent",
         trigger_origin: "user",

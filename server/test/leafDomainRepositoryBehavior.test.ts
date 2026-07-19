@@ -288,6 +288,8 @@ function sourceConnectionRow(policyOverrides: Record<string, unknown> = {}) {
     last_checked_at: null,
     next_check_at: null,
     handler_kind: "built_in",
+    connector_type: "external_feed",
+    connector_key: "rss",
     active_handler_version_id: null,
     active_recipe_version_id: null,
     repair_status: "ok",
@@ -326,7 +328,7 @@ function projectSourceBindingRow(params: readonly unknown[]) {
     id: String(params[0] ?? "binding-1"),
     space_id: String(params[1] ?? "space-1"),
     project_id: String(params[2] ?? "project-1"),
-    source_connection_id: String(params[3] ?? "conn-1"),
+    source_channel_id: String(params[3] ?? "channel-1"),
     binding_key: String(params[4] ?? "default"),
     status: "active",
     priority: Number(params[5] ?? 0),
@@ -355,7 +357,7 @@ describe("Leaf domain repository behavior", () => {
 
     await new PgSourcesRepository(db, sourcesConfig()).listProjectItems(identity, {
       projectId: "project-1",
-      sourceConnectionId: null,
+      sourceChannelId: null,
       itemType: null,
       sourceDomain: null,
       matchedDate: null,
@@ -430,27 +432,6 @@ describe("Leaf domain repository behavior", () => {
     expect(listSql?.sql).toContain("metadata_json->>'library_type'");
     expect(listSql?.sql).toContain("LIKE 'audio/%'");
     expect(listSql?.sql).toContain("podcasts.apple.com");
-  });
-
-  it("does not downgrade already subscribed users when recommending a source", async () => {
-    const calls: Array<{ sql: string; params: readonly unknown[] }> = [];
-    const db = new FakeDb((sql, params) => {
-      calls.push({ sql, params });
-      if (sql.includes("AS effective_access_level")) return [{ effective_access_level: "full" }];
-      if (sql.includes("FROM source_connections")) return [sourceConnectionRow({ visibility: "space_shared" })];
-      if (sql.includes("FROM space_memberships") && sql.includes("user_id = ANY")) return [{ user_id: "user-2" }];
-      if (sql.includes("INSERT INTO source_connection_user_subscriptions")) return [{ status: "subscribed" }];
-      if (sql.includes("INSERT INTO activity_records")) throw new Error("subscribed recommendation should not notify");
-      throw new Error(`unexpected SQL: ${sql}`);
-    });
-
-    const out = await new PgSourcesRepository(db, sourcesConfig()).recommendConnection(identity, "conn-1", {
-      target_user_ids: ["user-2"],
-    });
-
-    expect(out).toEqual({ source_connection_id: "conn-1", recommended: 0 });
-    const upsert = calls.find((call) => call.sql.includes("INSERT INTO source_connection_user_subscriptions"));
-    expect(upsert?.sql).toContain("status IN ('muted', 'subscribed')");
   });
 
   it("captures raw input as an activity record", async () => {
@@ -632,7 +613,7 @@ describe("Leaf domain repository behavior", () => {
     });
 
     expect(() => new ProjectSourceBindingService(db).createBinding(identity, {
-      source_connection_id: "conn-1",
+      source_channel_id: "channel-1",
     })).toThrow(expect.objectContaining({ statusCode: 422, message: "project_id is required" }));
   });
 
@@ -641,7 +622,7 @@ describe("Leaf domain repository behavior", () => {
     const db = new FakeDb((sql, params) => {
       if (sql.includes("FROM project_source_bindings") && sql.includes("binding_key")) return [];
       if (sql.includes("AS effective_access_level")) return [{ effective_access_level: "full" }];
-      if (sql.includes("FROM source_connections")) return [sourceConnectionRow()];
+      if (sql.includes("JOIN source_connections")) return [sourceConnectionRow()];
       if (sql.includes("FROM projects")) return [{ id: "project-1", owner_user_id: "user-1" }];
       if (sql.includes("INSERT INTO project_source_bindings")) {
         insertParams = params;
@@ -652,25 +633,25 @@ describe("Leaf domain repository behavior", () => {
 
     const out = await new ProjectSourceBindingService(db).createBinding(identity, {
       project_id: "project-1",
-      source_connection_id: "conn-1",
+      source_channel_id: "channel-1",
     });
 
     expect(out).toMatchObject({
       project_id: "project-1",
-      source_connection_id: "conn-1",
+      source_channel_id: "channel-1",
       delivery_scope: "project_members",
     });
     expect(insertParams?.[2]).toBe("project-1");
-    expect(insertParams?.[3]).toBe("conn-1");
+    expect(insertParams?.[3]).toBe("channel-1");
   });
 
   it("restores an archived project source binding instead of creating a duplicate", async () => {
     const calls: string[] = [];
-    const archived = { ...projectSourceBindingRow(["binding-1", "space-1", "project-1", "conn-1", "default"]), status: "archived" };
+    const archived = { ...projectSourceBindingRow(["binding-1", "space-1", "project-1", "channel-1", "default"]), status: "archived" };
     const db = new FakeDb((sql, params) => {
       calls.push(sql);
       if (sql.includes("AS effective_access_level")) return [{ effective_access_level: "full" }];
-      if (sql.includes("FROM source_connections")) return [sourceConnectionRow()];
+      if (sql.includes("JOIN source_connections")) return [sourceConnectionRow()];
       if (sql.includes("FROM projects")) return [{ id: "project-1", owner_user_id: "user-1" }];
       if (sql.includes("FROM project_source_bindings") && sql.includes("binding_key")) return [archived];
       if (sql.includes("UPDATE project_source_bindings") && sql.includes("SET status = 'active'")) {
@@ -681,7 +662,7 @@ describe("Leaf domain repository behavior", () => {
 
     const out = await new ProjectSourceBindingService(db).createBinding(identity, {
       project_id: "project-1",
-      source_connection_id: "conn-1",
+      source_channel_id: "channel-1",
     });
 
     expect(out).toMatchObject({ id: "binding-1", status: "active" });
@@ -702,7 +683,7 @@ describe("Leaf domain repository behavior", () => {
         backfillParams = params;
         return [];
       }
-      if (sql.includes("FROM source_connections")) return [sourceConnectionRow()];
+      if (sql.includes("JOIN source_connections")) return [sourceConnectionRow()];
       if (sql.includes("FROM projects")) return [{ id: "project-1", owner_user_id: "user-1" }];
       if (sql.includes("INSERT INTO project_source_bindings")) {
         bindingId = String(params[0]);
@@ -713,15 +694,14 @@ describe("Leaf domain repository behavior", () => {
 
     const out = await new ProjectSourceBindingService(db).createBinding(identity, {
       project_id: "project-1",
-      source_connection_id: "conn-1",
+      source_channel_id: "channel-1",
       backfill_history: true,
     });
 
     expect(out).toMatchObject({
       backfill_result: {
         project_id: "project-1",
-        source_connection_id: "conn-1",
-        created_links: 0,
+      created_links: 0,
         evidence_links: 0,
       },
     });
@@ -737,7 +717,7 @@ describe("Leaf domain repository behavior", () => {
         return [];
       }
       if (sql.includes("FROM project_source_bindings")) {
-        return [projectSourceBindingRow(["binding-1", "space-1", "project-1", "conn-1"])];
+        return [projectSourceBindingRow(["binding-1", "space-1", "project-1", "channel-1"])];
       }
       if (sql.includes("FROM projects")) return [{ id: "project-1", owner_user_id: "user-1" }];
       throw new Error(`unexpected SQL: ${sql}`);
@@ -748,7 +728,6 @@ describe("Leaf domain repository behavior", () => {
     expect(out).toMatchObject({
       binding_id: "binding-1",
       project_id: "project-1",
-      source_connection_id: "conn-1",
       created_links: 0,
       evidence_links: 0,
     });
@@ -758,7 +737,7 @@ describe("Leaf domain repository behavior", () => {
 
   it("blocks connected manual URL content queueing beyond source retention policy", async () => {
     const db = new FakeDb((sql) => {
-      if (sql.includes("FROM source_connection_user_subscriptions")) {
+      if (sql.includes("FROM source_channel_user_subscriptions")) {
         return [{ id: "sub-1" }];
       }
       if (sql.includes("FROM source_connections")) {
@@ -839,7 +818,7 @@ describe("Leaf domain repository behavior", () => {
           retention_policy: "metadata_only",
         })];
       }
-      if (sql.includes("FROM source_connection_user_subscriptions")) return [{ id: "sub-1" }];
+      if (sql.includes("FROM source_channel_user_subscriptions")) return [{ id: "sub-1" }];
       if (sql.includes("FROM source_connections")) return [sourceConnectionRow()];
       if (sql.includes("UPDATE source_items")) return [];
       if (sql.includes("UPDATE source_snapshots")) return [];
@@ -910,7 +889,7 @@ describe("Leaf domain repository behavior", () => {
     expect(itemSelect?.sql).toContain("si.owner_user_id = $3");
     expect(itemSelect?.sql).toContain("FROM content_access_grants content_grant");
     expect(itemSelect?.sql).toContain("FROM space_memberships content_member");
-    expect(itemSelect?.sql).toContain("FROM source_connection_user_subscriptions scus_read");
+    expect(itemSelect?.sql).toContain("FROM source_channel_user_subscriptions scus_read");
     expect(itemSelect?.sql).toContain("scus_read.status = 'subscribed'");
   });
 

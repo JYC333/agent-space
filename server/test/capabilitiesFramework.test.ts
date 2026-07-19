@@ -20,9 +20,11 @@ describe("capability framework built-ins", () => {
 
     expect(packs.map((pack) => pack.id)).toContain("research");
     expect(capabilities.map((capability) => capability.id).sort()).toEqual([
+      "research.adhoc_analyze",
       "research.brief_synthesize",
       "research.evidence_extract",
       "research.idea_generate",
+      "research.monitor_compare",
       "research.source_collect",
       "research.source_summarize",
     ]);
@@ -279,7 +281,7 @@ describe("skill import preview", () => {
 
 describe("runtime skill renderers", () => {
   it("renders deterministic Claude, Codex, and generic prompt content", () => {
-    const capability = listBuiltInCapabilityDefinitions()[0]!;
+    const capability = listBuiltInCapabilityDefinitions().find((item) => item.id === "research.brief_synthesize")!;
     const rendered = renderAllRuntimeSkills({ capability, profile: { z: 1, a: 2 } });
 
     expect(rendered.map((item) => item.runtime_adapter_type)).toEqual([

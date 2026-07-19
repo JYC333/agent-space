@@ -16,6 +16,8 @@ import { PgRunRepository } from "../runs/repository";
 import { RunMaterializationService } from "../runs/materializationService";
 import { OperationalAlertService } from "../notifications/operationalAlerts";
 import { registerEvaluationHarnessHandler } from "../evolution/evaluationJob";
+import { registerProjectResearchHandler } from "../projectResearch";
+import type { RuntimeHostLogger } from "../runtimeHost";
 
 const POLL_INTERVAL_MS = 1_000;
 const RECLAIM_INTERVAL_MS = 120_000;
@@ -37,9 +39,10 @@ export interface JobsWorkerHandle {
 export function buildJobHandlerRegistry(
   config: ServerConfig,
   pluginHost?: PluginHost,
+  runtimeHostLogger?: RuntimeHostLogger,
 ): JobHandlerRegistry {
   const registry = new JobHandlerRegistry();
-  registerAgentRunHandler(registry, config);
+  registerAgentRunHandler(registry, config, runtimeHostLogger);
   registerMemoryConsolidationHandler(registry, config);
   registerDailyCaptureReportHandler(registry, config);
   registerContextDigestRefreshHandler(registry, config);
@@ -48,6 +51,7 @@ export function buildJobHandlerRegistry(
   registerSessionCondenseHandler(registry, config);
   registerRetrievalEmbeddingHandler(registry, config);
   registerEvaluationHarnessHandler(registry, config);
+  registerProjectResearchHandler(registry, config);
   // Plugin-contributed job handlers (enablement-gated by the host context).
   pluginHost?.applyJobHandlers(registry);
   return registry;
@@ -62,7 +66,14 @@ export function startJobsWorker(
 
   const queue = PgJobQueueRepository.fromConfig(config);
   const runs = PgRunRepository.fromConfig(config);
-  const registry = buildJobHandlerRegistry(config, pluginHost);
+  const runtimeHostLogger: RuntimeHostLogger | undefined = log
+    ? {
+        error(details, message) {
+          log.error(`${message} ${JSON.stringify(details)}`);
+        },
+      }
+    : undefined;
+  const registry = buildJobHandlerRegistry(config, pluginHost, runtimeHostLogger);
   const claimableJobTypes = registry.registeredJobTypes();
   if (claimableJobTypes.length === 0) {
     throw new Error("Job worker started with zero registered handlers");

@@ -4,7 +4,7 @@ import { buildServer } from "../src/server";
 import { loadConfig } from "../src/config";
 import { __setAuthIdentityForTests } from "../src/modules/auth";
 import { type Queryable } from "../src/modules/routeUtils/common";
-import { PgReaderRepository, PgReaderActionRepository, PgAnnotationRepository, PgCommentRepository } from "../src/modules/sources/readerRepository";
+import { PgReaderActionRepository, PgAnnotationRepository, PgCommentRepository } from "../src/modules/reader/repository";
 import type { SourceItemRow } from "../src/modules/sources/sourceRepositoryRows";
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
@@ -22,9 +22,8 @@ function fakeAnnotation(overrides: Record<string, unknown> = {}): Record<string,
   return {
     id: "ann-1",
     space_id: SPACE,
-    source_item_id: "item-1",
-    artifact_id: null,
-    source_snapshot_id: null,
+    document_type: "source_item",
+    document_id: "item-1",
     annotation_type: "excerpt",
     quote_text: "The quick brown fox jumps over the lazy dog.",
     anchor_json: { schema_version: 1, normalizer: "plain_text_v1", quote_text: "fox" },
@@ -95,74 +94,18 @@ function fakeEvidenceRow(overrides: Record<string, unknown> = {}): Record<string
   };
 }
 
-function fakeArtifact(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  const content = {
-    schema_version: 1,
-    kind: "reader_document",
-    extraction_method: "structured_html_v1",
-    image_policy: "remote_reference",
-    title: "Extracted article",
-    source_uri: null,
-    plain_text: "Full article text.",
-    content_json: {
-      type: "doc",
-      content: [{ type: "paragraph", content: [{ type: "text", text: "Full article text." }] }],
-    },
-    image_count: 0,
-  };
-  return {
-    id: "artifact-1",
-    space_id: SPACE,
-    artifact_type: "source_reader_document",
-    title: "Extracted article",
-    content: JSON.stringify(content),
-    storage_path: null,
-    mime_type: "application/json",
-    visibility: "space_shared",
-    owner_user_id: null,
-    ...overrides,
-  };
-}
-
 function fakeProposalRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    id: "proposal-1",
-    space_id: SPACE,
-    created_by_user_id: USER,
-    workspace_id: null,
-    created_by_run_id: null,
-    proposal_type: "memory_create",
-    status: "pending",
-    risk_level: "low",
-    urgency: "normal",
-    preview: false,
-    title: "The quick brown fox",
-    payload_json: {},
-    rationale: "Created from reader annotation.",
-    visibility: "space_shared",
-    review_deadline: null,
-    expires_at: null,
-    created_at: "2026-06-30T10:00:00.000Z",
-    reviewed_at: null,
-    project_id: null,
-    egress_approval_id: null,
-    egress_approval_status: null,
-    ...overrides,
+    id: "proposal-1", space_id: SPACE, created_by_user_id: USER, workspace_id: null, created_by_run_id: null,
+    proposal_type: "memory_create", status: "pending", risk_level: "low", urgency: "normal", preview: false,
+    title: "The quick brown fox", payload_json: {}, rationale: "Created from reader annotation.", visibility: "space_shared",
+    review_deadline: null, expires_at: null, created_at: "2026-06-30T10:00:00.000Z", reviewed_at: null,
+    project_id: null, egress_approval_id: null, egress_approval_status: null, ...overrides,
   };
 }
 
-// ── Sequential fake DB ────────────────────────────────────────────────────────
+interface CapturedQuery { sql: string; params: readonly unknown[] }
 
-interface CapturedQuery {
-  sql: string;
-  params: readonly unknown[];
-}
-
-/**
- * Returns a fake Queryable that hands back `rowSets[0]` on the first .query()
- * call, `rowSets[1]` on the second, and [] for any call beyond the provided
- * sets. Captures all calls in `calls` for assertion.
- */
 function sequentialDb(
   rowSets: unknown[][],
 ): { db: Queryable; calls: CapturedQuery[] } {
@@ -206,161 +149,36 @@ describe("source reader routes — auth and input validation", () => {
 
     const res = await app.inject({
       method: "GET",
-      url: "/api/v1/sources/reader/documents/source_item/item-1",
+      url: "/api/v1/reader/documents/source_item/item-1",
     });
 
     expect(res.statusCode).toBe(401);
   });
 
-  it("returns 400 when project_id is missing from GET /sources/reader/annotations", async () => {
+  it("returns 400 when project_id is missing from GET /reader/annotations", async () => {
     __setAuthIdentityForTests({ spaceId: SPACE, userId: USER });
     app = buildServer(config(), { logger: false });
 
     const res = await app.inject({
       method: "GET",
-      url: "/api/v1/sources/reader/annotations",
+      url: "/api/v1/reader/annotations",
     });
 
     expect(res.statusCode).toBe(400);
     expect(res.json().detail).toMatch(/project_id/);
   });
 
-  it("returns 401 to unauthenticated requests on POST /sources/reader/annotations", async () => {
+  it("returns 401 to unauthenticated requests on POST /reader/annotations", async () => {
     app = buildServer(config(), { logger: false });
 
     const res = await app.inject({
       method: "POST",
-      url: "/api/v1/sources/reader/annotations",
+      url: "/api/v1/reader/annotations",
       headers: { "content-type": "application/json" },
       payload: JSON.stringify({ annotation_type: "excerpt", quote_text: "x" }),
     });
 
     expect(res.statusCode).toBe(401);
-  });
-});
-
-// ── PgReaderRepository unit tests ─────────────────────────────────────────────
-
-describe("PgReaderRepository.getDocument", () => {
-  it("reads reader document artifacts without filtering on a non-existent artifacts.deleted_at column", async () => {
-    const { db, calls } = sequentialDb([
-      [fakeArtifact()],
-      [{ title: "Extracted article" }],
-    ]);
-    const repo = new PgReaderRepository(db, config());
-
-    const result = await repo.getDocument(identity, "artifact", "artifact-1");
-
-    expect(result?.plain_text).toBe("Full article text.");
-    const artifactQueries = calls.filter((call) => call.sql.includes("FROM artifacts"));
-    expect(artifactQueries.length).toBeGreaterThan(0);
-    expect(artifactQueries.some((call) => /\b(?:artifacts|content_resource)\.deleted_at\b/.test(call.sql))).toBe(false);
-  });
-
-  it("does not read legacy text/plain extracted-text artifacts as reader documents", async () => {
-    const { db } = sequentialDb([
-      [fakeArtifact({
-        artifact_type: "source_extracted_text",
-        content: "Full article text.",
-        mime_type: "text/plain",
-      })],
-    ]);
-    const repo = new PgReaderRepository(db, config());
-
-    const result = await repo.getDocument(identity, "artifact", "artifact-1");
-
-    expect(result).toBeNull();
-  });
-
-  it("reads structured reader document artifacts without flattening content_json", async () => {
-    const structured = {
-      schema_version: 1,
-      kind: "reader_document",
-      extraction_method: "structured_html_v1",
-      image_policy: "remote_reference",
-      title: "Structured article",
-      source_uri: "https://example.test/read",
-      plain_text: "Structured heading\n\nParagraph text.",
-      content_json: {
-        type: "doc",
-        content: [
-          { type: "heading", attrs: { level: 1 }, content: [{ type: "text", text: "Structured heading" }] },
-          { type: "paragraph", content: [{ type: "text", text: "Paragraph text." }] },
-          { type: "image", attrs: { src: "https://example.test/image.png", alt: "Remote image" } },
-        ],
-      },
-      image_count: 1,
-    };
-    const { db } = sequentialDb([
-      [fakeArtifact({
-        artifact_type: "source_reader_document",
-        content: JSON.stringify(structured),
-        mime_type: "application/json",
-      })],
-      [{ title: "Stored artifact title" }],
-    ]);
-    const repo = new PgReaderRepository(db, config());
-
-    const result = await repo.getDocument(identity, "artifact", "artifact-1");
-
-    expect(result?.plain_text).toBe(structured.plain_text);
-    expect(result?.content_json.content).toEqual(structured.content_json.content);
-    expect(result?.normalized_text).toBe("Structured heading Paragraph text.");
-  });
-});
-
-describe("PgAnnotationRepository.createAnnotation", () => {
-  it("verifies anchor ranges against structured reader document plain_text", async () => {
-    const structured = {
-      schema_version: 1,
-      kind: "reader_document",
-      extraction_method: "structured_html_v1",
-      image_policy: "remote_reference",
-      title: "Structured article",
-      source_uri: "https://example.test/read",
-      plain_text: "Structured heading\n\nParagraph text.",
-      content_json: {
-        type: "doc",
-        content: [
-          { type: "heading", attrs: { level: 1 }, content: [{ type: "text", text: "Structured heading" }] },
-          { type: "paragraph", content: [{ type: "text", text: "Paragraph text." }] },
-        ],
-      },
-      image_count: 0,
-    };
-    const { db, calls } = sequentialDb([
-      [fakeArtifact({
-        artifact_type: "source_reader_document",
-        content: JSON.stringify(structured),
-        mime_type: "application/json",
-      })],
-      [{ content: JSON.stringify(structured), mime_type: "application/json" }],
-      [fakeAnnotation({
-        source_item_id: null,
-        artifact_id: "artifact-1",
-        annotation_type: "highlight",
-        quote_text: "Paragraph text.",
-        anchor_state: "verified",
-      })],
-    ]);
-    const repo = new PgAnnotationRepository(db);
-
-    const result = await repo.createAnnotation(identity, {
-      annotation_type: "highlight",
-      quote_text: "Paragraph text.",
-      anchor_json: {
-        schema_version: 1,
-        quote_text: "Paragraph text.",
-        text_range: { start: 19, end: 34, unit: "utf16" },
-        before_context: "Structured heading ",
-        after_context: "",
-      },
-      artifact_id: "artifact-1",
-    });
-
-    const insert = calls.find((call) => call.sql.includes("INSERT INTO reader_annotations"));
-    expect(insert?.params).toContain("verified");
-    expect(result.anchor_state).toBe("verified");
   });
 });
 
@@ -752,14 +570,14 @@ describe("PgCommentRepository.listThreads — annotation visibility gate", () =>
   });
 });
 
-describe("POST /sources/reader/annotations — anchor range validation", () => {
+describe("POST /reader/annotations — anchor range validation", () => {
   it("returns 422 when text_range.start is negative", async () => {
     __setAuthIdentityForTests({ spaceId: SPACE, userId: USER });
     app = buildServer(config(), { logger: false });
 
     const res = await app.inject({
       method: "POST",
-      url: "/api/v1/sources/reader/annotations",
+      url: "/api/v1/reader/annotations",
       headers: { "content-type": "application/json" },
       payload: JSON.stringify({
         annotation_type: "excerpt",
@@ -772,7 +590,8 @@ describe("POST /sources/reader/annotations — anchor range validation", () => {
           before_context: "",
           after_context: "",
         },
-        source_item_id: "item-1",
+        document_type: "source_item",
+        document_id: "item-1",
       }),
     });
 
@@ -786,7 +605,7 @@ describe("POST /sources/reader/annotations — anchor range validation", () => {
 
     const res = await app.inject({
       method: "POST",
-      url: "/api/v1/sources/reader/annotations",
+      url: "/api/v1/reader/annotations",
       headers: { "content-type": "application/json" },
       payload: JSON.stringify({
         annotation_type: "excerpt",
@@ -799,7 +618,8 @@ describe("POST /sources/reader/annotations — anchor range validation", () => {
           before_context: "",
           after_context: "",
         },
-        source_item_id: "item-1",
+        document_type: "source_item",
+        document_id: "item-1",
       }),
     });
 

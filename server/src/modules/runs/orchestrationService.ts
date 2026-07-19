@@ -45,6 +45,11 @@ import { RuntimeToolRegistry } from "../runtimeTools";
 import { resolveRuntimeToolVersionForSpace } from "../runtimeTools/policies";
 import { PgRouteDecisionRepository } from "../routing/repository";
 import { RunApprovalRequiredError, RunPreparationError } from "./orchestrationErrors";
+import { resolveSandboxLevelForRuntime } from "./runRepositoryHelpers";
+import {
+  credentialPolicyMetadata,
+  managedExecutionPolicyFromContract,
+} from "../policy/managedExecutionPolicy";
 import {
   adapterErrorJson,
   adapterFailureEnvelope,
@@ -104,6 +109,7 @@ export interface RunExecutionRepositoryPort {
     completed_at: string;
     error_code: string;
     error_message: string;
+    diagnostics?: unknown;
   }): Promise<RunRecord | null>;
   appendRunEvent(input: RunEventInput): Promise<unknown>;
   createRunStep(input: RunStepInput): Promise<RunStepRecord>;
@@ -308,6 +314,14 @@ export class RunOrchestrationService {
         error: "Run not found in this space.",
       };
     }
+    if (run.run_role === "coordinator") {
+      return {
+        run_id: run.id,
+        status: protocolRunStatus(run.status),
+        skipped: true,
+        skip_reason: "coordinator_run_not_executable",
+      };
+    }
     if (isTerminalRunStatus(run.status)) {
       return {
         run_id: run.id,
@@ -361,7 +375,6 @@ export class RunOrchestrationService {
           },
           exit_code: 1,
           completed_at: startedAt,
-          usage_json: {},
         });
         await this.finalizeTerminalRunBestEffort(rejected ?? { ...run, status: "failed", ended_at: startedAt });
         return {
@@ -597,7 +610,6 @@ export class RunOrchestrationService {
         error_json: adapterErrorJson(adapterResult),
         exit_code: adapterResult.exit_code,
         completed_at: completedAt,
-        usage_json: adapterResult.usage ?? {},
       });
       if (!terminalRun) {
         // The run reached a terminal state while the adapter was executing —
@@ -728,7 +740,6 @@ export class RunOrchestrationService {
         },
         exit_code: 1,
         completed_at: completedAt,
-        usage_json: {},
       });
       await this.finalizeTerminalRunBestEffort(failedRun ?? { ...run, status: "failed", ended_at: completedAt });
       if (failedRun) await this.markDelegatedRunTerminalBestEffort(failedRun);
@@ -862,7 +873,6 @@ export class RunOrchestrationService {
       },
       exit_code: 1,
       completed_at: new Date().toISOString(),
-      usage_json: {},
     });
     if (!updated) {
       const current = await this.repository.getRun(input.space_id, run.id);
@@ -906,15 +916,18 @@ export class RunOrchestrationService {
     const runtimeConfig = recordValue(run.runtime_config_json);
     const callerConfig = input.command_source === "http" ? {} : input.adapter_config ?? {};
     const contract = recordValue(run.contract_snapshot_json);
+    const managedPolicy = managedExecutionPolicyFromContract(run.contract_snapshot_json);
+    const credentialMetadata = credentialPolicyMetadata(managedPolicy);
     // The immutable run contract is authoritative. An internal execution
     // caller may supply a fallback risk for legacy runs, but it can never
     // downgrade a critical contract to reach a weaker sandbox.
     const riskLevel = stringConfigValue(contract.risk_level) ?? input.risk_level ?? null;
-    const requiredSandboxLevel = requiredSandboxLevelForRuntimePolicy(
-      run.adapter_type,
-      run.required_sandbox_level,
+    const requiredSandboxLevel = resolveSandboxLevelForRuntime({
+      adapterType: run.adapter_type,
+      configuredLevel: run.required_sandbox_level,
       riskLevel,
-    );
+      workspaceId: run.workspace_id,
+    });
     if (requiredSandboxLevel === "one_shot_docker" && isVendorCliAdapter(run.adapter_type)) {
       const spec = getRuntimeAdapterSpec(run.adapter_type);
       if (!spec?.sandbox.supports_one_shot_docker) {
@@ -975,12 +988,14 @@ export class RunOrchestrationService {
             adapter_type: run.adapter_type,
             command_source: input.command_source,
             trigger_origin: run.trigger_origin,
+            ...credentialMetadata,
             risk_level: base.risk_level,
           },
           metadata_json: {
             adapter_type: run.adapter_type,
             command_source: input.command_source,
             trigger_origin: run.trigger_origin,
+            ...credentialMetadata,
             credential_kind: "model_provider",
             provider_id: run.model_provider_id,
           },
@@ -1021,6 +1036,7 @@ export class RunOrchestrationService {
               adapter_type: run.adapter_type,
               command_source: input.command_source,
               trigger_origin: run.trigger_origin,
+              ...credentialMetadata,
               credential_profile_id: credentialProfileId,
               risk_level: base.risk_level,
             },
@@ -1028,6 +1044,7 @@ export class RunOrchestrationService {
               adapter_type: run.adapter_type,
               command_source: input.command_source,
               trigger_origin: run.trigger_origin,
+              ...credentialMetadata,
               credential_kind: "cli_profile",
               credential_profile_id: credentialProfileId,
             },
@@ -1498,21 +1515,6 @@ function verificationStatus(
   if (results.some((result) => result.status === "failed" || result.status === "error")) return "failed";
   if (results.some((result) => result.status === "skipped")) return "warning";
   return "succeeded";
-}
-
-function requiredSandboxLevelForRuntimePolicy(
-  adapterType: string | null,
-  configuredLevel: string | null | undefined,
-  riskLevel: string | null | undefined,
-): string | null {
-  if (
-    isVendorCliAdapter(adapterType) &&
-    typeof riskLevel === "string" &&
-    riskLevel.trim().toLowerCase() === "critical"
-  ) {
-    return "one_shot_docker";
-  }
-  return configuredLevel ?? null;
 }
 
 function stringConfigValue(value: unknown): string | null {

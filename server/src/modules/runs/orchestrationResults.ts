@@ -27,12 +27,17 @@ export function terminalStatusFromAdapter(result: RunAdapterResultEnvelope): Run
 
 export function adapterErrorJson(result: RunAdapterResultEnvelope): unknown {
   if (result.success) return {};
+  const output = recordValue(result.output_json);
+  const diagnostics = recordValue(output.structured_output_diagnostics);
   return sanitizeEvidenceJson({
     error_code: result.error_code ?? "adapter_failed",
     error_text: result.error_message ?? "Runtime adapter failed.",
     adapter_type: result.adapter_type,
     adapter_kind: result.adapter_kind,
     exit_code: result.exit_code,
+    ...(Object.keys(diagnostics).length > 0
+      ? { structured_output_diagnostics: diagnostics }
+      : {}),
   });
 }
 

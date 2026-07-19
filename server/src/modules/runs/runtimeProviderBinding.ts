@@ -14,6 +14,10 @@ import {
   CodexProviderConfigError,
   writeCodexProviderConfig,
 } from "./codexProviderConfig";
+import {
+  OpenCodeProviderConfigError,
+  writeOpenCodeProviderConfig,
+} from "./opencodeProviderConfig";
 
 export interface RuntimeProviderResolverPort {
   getProvider(
@@ -29,7 +33,8 @@ export interface RuntimeProviderBinding {
   lease_registry: ProviderProxyLeaseRegistry | null;
   model: string | null;
   provider_id: string | null;
-  protocol: "anthropic" | "openai_responses" | null;
+  protocol: "anthropic" | "openai_responses" | "openai_chat_completions" | null;
+  cleanup?: () => Promise<void>;
 }
 
 export class RuntimeProviderBindingError extends Error {
@@ -47,6 +52,7 @@ export async function buildRuntimeProviderBinding(
   input: {
     run: RunRecord;
     model: string | null;
+    sandbox_cwd?: string | null;
   },
   spec: LocalCliRuntimeAdapterSpec,
   deps: {
@@ -57,7 +63,7 @@ export async function buildRuntimeProviderBinding(
     ttlSeconds: number;
   },
 ): Promise<RuntimeProviderBinding> {
-  if (spec.adapter_type !== "claude_code" && spec.adapter_type !== "codex_cli") {
+  if (spec.adapter_type !== "claude_code" && spec.adapter_type !== "codex_cli" && spec.adapter_type !== "opencode") {
     return emptyRuntimeProviderBinding();
   }
   const providerId = input.run.model_provider_id;
@@ -71,11 +77,15 @@ export async function buildRuntimeProviderBinding(
   if (spec.adapter_type === "claude_code") {
     return buildClaudeProviderBinding(input, providerId, provider, deps);
   }
+  if (spec.adapter_type === "opencode") {
+    return buildOpenCodeProviderBinding(input, providerId, provider, deps);
+  }
   return buildCodexProviderBinding(input, providerId, provider, deps);
 }
 
-export function cleanupRuntimeProviderBinding(binding: RuntimeProviderBinding): void {
+export async function cleanupRuntimeProviderBinding(binding: RuntimeProviderBinding): Promise<void> {
   if (binding.lease_id) binding.lease_registry?.revoke(binding.lease_id);
+  await binding.cleanup?.();
 }
 
 async function resolveRuntimeProvider(
@@ -252,6 +262,86 @@ async function buildCodexProviderBinding(
     provider_id: providerId,
     protocol: "openai_responses",
   };
+}
+
+async function buildOpenCodeProviderBinding(
+  input: { run: RunRecord; model: string | null; sandbox_cwd?: string | null },
+  providerId: string,
+  provider: Record<string, unknown>,
+  deps: {
+    credential: CredentialGrant;
+    leaseRegistry?: ProviderProxyLeaseRegistry;
+    proxyBaseUrl?: string;
+    ttlSeconds: number;
+  },
+): Promise<RuntimeProviderBinding> {
+  const baseUrl = stringValue(provider.openai_compatible_base_url);
+  if (!baseUrl) {
+    throw new RuntimeProviderBindingError(
+      "openai_compatible_base_url_required",
+      `ModelProvider '${providerId}' is not configured with an OpenAI-compatible URL.`,
+    );
+  }
+  const model =
+    input.model ??
+    modelFromRun(input.run) ??
+    stringValue(provider.default_model) ??
+    firstString(provider.available_models) ??
+    null;
+  if (!model) {
+    throw new RuntimeProviderBindingError(
+      "opencode_model_required",
+      `ModelProvider '${providerId}' must provide a model for OpenCode.`,
+    );
+  }
+
+  const leaseRegistry = deps.leaseRegistry ?? providerProxyLeases;
+  const lease = leaseRegistry.create({
+    run_id: input.run.id,
+    space_id: input.run.space_id,
+    provider_id: providerId,
+    provider_type: stringValue(provider.provider_type),
+    provider_name_snapshot: stringValue(provider.name),
+    network_profile_id: stringValue(provider.network_profile_id),
+    route: "openai",
+    upstream_base_url: baseUrl,
+    model,
+    adapter_type: input.run.adapter_type,
+    session_id: input.run.session_id,
+    parent_run_id: input.run.parent_run_id ?? null,
+    root_run_id: input.run.root_run_id ?? null,
+    run_group_id: input.run.run_group_id ?? null,
+    agent_id: input.run.agent_id,
+    project_id: input.run.project_id,
+    workspace_id: input.run.workspace_id,
+    trigger_origin: input.run.trigger_origin ?? null,
+    ttl_ms: Math.max(deps.ttlSeconds, 1) * 1000,
+  });
+  try {
+    const config = await writeOpenCodeProviderConfig({
+      sandboxCwd: input.sandbox_cwd ?? null,
+      providerName: stringValue(provider.name) ?? "Agent Space Provider",
+      proxyBaseUrl: runtimeProviderProxyUrl("openai", lease.id, deps.proxyBaseUrl),
+      leaseToken: lease.token,
+      model,
+      availableModels: stringArray(provider.available_models),
+    });
+    return {
+      env: {},
+      lease_id: lease.id,
+      lease_registry: leaseRegistry,
+      model: config.model,
+      provider_id: providerId,
+      protocol: "openai_chat_completions",
+      cleanup: config.restore,
+    };
+  } catch (error) {
+    leaseRegistry.revoke(lease.id);
+    if (error instanceof OpenCodeProviderConfigError) {
+      throw new RuntimeProviderBindingError(error.code, error.message);
+    }
+    throw error;
+  }
 }
 
 function codexHomeOnlyBinding(credential: CredentialGrant): RuntimeProviderBinding {

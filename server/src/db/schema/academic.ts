@@ -16,6 +16,7 @@ export const academicPapers = pgTable("academic_papers", {
 	arxivId: varchar("arxiv_id", { length: 64 }),
 	pmid: varchar({ length: 32 }),
 	openalexId: varchar("openalex_id", { length: 64 }),
+	semanticScholarId: varchar("semantic_scholar_id", { length: 64 }),
 	publicationDate: timestamp("publication_date", { withTimezone: true, mode: 'string' }),
 	venue: varchar({ length: 512 }),
 	paperType: varchar("paper_type", { length: 32 }).default('article').notNull(),
@@ -27,6 +28,8 @@ export const academicPapers = pgTable("academic_papers", {
 	index("ix_academic_papers_space_id").using("btree", table.spaceId.asc().nullsLast()),
 	uniqueIndex("uq_academic_papers_space_doi").using("btree", table.spaceId.asc().nullsLast(), table.doi.asc().nullsLast()).where(sql`(doi IS NOT NULL)`),
 	uniqueIndex("uq_academic_papers_space_arxiv_id").using("btree", table.spaceId.asc().nullsLast(), table.arxivId.asc().nullsLast()).where(sql`(arxiv_id IS NOT NULL)`),
+	uniqueIndex("uq_academic_papers_space_openalex_id").using("btree", table.spaceId.asc().nullsLast(), table.openalexId.asc().nullsLast()).where(sql`(openalex_id IS NOT NULL)`),
+	uniqueIndex("uq_academic_papers_space_semantic_scholar_id").using("btree", table.spaceId.asc().nullsLast(), table.semanticScholarId.asc().nullsLast()).where(sql`(semantic_scholar_id IS NOT NULL)`),
 	foreignKey({
 			columns: [table.spaceId],
 			foreignColumns: [spaces.id],

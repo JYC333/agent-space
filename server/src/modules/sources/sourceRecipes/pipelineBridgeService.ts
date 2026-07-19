@@ -12,10 +12,9 @@ import {
   type SpaceUserIdentity,
 } from "../../routeUtils/common";
 import { loadProtocol } from "../../providers/protocolRuntime";
-import { SourceConnectionService } from "../sourceConnectionService";
-import { CONNECTION_COLUMNS, type SourceConnectionRow } from "../sourceRepositoryRows";
+import { SourceChannelService } from "../channels/sourceChannelService";
+import { connectionColumnsForAlias, type SourceChannelConnectionRow } from "../sourceRepositoryRows";
 import { PgCustomSourceHandlerRepository } from "../customSources/customSourceHandlerRepository";
-import { getSourceConnectionScanTask, upsertSourceConnectionScanTask } from "../sourceConnectionScheduler";
 import { analyzeSourceRecipe } from "./primitiveRegistry";
 import { recipeFromPipelineDefinition } from "./recipeInterpreter";
 import {
@@ -91,17 +90,20 @@ export class SourceRecipePipelineBridgeService {
     };
 
     return withDbTransaction(this.pool, async (client) => {
-      const connections = new SourceConnectionService(client, this.config);
-      const sourceScheduleTask = await getSourceConnectionScanTask(client, sourceConnection.id);
-      const connection = await connections.createConnection(
+      const channels = new SourceChannelService(client, this.config);
+      const channel = await channels.create(
         identity,
         {
-          connector_key: "custom_source",
+          provider_key: "custom_source",
           name: bridgedName,
+          // Keep the underlying governed connection distinct from the source
+          // channel.  `name` is the channel label, while `source_name` is the
+          // connection identity used by the connection uniqueness rule.
+          source_name: bridgedName,
           endpoint_url: sourceConnection.endpoint_url,
           credential_id: sourceConnection.credential_id,
           fetch_frequency: optionalString(body.fetch_frequency) ?? sourceConnection.fetch_frequency,
-          next_check_at: optionalString(body.next_check_at) ?? timestampString(sourceScheduleTask?.next_run_at),
+          next_check_at: optionalString(body.next_check_at),
           schedule_rule: body.schedule_rule ?? sourceConnection.schedule_rule_json,
           capture_policy: policyEnvelope.capture_policy,
           trust_level: sourceConnection.trust_level,
@@ -112,41 +114,37 @@ export class SourceRecipePipelineBridgeService {
             retention_policy: policyEnvelope.retention_policy,
           },
           config: bridgedConfig,
+          status: "paused",
+          _initial_status: "paused",
+          _force_create: true,
+          query: {},
         },
-        { allowCustomSourceConnector: true },
       );
       const now = new Date().toISOString();
-      const updated = await client.query<{
-        id: string;
-        space_id: string;
-        owner_user_id: string;
-        status: string;
-        fetch_frequency: string;
-      }>(
+      await client.query(
         `UPDATE source_connections
             SET handler_kind = 'recipe', status = 'paused', updated_at = $3
           WHERE id = $1 AND space_id = $2
-          RETURNING id, space_id, owner_user_id, status, fetch_frequency`,
-        [connection.id, identity.spaceId, now],
+          RETURNING id`,
+        [channel.source_connection_id, identity.spaceId, now],
       );
-      const schedulerConnection = updated.rows[0];
-      if (schedulerConnection) {
-        await upsertSourceConnectionScanTask(client, {
-          connection: schedulerConnection,
-          nextRunAt: connection.next_check_at,
-          updatedAt: now,
-        });
-      }
       const version = await insertSourceRecipeVersion(client, {
         spaceId: identity.spaceId,
-        connectionId: connection.id,
+        connectionId: channel.source_connection_id,
         recipe: parsedRecipe.data,
         policyEnvelope,
         primitiveVersions: analysis.primitive_versions,
         createdByUserId: identity.userId,
       });
       return {
-        connection: { ...connection, handler_kind: "recipe", status: "paused", config_json: bridgedConfig },
+        connection: {
+          ...channel,
+          id: channel.source_connection_id,
+          source_channel_id: channel.id,
+          handler_kind: "recipe",
+          status: "paused",
+          config_json: bridgedConfig,
+        },
         recipe_version: recipeVersionOut(version),
         bridged_from_connection_id: sourceConnection.id,
         bridged_from_handler_version_id: handlerVersion.id,
@@ -154,11 +152,13 @@ export class SourceRecipePipelineBridgeService {
     });
   }
 
-  private async requireGeneratedCustomConnection(identity: SpaceUserIdentity, connectionId: string): Promise<SourceConnectionRow> {
-    const result = await this.pool.query<SourceConnectionRow>(
-      `SELECT ${CONNECTION_COLUMNS}
-         FROM source_connections
-        WHERE space_id = $1 AND id = $2 AND deleted_at IS NULL`,
+  private async requireGeneratedCustomConnection(identity: SpaceUserIdentity, connectionId: string): Promise<SourceChannelConnectionRow> {
+    const result = await this.pool.query<SourceChannelConnectionRow>(
+      `SELECT ${connectionColumnsForAlias("sc")},
+              ch.id AS source_channel_id, ch.endpoint_url, ch.fetch_frequency, ch.schedule_rule_json
+         FROM source_connections sc
+         JOIN source_channels ch ON ch.source_connection_id = sc.id AND ch.status <> 'archived'
+        WHERE sc.space_id = $1 AND sc.id = $2 AND sc.deleted_at IS NULL`,
       [identity.spaceId, connectionId],
     );
     const row = result.rows[0];
@@ -189,11 +189,4 @@ function originOf(url: string): string | null {
   } catch {
     return null;
   }
-}
-
-function timestampString(value: unknown): string | null {
-  if (value === null || value === undefined) return null;
-  if (value instanceof Date) return value.toISOString();
-  const raw = String(value);
-  return raw.length > 0 ? raw : null;
 }

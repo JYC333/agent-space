@@ -10,6 +10,11 @@ import {
   completeProviderMessages,
   ProviderInvocationError,
 } from "../providers/invocation/invocation";
+import { redactSecretPatterns } from "../runs/evidenceRedaction";
+
+export interface RuntimeHostLogger {
+  error(details: Record<string, unknown>, message: string): void;
+}
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -71,21 +76,32 @@ function failureResponse(
   startedAt: string,
   errorCode: string,
   errorText: string,
+  diagnostics?: Record<string, unknown>,
 ): RuntimeHostExecuteResponse {
   const completedAt = nowIso();
+  const structuredFailure = input.output_format
+    ? `Structured output failed: stage=${input.output_format.stage ?? "managed_api"} schema=${input.output_format.schema_id} provider=${input.model_provider_id} model=${input.model ?? "provider-default"} attempt=1 reason=${errorText}`
+    : errorText;
   return {
     success: false,
     stdout: "",
-    stderr: errorText,
+    stderr: structuredFailure,
     output_text: "",
     output_json: {
       adapter_type: "ts_agent_host",
       run_id: input.run_id,
       model_provider_id: input.model_provider_id,
+      model: input.model ?? null,
+      attempt: 1,
+      ...(input.output_format ? {
+        structured_output_schema_id: input.output_format.schema_id,
+        structured_output_stage: input.output_format.stage ?? "managed_api",
+      } : {}),
+      ...(diagnostics ? { structured_output_diagnostics: diagnostics } : {}),
     },
     exit_code: 1,
     error_code: errorCode,
-    error_text: errorText,
+    error_text: structuredFailure,
     started_at: startedAt,
     completed_at: completedAt,
     model: input.model ?? null,
@@ -95,7 +111,7 @@ function failureResponse(
         type: "model.error",
         error: {
           code: errorCode,
-          message: errorText,
+          message: structuredFailure,
         },
       },
     ],
@@ -103,15 +119,23 @@ function failureResponse(
       adapter_type: "ts_agent_host",
       run_id: input.run_id,
       model_provider_id: input.model_provider_id,
+      model: input.model ?? null,
+      attempt: 1,
+      ...(input.output_format ? {
+        structured_output_schema_id: input.output_format.schema_id,
+        structured_output_stage: input.output_format.stage ?? "managed_api",
+      } : {}),
+      ...(diagnostics ? { structured_output_diagnostics: diagnostics } : {}),
       tool_mode: input.tool_mode,
     },
-    adapter_log_json: null,
+    adapter_log_json: diagnostics ? { structured_output_diagnostics: diagnostics } : null,
   };
 }
 
 export async function executeRuntimeHost(
   config: ServerConfig,
   input: RuntimeHostExecuteRequest,
+  logger?: RuntimeHostLogger,
 ): Promise<RuntimeHostExecuteResponse> {
   const startedAt = nowIso();
   const toolMode = input.tool_mode ?? "disabled";
@@ -153,6 +177,7 @@ export async function executeRuntimeHost(
             }))
           : [{ role: "user", content: input.prompt }],
         max_tokens: input.max_tokens,
+        output_format: input.output_format ?? null,
         task: "runtime_host",
         tools: toolMode === "authorized_bindings" ? tools : undefined,
         metering: {
@@ -189,7 +214,7 @@ export async function executeRuntimeHost(
       stdout: result.text,
       stderr: "",
       output_text: result.text,
-      output_json: {
+      output_json: result.structured_output ?? {
         adapter_type: "ts_agent_host",
         model: result.model,
         usage,
@@ -223,6 +248,26 @@ export async function executeRuntimeHost(
     };
   } catch (error) {
     if (error instanceof ProviderInvocationError) {
+      if (error.code === "structured_output_invalid") {
+        logger?.error(
+          {
+            run_id: input.run_id,
+            space_id: input.space_id,
+            project_id: input.project_id ?? null,
+            model_provider_id: input.model_provider_id,
+            model: input.model ?? "provider-default",
+            stage: input.output_format?.stage ?? "managed_api",
+            schema_id: input.output_format?.schema_id ?? null,
+            error_code: error.code,
+            reason: error.message,
+            diagnostics: error.diagnostics ?? null,
+            provider_response_text: error.responseText === undefined
+              ? null
+              : redactSecretPatterns(error.responseText),
+          },
+          "managed API structured output failed",
+        );
+      }
       return failureResponse(
         input,
         startedAt,
@@ -230,6 +275,7 @@ export async function executeRuntimeHost(
         // managed-run tool loop can degrade to a no-tool turn instead of failing.
         error.code ?? "provider_invocation_failed",
         error.message,
+        error.diagnostics,
       );
     }
     return failureResponse(

@@ -16,7 +16,7 @@ import { registerClaimCandidatePacketProposalAppliers } from "../knowledge/claim
 import { registerRelationDiscoveryProposalAppliers } from "../knowledge/relationDiscoveryArtifacts";
 import { registerCustomSourceProposalAppliers } from "../sources/customSources/customSourceProposalApplier";
 import { registerSourceRecipeProposalAppliers } from "../sources/sourceRecipes/recipeProposalApplier";
-import { registerSourceConnectionProposalAppliers } from "../sources/sourceConnectionProposalApplier";
+import { registerSourceChannelProposalAppliers } from "../sources/sourceChannelProposalApplier";
 import { registerSourceBackfillProposalAppliers } from "../sources/sourceBackfillProposalApplier";
 import { registerProjectSourceProposalAppliers } from "../projects/projectSourceProposalApplier";
 import { registerEvolvableAssetPromotionProposalApplier } from "../evolution/assetPromotionProposalApplier";
@@ -56,6 +56,8 @@ export interface ProposalApplyResult {
   rollback?: () => Promise<void>;
   /** Updated proposal payload to persist on accept (e.g., memory resulting_memory_id). */
   proposalPayloadPatch?: Record<string, unknown>;
+  /** Supersede a proposal that is valid but no longer applies (for example an optimistic-lock miss). */
+  finalStatus?: "accepted" | "superseded";
 }
 
 export class UnknownProposalApplierError extends Error {
@@ -119,7 +121,7 @@ export function createDefaultProposalApplierRegistry(
   registerWorkspaceProposalAppliers(registry);
   registerCustomSourceProposalAppliers(registry);
   registerSourceRecipeProposalAppliers(registry);
-  registerSourceConnectionProposalAppliers(registry);
+  registerSourceChannelProposalAppliers(registry);
   registerSourceBackfillProposalAppliers(registry);
   registerProjectSourceProposalAppliers(registry);
   registerEvolvableAssetPromotionProposalApplier(registry);

@@ -1733,7 +1733,7 @@ function RunMeta({ run }: { run: Run }) {
   return (
     <div className="mt-2 space-y-2 text-xs text-muted-foreground">
       <div className="flex flex-wrap gap-x-3 gap-y-1">
-        {run.adapter_type && <span>Adapter {run.adapter_type}</span>}
+        {run.selected_adapter_type && <span>Adapter {run.selected_adapter_type}</span>}
         <span>Started {fmt(run.started_at)}</span>
         <span>Ended {fmt(run.ended_at)}</span>
       </div>

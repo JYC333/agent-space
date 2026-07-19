@@ -235,7 +235,14 @@ export class PgProjectRepository {
       memories,
     ] = await Promise.all([
       this.countVisible("activity", "activity_records", identity, projectId),
-      this.countVisible("artifact", "artifacts", identity, projectId),
+      this.db.query<{ total: string | number }>(
+        `SELECT count(a.id)::text AS total
+           FROM artifacts a
+          WHERE a.space_id = $1 AND a.project_id = $2
+            AND a.surface_role <> 'system_archive'
+            AND ${contentReadSql("artifact", "a", "$3")}`,
+        [identity.spaceId, projectId, identity.userId],
+      ),
       this.db.query<{ total: string | number }>(
         `SELECT count(id)::text AS total
            FROM proposals p

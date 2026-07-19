@@ -8,9 +8,25 @@ There is no Area concept in this foundation.
 
 ## Model
 
-- `SourceConnector` is the connector catalog.
-- `SourceConnection` is a space-scoped configured connection with endpoint,
-  credential reference, consent, policy, trust, and connector config.
+- `SourceProvider` names an external source (for example `arxiv` or a generic
+  RSS provider). `SourceConnector` is a system-published transport/parser
+  implementation (for example `arxiv_api` or `rss`).
+- `SourceProviderConnector` maps those independent models many-to-many; active
+  mapping priority selects the default implementation.
+- `SourceConnection` is the space-scoped governance boundary. It owns
+  credential reference, consent, policy, trust, transport config, and handler
+  provenance. It does not own a search query or schedule.
+- `Source` is the user-facing external origin. `Monitor` is the user-facing
+  saved search/feed/page rule attached to that origin. A Monitor owns the
+  provider query, endpoint, normalized fingerprint, frequency, and schedule;
+  query and schedule therefore do not change the identity of the Source.
+  Internally, each Monitor is represented by a `SourceChannel`. One
+  connection can back many independent channels, while the normal Sources UI
+  groups them under one Source and exposes the child records as Monitors.
+- Channel cursor, watermark, ETag, Last-Modified, and scan statistics live in
+  `scheduler_tasks.metadata_json`, not in the connection.
+- `SourceChannelItemLink` records every channel that matched a deduplicated
+  `SourceItem`; the item and snapshot retain connection provenance.
 - `SourceItem` is raw candidate material. Every item belongs to exactly one
   `Space`. It does not require a workspace or project, and general space source capture
   is valid. Manually saved URL items may attach to or change a
@@ -40,11 +56,10 @@ There is no Area concept in this foundation.
   or task. Service-layer validation requires each non-space target to exist in
   the same space. `target_type="space"` may omit `target_id`; it is normalized
   to the current `space_id`.
-- `ProjectSourceBinding` binds a space-level source connection directly to a
-  project without duplicating raw source data or credentials. `project_id` is
-  required, creation requires project writer authority, and `binding_key`
-  distinguishes multiple filtered bindings over the same project/source
-  connection.
+- `ProjectSourceBinding` binds a Monitor (internal Source Channel) to a project without
+  duplicating raw source data or credentials. `project_id` is required,
+  creation requires project writer authority, and `binding_key` distinguishes
+  multiple filtered bindings over the same project/channel.
 - `ProjectSourceItemLink` materializes which source items entered a project
   collection through a project source binding.
 - `SourcePostProcessingRule` is Sources-owned source-level AI post-processing.
@@ -60,8 +75,8 @@ There is no Area concept in this foundation.
   retrieval context. If configured, relevant candidate items above the rule's
   confidence threshold can queue full-text extraction and then enqueue a
   second-stage `screen_extract_digest` pass over those candidates only. This is
-  reusable by any source preset; arXiv uses it only when the preset option is
-  explicitly enabled.
+  reusable by any source provider; arXiv uses it only when its Channel
+  post-processing profile explicitly enables it.
 - `SourcePostProcessingItemDecision` is the review/query read model for
   screening decisions. It records rule/run/item relevance, confidence, reason,
   matched context refs, applied item status, and review status. It is not

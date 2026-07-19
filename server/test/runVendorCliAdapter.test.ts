@@ -306,9 +306,7 @@ describe("executeVendorCliAdapter", () => {
       {
         run: run({
           model_provider_id: "provider-openai",
-          model_override_json: { model: "MiniMax-M3", source: "agent_default" },
         }),
-        model: "MiniMax-M2.7",
         sandbox_cwd: sandbox,
         context_text: "Codex instructions",
         adapter_config: { credential_profile_id: "11111111-1111-4111-8111-111111111111" },
@@ -358,7 +356,7 @@ describe("executeVendorCliAdapter", () => {
       "workspace-write",
       "Fix the bug",
     ]);
-    expect(configToml).toContain('model = "MiniMax-M2.7"');
+    expect(configToml).toContain('model = "MiniMax-M3"');
     expect(configToml).toContain('model_provider = "agent_space_provider"');
     expect(configToml).toContain(
       `model_catalog_json = "${join(codexDir, "model-catalogs", "agent-space-provider.json")}"`,
@@ -380,18 +378,18 @@ describe("executeVendorCliAdapter", () => {
         truncation_policy: { mode: string; limit: number };
       }>;
     };
-    expect(catalog.models.map((model) => model.slug)).toEqual(["MiniMax-M2.7", "MiniMax-M3"]);
+    expect(catalog.models.map((model) => model.slug)).toEqual(["MiniMax-M3", "MiniMax-M2.7"]);
     expect(catalog.models[0]).toMatchObject({
       default_reasoning_level: "none",
       supported_reasoning_levels: [{ effort: "none", description: "Reasoning off" }],
       supports_reasoning_summaries: false,
       truncation_policy: { mode: "bytes", limit: 10000 },
     });
-    expect(catalog.models[0].base_instructions).toContain("using MiniMax-M2.7 through MiniMax");
+    expect(catalog.models[0].base_instructions).toContain("using MiniMax-M3 through MiniMax");
     expect(leases.size()).toBe(0);
     expect(result.metadata_json).toMatchObject({
       runtime_provider_id: "provider-openai",
-      runtime_provider_model: "MiniMax-M2.7",
+      runtime_provider_model: "MiniMax-M3",
       runtime_provider_protocol: "openai_responses",
       runtime_provider_proxy: true,
     });

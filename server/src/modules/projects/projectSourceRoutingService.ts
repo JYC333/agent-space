@@ -10,7 +10,7 @@ type ProjectSourceBindingFilterRow = {
   id: string;
   space_id: string;
   project_id: string;
-  source_connection_id: string;
+  source_channel_id: string;
   priority: number;
   filters_json: unknown;
   collection_notifications_enabled: boolean;
@@ -97,11 +97,24 @@ export function sourceItemMatchesProjectFilters(item: SourceItemFilterRow, filte
 
 async function itemRow(db: Queryable, spaceId: string, sourceItemId: string): Promise<SourceItemFilterRow | null> {
   const result = await db.query<SourceItemFilterRow>(
-    `SELECT id, space_id, connection_id, item_type, title, excerpt, source_uri, source_domain
-       FROM source_items
-      WHERE space_id = $1
-        AND id = $2
-        AND deleted_at IS NULL
+    `SELECT si.id, si.space_id,
+            COALESCE(
+              si.connection_id,
+              (
+                SELECT ss.connection_id
+                  FROM source_snapshots ss
+                 WHERE ss.space_id = si.space_id
+                   AND ss.source_item_id = si.id
+                   AND ss.connection_id IS NOT NULL
+                 ORDER BY ss.captured_at DESC, ss.id DESC
+                 LIMIT 1
+              )
+            ) AS connection_id,
+            si.item_type, si.title, si.excerpt, si.source_uri, si.source_domain
+       FROM source_items si
+      WHERE si.space_id = $1
+        AND si.id = $2
+        AND si.deleted_at IS NULL
       LIMIT 1`,
     [spaceId, sourceItemId],
   );
@@ -114,7 +127,7 @@ async function matchingBindingRows(
   bindingId: string | null,
 ): Promise<ProjectSourceBindingFilterRow[]> {
   const result = await db.query<ProjectSourceBindingFilterRow>(
-    `SELECT psb.id, psb.space_id, psb.project_id, psb.source_connection_id,
+    `SELECT psb.id, psb.space_id, psb.project_id, psb.source_channel_id,
             psb.priority, psb.filters_json, psb.collection_notifications_enabled,
             psb.extraction_policy_json
        FROM project_source_bindings psb
@@ -122,13 +135,18 @@ async function matchingBindingRows(
         AND psb.status = 'active'
         AND ($3::varchar IS NULL OR psb.id = $3)
         AND (
-          psb.source_connection_id = $2
+          EXISTS (
+            SELECT 1 FROM source_channel_item_links sci
+             WHERE sci.space_id = psb.space_id
+               AND sci.source_channel_id = psb.source_channel_id
+               AND sci.source_item_id = $4
+               AND sci.status = 'active'
+          )
           OR EXISTS (
-            SELECT 1
-              FROM source_snapshots ss
-             WHERE ss.space_id = psb.space_id
-               AND ss.source_item_id = $4
-               AND ss.connection_id = psb.source_connection_id
+            SELECT 1 FROM source_channels ch
+             WHERE ch.space_id = psb.space_id
+               AND ch.id = psb.source_channel_id
+               AND ch.source_connection_id = $2
           )
         )
       ORDER BY psb.priority DESC, psb.id ASC`,
@@ -213,14 +231,15 @@ export async function materializeProjectSourceItemLinks(
     }
     const result = await db.query<{ was_created: boolean; was_reactivated: boolean }>(
       `INSERT INTO project_source_item_links (
-         id, space_id, project_id, project_source_binding_id, source_connection_id,
+         id, space_id, project_id, project_source_binding_id, source_channel_id, source_connection_id,
          source_item_id, status, matched_at, match_reason, created_at, updated_at
        ) VALUES (
-         $1, $2, $3, $4::varchar, $5,
-         $6, 'active', $7, 'project_source_binding:' || $8::text, $9, $10
+         $1, $2, $3, $4::varchar, $5, $6,
+         $7, 'active', $8, 'project_source_binding:' || $9::text, $10, $11
        )
        ON CONFLICT (space_id, project_id, project_source_binding_id, source_item_id)
        DO UPDATE SET status = 'active',
+                     source_channel_id = EXCLUDED.source_channel_id,
                      source_connection_id = EXCLUDED.source_connection_id,
                      match_reason = EXCLUDED.match_reason,
                      updated_at = EXCLUDED.updated_at
@@ -231,7 +250,8 @@ export async function materializeProjectSourceItemLinks(
         input.spaceId,
         binding.project_id,
         binding.id,
-        binding.source_connection_id,
+        binding.source_channel_id,
+        item.connection_id,
         input.sourceItemId,
         now,
         binding.id,
@@ -245,7 +265,7 @@ export async function materializeProjectSourceItemLinks(
       await upsertProjectSourceCollectionActivity(db, {
         spaceId: input.spaceId,
         projectId: binding.project_id,
-        sourceConnectionId: binding.source_connection_id,
+        sourceConnectionId: item.connection_id ?? "",
         localDate,
         now,
       });
@@ -313,13 +333,18 @@ export async function recomputeProjectSourceBindingLinks(
          ON si.space_id = psb.space_id
         AND si.deleted_at IS NULL
         AND (
-          si.connection_id = psb.source_connection_id
+          EXISTS (
+            SELECT 1 FROM source_channel_item_links sci
+             WHERE sci.space_id = psb.space_id
+               AND sci.source_channel_id = psb.source_channel_id
+               AND sci.source_item_id = si.id
+               AND sci.status = 'active'
+          )
           OR EXISTS (
-            SELECT 1
-              FROM source_snapshots ss
-             WHERE ss.space_id = si.space_id
-               AND ss.source_item_id = si.id
-               AND ss.connection_id = psb.source_connection_id
+            SELECT 1 FROM source_channels ch
+             WHERE ch.space_id = psb.space_id
+               AND ch.id = psb.source_channel_id
+               AND ch.source_connection_id = si.connection_id
           )
         )
       WHERE psb.space_id = $1

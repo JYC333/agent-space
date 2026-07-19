@@ -74,7 +74,7 @@ describe("source retrieval access revalidation", () => {
     expect(result.get("item-1")?.title).toBe("Readable source");
     expect(db.calls[0]?.params).toEqual(["space-1", ["item-1"], "viewer-1"]);
     expect(db.calls[0]?.sql).toContain("content_access_grants");
-    expect(db.calls[0]?.sql).toContain("source_connection_user_subscriptions");
+    expect(db.calls[0]?.sql).toContain("source_channel_user_subscriptions");
     expect(db.calls[0]?.sql).toContain("space_memberships");
   });
 
@@ -96,6 +96,6 @@ describe("source retrieval access revalidation", () => {
       "viewer-1",
     ]);
     expect(db.calls[0]?.sql.match(/content_access_grants/g)?.length).toBeGreaterThanOrEqual(2);
-    expect(db.calls[0]?.sql).toContain("source_connection_user_subscriptions");
+    expect(db.calls[0]?.sql).toContain("source_channel_user_subscriptions");
   });
 });

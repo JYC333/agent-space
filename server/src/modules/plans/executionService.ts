@@ -21,7 +21,7 @@ export class PlanExecutionService {
     return this.repository.reconcilePlan(identity, planId);
   }
 
-  reconcileForRun(spaceId: string, runId: string): Promise<void> {
-    return this.repository.reconcileForRun(spaceId, runId);
+  reconcileForRun(spaceId: string, runId: string, userId?: string): Promise<void> {
+    return this.repository.reconcileForRun(spaceId, runId, userId);
   }
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { enqueueDueSourceConnectionScans } from "../src/modules/sources/scanSchedule";
+import { enqueueDueSourceChannelScans } from "../src/modules/sources/scanSchedule";
 import type { Queryable } from "../src/modules/routeUtils/common";
 
 class DueScanDb implements Queryable {
@@ -11,8 +11,8 @@ class DueScanDb implements Queryable {
       return {
         rows: [{
           id: "task-1",
-          task_type: "source_connection_scan",
-          task_key: "conn-1",
+          task_type: "source_channel_scan",
+          task_key: "channel-1",
           scope_type: "space",
           scope_id: "space-1",
           space_id: "space-1",
@@ -27,9 +27,9 @@ class DueScanDb implements Queryable {
         rowCount: 1,
       };
     }
-    if (sql.includes("SELECT sc.id, sc.space_id")) {
+    if (sql.includes("SELECT ch.id, ch.space_id")) {
       return {
-        rows: [{ id: "conn-1", space_id: "space-1" }] as Row[],
+        rows: [{ id: "channel-1", space_id: "space-1", source_connection_id: "conn-1" }] as Row[],
         rowCount: 1,
       };
     }
@@ -40,31 +40,31 @@ class DueScanDb implements Queryable {
   }
 }
 
-describe("source due source connection scheduler", () => {
-  it("enqueues connection_scan jobs for due active scheduled connections", async () => {
+describe("source due channel scheduler", () => {
+  it("enqueues connection_scan jobs for due active scheduled channels", async () => {
     const db = new DueScanDb();
 
-    await expect(enqueueDueSourceConnectionScans(db, 10)).resolves.toBe(1);
+    await expect(enqueueDueSourceChannelScans(db, 10)).resolves.toBe(1);
 
     const insert = db.calls.find(call => call.sql.includes("INSERT INTO extraction_jobs"));
     expect(insert?.params[1]).toBe("space-1");
     expect(insert?.params[2]).toBe("conn-1");
-    expect(JSON.parse(String(insert?.params[3]))).toEqual({ created_by: "scheduler" });
+    expect(JSON.parse(String(insert?.params[3]))).toEqual({ created_by: "scheduler", source_channel_id: "channel-1" });
   });
 
   it("skips manual, inactive, not-due, and already pending-running scan rows in the due query", async () => {
     const db = new DueScanDb();
 
-    await enqueueDueSourceConnectionScans(db, 10);
+    await enqueueDueSourceChannelScans(db, 10);
 
     const taskSelect = db.calls.find(call => call.sql.includes("FROM scheduler_tasks"))!.sql.replace(/\s+/g, " ");
     expect(taskSelect).toContain("task_type = $1");
     expect(taskSelect).toContain("next_run_at <= $2");
     expect(taskSelect).toContain("LIMIT $3");
 
-    const sourceSelect = db.calls.find(call => call.sql.includes("SELECT sc.id, sc.space_id"))!.sql.replace(/\s+/g, " ");
-    expect(sourceSelect).toContain("sc.status = 'active'");
-    expect(sourceSelect).toContain("sc.fetch_frequency <> 'manual'");
+    const sourceSelect = db.calls.find(call => call.sql.includes("SELECT ch.id, ch.space_id"))!.sql.replace(/\s+/g, " ");
+    expect(sourceSelect).toContain("ch.status = 'active'");
+    expect(sourceSelect).toContain("ch.fetch_frequency <> 'manual'");
     expect(sourceSelect).toContain("sc.handler_kind = 'built_in'");
     expect(sourceSelect).toContain("ej.job_type = 'connection_scan'");
     expect(sourceSelect).toContain("ej.status IN ('pending', 'running')");

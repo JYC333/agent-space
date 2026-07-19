@@ -1,12 +1,11 @@
 import { randomUUID, createHash } from "node:crypto";
-import type { Pool, PoolClient } from "../../../db/pool";
-import { withTransaction } from "../../../db/tx";
+import type { PoolClient } from "../../../db/pool";
 import { insertProposalRow } from "../../proposals/reviewPackets";
-import { HttpError, page, countFromRow, type Queryable } from "../../routeUtils/common";
+import { HttpError, page, countFromRow, type Queryable, withQueryableTransaction } from "../../routeUtils/common";
 import { PgSchedulerTaskStore, type SchedulerTaskRow } from "../../scheduler/taskStore";
 import { computeNextRunAt, InvalidScheduleError } from "../../automations/schedule";
 import type { SourceConnectionRow, SourceItemRow, EvidenceRow } from "../sourceRepositoryRows";
-import { ITEM_COLUMNS, EVIDENCE_COLUMNS, connectionColumnsWithConnectorForAlias } from "../sourceRepositoryRows";
+import { ITEM_COLUMNS, EVIDENCE_COLUMNS } from "../sourceRepositoryRows";
 import { inheritContentAccessGrants } from "../../access/contentAccessInheritance";
 import { contentReadSql } from "../../access/contentAccessSql";
 import {
@@ -16,6 +15,7 @@ import {
   enforceSourceRetentionPolicy,
   normalizeSourceConnectionReadGovernance,
 } from "../sourceConsent";
+import { SOURCE_POST_PROCESSING_LIMITS } from "./config";
 
 export const SOURCE_POST_PROCESSING_EVENT_JOB_TYPE = "source_post_processing_event";
 export const SOURCE_POST_PROCESSING_TASK_TYPE = "source_post_processing_rule";
@@ -78,6 +78,10 @@ export interface SourcePostProcessingInputConfig {
   candidate_prefilter: SourcePostProcessingCandidatePrefilterConfig;
   deep_analysis: SourcePostProcessingDeepAnalysisConfig;
   relevance_profile?: SourcePostProcessingRelevanceProfile;
+  /** Optional explicit runtime selection captured with the research workflow. */
+  runtime_profile_id?: string;
+  /** Research-owned rules use a provider-enforced structured output contract. */
+  structured_output_schema_id?: "source_post_processing.result.v1";
 }
 
 export interface SourcePostProcessingCandidatePrefilterConfig {
@@ -131,7 +135,7 @@ export interface SourcePostProcessingTriggerConfig {
 export interface SourcePostProcessingRuleRow {
   id: string;
   space_id: string;
-  source_connection_id: string;
+  source_channel_id: string;
   agent_id: string;
   project_id: string | null;
   name: string;
@@ -152,7 +156,7 @@ export interface SourcePostProcessingRunRow {
   id: string;
   space_id: string;
   rule_id: string | null;
-  source_connection_id: string;
+  source_channel_id: string;
   agent_id: string;
   project_id: string | null;
   agent_run_id: string | null;
@@ -178,11 +182,12 @@ export interface SourcePostProcessingRunRow {
 export interface SourcePostProcessingItemDecisionRow {
   id: string;
   space_id: string;
-  source_connection_id: string;
+  source_channel_id: string;
   rule_id: string | null;
   run_id: string;
   project_id: string | null;
   source_item_id: string;
+  research_question_version: number;
   relevance: SourcePostProcessingItemRelevance;
   confidence: number | null;
   reason: string | null;
@@ -206,7 +211,7 @@ export interface SourcePostProcessingItemDecisionRow {
 export interface SourcePostProcessingRuleOut {
   id: string;
   space_id: string;
-  source_connection_id: string;
+  source_channel_id: string;
   agent_id: string;
   project_id: string | null;
   name: string;
@@ -227,7 +232,7 @@ export interface SourcePostProcessingRunOut {
   id: string;
   space_id: string;
   rule_id: string | null;
-  source_connection_id: string;
+  source_channel_id: string;
   agent_id: string;
   project_id: string | null;
   agent_run_id: string | null;
@@ -253,11 +258,12 @@ export interface SourcePostProcessingRunOut {
 export interface SourcePostProcessingItemDecisionOut {
   id: string;
   space_id: string;
-  source_connection_id: string;
+  source_channel_id: string;
   rule_id: string | null;
   run_id: string;
   project_id: string | null;
   source_item_id: string;
+  research_question_version: number;
   relevance: SourcePostProcessingItemRelevance;
   confidence: number | null;
   reason: string | null;
@@ -296,7 +302,7 @@ export interface SourcePostProcessingBacklogRuleOut {
 }
 
 export interface SourcePostProcessingBacklogOut {
-  source_connection_id: string;
+  source_channel_id: string;
   rules: SourcePostProcessingBacklogRuleOut[];
 }
 
@@ -304,7 +310,7 @@ export interface SourcePostProcessingBacklogOut {
  *  aggregated output for one local day. See listBriefings/getBriefing and
  *  .agent/modules/brief.md. */
 export interface SourcePostProcessingBriefingDaySummaryOut {
-  source_connection_id: string;
+  source_channel_id: string;
   connection_name: string;
   project_id: string | null;
   date: string;
@@ -317,7 +323,7 @@ export interface SourcePostProcessingBriefingDaySummaryOut {
 }
 
 export interface SourcePostProcessingBriefingDetailOut {
-  source_connection_id: string;
+  source_channel_id: string;
   connection_name: string;
   project_id: string | null;
   date: string;
@@ -340,13 +346,13 @@ export interface SourcePostProcessingInputBatch {
 }
 
 const RULE_COLUMNS = `
-  id, space_id, source_connection_id, agent_id, project_id, name, status,
+  id, space_id, source_channel_id, agent_id, project_id, name, status,
   trigger_type, trigger_config_json, input_config_json, actions_json,
   cursor_json, last_fired_at, created_by_user_id, created_at, updated_at
 `;
 
 const RUN_COLUMNS = `
-  id, space_id, rule_id, source_connection_id, agent_id, project_id, agent_run_id,
+  id, space_id, rule_id, source_channel_id, agent_id, project_id, agent_run_id,
   triggered_by_user_id, trigger_type, status, input_item_ids_json,
   input_evidence_ids_json, output_artifact_ids_json, output_proposal_ids_json,
   output_job_ids_json, cursor_before_json, cursor_after_json, summary, error_json,
@@ -354,8 +360,8 @@ const RUN_COLUMNS = `
 `;
 
 const DECISION_COLUMNS = `
-  d.id, d.space_id, d.source_connection_id, d.rule_id, d.run_id, d.project_id,
-  d.source_item_id, d.relevance, d.confidence, d.reason,
+  d.id, d.space_id, d.source_channel_id, d.rule_id, d.run_id, d.project_id,
+  d.source_item_id, d.research_question_version, d.relevance, d.confidence, d.reason,
   d.matched_context_refs_json, d.review_status,
   d.action_json, d.created_at, d.updated_at,
   ii.title AS item_title, ii.source_uri AS item_source_uri,
@@ -366,8 +372,8 @@ const DECISION_COLUMNS = `
 `;
 
 const DECISION_COLUMNS_WITH_USER_STATE = `
-  d.id, d.space_id, d.source_connection_id, d.rule_id, d.run_id, d.project_id,
-  d.source_item_id, d.relevance, d.confidence, d.reason,
+  d.id, d.space_id, d.source_channel_id, d.rule_id, d.run_id, d.project_id,
+  d.source_item_id, d.research_question_version, d.relevance, d.confidence, d.reason,
   d.matched_context_refs_json, d.review_status,
   d.action_json, d.created_at, d.updated_at,
   ii.title AS item_title, ii.source_uri AS item_source_uri,
@@ -384,7 +390,7 @@ const BRIEFING_LIST_WINDOW_RUNS = 500;
 
 interface BriefingRunRow {
   run_id: string;
-  source_connection_id: string;
+  source_channel_id: string;
   connection_name: string;
   project_id: string | null;
   output_artifact_ids_json: unknown;
@@ -411,7 +417,7 @@ interface BriefingArtifactRow {
 
 interface DailyBriefingActivityRunRow {
   run_id: string;
-  source_connection_id: string;
+  source_channel_id: string;
   connection_name: string;
   owner_user_id: string;
   triggered_by_user_id: string | null;
@@ -439,7 +445,7 @@ interface DailyBriefingDecisionCountRow {
 /** In-memory grouping key for listBriefings; not part of the public output shape
  *  (hydrateBriefingSummaries maps these into SourcePostProcessingBriefingDaySummaryOut). */
 interface BriefingBucket {
-  source_connection_id: string;
+  source_channel_id: string;
   connection_name: string;
   project_id: string | null;
   date: string;
@@ -448,17 +454,17 @@ interface BriefingBucket {
   latest_created_at: string;
 }
 
-/** Groups recency-ordered run rows by (source_connection_id, local_date), preserving
+/** Groups recency-ordered run rows by (source_channel_id, local_date), preserving
  *  the input's recency order across buckets (first occurrence of a key = most recent). */
 function groupBriefingRuns(rows: BriefingRunRow[]): BriefingBucket[] {
   const order: string[] = [];
   const byKey = new Map<string, BriefingBucket>();
   for (const row of rows) {
-    const key = `${row.source_connection_id}::${row.local_date}`;
+    const key = `${row.source_channel_id}::${row.local_date}`;
     let bucket = byKey.get(key);
     if (!bucket) {
       bucket = {
-        source_connection_id: row.source_connection_id,
+        source_channel_id: row.source_channel_id,
         connection_name: row.connection_name,
         project_id: row.project_id,
         date: row.local_date,
@@ -487,8 +493,8 @@ function digestPreviewFromMarkdown(markdown: string, maxLen = 220): string {
   return stripped.length > maxLen ? `${stripped.slice(0, maxLen).trimEnd()}…` : stripped;
 }
 
-function dailyBriefingAggregateKey(sourceConnectionId: string, date: string): string {
-  return `source:briefing:${sourceConnectionId}:${date}`;
+function dailyBriefingAggregateKey(sourceChannelId: string, date: string): string {
+  return `source:briefing:${sourceChannelId}:${date}`;
 }
 
 function truncateText(value: string, maxLen: number): string {
@@ -526,10 +532,14 @@ export class PgSourcePostProcessingRepository {
 
   async getConnection(spaceId: string, connectionId: string): Promise<SourceConnectionRow | null> {
     const result = await this.db.query<SourceConnectionRow>(
-      `SELECT ${connectionColumnsWithConnectorForAlias("sc", "c")}
-         FROM source_connections sc
-         JOIN source_connectors c ON c.id = sc.connector_id
-        WHERE sc.space_id = $1 AND sc.id = $2 AND sc.deleted_at IS NULL
+      `SELECT sc.*, c.connector_key, c.connector_type, c.ingestion_mode,
+              ch.id AS source_channel_id
+         FROM source_channels ch
+         JOIN source_connections sc ON sc.id = ch.source_connection_id
+         JOIN source_provider_connectors spc ON spc.id = sc.provider_connector_id
+         JOIN source_connectors c ON c.id = spc.connector_id
+        WHERE ch.space_id = $1 AND ch.id = $2 AND ch.status <> 'archived'
+          AND sc.deleted_at IS NULL
         LIMIT 1`,
       [spaceId, connectionId],
     );
@@ -551,7 +561,7 @@ export class PgSourcePostProcessingRepository {
     const result = await this.db.query<SourcePostProcessingRuleRow>(
       `SELECT ${RULE_COLUMNS}
          FROM source_post_processing_rules
-        WHERE space_id = $1 AND source_connection_id = $2
+        WHERE space_id = $1 AND source_channel_id = $2
         ORDER BY created_at DESC, id DESC`,
       [spaceId, connectionId],
     );
@@ -568,7 +578,7 @@ export class PgSourcePostProcessingRepository {
       `SELECT ${RULE_COLUMNS}
          FROM source_post_processing_rules
         WHERE space_id = $1
-          AND source_connection_id = $2
+          AND source_channel_id = $2
           AND trigger_type = $3
           AND status = 'active'
         ORDER BY created_at ASC, id ASC`,
@@ -586,13 +596,13 @@ export class PgSourcePostProcessingRepository {
     const total = await this.db.query<{ total: string }>(
       `SELECT count(*)::text AS total
          FROM source_post_processing_runs
-        WHERE space_id = $1 AND source_connection_id = $2`,
+        WHERE space_id = $1 AND source_channel_id = $2`,
       [spaceId, connectionId],
     );
     const result = await this.db.query<SourcePostProcessingRunRow>(
       `SELECT ${RUN_COLUMNS}
          FROM source_post_processing_runs
-        WHERE space_id = $1 AND source_connection_id = $2
+        WHERE space_id = $1 AND source_channel_id = $2
         ORDER BY created_at DESC, id DESC
         LIMIT $3 OFFSET $4`,
       [spaceId, connectionId, limit, offset],
@@ -605,7 +615,7 @@ export class PgSourcePostProcessingRepository {
       `SELECT ${RULE_COLUMNS}
          FROM source_post_processing_rules
         WHERE space_id = $1
-          AND source_connection_id = $2
+          AND source_channel_id = $2
           AND status <> 'archived'
         ORDER BY created_at ASC, id ASC`,
       [spaceId, connectionId],
@@ -632,7 +642,7 @@ export class PgSourcePostProcessingRepository {
         last_failed_run: recentRuns.find((run) => run.status === "failed") ?? null,
       });
     }
-    return { source_connection_id: connectionId, rules };
+    return { source_channel_id: connectionId, rules };
   }
 
   async listDecisions(input: {
@@ -717,7 +727,7 @@ export class PgSourcePostProcessingRepository {
     const clauses = ["pr.space_id = $1", "pr.status = 'succeeded'", "scus.status = 'subscribed'", "scus.digest_enabled = true"];
     if (input.connectionId) {
       params.push(input.connectionId);
-      clauses.push(`pr.source_connection_id = $${params.length}`);
+      clauses.push(`pr.source_channel_id = $${params.length}`);
     }
     if (input.projectId) {
       params.push(input.projectId);
@@ -725,15 +735,17 @@ export class PgSourcePostProcessingRepository {
     }
     params.push(BRIEFING_LIST_WINDOW_RUNS);
     const result = await this.db.query<BriefingRunRow>(
-      `SELECT pr.id AS run_id, pr.source_connection_id, sc.name AS connection_name,
+      `SELECT pr.id AS run_id, pr.source_channel_id, sc.name AS connection_name,
               pr.project_id, pr.output_artifact_ids_json, pr.created_at,
               (pr.created_at AT TIME ZONE COALESCE(r.input_config_json->>'timezone', 'UTC'))::date::text AS local_date
          FROM source_post_processing_runs pr
+         JOIN source_channels sch
+           ON sch.space_id = pr.space_id AND sch.id = pr.source_channel_id
          JOIN source_connections sc
-           ON sc.space_id = pr.space_id AND sc.id = pr.source_connection_id
-         JOIN source_connection_user_subscriptions scus
+           ON sc.space_id = sch.space_id AND sc.id = sch.source_connection_id
+         JOIN source_channel_user_subscriptions scus
            ON scus.space_id = pr.space_id
-          AND scus.source_connection_id = pr.source_connection_id
+          AND scus.source_channel_id = sch.id
           AND scus.user_id = $2
          LEFT JOIN source_post_processing_rules r
            ON r.space_id = pr.space_id AND r.id = pr.rule_id
@@ -761,16 +773,18 @@ export class PgSourcePostProcessingRepository {
       `SELECT pr.id AS run_id, sc.name AS connection_name, pr.project_id,
               pr.status, pr.summary, pr.output_artifact_ids_json, pr.created_at
          FROM source_post_processing_runs pr
+         JOIN source_channels sch
+           ON sch.space_id = pr.space_id AND sch.id = pr.source_channel_id
          JOIN source_connections sc
-           ON sc.space_id = pr.space_id AND sc.id = pr.source_connection_id
-         JOIN source_connection_user_subscriptions scus
+           ON sc.space_id = sch.space_id AND sc.id = sch.source_connection_id
+         JOIN source_channel_user_subscriptions scus
            ON scus.space_id = pr.space_id
-          AND scus.source_connection_id = pr.source_connection_id
+          AND scus.source_channel_id = sch.id
           AND scus.user_id = $4
          LEFT JOIN source_post_processing_rules r
            ON r.space_id = pr.space_id AND r.id = pr.rule_id
         WHERE pr.space_id = $1
-          AND pr.source_connection_id = $2
+          AND pr.source_channel_id = $2
           AND pr.status = 'succeeded'
           AND scus.status = 'subscribed'
           AND scus.digest_enabled = true
@@ -838,7 +852,7 @@ export class PgSourcePostProcessingRepository {
 
     const first = runsResult.rows[0]!;
     return {
-      source_connection_id: input.connectionId,
+      source_channel_id: input.connectionId,
       connection_name: first.connection_name,
       project_id: first.project_id,
       date: input.date,
@@ -907,7 +921,7 @@ export class PgSourcePostProcessingRepository {
       }
       const digest = bucket.artifact_ids.map((id) => digestById.get(id)).find((row): row is BriefingArtifactRow => Boolean(row));
       return {
-        source_connection_id: bucket.source_connection_id,
+        source_channel_id: bucket.source_channel_id,
         connection_name: bucket.connection_name,
         project_id: bucket.project_id,
         date: bucket.date,
@@ -923,7 +937,7 @@ export class PgSourcePostProcessingRepository {
 
   async createRule(input: {
     spaceId: string;
-    sourceConnectionId: string;
+    sourceChannelId: string;
     agentId: string;
     projectId: string | null;
     name: string;
@@ -938,7 +952,7 @@ export class PgSourcePostProcessingRepository {
       const now = new Date().toISOString();
       const result = await db.query<SourcePostProcessingRuleRow>(
         `INSERT INTO source_post_processing_rules (
-           id, space_id, source_connection_id, agent_id, project_id, name, status,
+           id, space_id, source_channel_id, agent_id, project_id, name, status,
            trigger_type, trigger_config_json, input_config_json, actions_json,
            cursor_json, created_by_user_id, created_at, updated_at
          ) VALUES (
@@ -950,7 +964,7 @@ export class PgSourcePostProcessingRepository {
         [
           id,
           input.spaceId,
-          input.sourceConnectionId,
+          input.sourceChannelId,
           input.agentId,
           input.projectId,
           input.name,
@@ -967,7 +981,7 @@ export class PgSourcePostProcessingRepository {
       const task = await new PgSourcePostProcessingRepository(db).upsertRuleSchedule(row, now);
       return ruleOut({ ...row, next_run_at: task?.next_run_at ?? null });
     };
-    return isPool(this.db) ? withTransaction(this.db, write) : write(this.db);
+    return withQueryableTransaction(this.db, write);
   }
 
   async updateRule(
@@ -1025,7 +1039,7 @@ export class PgSourcePostProcessingRepository {
   async createRun(input: {
     spaceId: string;
     ruleId: string | null;
-    sourceConnectionId: string;
+    sourceChannelId: string;
     agentId: string;
     projectId: string | null;
     triggeredByUserId: string | null;
@@ -1039,7 +1053,7 @@ export class PgSourcePostProcessingRepository {
     const now = new Date().toISOString();
     const result = await this.db.query<SourcePostProcessingRunRow>(
       `INSERT INTO source_post_processing_runs (
-         id, space_id, rule_id, source_connection_id, agent_id, project_id,
+         id, space_id, rule_id, source_channel_id, agent_id, project_id,
          triggered_by_user_id, trigger_type, status, input_item_ids_json,
          input_evidence_ids_json, cursor_before_json, cursor_after_json,
          started_at, created_at
@@ -1054,7 +1068,7 @@ export class PgSourcePostProcessingRepository {
         id,
         input.spaceId,
         input.ruleId,
-        input.sourceConnectionId,
+        input.sourceChannelId,
         input.agentId,
         input.projectId,
         input.triggeredByUserId,
@@ -1133,14 +1147,16 @@ export class PgSourcePostProcessingRepository {
     runId: string;
   }): Promise<void> {
     const runResult = await this.db.query<DailyBriefingActivityRunRow>(
-      `SELECT pr.id AS run_id, pr.source_connection_id, sc.name AS connection_name,
+      `SELECT pr.id AS run_id, pr.source_channel_id, sc.name AS connection_name,
               sc.owner_user_id, pr.triggered_by_user_id,
               pr.project_id, pr.output_artifact_ids_json, pr.summary, pr.created_at,
               (pr.created_at AT TIME ZONE COALESCE(r.input_config_json->>'timezone', 'UTC'))::date::text AS local_date,
               sc.config_json
          FROM source_post_processing_runs pr
+         JOIN source_channels sch
+           ON sch.space_id = pr.space_id AND sch.id = pr.source_channel_id
          JOIN source_connections sc
-           ON sc.space_id = pr.space_id AND sc.id = pr.source_connection_id
+           ON sc.space_id = sch.space_id AND sc.id = sch.source_connection_id
          LEFT JOIN source_post_processing_rules r
            ON r.space_id = pr.space_id AND r.id = pr.rule_id
         WHERE pr.space_id = $1
@@ -1160,10 +1176,10 @@ export class PgSourcePostProcessingRepository {
            SELECT 1
              FROM source_post_processing_rules
             WHERE space_id = $1
-              AND source_connection_id = $2
+              AND source_channel_id = $2
               AND status = 'active'
          ) AS enabled`,
-        [input.spaceId, run.source_connection_id],
+        [input.spaceId, run.source_channel_id],
       );
       if (enabledResult.rows[0]?.enabled !== true) return;
     }
@@ -1174,11 +1190,11 @@ export class PgSourcePostProcessingRepository {
          LEFT JOIN source_post_processing_rules r
            ON r.space_id = pr.space_id AND r.id = pr.rule_id
         WHERE pr.space_id = $1
-          AND pr.source_connection_id = $2
+          AND pr.source_channel_id = $2
           AND pr.status = 'succeeded'
           AND (pr.created_at AT TIME ZONE COALESCE(r.input_config_json->>'timezone', 'UTC'))::date::text = $3
         ORDER BY pr.created_at DESC, pr.id DESC`,
-      [input.spaceId, run.source_connection_id, run.local_date],
+      [input.spaceId, run.source_channel_id, run.local_date],
     );
     const dayRuns = dayRunsResult.rows;
     if (dayRuns.length === 0) return;
@@ -1219,7 +1235,7 @@ export class PgSourcePostProcessingRepository {
     const projectId = dayRuns.map((row) => row.project_id).find((id): id is string => Boolean(id)) ?? run.project_id;
     const payload = {
       briefing_date: run.local_date,
-      source_connection_id: run.source_connection_id,
+      source_channel_id: run.source_channel_id,
       source_connection_name: run.connection_name,
       post_processing_run_ids: runIds,
       artifact_ids: artifactIds,
@@ -1227,7 +1243,7 @@ export class PgSourcePostProcessingRepository {
       run_count: runIds.length,
     };
     const now = new Date().toISOString();
-    const aggregateKey = dailyBriefingAggregateKey(run.source_connection_id, run.local_date);
+    const aggregateKey = dailyBriefingAggregateKey(run.source_channel_id, run.local_date);
     const occurredAt = timestampString(dayRuns[0]?.created_at ?? run.created_at) ?? now;
 
     await this.db.query(
@@ -1292,23 +1308,33 @@ export class PgSourcePostProcessingRepository {
 
   async persistItemDecisions(input: {
     spaceId: string;
-    sourceConnectionId: string;
+    sourceChannelId: string;
     ruleId: string | null;
     runId: string;
     projectId: string | null;
     decisions: SourcePostProcessingItemDecision[];
   }): Promise<void> {
     if (!input.decisions.length) return;
+    const ruleVersion = input.ruleId
+      ? await this.db.query<{ research_question_version: string | null }>(
+          `SELECT input_config_json->>'research_question_version' AS research_question_version
+             FROM source_post_processing_rules WHERE space_id=$1 AND id=$2 LIMIT 1`,
+          [input.spaceId, input.ruleId],
+        )
+      : { rows: [] };
+    const parsedVersion = Number(ruleVersion.rows[0]?.research_question_version ?? 1);
+    const researchQuestionVersion = Number.isInteger(parsedVersion) && parsedVersion >= 1 ? parsedVersion : 1;
     const now = new Date().toISOString();
     for (const decision of input.decisions) {
       await this.db.query(
         `INSERT INTO source_post_processing_item_decisions (
-           id, space_id, source_connection_id, rule_id, run_id, project_id,
-           source_item_id, relevance, confidence, reason, matched_context_refs_json,
+           id, space_id, source_channel_id, rule_id, run_id, project_id,
+           source_item_id, research_question_version, relevance, confidence, reason, matched_context_refs_json,
            review_status, action_json, created_at, updated_at
          ) VALUES (
            $1, $2, $3, $4, $5, $6,
-           $7, $8, $9, $10, $11::jsonb,
+           $7, $13,
+           $8, $9, $10, $11::jsonb,
            'pending', '{}'::jsonb, $12, $12
          )
          ON CONFLICT (space_id, run_id, source_item_id)
@@ -1317,11 +1343,12 @@ export class PgSourcePostProcessingRepository {
                        reason = EXCLUDED.reason,
                        matched_context_refs_json = EXCLUDED.matched_context_refs_json,
                        review_status = EXCLUDED.review_status,
+                       research_question_version = EXCLUDED.research_question_version,
                        updated_at = EXCLUDED.updated_at`,
         [
           randomUUID(),
           input.spaceId,
-          input.sourceConnectionId,
+          input.sourceChannelId,
           input.ruleId,
           input.runId,
           input.projectId,
@@ -1331,6 +1358,7 @@ export class PgSourcePostProcessingRepository {
           decision.reason,
           JSON.stringify(decision.matched_context_refs),
           now,
+          researchQuestionVersion,
         ],
       );
     }
@@ -1419,7 +1447,7 @@ export class PgSourcePostProcessingRepository {
 
   async collectInputBatch(input: {
     spaceId: string;
-    sourceConnectionId: string;
+    sourceChannelId: string;
     inputConfig: SourcePostProcessingInputConfig;
     cursor: SourceWatermark | null;
     viewerUserId: string;
@@ -1433,7 +1461,7 @@ export class PgSourcePostProcessingRepository {
 
     if (input.inputConfig.window === "explicit") {
       items = itemIds.length
-        ? await this.findItemsByIds(input.spaceId, input.sourceConnectionId, itemIds, input.viewerUserId)
+        ? await this.findItemsByIds(input.spaceId, input.sourceChannelId, itemIds, input.viewerUserId)
         : [];
     } else {
       const result = await this.findItemsForWindow(input);
@@ -1442,7 +1470,7 @@ export class PgSourcePostProcessingRepository {
     }
 
     const evidence = evidenceIds.length
-      ? await this.findEvidenceByIds(input.spaceId, input.sourceConnectionId, evidenceIds, input.viewerUserId)
+      ? await this.findEvidenceByIds(input.spaceId, input.sourceChannelId, evidenceIds, input.viewerUserId)
       : input.inputConfig.include_evidence && items.length
         ? await this.findEvidenceForItems(input.spaceId, items.map((item) => item.id), input.viewerUserId)
         : [];
@@ -1524,7 +1552,7 @@ export class PgSourcePostProcessingRepository {
   }): Promise<string> {
     const id = randomUUID();
     const now = new Date().toISOString();
-    await this.db.query(
+    const inserted = await this.db.query<{ id: string }>(
       `INSERT INTO extracted_evidence (
          id, space_id, owner_user_id, visibility, access_level,
          source_item_id, extraction_job_id, source_snapshot_id,
@@ -1541,7 +1569,11 @@ export class PgSourcePostProcessingRepository {
          $15, $16::timestamptz, 'normal', 'source_post_processing', 0.7,
          'candidate', $17::jsonb, $18, $19,
          $20, $21, $21
-       )`,
+       )
+       ON CONFLICT (space_id, source_item_id, extraction_method, content_hash)
+         WHERE content_hash IS NOT NULL
+       DO NOTHING
+       RETURNING id`,
       [
         id,
         input.spaceId,
@@ -1566,26 +1598,36 @@ export class PgSourcePostProcessingRepository {
         now,
       ],
     );
+    const evidenceId = inserted.rows[0]?.id ?? (await this.db.query<{ id: string }>(
+      `SELECT id FROM extracted_evidence
+        WHERE space_id=$1 AND source_item_id=$2
+          AND extraction_method='source_post_processing' AND content_hash=$3
+        ORDER BY created_at ASC, id ASC
+        LIMIT 1`,
+      [input.spaceId, input.item.id, sha256(input.content)],
+    )).rows[0]?.id;
+    if (!evidenceId) throw new Error("Evidence insert conflicted but the existing row could not be read");
+    if (!inserted.rows[0]) return evidenceId;
     if (input.item.visibility === "selected_users") {
       await inheritContentAccessGrants(this.db, {
         spaceId: input.spaceId,
         sourceResourceType: "source_item",
         sourceResourceId: input.item.id,
         targetResourceType: "extracted_evidence",
-        targetResourceId: id,
+        targetResourceId: evidenceId,
         inheritedAt: now,
       });
     }
     await reindexExtractedEvidenceAndParentForRetrieval(this.db, {
       spaceId: input.spaceId,
-      evidenceId: id,
+      evidenceId,
       trigger: "source_post_processing_evidence",
     }).catch((error) => {
       process.stderr.write(
-        `[source.retrieval] evidence reindex failed (${id}): ${String((error as Error)?.message ?? error)}\n`,
+        `[source.retrieval] evidence reindex failed (${evidenceId}): ${String((error as Error)?.message ?? error)}\n`,
       );
     });
-    return id;
+    return evidenceId;
   }
 
   async insertProposal(input: {
@@ -1874,7 +1916,7 @@ export class PgSourcePostProcessingRepository {
     if (inputConfig.window === "explicit") return 0;
     const { clauses, params } = itemWindowWhere({
       spaceId: rule.space_id,
-      sourceConnectionId: rule.source_connection_id,
+      sourceChannelId: rule.source_channel_id,
       inputConfig,
       cursor: cursorWatermark(rule.cursor_json),
     });
@@ -1889,7 +1931,7 @@ export class PgSourcePostProcessingRepository {
 
   private async findItemsForWindow(input: {
     spaceId: string;
-    sourceConnectionId: string;
+    sourceChannelId: string;
     inputConfig: SourcePostProcessingInputConfig;
     cursor: SourceWatermark | null;
     viewerUserId: string;
@@ -1915,7 +1957,7 @@ export class PgSourcePostProcessingRepository {
 
   private async findItemsByIds(
     spaceId: string,
-    sourceConnectionId: string,
+    sourceChannelId: string,
     itemIds: string[],
     viewerUserId: string,
   ): Promise<SourceItemRow[]> {
@@ -1923,12 +1965,12 @@ export class PgSourcePostProcessingRepository {
       `SELECT ${ITEM_COLUMNS}
          FROM source_items
         WHERE space_id = $1
-          AND connection_id = $2
           AND id::text = ANY($3::text[])
           AND deleted_at IS NULL
+          AND ${channelItemLinkExistsSql("source_items.space_id", "source_items.id", "$2")}
           AND ${contentReadSql("source_item", "source_items", "$4")}
         ORDER BY created_at ASC, id ASC`,
-      [spaceId, sourceConnectionId, itemIds, viewerUserId],
+      [spaceId, sourceChannelId, itemIds, viewerUserId],
     );
     if (result.rows.length !== itemIds.length) {
       throw new HttpError(404, "Post-processing input item not found in this source");
@@ -1938,7 +1980,7 @@ export class PgSourcePostProcessingRepository {
 
   private async findEvidenceByIds(
     spaceId: string,
-    sourceConnectionId: string,
+    sourceChannelId: string,
     evidenceIds: string[],
     viewerUserId: string,
   ): Promise<EvidenceRow[]> {
@@ -1951,11 +1993,11 @@ export class PgSourcePostProcessingRepository {
         WHERE ee.space_id = $1
           AND ee.id::text = ANY($2::text[])
           AND ee.deleted_at IS NULL
-          AND (ii.connection_id = $3 OR ee.source_item_id IS NULL)
+          AND (ee.source_item_id IS NULL OR ${channelItemLinkExistsSql("ee.space_id", "ee.source_item_id", "$3")})
           AND ${contentReadSql("extracted_evidence", "ee", "$4")}
           AND (ii.id IS NULL OR ${contentReadSql("source_item", "ii", "$4")})
         ORDER BY ee.created_at ASC, ee.id ASC`,
-      [spaceId, evidenceIds, sourceConnectionId, viewerUserId],
+      [spaceId, evidenceIds, sourceChannelId, viewerUserId],
     );
     if (result.rows.length !== evidenceIds.length) {
       throw new HttpError(404, "Post-processing input evidence not found in this source");
@@ -1982,7 +2024,7 @@ export function ruleOut(row: SourcePostProcessingRuleRow): SourcePostProcessingR
   return {
     id: row.id,
     space_id: row.space_id,
-    source_connection_id: row.source_connection_id,
+    source_channel_id: row.source_channel_id,
     agent_id: row.agent_id,
     project_id: row.project_id,
     name: row.name,
@@ -2005,7 +2047,7 @@ export function runOut(row: SourcePostProcessingRunRow): SourcePostProcessingRun
     id: row.id,
     space_id: row.space_id,
     rule_id: row.rule_id,
-    source_connection_id: row.source_connection_id,
+    source_channel_id: row.source_channel_id,
     agent_id: row.agent_id,
     project_id: row.project_id,
     agent_run_id: row.agent_run_id,
@@ -2033,11 +2075,12 @@ export function decisionOut(row: SourcePostProcessingItemDecisionRow): SourcePos
   return {
     id: row.id,
     space_id: row.space_id,
-    source_connection_id: row.source_connection_id,
+    source_channel_id: row.source_channel_id,
     rule_id: row.rule_id,
     run_id: row.run_id,
     project_id: row.project_id,
     source_item_id: row.source_item_id,
+    research_question_version: row.research_question_version,
     relevance: row.relevance,
     confidence: row.confidence,
     reason: row.reason,
@@ -2130,6 +2173,15 @@ export function normalizeInputConfig(value: unknown): SourcePostProcessingInputC
     deep_analysis: normalizeDeepAnalysis(record.deep_analysis),
   };
   if (stringValue(record.content_profile)) config.content_profile = contentProfile;
+  const runtimeProfileId = stringValue(record.runtime_profile_id);
+  if (runtimeProfileId) config.runtime_profile_id = runtimeProfileId;
+  const structuredOutputSchemaId = stringValue(record.structured_output_schema_id);
+  if (structuredOutputSchemaId) {
+    if (structuredOutputSchemaId !== "source_post_processing.result.v1") {
+      throw new HttpError(422, "input_config_json.structured_output_schema_id is not supported");
+    }
+    config.structured_output_schema_id = "source_post_processing.result.v1";
+  }
   const summaryGoal = boundedString(record.summary_goal, "input_config_json.summary_goal", 2000);
   if (summaryGoal) config.summary_goal = summaryGoal;
   const outputInstructions = boundedString(record.output_instructions, "input_config_json.output_instructions", 4000);
@@ -2160,7 +2212,7 @@ function normalizeCandidatePrefilter(value: unknown): SourcePostProcessingCandid
       "input_config_json.candidate_prefilter.max_candidates",
       20,
       1,
-      100,
+      SOURCE_POST_PROCESSING_LIMITS.candidatePrefilterMax,
     ),
   };
   if (minScore !== null) config.min_score = Math.min(1_000_000, minScore);
@@ -2188,7 +2240,7 @@ function normalizeDeepAnalysis(value: unknown): SourcePostProcessingDeepAnalysis
       "input_config_json.deep_analysis.max_candidates_per_run",
       5,
       1,
-      25,
+      SOURCE_POST_PROCESSING_LIMITS.deepAnalysisMaxCandidatesPerRun,
     ),
     content_source: enumValue(
       record.content_source,
@@ -2442,15 +2494,15 @@ function enumValue<const Values extends readonly string[]>(
 
 function itemWindowWhere(input: {
   spaceId: string;
-  sourceConnectionId: string;
+  sourceChannelId: string;
   inputConfig: SourcePostProcessingInputConfig;
   cursor: SourceWatermark | null;
 }): { clauses: string[]; params: unknown[] } {
-  const params: unknown[] = [input.spaceId, input.sourceConnectionId];
+  const params: unknown[] = [input.spaceId, input.sourceChannelId];
   const clauses = [
-    "space_id = $1",
-    "connection_id = $2",
-    "deleted_at IS NULL",
+    "source_items.space_id = $1",
+    "source_items.deleted_at IS NULL",
+    channelItemLinkExistsSql("source_items.space_id", "source_items.id", "$2"),
   ];
   if (input.inputConfig.window === "new_since_last_success" && input.cursor) {
     params.push(input.cursor.created_at, input.cursor.id);
@@ -2467,6 +2519,17 @@ function itemWindowWhere(input: {
   return { clauses, params };
 }
 
+function channelItemLinkExistsSql(spaceExpression: string, itemExpression: string, channelExpression: string): string {
+  return `EXISTS (
+    SELECT 1
+      FROM source_channel_item_links channel_item_link
+     WHERE channel_item_link.space_id = ${spaceExpression}
+       AND channel_item_link.source_channel_id = ${channelExpression}
+       AND channel_item_link.source_item_id = ${itemExpression}
+       AND channel_item_link.status = 'active'
+  )`;
+}
+
 function decisionListWhere(input: {
   spaceId: string;
   connectionId?: string | null;
@@ -2479,7 +2542,7 @@ function decisionListWhere(input: {
   const clauses = ["d.space_id = $1"];
   if (input.connectionId) {
     params.push(input.connectionId);
-    clauses.push(`d.source_connection_id = $${params.length}`);
+    clauses.push(`d.source_channel_id = $${params.length}`);
   }
   if (input.projectId) {
     params.push(input.projectId);
@@ -2552,10 +2615,6 @@ function zonedParts(date: Date, timezone: string): { year: number; month: number
   }).formatToParts(date);
   const part = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find((item) => item.type === type)?.value ?? 0);
   return { year: part("year"), month: part("month"), day: part("day"), hour: part("hour"), minute: part("minute") };
-}
-
-function isPool(db: Queryable): db is Pool {
-  return typeof (db as Pool).connect === "function";
 }
 
 export type SourcePostProcessingPoolClient = PoolClient;

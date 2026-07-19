@@ -6,9 +6,14 @@ import type {
 } from "./types";
 
 const RESEARCH_ARTIFACT_TYPES = [
-  "research_brief.v1",
-  "research_source_table.v1",
-  "research_idea_candidates.v1",
+  "research_report.archive.v1",
+];
+const RESEARCH_WORKFLOW_CAPABILITY_IDS = [
+  "research.source_collect",
+  "research.source_summarize",
+  "research.evidence_extract",
+  "research.brief_synthesize",
+  "research.idea_generate",
 ];
 
 function binding(
@@ -64,31 +69,43 @@ export const RESEARCH_CAPABILITIES: CapabilityDefinition[] = [
     "research.source_collect",
     "Source Collection",
     "Collect candidate sources from project sources, manual URLs, or runtime-native source tools.",
-    ["research_source_table.v1"],
+    ["research_report.archive.v1"],
   ),
   researchCapability(
     "research.source_summarize",
     "Source Summarization",
     "Summarize source material with citations and stated uncertainty.",
-    ["research_source_table.v1"],
+    ["research_report.archive.v1"],
   ),
   researchCapability(
     "research.evidence_extract",
     "Evidence Extraction",
     "Extract structured evidence, claims, and provenance from source material.",
-    ["research_source_table.v1"],
+    ["research_report.archive.v1"],
   ),
   researchCapability(
     "research.brief_synthesize",
     "Brief Synthesis",
     "Synthesize cited evidence into a concise research brief.",
-    ["research_brief.v1"],
+    ["research_report.archive.v1"],
   ),
   researchCapability(
     "research.idea_generate",
     "Idea Generation",
     "Generate candidate ideas, questions, or follow-up directions from research evidence.",
-    ["research_idea_candidates.v1"],
+    ["research_report.archive.v1"],
+  ),
+  researchCapability(
+    "research.adhoc_analyze",
+    "Ad-hoc Research Analysis",
+    "Analyze a bounded notebook and paper selection and propose a reviewed workspace update.",
+    [],
+  ),
+  researchCapability(
+    "research.monitor_compare",
+    "Monitoring Evidence Comparison",
+    "Compare newly screened evidence with the project's current research understanding.",
+    [],
   ),
 ];
 
@@ -103,7 +120,7 @@ function workflow(
     name,
     description,
     category: "research",
-    capability_ids: RESEARCH_CAPABILITIES.map((capability) => capability.id),
+    capability_ids: RESEARCH_WORKFLOW_CAPABILITY_IDS,
     input_schema_json: {
       type: "object",
       properties: {
@@ -136,25 +153,25 @@ export const RESEARCH_WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
     "research.academic_literature_review",
     "Academic Literature Review",
     "Review academic sources and synthesize cited findings into a research brief.",
-    ["research_brief.v1", "research_source_table.v1"],
+    ["research_report.archive.v1"],
   ),
   workflow(
     "research.news_scan",
     "News Scan",
     "Scan time-sensitive sources and produce a cited summary of developments.",
-    ["research_brief.v1", "research_source_table.v1"],
+    ["research_report.archive.v1"],
   ),
   workflow(
     "research.market_research",
     "Market Research",
     "Compare market sources, extract evidence, and produce brief findings and candidate ideas.",
-    ["research_brief.v1", "research_source_table.v1", "research_idea_candidates.v1"],
+    ["research_report.archive.v1"],
   ),
   workflow(
     "research.technical_survey",
     "Technical Survey",
     "Survey technical sources and synthesize implementation-relevant findings.",
-    ["research_brief.v1", "research_source_table.v1"],
+    ["research_report.archive.v1"],
   ),
 ];
 

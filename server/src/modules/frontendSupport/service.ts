@@ -244,6 +244,7 @@ export class PgFrontendSupportService {
          FROM runs r
          LEFT JOIN task_runs tr ON tr.run_id = r.id AND tr.space_id = r.space_id AND tr.role = 'primary'
         WHERE r.space_id = $1
+          AND r.run_role = 'execution'
           AND ${runReadSql("$2")}
           ${activeFilter}
         ORDER BY r.created_at DESC, r.id DESC
@@ -488,6 +489,7 @@ export class PgFrontendSupportService {
          count(*) FILTER (WHERE mode = 'dry_run')::text AS dry_run_count
        FROM runs
        WHERE space_id = $1
+         AND run_role = 'execution'
          AND created_at >= date_trunc('day', now())`,
       [spaceId],
     );

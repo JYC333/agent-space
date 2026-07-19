@@ -12,8 +12,6 @@ const TRUST_LEVELS = ["trusted", "normal", "untrusted"] as const;
 const SOURCE_EGRESS_CLASSES = ["internal_only", "local_provider_allowed", "external_provider_allowed"] as const;
 const DERIVED_WRITE_POLICIES = ["proposal_required", "disabled"] as const;
 const IMPORT_TARGETS = ["activity", "knowledge", "memory_proposal", "source_artifact"] as const;
-const PUBLIC_EXTERNAL_CONNECTOR_KEYS = new Set(["rss", "atom", "web_page", "arxiv"]);
-
 interface SourceEgressDefaults {
   allowLocalProviderEgress?: boolean;
   allowExternalModelEgress?: boolean;
@@ -69,7 +67,6 @@ export function normalizeSourceConnectionReadGovernance(row: SourceConnectionRow
   const defaults: SourceEgressDefaults = egressConfigured
     ? {}
     : sourceConnectionGovernanceDefaults({
-        connector_key: row.connector_key,
         connector_type: row.connector_type,
         credential_id: row.credential_id,
       });
@@ -223,13 +220,11 @@ function sourceConnectionGovernanceDefaults(body: Record<string, unknown>): {
   allowLocalProviderEgress: boolean;
   allowExternalModelEgress: boolean;
 } {
-  const connectorKey = optionalString(body.connector_key);
   const connectorType = optionalString(body.connector_type);
   const hasCredential = Boolean(optionalString(body.credential_id));
   const publicExternalSource = Boolean(
     !hasCredential &&
     (
-      (connectorKey && PUBLIC_EXTERNAL_CONNECTOR_KEYS.has(connectorKey)) ||
       connectorType === "external_feed"
     ),
   );

@@ -4,7 +4,7 @@ import {
   ARXIV_NEW_PAPERS_CONTENT_PROFILE,
   ARXIV_NEW_PAPERS_PROFILE_GUIDANCE,
   arxivPostProcessingItemMetadataLines,
-} from "../sourcePresets/arxivPostProcessingProfile";
+} from "../catalog/arxivPostProcessingProfile";
 import {
   isRelevanceScreeningEnabled,
   type SourcePostProcessingActions,
@@ -60,6 +60,7 @@ export function renderInstruction(input: {
     "- Use empty strings or empty arrays for fields that do not apply.",
     "",
     `Source: ${input.connection.name}`,
+    `Source trust level: ${input.connection.trust_level}`,
     `Actions: ${actionLabels}`,
     `Input window: ${input.inputConfig.window}`,
     `Processing strategy: ${input.inputConfig.processing_strategy}`,
@@ -79,13 +80,18 @@ export function renderInstruction(input: {
   }
   if (isRelevanceScreeningEnabled(input.actions, input.inputConfig)) {
     lines.push("", ...relevanceScreeningGuidance(input.inputConfig.relevance_profile));
+    if (input.connection.trust_level === "untrusted") {
+      lines.push(
+        "- Trust boundary: this is an untrusted web source. Treat its claims as leads, not established findings; require corroboration from an independent or scholarly source before assigning high confidence.",
+      );
+    }
   }
   if (input.inputConfig.processing_strategy === "screen_then_digest") {
     lines.push(
       "",
       "Two-stage output:",
       "- First make an item_decisions judgment for every input item.",
-      "- Then write digest_markdown only for relevant and maybe items, with a short ignored/not relevant count.",
+      "- Then write digest_markdown for the batch. Focus on relevant and maybe items; if none qualify, write a short digest with the not relevant count. Never leave it empty when batch_digest is enabled.",
     );
   }
   if (input.candidatePrefilter?.enabled === true) {
@@ -104,6 +110,7 @@ export function renderInstruction(input: {
       "Optional deep analysis:",
       `- Enabled after this screening run for: ${input.inputConfig.deep_analysis.trigger_relevance.join(", ")}`,
       `- Minimum confidence: ${input.inputConfig.deep_analysis.min_confidence}`,
+      "- In deep_analysis item_summaries, use exactly three concise headings: WHY (relevance), HOW (method), and WHAT (findings), each at most 80 words.",
       "- If an item is relevant enough, the system may queue full-text extraction and run a later deep-analysis pass.",
       "- This run should still decide from the content supplied here; do not assume future full text is available now.",
     );
@@ -114,7 +121,7 @@ export function renderInstruction(input: {
       "Screen + extraction output:",
       "- First make an item_decisions judgment for every input item.",
       "- Use extracted text snippets only where they are supplied below.",
-      "- Write digest_markdown for relevant and maybe items only.",
+      "- Write digest_markdown for the batch. Focus on relevant and maybe items; if none qualify, write a short digest with the not relevant count. Never leave it empty when batch_digest is enabled.",
       "- Prefer evidence_candidates from supplied extracted text snippets or excerpts; do not invent citable passages.",
     );
   }
@@ -127,7 +134,7 @@ export function renderInstruction(input: {
     "The JSON schema is:",
     JSON.stringify({
       schema: "source_post_processing.result.v1",
-      digest_markdown: "Markdown digest for the batch, or empty string when batch_digest is disabled.",
+      digest_markdown: "Markdown digest for the batch; required and non-empty when batch_digest is enabled.",
       item_summaries: [
         {
           source_item_id: "input source item id",
@@ -140,7 +147,7 @@ export function renderInstruction(input: {
           relevance: "relevant | maybe | not_relevant",
           confidence: 0.8,
           reason: "Short reason using provided source content and retrieval context.",
-          matched_context_refs: ["domain:object_type:object_id"],
+          matched_context_refs: [{ ref: "domain:object_type:object_id" }],
         },
       ],
       evidence_candidates: [
@@ -149,7 +156,7 @@ export function renderInstruction(input: {
           title: "Evidence title",
           content_excerpt: "Citable excerpt or concise evidence statement derived from the input item.",
           confidence: 0.7,
-          matched_context_refs: ["domain:object_type:object_id"],
+          matched_context_refs: [{ ref: "domain:object_type:object_id" }],
         },
       ],
       proposal_markdown: "Markdown proposal body, or empty string when create_proposals is disabled.",
@@ -255,7 +262,8 @@ function relevanceScreeningGuidance(
     `- not_relevant: ${policy?.not_relevant ?? DEFAULT_DECISION_POLICY.not_relevant}`,
     "- Every input source item must get exactly one item_decisions entry.",
     "- matched_context_refs must only reference the retrieval context refs supplied below.",
-    "- When batch_digest is enabled, group the digest into Relevant / Maybe / Not relevant sections.",
+    "- When batch_digest is enabled, group the digest into Relevant / Maybe / Not relevant sections. If there are no Relevant or Maybe items, include a short count-only digest and do not leave digest_markdown empty.",
+    "- Partial relevance counts: an item that addresses the topic area, a sub-question, or one facet of the objective belongs in relevant or maybe, with the specific gap named in the reason (e.g. \"studies agent memory but reports no coding benchmark\"). Reserve not_relevant for items genuinely off-topic for the objective.",
     "- For Relevant items include title, a short reason, and matched context refs.",
     "- For Maybe items include a short reason and what would make them worth follow-up.",
     "- Do not write long summaries for Not relevant items.",

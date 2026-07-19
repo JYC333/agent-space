@@ -53,6 +53,9 @@ import {
   retrievalProviderEgressDestination,
   type RetrievalEgressPolicy,
 } from "../../retrieval/egress/egressPolicy";
+import { normalizeGatewayShapes, normalizeNullableNearMisses, validateStructuredOutput } from "../../runs/structuredOutputValidation";
+import { modelStructuredToolCallUnreliable, providerSupportsStructuredOutput } from "../structuredOutputCapabilities";
+import { effectiveMaxOutputTokens } from "../modelOutputLimits";
 
 export interface ChatMessage {
   role: string;
@@ -70,6 +73,7 @@ export interface ProviderChatRequestBody {
   temperature?: number;
   max_tokens?: number;
   tools?: CanonicalToolDefinition[] | null;
+  output_format?: ProviderStructuredOutput | null;
   egressPolicy?: RetrievalEgressPolicy | null;
   metering: ProviderMeteringContext;
 }
@@ -80,7 +84,26 @@ export interface ProviderChatResponseBody {
   model: string;
   usage: Record<string, unknown>;
   tool_calls?: CanonicalToolCall[];
+  structured_output?: Record<string, unknown> | null;
   finish_reason?: string | null;
+}
+
+/**
+ * Safe diagnostics for a structured-output failure.
+ *
+ * These describe the provider response shape plus a bounded normalized-text
+ * preview for triage. They never retain prompt text, credentials, or request
+ * headers. The full raw response, when available, is carried separately on
+ * ProviderInvocationError for failure logging only.
+ */
+export type StructuredOutputDiagnostics = Record<string, unknown>;
+
+export interface ProviderStructuredOutput {
+  type: "json_schema";
+  schema_id: string;
+  schema: Record<string, unknown>;
+  strict?: boolean;
+  stage?: string;
 }
 
 export type ProviderMeteringContext = Partial<UsageObservation>;
@@ -92,6 +115,9 @@ export class ProviderInvocationError extends Error {
     readonly resilience?: ProviderResilienceDecision,
     /** Stable code so callers can branch (e.g. degrade) without string-matching. */
     readonly code?: string,
+    readonly diagnostics?: StructuredOutputDiagnostics,
+    /** Provider text is retained only for the failure logger, not run evidence. */
+    readonly responseText?: string,
   ) {
     super(message);
     this.name = "ProviderInvocationError";
@@ -143,7 +169,15 @@ async function fetchProviderResponse(
   init?: RequestInit,
 ): Promise<Response> {
   try {
-    return await httpClient(profile).fetch(url, init);
+    const headers = new Headers(init?.headers);
+    // Provider responses are consumed by server-side fetch. Requesting an
+    // identity representation avoids Brotli/gzip decompression failures from
+    // provider or proxy content-encoding mismatches.
+    headers.set("accept-encoding", "identity");
+    return await httpClient(profile).fetch(url, {
+      ...init,
+      headers: Object.fromEntries(headers.entries()),
+    });
   } catch (error) {
     if (error instanceof ProviderInvocationError) throw error;
     throw new ProviderInvocationError(
@@ -230,10 +264,15 @@ function resolveModel(provider: ProviderInfo, requested?: string | null): string
 async function parseJsonResponse(response: Response): Promise<unknown> {
   const text = await response.text();
   if (!response.ok) {
+    const decision = classifyProviderFailure(response.status, text);
     throw new ProviderInvocationError(
       502,
       `Provider request failed with status ${response.status}`,
-      classifyProviderFailure(response.status, text),
+      decision,
+      // Rate limits carry a stable code so the Run Supervisor can classify
+      // the terminal attempt as retryable; quota exhaustion stays codeless
+      // (a retry would fail identically until the key or plan changes).
+      decision.failure_class === "rate_limit" ? "provider_rate_limit" : undefined,
     );
   }
   try {
@@ -276,6 +315,285 @@ function providerSupportsRuntimeTools(providerType: string): boolean {
   );
 }
 
+function diagnosticSummary(diagnostics: StructuredOutputDiagnostics | undefined): string {
+  if (!diagnostics || Object.keys(diagnostics).length === 0) return "";
+  return Object.entries(diagnostics)
+    .filter(([, value]) => value !== undefined)
+    .map(([key, value]) => `${key}=${Array.isArray(value) ? value.join(",") : String(value)}`)
+    .join("; ");
+}
+
+type StructuredOutputNormalization =
+  | "none"
+  | "reasoning_envelope"
+  | "json_fence"
+  | "embedded_json_fence"
+  | "json_slice";
+
+/**
+ * Reasoning models wrap the contractual JSON in transport noise in several
+ * combinable ways: a provider-specific `<think>...</think>` envelope, a
+ * markdown code fence, and/or surrounding prose ("Here is the result: {...}
+ * Let me know."). None of that noise is part of the structured-output
+ * contract, so produce extraction candidates in decreasing strictness; the
+ * caller takes the first one that parses as JSON. Schema validation remains
+ * the real contract gate, so liberal extraction here cannot let a
+ * non-conforming payload through.
+ */
+function structuredOutputCandidates(text: string): Array<{
+  text: string;
+  normalization: StructuredOutputNormalization;
+}> {
+  const trimmed = text.trim();
+  const withoutReasoning = trimmed
+    .replace(/^<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>\s*/i, "")
+    .trim();
+  const base = withoutReasoning;
+  const baseNormalization: StructuredOutputNormalization = base === trimmed ? "none" : "reasoning_envelope";
+  const candidates: Array<{ text: string; normalization: StructuredOutputNormalization }> = [
+    { text: base, normalization: baseNormalization },
+  ];
+  const fenced = base.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  if (fenced) {
+    candidates.push({ text: fenced[1]!.trim(), normalization: "json_fence" });
+  } else {
+    const embedded = base.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+    if (embedded) candidates.push({ text: embedded[1]!.trim(), normalization: "embedded_json_fence" });
+  }
+  for (const slice of balancedJsonSlices(base)) {
+    if (candidates.every((candidate) => candidate.text !== slice)) {
+      candidates.push({ text: slice, normalization: "json_slice" });
+    }
+  }
+  return candidates;
+}
+
+function balancedJsonSlices(text: string): string[] {
+  const slices: string[] = [];
+  for (let start = 0; start < text.length; start += 1) {
+    const opening = text[start];
+    if (opening !== "{" && opening !== "[") continue;
+    const end = balancedJsonEnd(text, start);
+    if (end === null) continue;
+    const slice = text.slice(start, end).trim();
+    if (slice && !slices.includes(slice)) slices.push(slice);
+  }
+  return slices;
+}
+
+function balancedJsonEnd(text: string, start: number): number | null {
+  const opening = text[start];
+  if (opening !== "{" && opening !== "[") return null;
+  const stack: string[] = [opening];
+  let inString = false;
+  let escaped = false;
+
+  for (let index = start + 1; index < text.length; index += 1) {
+    const character = text[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (character === '"') {
+      inString = true;
+      continue;
+    }
+    if (character === "{" || character === "[") {
+      stack.push(character);
+      continue;
+    }
+    if (character !== "}" && character !== "]") continue;
+    const expectedOpening = character === "}" ? "{" : "[";
+    if (stack.at(-1) !== expectedOpening) return null;
+    stack.pop();
+    if (stack.length === 0) return index + 1;
+  }
+  return null;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function withResponseText(error: ProviderInvocationError, text: string): ProviderInvocationError {
+  if (error.responseText !== undefined) return error;
+  return new ProviderInvocationError(error.statusCode, error.message, error.resilience, error.code, error.diagnostics, text);
+}
+
+function structuredOutputFromValue(
+  value: unknown,
+  outputFormat: ProviderStructuredOutput,
+  diagnostics?: StructuredOutputDiagnostics,
+): Record<string, unknown> {
+  if (isPlainObject(value)) {
+    const schemaError = validateStructuredOutput(value, outputFormat);
+    if (!schemaError) return value;
+    const attempts: Record<string, unknown>[] = [];
+    const push = (candidate: unknown) => { if (isPlainObject(candidate)) attempts.push(candidate); };
+    const expand = (candidate: Record<string, unknown>) => {
+      const unwrapped = unwrapTextNodes(candidate);
+      if (unwrapped.changed) push(unwrapped.value);
+      const base = unwrapped.changed && isPlainObject(unwrapped.value) ? unwrapped.value : candidate;
+      const nullNormalized = normalizeNullableNearMisses(base, outputFormat.schema);
+      if (nullNormalized.changed) push(nullNormalized.value);
+      const gatewayBase = nullNormalized.changed && isPlainObject(nullNormalized.value) ? nullNormalized.value : base;
+      const gatewayNormalized = normalizeGatewayShapes(gatewayBase, outputFormat.schema);
+      if (gatewayNormalized.changed) push(gatewayNormalized.value);
+    };
+    expand(value);
+    // Tool-call gateways sometimes nest the payload one level deep under the
+    // tool/schema name (observed with MiniMax-M3 forced tool calls). Peel
+    // single-key object wrappers, at most two levels, and revalidate.
+    let wrapper: Record<string, unknown> = value;
+    for (let depth = 0; depth < 2; depth += 1) {
+      const keys = Object.keys(wrapper);
+      if (keys.length !== 1) break;
+      const inner = wrapper[keys[0]!];
+      if (!isPlainObject(inner)) break;
+      push(inner);
+      expand(inner);
+      wrapper = inner;
+    }
+    for (const attempt of attempts) {
+      if (!validateStructuredOutput(attempt, outputFormat)) return attempt;
+    }
+    const details = {
+      json_top_level_keys: Object.keys(value).slice(0, 12).join("|") || "none",
+      ...(diagnostics ?? {}),
+    };
+    throw new ProviderInvocationError(
+      502,
+      `Provider returned structured output that failed schema '${outputFormat.schema_id}' at ${schemaError}${diagnosticSummary(details) ? ` (${diagnosticSummary(details)})` : ""}`,
+      { failure_class: "permanent", actions: ["fail"] },
+      "structured_output_invalid",
+      details,
+    );
+  }
+  const valueType = value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
+  const details = { value_type: valueType, ...(diagnostics ?? {}) };
+  throw new ProviderInvocationError(
+    502,
+    `Provider returned invalid structured output for schema '${outputFormat.schema_id}' (${diagnosticSummary(details)})`,
+    { failure_class: "permanent", actions: ["fail"] },
+    "structured_output_invalid",
+    details,
+  );
+}
+
+/**
+ * XML-to-JSON tool-call gateways (observed with MiniMax's OpenAI-compatible
+ * layer) represent a string the model emitted where the schema expects an
+ * object as a single-key text node: {"$text": "<json-encoded payload>"}.
+ * Recursively replace exact {"$text": string} nodes with the parsed payload
+ * (or the raw string when it is not JSON) so schema validation sees the value
+ * the model intended. Objects with any other keys are never touched.
+ */
+function unwrapTextNodes(value: unknown): { value: unknown; changed: boolean } {
+  if (Array.isArray(value)) {
+    let changed = false;
+    const items = value.map((item) => {
+      const result = unwrapTextNodes(item);
+      changed = changed || result.changed;
+      return result.value;
+    });
+    return { value: changed ? items : value, changed };
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const keys = Object.keys(record);
+    if (keys.length === 1 && keys[0] === "$text" && typeof record.$text === "string") {
+      try {
+        return { value: unwrapTextNodes(JSON.parse(record.$text)).value, changed: true };
+      } catch {
+        return { value: record.$text, changed: true };
+      }
+    }
+    let changed = false;
+    const entries = Object.entries(record).map(([key, item]) => {
+      const result = unwrapTextNodes(item);
+      changed = changed || result.changed;
+      return [key, result.value] as const;
+    });
+    return { value: changed ? Object.fromEntries(entries) : value, changed };
+  }
+  return { value, changed: false };
+}
+
+export function structuredOutputFromText(
+  text: unknown,
+  outputFormat: ProviderStructuredOutput,
+  diagnostics?: StructuredOutputDiagnostics,
+): Record<string, unknown> {
+  if (typeof text !== "string") {
+    return structuredOutputFromValue(text, outputFormat, {
+      response_kind: "non_text_content",
+      content_type: text === null ? "null" : Array.isArray(text) ? "array" : typeof text,
+      ...(diagnostics ?? {}),
+    });
+  }
+  const candidates = structuredOutputCandidates(text);
+  const diagnosticsFor = (candidate: { text: string; normalization: StructuredOutputNormalization }) => ({
+    response_kind: candidate.text ? "text" : "empty_text",
+    content_length: text.length,
+    normalized_length: candidate.text.length,
+    first_non_whitespace: text.trim()[0] ?? "none",
+    last_non_whitespace: text.trim().at(-1) ?? "none",
+    normalization: candidate.normalization,
+    ...(diagnostics ?? {}),
+  }) satisfies StructuredOutputDiagnostics;
+  let firstSchemaError: ProviderInvocationError | null = null;
+  for (const candidate of candidates) {
+    let value: unknown;
+    try {
+      value = JSON.parse(candidate.text);
+    } catch {
+      continue;
+    }
+    try {
+      return structuredOutputFromValue(value, outputFormat, {
+        ...diagnosticsFor(candidate),
+        parse_result: "valid_json",
+        json_value_type: value === null ? "null" : Array.isArray(value) ? "array" : typeof value,
+      });
+    } catch (error) {
+      if (error instanceof ProviderInvocationError && error.code === "structured_output_invalid") {
+        firstSchemaError ??= withResponseText(error, text);
+        continue;
+      }
+      throw error;
+    }
+  }
+  if (firstSchemaError) throw firstSchemaError;
+  throw invalidStructuredOutputError(outputFormat.schema_id, {
+    ...diagnosticsFor(candidates[0]!),
+    candidate_normalizations: candidates.map((candidate) => candidate.normalization).join(","),
+    parse_result: "invalid_json",
+  });
+}
+
+function invalidStructuredOutputError(
+  schemaId: string,
+  diagnostics?: StructuredOutputDiagnostics,
+): ProviderInvocationError {
+  return new ProviderInvocationError(
+    502,
+    `Provider returned invalid structured output for schema '${schemaId}'${diagnosticSummary(diagnostics) ? ` (${diagnosticSummary(diagnostics)})` : ""}`,
+    { failure_class: "permanent", actions: ["fail"] },
+    "structured_output_invalid",
+    diagnostics,
+  );
+}
+
+function providerStructuredOutputName(schemaId: string): string {
+  return schemaId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64) || "structured_output";
+}
+
 // ---------------------------------------------------------------------------
 // Single-attempt provider calls (one key, one request)
 // ---------------------------------------------------------------------------
@@ -294,6 +612,34 @@ async function completeOpenAiCompatible(
   }
   const model = bareModelName(provider.provider_type, resolveModel(provider, body.model));
   const tools = openAiTools(body.tools);
+  // `response_format: json_schema` needs provider-side constrained decoding;
+  // OpenAI-compatible gateways that lack it silently ignore the field and
+  // answer in prose. Models are far more reliably trained to emit valid JSON
+  // as tool-call arguments, so when the request has no runtime tools of its
+  // own, also offer the schema as a single forced tool. Providers honoring
+  // response_format still constrain the output; the ones ignoring it return
+  // the payload as tool arguments, which the response path already prefers
+  // (structuredOutputFromOpenAiChoice checks the schema-named tool first).
+  const structuredToolName = body.output_format ? providerStructuredOutputName(body.output_format.schema_id) : null;
+  const forcedStructuredTool = body.output_format && !tools && !modelStructuredToolCallUnreliable(model)
+    ? [{
+        type: "function",
+        function: {
+          name: structuredToolName!,
+          description: `Return the ${body.output_format.schema_id} structured result.`,
+          parameters: body.output_format.schema,
+        },
+      }]
+    : null;
+  // A model that neither honors response_format nor gets the forced tool
+  // otherwise NEVER sees the contract — it can only guess field shapes from
+  // prose. Embed the schema itself in the system instruction for those.
+  const schemaInstruction = body.output_format && modelStructuredToolCallUnreliable(model)
+    ? `Reply with exactly one JSON object that validates against this JSON Schema. Match every key name and type exactly; do not add undeclared keys:\n${JSON.stringify(body.output_format.schema)}`
+    : null;
+  const messagesBody = schemaInstruction
+    ? { ...body, system: body.system ? `${body.system}\n\n${schemaInstruction}` : schemaInstruction }
+    : body;
   const response = await fetchProviderResponse(networkProfile, `${openAiCompatibleBase(provider)}/chat/completions`, {
     method: "POST",
     headers: {
@@ -302,10 +648,24 @@ async function completeOpenAiCompatible(
     },
     body: JSON.stringify({
       model,
-      messages: openAiMessages(body),
+      messages: openAiMessages(messagesBody),
       temperature: body.temperature,
-      max_tokens: body.max_tokens,
+      max_tokens: effectiveMaxOutputTokens(model, body.max_tokens) ?? undefined,
       ...(tools ? { tools, tool_choice: "auto" } : {}),
+      ...(forcedStructuredTool ? {
+        tools: forcedStructuredTool,
+        tool_choice: { type: "function", function: { name: structuredToolName } },
+      } : {}),
+      ...(body.output_format ? {
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: providerStructuredOutputName(body.output_format.schema_id),
+            strict: body.output_format.strict ?? true,
+            schema: body.output_format.schema,
+          },
+        },
+      } : {}),
     }),
   });
   const data = (await parseJsonResponse(response)) as {
@@ -325,14 +685,97 @@ async function completeOpenAiCompatible(
   };
   const choice = data.choices?.[0];
   const toolCalls = openAiToolCalls(choice?.message?.tool_calls, body.tools);
+  const content = choice?.message?.content ?? "";
+  const structuredDiagnostics = {
+    transport: "openai_compatible",
+    finish_reason: choice?.finish_reason ?? "unknown",
+    response_model: data.model ?? model,
+    choice_count: data.choices?.length ?? 0,
+    content_type: choice?.message?.content === null
+      ? "null"
+      : Array.isArray(choice?.message?.content)
+        ? "array"
+        : typeof choice?.message?.content,
+    tool_call_count: choice?.message?.tool_calls?.length ?? 0,
+    tool_names: (choice?.message?.tool_calls ?? [])
+      .map((call) => call.function?.name ?? "unnamed")
+      .slice(0, 8),
+    tool_argument_lengths: (choice?.message?.tool_calls ?? [])
+      .map((call) => typeof call.function?.arguments === "string" ? call.function.arguments.length : 0)
+      .slice(0, 8),
+  } satisfies StructuredOutputDiagnostics;
+  const structuredOutput = body.output_format
+    ? (() => {
+        try {
+          return structuredOutputFromOpenAiChoice(
+            choice,
+            body.output_format,
+            content,
+            !body.tools?.length,
+            structuredDiagnostics,
+          );
+        } catch (error) {
+          if (error instanceof ProviderInvocationError && error.code === "structured_output_invalid") {
+            // The schema failure usually lives in tool-call arguments, not the
+            // message text; carry both so the failure logger shows the actual
+            // offending payload instead of only the reasoning prose.
+            const rawToolCalls = (choice?.message?.tool_calls ?? [])
+              .filter((call) => typeof call.function?.arguments === "string" && call.function.arguments)
+              .map((call) => `tool_call ${call.function?.name ?? "unnamed"} arguments: ${call.function!.arguments}`);
+            throw new ProviderInvocationError(
+              error.statusCode,
+              error.message,
+              error.resilience,
+              error.code,
+              error.diagnostics,
+              [content, ...rawToolCalls].filter(Boolean).join("\n"),
+            );
+          }
+          throw error;
+        }
+      })()
+    : null;
   return {
-    content: choice?.message?.content ?? "",
+    content,
     provider: provider.provider_type,
     model: data.model ?? model,
     usage: data.usage ?? {},
     tool_calls: toolCalls,
+    structured_output: structuredOutput,
     finish_reason: choice?.finish_reason ?? null,
   };
+}
+
+function structuredOutputFromOpenAiChoice(
+  choice: {
+    message?: {
+      content?: string | null;
+      tool_calls?: Array<{
+        id?: string;
+        type?: string;
+        function?: { name?: string; arguments?: string };
+      }>;
+    };
+  } | undefined,
+  outputFormat: ProviderStructuredOutput,
+  content: unknown,
+  allowUnlabelledToolCall: boolean,
+  diagnostics: StructuredOutputDiagnostics,
+): Record<string, unknown> {
+  const expectedName = providerStructuredOutputName(outputFormat.schema_id);
+  const toolCalls = choice?.message?.tool_calls ?? [];
+  const expectedTool = toolCalls.find((call) => call.function?.name === expectedName)
+    ?? (allowUnlabelledToolCall && toolCalls.length === 1 ? toolCalls[0] : undefined);
+  if (expectedTool?.function?.arguments) {
+    return structuredOutputFromText(expectedTool.function.arguments, outputFormat, {
+      ...diagnostics,
+      response_kind: "tool_call_arguments",
+    });
+  }
+  return structuredOutputFromText(content, outputFormat, {
+    ...diagnostics,
+    response_kind: "message_content",
+  });
 }
 
 async function completeAnthropic(
@@ -348,7 +791,15 @@ async function completeAnthropic(
     );
   }
   const model = bareModelName("anthropic", resolveModel(provider, body.model));
-  const tools = anthropicTools(body.tools);
+  const structuredDefinition: CanonicalToolDefinition[] = body.output_format
+    ? [{
+        name: providerStructuredOutputName(body.output_format.schema_id),
+        description: `Return the ${body.output_format.schema_id} structured result.`,
+        input_schema: body.output_format.schema,
+      }]
+    : [];
+  const requestTools = [...structuredDefinition, ...(body.tools ?? [])];
+  const tools = anthropicTools(requestTools);
   const response = await fetchProviderResponse(networkProfile, anthropicMessagesUrl(provider), {
     method: "POST",
     headers: {
@@ -363,8 +814,13 @@ async function completeAnthropic(
       temperature: body.temperature,
       // Tool-use turns need headroom for the tool_use block plus a follow-up
       // answer, so default higher when tools are offered.
-      max_tokens: body.max_tokens ?? (tools ? 2048 : 1024),
-      ...(tools ? { tools, tool_choice: { type: "auto" } } : {}),
+      max_tokens: effectiveMaxOutputTokens(model, body.max_tokens) ?? (tools ? 2048 : 1024),
+      ...(tools ? {
+        tools,
+        tool_choice: body.output_format
+          ? { type: "tool", name: providerStructuredOutputName(body.output_format.schema_id) }
+          : { type: "auto" },
+      } : {}),
     }),
   });
   const data = (await parseJsonResponse(response)) as {
@@ -379,14 +835,63 @@ async function completeAnthropic(
     usage?: Record<string, unknown>;
     stop_reason?: string | null;
   };
+  const structuredSchemaId = body.output_format?.schema_id ?? null;
+  const expectedToolName = structuredSchemaId ? providerStructuredOutputName(structuredSchemaId) : null;
+  const structuredBlock = structuredSchemaId
+    ? data.content?.find((block) => block.type === "tool_use" && block.name === expectedToolName)
+      // Some Anthropic-compatible gateways preserve the tool call but rewrite
+      // its name. Research runs have no runtime tools, so the only tool_use
+      // block is unambiguously the structured result in that case.
+      ?? (!body.tools?.length ? data.content?.find((block) => block.type === "tool_use") : undefined)
+    : undefined;
+  if (body.output_format && (!structuredBlock || !isStructuredObject(structuredBlock.input))) {
+    throw new ProviderInvocationError(
+      502,
+      `Provider returned no structured output for schema '${body.output_format.schema_id}' (${anthropicStructuredOutputDiagnostic(data)})`,
+      { failure_class: "permanent", actions: ["fail"] },
+      "structured_output_invalid",
+    );
+  }
+  const structuredOutput = body.output_format
+    ? structuredOutputFromValue(structuredBlock!.input, body.output_format, {
+        transport: "anthropic",
+        finish_reason: data.stop_reason ?? "unknown",
+        response_model: data.model ?? model,
+        response_kind: "tool_use_input",
+      })
+    : null;
   return {
     content: data.content?.map((c) => c.text ?? "").join("") ?? "",
     provider: "anthropic",
     model: data.model ?? model,
     usage: data.usage ?? {},
     tool_calls: anthropicToolCalls(data.content, body.tools),
+    structured_output: structuredOutput,
     finish_reason: data.stop_reason ?? null,
   };
+}
+
+function isStructuredObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function anthropicStructuredOutputDiagnostic(data: {
+  content?: Array<{ type?: string; name?: string }>;
+  stop_reason?: string | null;
+  model?: string;
+}): string {
+  const blocks = data.content ?? [];
+  const blockTypes = blocks.map((block) => block.type ?? "unknown").join(",") || "none";
+  const toolNames = blocks
+    .filter((block) => block.type === "tool_use")
+    .map((block) => block.name ?? "unnamed")
+    .join(",") || "none";
+  return [
+    `finish_reason=${data.stop_reason ?? "unknown"}`,
+    `content_blocks=${blockTypes}`,
+    `tool_names=${toolNames}`,
+    `model=${data.model ?? "unknown"}`,
+  ].join("; ");
 }
 
 async function completeOllama(
@@ -410,19 +915,28 @@ async function completeOllama(
         : body.messages.map((m) => ({ role: m.role, content: m.content ?? "" })),
       options: {
         temperature: body.temperature,
-        num_predict: body.max_tokens,
+        num_predict: effectiveMaxOutputTokens(model, body.max_tokens) ?? undefined,
       },
+      ...(body.output_format ? { format: body.output_format.schema } : {}),
     }),
   });
   const data = (await parseJsonResponse(response)) as {
     message?: { content?: string };
     model?: string;
   };
+  const content = data.message?.content ?? "";
   return {
-    content: data.message?.content ?? "",
+    content,
     provider: "ollama",
     model: data.model ?? model,
     usage: {},
+    structured_output: body.output_format
+      ? structuredOutputFromText(content, body.output_format, {
+          transport: "ollama",
+          response_kind: "message_content",
+          response_model: data.model ?? model,
+        })
+      : null,
   };
 }
 
@@ -432,6 +946,9 @@ function attemptOnce(
   body: ProviderChatRequestBody,
 ): Promise<ProviderChatResponseBody> {
   const provider = target.provider;
+  if (body.output_format && !providerSupportsStructuredOutput(provider.provider_type)) {
+    throw structuredOutputUnsupportedError(provider.provider_type);
+  }
   if (body.tools?.length && !providerSupportsRuntimeTools(provider.provider_type)) {
     throw new ProviderInvocationError(
       400,
@@ -440,33 +957,28 @@ function attemptOnce(
       "runtime_tool_provider_unsupported",
     );
   }
+  // A provider may be catalogued by vendor as Anthropic while exposing an
+  // OpenAI-compatible endpoint (for example, a gateway or a multi-protocol
+  // vendor). Managed API calls prefer that explicit OpenAI endpoint so JSON
+  // Schema output uses one consistent transport. Native Anthropic is used
+  // only when no OpenAI-compatible endpoint is configured.
+  if (provider.provider_type === "anthropic" && provider.openai_compatible_base_url) {
+    return completeOpenAiCompatible(provider, target.network_profile, apiKey, body);
+  }
   if (provider.provider_type === "anthropic") {
-    return completeAnthropicWithCompatibleFallback(provider, target.network_profile, apiKey, body);
+    return completeAnthropic(provider, target.network_profile, apiKey, body);
   }
   if (provider.provider_type === "ollama") return completeOllama(provider, target.network_profile, body);
   return completeOpenAiCompatible(provider, target.network_profile, apiKey, body);
 }
 
-async function completeAnthropicWithCompatibleFallback(
-  provider: ProviderInfo,
-  networkProfile: ResolvedNetworkProfile | null,
-  apiKey: string | null,
-  body: ProviderChatRequestBody,
-): Promise<ProviderChatResponseBody> {
-  try {
-    return await completeAnthropic(provider, networkProfile, apiKey, body);
-  } catch (error) {
-    if (!provider.openai_compatible_base_url || !isTransientProviderError(error)) {
-      throw error;
-    }
-    return completeOpenAiCompatible(provider, networkProfile, apiKey, body);
-  }
-}
-
-function isTransientProviderError(error: unknown): boolean {
-  return error instanceof ProviderInvocationError &&
-    (error.code === "provider_network_error" ||
-      error.resilience?.failure_class === "transient");
+function structuredOutputUnsupportedError(providerType: string): ProviderInvocationError {
+  return new ProviderInvocationError(
+    422,
+    `Provider type '${providerType}' does not support structured output`,
+    { failure_class: "permanent", actions: ["fail"] },
+    "structured_output_unsupported",
+  );
 }
 
 function providerTargetEgressAllowed(
@@ -759,6 +1271,9 @@ export async function completeProviderChat(
     body.metering,
   );
   const primary = await store.getInvocationTarget(spaceId, body.provider_id);
+  if (body.output_format && !providerSupportsStructuredOutput(primary.provider.provider_type)) {
+    throw structuredOutputUnsupportedError(primary.provider.provider_type);
+  }
   const chain: InvocationTarget[] = [primary];
   for (const fallbackId of primary.fallback_provider_ids) {
     try {
@@ -778,7 +1293,16 @@ export async function completeProviderChat(
       // Fallback providers serve THEIR OWN default model: an explicit model
       // name from the request only binds to the provider it was meant for.
       const effectiveBody = index === 0 ? body : { ...body, model: null };
-      return await invokeProviderWithPool(store, target, effectiveBody, attribution);
+      try {
+        return await invokeProviderWithPool(store, target, effectiveBody, attribution);
+      } catch (error) {
+        // Weak instruction followers often fix their JSON when shown the
+        // exact validation failure; one corrective round-trip is far cheaper
+        // than failing the whole task.
+        const corrective = structuredOutputCorrectionBody(effectiveBody, error);
+        if (!corrective) throw error;
+        return await invokeProviderWithPool(store, target, corrective, attribution);
+      }
     } catch (error) {
       if (isUsageMeteringFailure(error)) throw error;
       lastError = error;
@@ -793,6 +1317,36 @@ export async function completeProviderChat(
   throw lastError instanceof Error
     ? lastError
     : new ProviderInvocationError(502, "Provider invocation failed");
+}
+
+function structuredOutputCorrectionBody(
+  body: ProviderChatRequestBody,
+  error: unknown,
+): ProviderChatRequestBody | null {
+  if (!body.output_format) return null;
+  if (!(error instanceof ProviderInvocationError) || error.code !== "structured_output_invalid") return null;
+  const failurePoint = /failed schema '[^']*' at ([^(]+?)(?:\s*\(|$)/.exec(error.message)?.[1]?.trim();
+  const requiredKeys = Array.isArray(body.output_format.schema.required)
+    ? body.output_format.schema.required.filter((key): key is string => typeof key === "string")
+    : [];
+  const offending = typeof error.responseText === "string" && error.responseText.trim()
+    ? error.responseText.slice(0, 6000)
+    : null;
+  return {
+    ...body,
+    messages: [
+      ...body.messages,
+      { role: "assistant", content: offending ?? "(previous structured reply was rejected)" },
+      {
+        role: "user",
+        content: [
+          `Your previous reply failed JSON schema validation for '${body.output_format.schema_id}'${failurePoint ? ` at ${failurePoint}` : ""}.`,
+          requiredKeys.length ? `The top-level JSON object must contain exactly these keys: ${requiredKeys.join(", ")}.` : null,
+          "Respond again with ONLY the corrected JSON object. Match every key name exactly as the schema spells it, including case; do not rename keys, do not wrap the object in another key, and do not add keys the schema does not declare.",
+        ].filter(Boolean).join(" "),
+      },
+    ],
+  };
 }
 
 export interface ProviderTextCompletionInput {
@@ -814,6 +1368,7 @@ export interface ProviderMessagesCompletionInput {
   messages: ChatMessage[];
   max_tokens?: number;
   tools?: CanonicalToolDefinition[] | null;
+  output_format?: ProviderStructuredOutput | null;
   /** Auxiliary-task name; resolves a ProviderTaskPolicy chain when present. */
   task?: string | null;
   egressPolicy?: RetrievalEgressPolicy | null;
@@ -853,6 +1408,7 @@ export async function completeProviderMessages(
   model: string;
   usage: Record<string, unknown>;
   tool_calls?: CanonicalToolCall[];
+  structured_output?: Record<string, unknown> | null;
   finish_reason?: string | null;
 }> {
   const chatBody = (providerId: string, model: string | null | undefined): ProviderChatRequestBody => ({
@@ -862,11 +1418,15 @@ export async function completeProviderMessages(
     messages: input.messages,
     max_tokens: input.max_tokens,
     tools: input.tools,
+    output_format: input.output_format,
     egressPolicy: input.egressPolicy,
     metering: meteringContext(input.metering, input.task),
   });
 
-  const taskChain = input.task ? await store.getTaskChain(spaceId, input.task) : null;
+  // A structured contract is bound to the selected Research provider/model.
+  // Auxiliary task policies may intentionally reroute generic work, but they
+  // must not silently replace a Research execution contract.
+  const taskChain = input.output_format || !input.task ? null : await store.getTaskChain(spaceId, input.task);
   let lastError: unknown = null;
   if (taskChain) {
     for (const entry of taskChain) {
@@ -878,6 +1438,7 @@ export async function completeProviderMessages(
           model: result.model,
           usage: result.usage,
           tool_calls: result.tool_calls,
+          structured_output: result.structured_output,
           finish_reason: result.finish_reason,
         };
       } catch (error) {
@@ -906,6 +1467,7 @@ export async function completeProviderMessages(
     model: result.model,
     usage: result.usage,
     tool_calls: result.tool_calls,
+    structured_output: result.structured_output,
     finish_reason: result.finish_reason,
   };
 }

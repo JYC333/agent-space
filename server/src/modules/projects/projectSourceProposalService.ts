@@ -3,8 +3,7 @@ import type { Queryable, SpaceUserIdentity } from "../routeUtils/common";
 import { HttpError, objectValue, optionalString, requiredString, withQueryableTransaction } from "../routeUtils/common";
 import { insertProposalRow } from "../proposals/reviewPackets";
 import { PgProposalApplyService } from "../proposals/applyService";
-import { SourceConnectionService } from "../sources/sourceConnectionService";
-import { arxivConnectionDraft } from "../sources/sourcePresets/service";
+import { SourceChannelService } from "../sources/channels/sourceChannelService";
 import { SourceBackfillPlanningService } from "../sources/sourceBackfillService";
 import { ProjectOperationService } from "./projectOperationService";
 import { assertProjectWriter } from "./access";
@@ -29,7 +28,7 @@ export class ProjectSourceProposalService {
   ) {}
 
   async proposeBind(identity: SpaceUserIdentity, projectId: string, body: Record<string, unknown>, actor: BindProposalActor = {}) {
-    requiredString(body.source_connection_id, "source_connection_id");
+    requiredString(body.source_channel_id, "source_channel_id");
     await assertProjectWriter(this.db, identity.spaceId, projectId, identity.userId);
 
     const reused = await this.reuseBindProposal(identity.spaceId, projectId, actor);
@@ -76,7 +75,7 @@ export class ProjectSourceProposalService {
   }
 
   /**
-   * Bundles a proposed Source connection draft with a dependent Project
+   * Bundles a proposed Source Channel draft with a dependent Project
    * binding proposal into one idempotent Project operation, so a single
    * "set up this source for my project" request either fully succeeds or
    * fully replays on retry.
@@ -109,16 +108,42 @@ export class ProjectSourceProposalService {
         [operation.id, identity.spaceId, projectId, JSON.stringify({ idempotency: { key, fingerprint } })],
       );
 
-      const sourceBody = body.preset_id === "arxiv" ? arxivConnectionDraft(body) : objectValue(body.source);
-      const connection = await new SourceConnectionService(db, this.config!).proposeCreate(identity, sourceBody, { projectId });
+      const sourceBody = objectValue(body.source);
+      const channel = await new SourceChannelService(db, this.config!).create(identity, {
+        ...sourceBody,
+        status: "paused",
+        _initial_status: "paused",
+      });
+      const channelId = requiredString(channel.id, "source_channel_id");
+      const draftUpdatedAt = requiredString(channel.updated_at, "draft_updated_at");
+      const activationProposal = await insertProposalRow(db, {
+        spaceId: identity.spaceId,
+        proposalType: "source_channel_activation",
+        title: `Activate Source Channel: ${String(channel.name ?? "channel")}`,
+        payload: {
+          proposal_type: "source_channel_activation",
+          action_id: "source.channel.propose_activation",
+          source_channel_id: channelId,
+          draft_updated_at: draftUpdatedAt,
+        },
+        rationale: "Activate a reviewed Source Channel and its underlying governed connection.",
+        createdByUserId: identity.userId,
+        createdByAgentId: null,
+        createdByRunId: null,
+        actionIdempotencyKey: `${key}:channel-activation`,
+        visibility: "space_shared",
+        projectId,
+        riskLevel: "medium",
+        requiredApproverRole: "owner",
+      });
       const binding = await new ProjectSourceProposalService(db, this.config).proposeBind(identity, projectId, {
         ...objectValue(body.binding),
-        source_connection_id: (connection.draft as Record<string, unknown>).id,
-        depends_on_proposal_id: connection.proposal.id,
+        source_channel_id: channelId,
+        depends_on_proposal_id: activationProposal.id,
       });
-      await operations.link(identity.spaceId, projectId, String(operation.id), "proposal", String(connection.proposal.id), "source_activation");
+      await operations.link(identity.spaceId, projectId, String(operation.id), "proposal", String(activationProposal.id), "source_activation");
       await operations.link(identity.spaceId, projectId, String(operation.id), "proposal", String(binding.proposal.id), "source_binding");
-      return { operation, connection_draft: connection.draft, source_proposal: connection.proposal, binding_proposal: binding.proposal };
+      return { operation, channel_draft: channel, source_proposal: activationProposal, binding_proposal: binding.proposal };
     });
   }
 
@@ -132,26 +157,26 @@ export class ProjectSourceProposalService {
 
     return withQueryableTransaction(this.db, async (db) => {
       await advisoryLock(db, identity.spaceId, "source_backfill", key);
-      const binding = await db.query<{ source_connection_id: string }>(
-        `SELECT source_connection_id FROM project_source_bindings WHERE id=$1 AND space_id=$2 AND project_id=$3 AND status='active' FOR UPDATE`,
+      const binding = await db.query<{ source_channel_id: string }>(
+        `SELECT source_channel_id FROM project_source_bindings WHERE id=$1 AND space_id=$2 AND project_id=$3 AND status='active' FOR UPDATE`,
         [bindingId, identity.spaceId, projectId],
       );
       if (!binding.rows[0]) throw new HttpError(404, "Project source binding not found");
-      const connectionId = binding.rows[0].source_connection_id;
+      const channelId = binding.rows[0].source_channel_id;
 
       const planner = new SourceBackfillPlanningService(db, this.config);
       const request = { strategy: objectValue(body.strategy), quota_policy: objectValue(body.quota_policy) };
-      const preview = await planner.preview(identity, connectionId, request);
+      const preview = await planner.preview(identity, channelId, request);
       const operationTitle = optionalString(body.title) ?? "Import source history";
       const fingerprint = fingerprintOf({
         binding_id: bindingId,
-        source_connection_id: connectionId,
+        source_channel_id: channelId,
         title: operationTitle,
         strategy: preview.strategy,
         quota_policy: preview.quota_policy,
       });
 
-      const reused = await this.reuseBackfillProposal(db, identity, projectId, bindingId, connectionId, key, fingerprint, planner);
+      const reused = await this.reuseBackfillProposal(db, identity, projectId, bindingId, channelId, key, fingerprint, planner);
       if (reused) return reused;
 
       const operation = await new ProjectOperationService(db).create(identity, projectId, {
@@ -160,7 +185,7 @@ export class ProjectSourceProposalService {
         progress: { idempotency: { key, fingerprint } },
         steps: [{ title: "Review import plan" }, { title: "Import history" }],
       });
-      const plan = await planner.create(identity, connectionId, {
+      const plan = await planner.create(identity, channelId, {
         ...request,
         strategy: preview.strategy,
         quota_policy: preview.quota_policy,
@@ -168,7 +193,7 @@ export class ProjectSourceProposalService {
         project_source_binding_id: bindingId,
         project_operation_id: operation.id,
       });
-      const proposed = await planner.proposeStart(identity, connectionId, requiredString(plan.id, "source_backfill_plan_id"), { projectId });
+      const proposed = await planner.proposeStart(identity, channelId, requiredString(plan.id, "source_backfill_plan_id"), { projectId });
       await new ProjectOperationService(db).link(identity.spaceId, projectId, operation.id, "proposal", proposed.proposal.id, "backfill_approval");
       return { operation, plan, proposal: proposed.proposal };
     });
@@ -189,7 +214,7 @@ export class ProjectSourceProposalService {
     identity: SpaceUserIdentity,
     projectId: string,
     bindingId: string,
-    connectionId: string,
+    channelId: string,
     key: string,
     fingerprint: string,
     planner: SourceBackfillPlanningService,
@@ -216,13 +241,13 @@ export class ProjectSourceProposalService {
       [row.project_operation_id, identity.spaceId, projectId],
     );
     const priorFingerprint = priorOperation.rows[0]
-      ? fingerprintOf({ binding_id: bindingId, source_connection_id: connectionId, title: priorOperation.rows[0].title, strategy: row.strategy_json, quota_policy: row.quota_policy_json })
+      ? fingerprintOf({ binding_id: bindingId, source_channel_id: channelId, title: priorOperation.rows[0].title, strategy: row.strategy_json, quota_policy: row.quota_policy_json })
       : null;
     if (!priorOperation.rows[0] || priorFingerprint !== fingerprint) {
       throw new HttpError(409, "idempotency_key is already used with different backfill parameters or Project scope");
     }
     const operation = await new ProjectOperationService(db).get(identity, projectId, row.project_operation_id);
-    const plan = await planner.get(identity, connectionId, row.id);
+    const plan = await planner.get(identity, channelId, row.id);
     const proposal = await db.query(`SELECT * FROM proposals WHERE id=$1 AND space_id=$2 AND project_id=$3`, [row.proposal_id, identity.spaceId, projectId]);
     if (!proposal.rows[0]) throw new HttpError(409, "Existing backfill proposal is missing or belongs to another Project");
     await new ProjectOperationService(db).link(identity.spaceId, projectId, row.project_operation_id, "proposal", row.proposal_id, "backfill_approval");
@@ -244,14 +269,20 @@ async function loadSourceSetupBundle(db: Queryable, identity: SpaceUserIdentity,
   const proposalRows = await db.query(`SELECT * FROM proposals WHERE space_id=$1 AND id=ANY($2::text[])`, [identity.spaceId, [source.proposal_id, binding.proposal_id]]);
   const proposals = new Map(proposalRows.rows.map((row: Record<string, unknown>) => [row.id, row]));
 
-  const connectionId = source.payload_json.source_connection_id;
-  if (typeof connectionId !== "string") throw new HttpError(409, "Existing source setup operation has no source draft");
-  const connection = await db.query(`SELECT * FROM source_connections WHERE id=$1 AND space_id=$2`, [connectionId, identity.spaceId]);
-  if (!connection.rows[0]) throw new HttpError(409, "Existing source setup draft is missing");
+  const channelId = source.payload_json.source_channel_id;
+  if (typeof channelId !== "string") throw new HttpError(409, "Existing source setup operation has no source channel draft");
+  const channel = await db.query(
+    `SELECT ch.*, sc.status AS connection_status, sc.provider_connector_id
+       FROM source_channels ch
+       JOIN source_connections sc ON sc.id=ch.source_connection_id AND sc.space_id=ch.space_id
+      WHERE ch.id=$1 AND ch.space_id=$2`,
+    [channelId, identity.spaceId],
+  );
+  if (!channel.rows[0]) throw new HttpError(409, "Existing source setup channel draft is missing");
 
   return {
     operation: await new ProjectOperationService(db).get(identity, projectId, operationId),
-    connection_draft: connection.rows[0],
+    channel_draft: channel.rows[0],
     source_proposal: proposals.get(source.proposal_id),
     binding_proposal: proposals.get(binding.proposal_id),
   };

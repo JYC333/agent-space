@@ -4,12 +4,13 @@ import { users } from "./auth";
 import { spaces } from "./spaces";
 import { projects } from "./projects";
 import { sourceConnections, sourceItems } from "./sources";
+import { sourceChannels } from "./sourceChannels";
 
 export const projectSourceBindings = pgTable("project_source_bindings", {
 	id: varchar({ length: 36 }).primaryKey().notNull(),
 	spaceId: varchar("space_id", { length: 36 }).notNull(),
 	projectId: varchar("project_id", { length: 36 }).notNull(),
-	sourceConnectionId: varchar("source_connection_id", { length: 36 }).notNull(),
+	sourceChannelId: varchar("source_channel_id", { length: 36 }).notNull(),
 	bindingKey: varchar("binding_key", { length: 128 }).default('default').notNull(),
 	status: varchar({ length: 32 }).notNull(),
 	priority: integer().notNull(),
@@ -24,7 +25,7 @@ export const projectSourceBindings = pgTable("project_source_bindings", {
 }, (table): PgTableExtraConfigValue[] => [
 	index("ix_project_source_bindings_created_by_user_id").using("btree", table.createdByUserId.asc().nullsLast()),
 	index("ix_project_source_bindings_project_id").using("btree", table.projectId.asc().nullsLast()),
-	index("ix_project_source_bindings_source_connection_id").using("btree", table.sourceConnectionId.asc().nullsLast()),
+	index("ix_project_source_bindings_source_channel_id").using("btree", table.sourceChannelId.asc().nullsLast()),
 	index("ix_project_source_bindings_space_id").using("btree", table.spaceId.asc().nullsLast()),
 	index("ix_project_source_bindings_status").using("btree", table.status.asc().nullsLast()),
 	unique("uq_project_source_bindings_id_space_id").on(table.id, table.spaceId),
@@ -39,16 +40,16 @@ export const projectSourceBindings = pgTable("project_source_bindings", {
 			name: "project_source_bindings_project_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.sourceConnectionId],
-			foreignColumns: [sourceConnections.id],
-			name: "project_source_bindings_source_connection_id_fkey"
+			columns: [table.sourceChannelId, table.spaceId],
+			foreignColumns: [sourceChannels.id, sourceChannels.spaceId],
+			name: "project_source_bindings_source_channel_id_fkey"
 		}),
 	foreignKey({
 			columns: [table.spaceId],
 			foreignColumns: [spaces.id],
 			name: "project_source_bindings_space_id_fkey"
 		}),
-	unique("uq_project_source_bindings_project_connection").on(table.bindingKey, table.projectId, table.sourceConnectionId, table.spaceId),
+	unique("uq_project_source_bindings_project_channel").on(table.bindingKey, table.projectId, table.sourceChannelId, table.spaceId),
 	check("ck_project_source_bindings_delivery_scope", sql`(delivery_scope)::text = ANY (ARRAY[('project_members'::character varying)::text, ('source_subscribers'::character varying)::text])`),
 	check("ck_project_source_bindings_status", sql`(status)::text = ANY (ARRAY[('active'::character varying)::text, ('paused'::character varying)::text, ('archived'::character varying)::text])`),
 ]);
@@ -58,6 +59,7 @@ export const projectSourceItemLinks = pgTable("project_source_item_links", {
 	spaceId: varchar("space_id", { length: 36 }).notNull(),
 	projectId: varchar("project_id", { length: 36 }).notNull(),
 	projectSourceBindingId: varchar("project_source_binding_id", { length: 36 }).notNull(),
+	sourceChannelId: varchar("source_channel_id", { length: 36 }),
 	sourceConnectionId: varchar("source_connection_id", { length: 36 }),
 	sourceItemId: varchar("source_item_id", { length: 36 }).notNull(),
 	status: varchar({ length: 32 }).default('active').notNull(),
@@ -69,6 +71,7 @@ export const projectSourceItemLinks = pgTable("project_source_item_links", {
 	index("ix_project_source_item_links_binding_id").using("btree", table.projectSourceBindingId.asc().nullsLast()),
 	index("ix_project_source_item_links_matched_at").using("btree", table.matchedAt.asc().nullsLast()),
 	index("ix_project_source_item_links_project_id").using("btree", table.projectId.asc().nullsLast()),
+	index("ix_project_source_item_links_source_channel_id").using("btree", table.sourceChannelId.asc().nullsLast()),
 	index("ix_project_source_item_links_source_connection_id").using("btree", table.sourceConnectionId.asc().nullsLast()),
 	index("ix_project_source_item_links_source_item_id").using("btree", table.sourceItemId.asc().nullsLast()),
 	index("ix_project_source_item_links_status").using("btree", table.status.asc().nullsLast()),
@@ -86,6 +89,11 @@ export const projectSourceItemLinks = pgTable("project_source_item_links", {
 			columns: [table.sourceConnectionId],
 			foreignColumns: [sourceConnections.id],
 			name: "project_source_item_links_source_connection_id_fkey"
+		}),
+	foreignKey({
+			columns: [table.sourceChannelId, table.spaceId],
+			foreignColumns: [sourceChannels.id, sourceChannels.spaceId],
+			name: "project_source_item_links_source_channel_id_fkey"
 		}),
 	foreignKey({
 			columns: [table.sourceItemId],

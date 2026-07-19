@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Queryable, SpaceUserIdentity } from "../routeUtils/common";
-import { HttpError } from "../routeUtils/common";
+import { HttpError, withQueryableTransaction } from "../routeUtils/common";
 import { PgJobQueueRepository } from "../jobs/repository";
 import { PgRunRepository } from "../runs/repository";
 import { assertBudgetSourcesAvailable } from "../runs/budgetEnforcement";
@@ -8,6 +8,8 @@ import type { RunBudgetSource } from "../runs/contractSnapshot";
 import { materializePlanGraph, type MaterializedPlanGraph } from "../plans/graph";
 import type { AutomationRow } from "./repository";
 import { ExecutionGraphScheduler } from "../execution/executionGraphScheduler";
+import { InputBindingResolutionError, resolveNodeInputs } from "../execution/nodeInputResolver";
+import type { WorkflowNodeInputBinding } from "@agent-space/protocol" with { "resolution-mode": "import" };
 
 export interface ResolvedWorkflowExecutionTarget {
   versionId: string;
@@ -52,7 +54,7 @@ export class WorkflowExecutionService {
         JSON.stringify(input.inputJson), JSON.stringify(input.target.contentJson), JSON.stringify(input.target.resolutionTrace),
         JSON.stringify(automationContractSnapshot(input.automation)), JSON.stringify({ sources: input.budgetSources }), now],
     );
-    const root = await new PgRunRepository(input.db).createQueuedRun({
+    const root = await new PgRunRepository(input.db).createCoordinatorRun({
       agent_id: input.automation.agent_id,
       space_id: input.identity.spaceId,
       user_id: input.identity.userId,
@@ -81,6 +83,11 @@ export class WorkflowExecutionService {
   }
 
   async reconcile(client: Queryable, spaceId: string, executionId: string, userId: string): Promise<Record<string, unknown>> {
+    return withQueryableTransaction(client, (transaction) =>
+      this.reconcileLocked(transaction, spaceId, executionId, userId));
+  }
+
+  private async reconcileLocked(client: Queryable, spaceId: string, executionId: string, userId: string): Promise<Record<string, unknown>> {
     const result = await client.query<{
       id: string; automation_id: string; workflow_version_id: string; root_run_id: string | null;
       status: string; input_json: Record<string, unknown>; definition_json: unknown; resolution_trace_json: string[];
@@ -169,10 +176,12 @@ export class WorkflowExecutionService {
       id: string; node_key: string; node_kind: string; title: string; description: string | null;
       status: string; assigned_agent_id: string | null; runtime_profile_id: string | null;
       capability_id: string | null; contract_json: Record<string, unknown>; metadata_json: Record<string, unknown>;
+      input_bindings_json: WorkflowNodeInputBinding[];
       depends_on: string[]; approval_proposal_id: string | null;
     }>(
       `SELECT n.id, n.node_key, n.node_kind, n.title, n.description, n.status,
               n.assigned_agent_id, n.runtime_profile_id, n.capability_id, n.contract_json,
+              n.input_bindings_json,
               n.metadata_json, n.approval_proposal_id,
               COALESCE(array_agg(d.depends_on_node_id) FILTER (WHERE d.depends_on_node_id IS NOT NULL), ARRAY[]::varchar[]) AS depends_on
          FROM workflow_execution_nodes n
@@ -215,6 +224,27 @@ export class WorkflowExecutionService {
         continue;
       }
       const childAgentId = node.assigned_agent_id ?? input.automation.agent_id;
+      let resolvedInputs;
+      try {
+        resolvedInputs = await resolveNodeInputs(input.db, {
+          spaceId: input.identity.spaceId,
+          bindings: node.input_bindings_json,
+          sourceTable: "workflow_execution_nodes",
+          linkTable: "workflow_execution_node_runs",
+          linkNodeColumn: "node_id",
+          scopeColumn: "execution_id",
+          scopeId: context.executionId,
+        });
+      } catch (error) {
+        if (!(error instanceof InputBindingResolutionError)) throw error;
+        const now = new Date().toISOString();
+        await input.db.query(
+          `UPDATE workflow_execution_nodes SET status = 'failed', blocked_reason = $3, updated_at = $4 WHERE id = $1 AND space_id = $2`,
+          [node.id, input.identity.spaceId, `input_binding_unresolved:${error.bindingName}:${error.reason}`, now],
+        );
+        scheduled.push(node.id);
+        continue;
+      }
       const child = await new PgRunRepository(input.db).createQueuedRun({
         agent_id: childAgentId,
         space_id: input.identity.spaceId,
@@ -231,6 +261,7 @@ export class WorkflowExecutionService {
         runtime_profile_id: node.runtime_profile_id,
         runtime_profile_selection_source: node.runtime_profile_id ? "explicit" : "default",
         capability_id: node.capability_id,
+        context_artifact_ids: resolvedInputs.contextArtifactIds,
         workflow_version_id: input.target.versionId,
         contract_snapshot: {
           source: { kind: "workflow", id: input.target.versionId },
@@ -239,11 +270,12 @@ export class WorkflowExecutionService {
           ...workflowContract(node.contract_json),
           budget_sources: input.budgetSources,
           workflow_input_json: input.inputJson,
+          upstream_inputs_json: resolvedInputs,
           route_hints_json: { workflow_execution_id: context.executionId, node_id: node.id, node_key: node.node_key },
         },
       });
       const now = new Date().toISOString();
-      await input.db.query(`INSERT INTO workflow_execution_node_runs (id, space_id, node_id, run_id, role, created_at) VALUES ($1, $2, $3, $4, 'primary', $5)`, [randomUUID(), input.identity.spaceId, node.id, child.id, now]);
+      await input.db.query(`INSERT INTO workflow_execution_node_runs (id, space_id, node_id, run_id, role, resolved_inputs_json, created_at) VALUES ($1, $2, $3, $4, 'primary', $5::jsonb, $6)`, [randomUUID(), input.identity.spaceId, node.id, child.id, JSON.stringify(resolvedInputs), now]);
       await input.db.query(`UPDATE workflow_execution_nodes SET status = 'in_progress', updated_at = $3 WHERE id = $1 AND space_id = $2`, [node.id, input.identity.spaceId, now]);
       await queue.enqueue({ job_type: "agent_run", space_id: input.identity.spaceId, user_id: input.identity.userId, agent_id: childAgentId, workspace_id: input.automation.workspace_id, payload: { run_id: child.id, workflow_execution_id: context.executionId, workflow_execution_node_id: node.id } });
       scheduled.push(node.id);
@@ -290,7 +322,7 @@ async function finishWorkflowExecution(client: Queryable, spaceId: string, execu
   const now = new Date().toISOString();
   await client.query(`UPDATE workflow_executions SET status = $3, ended_at = $4, updated_at = $4 WHERE space_id = $1 AND id = $2`, [spaceId, executionId, status === "succeeded" ? "completed" : "failed", now]);
   if (!rootRunId) return;
-  await new PgRunRepository(client).markRunTerminal({ run_id: rootRunId, space_id: spaceId, status, output_text: summary, output_json: { workflow_execution_id: executionId, coordinator: true, summary }, error_json: status === "failed" ? { error_code: "workflow_node_failed", error_text: summary } : {}, exit_code: status === "failed" ? 1 : 0, completed_at: now, usage_json: {} });
+  await new PgRunRepository(client).markRunTerminal({ run_id: rootRunId, space_id: spaceId, status, output_text: summary, output_json: { workflow_execution_id: executionId, coordinator: true, summary }, error_json: status === "failed" ? { error_code: "workflow_node_failed", error_text: summary } : {}, exit_code: status === "failed" ? 1 : 0, completed_at: now });
 }
 
 function budgetSourcesFromSnapshot(value: unknown): RunBudgetSource[] {
@@ -307,9 +339,9 @@ async function insertWorkflowNodes(client: Queryable, spaceId: string, execution
       `INSERT INTO workflow_execution_nodes (
          id, space_id, execution_id, node_key, node_kind, title, description, status,
          assigned_agent_id, runtime_profile_id, capability_id, prompt_asset_key, risk_level,
-         contract_json, metadata_json, created_at, updated_at
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'inbox', $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, $15, $15)`,
-      [id, spaceId, executionId, node.key, node.kind, node.title, node.description, node.agentId, node.runtimeProfileId, node.capabilityId, node.promptAssetKey, stringValue(node.contractJson.risk_level) ?? "low", JSON.stringify({ ...node.contractJson, verification_recipe_refs: node.verificationRecipeRefs }), JSON.stringify(node.metadataJson), now],
+         contract_json, input_bindings_json, metadata_json, created_at, updated_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'inbox', $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, $15::jsonb, $16, $16)`,
+      [id, spaceId, executionId, node.key, node.kind, node.title, node.description, node.agentId, node.runtimeProfileId, node.capabilityId, node.promptAssetKey, stringValue(node.contractJson.risk_level) ?? "low", JSON.stringify({ ...node.contractJson, verification_recipe_refs: node.verificationRecipeRefs }), JSON.stringify(node.inputBindings), JSON.stringify(node.metadataJson), now],
     );
   }
   for (const node of graph.nodes) {

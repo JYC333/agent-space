@@ -8,11 +8,29 @@
 CREATE TABLE public.source_connections (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
+    provider_connector_id character varying(36) DEFAULT 'mapping-test'::character varying NOT NULL,
     owner_user_id character varying(36),
     visibility character varying(32) DEFAULT 'space_shared' NOT NULL,
     access_level character varying(16) DEFAULT 'full' NOT NULL,
     last_handler_run_id character varying(36),
     CONSTRAINT source_connections_pkey PRIMARY KEY (id)
+);
+
+CREATE TABLE public.source_channels (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    source_connection_id character varying(36) NOT NULL,
+    status character varying(32) NOT NULL DEFAULT 'active',
+    CONSTRAINT source_channels_pkey PRIMARY KEY (id)
+);
+
+CREATE TABLE public.source_channel_item_links (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    source_channel_id character varying(36) NOT NULL,
+    source_item_id character varying(36) NOT NULL,
+    status character varying(32) NOT NULL DEFAULT 'active',
+    CONSTRAINT source_channel_item_links_pkey PRIMARY KEY (id)
 );
 
 -- Minimal spaces table for the canonical content-access oversight branch
@@ -189,6 +207,7 @@ CREATE TABLE public.project_source_bindings (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
     project_id character varying(36) NOT NULL,
+    source_channel_id character varying(36),
     source_connection_id character varying(36) NOT NULL,
     binding_key character varying(128) DEFAULT 'default'::character varying NOT NULL,
     status character varying(32) NOT NULL,
@@ -209,6 +228,7 @@ CREATE TABLE public.project_source_item_links (
     space_id character varying(36) NOT NULL,
     project_id character varying(36) NOT NULL,
     project_source_binding_id character varying(36) NOT NULL,
+    source_channel_id character varying(36),
     source_connection_id character varying(36),
     source_item_id character varying(36) NOT NULL,
     status character varying(32) DEFAULT 'active'::character varying NOT NULL,

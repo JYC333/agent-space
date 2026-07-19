@@ -37,7 +37,7 @@ type BriefingDecision = SourcePostProcessingBriefingDetail['item_decisions'][num
 function makeDecision(overrides: Partial<BriefingDecision> & Pick<BriefingDecision, 'id' | 'source_item_id' | 'relevance'>): BriefingDecision {
   return {
     space_id: 'space-1',
-    source_connection_id: 'conn-1',
+    source_channel_id: 'channel-1',
     rule_id: 'rule-1',
     run_id: 'run-1',
     project_id: null,
@@ -67,7 +67,7 @@ function makeDecision(overrides: Partial<BriefingDecision> & Pick<BriefingDecisi
 describe('LibraryDetailPage', () => {
   it('renders the digest markdown and item decisions grouped by relevance', async () => {
     vi.mocked(sourcesApi.briefing).mockResolvedValue({
-      source_connection_id: 'conn-1',
+      source_channel_id: 'channel-1',
       connection_name: 'arXiv: 3dgs',
       project_id: null,
       date: '2026-07-07',
@@ -80,7 +80,7 @@ describe('LibraryDetailPage', () => {
         {
           id: 'decision-1',
           space_id: 'space-1',
-          source_connection_id: 'conn-1',
+          source_channel_id: 'channel-1',
           rule_id: 'rule-1',
           run_id: 'run-1',
           project_id: null,
@@ -109,7 +109,7 @@ describe('LibraryDetailPage', () => {
         {
           id: 'decision-2',
           space_id: 'space-1',
-          source_connection_id: 'conn-1',
+          source_channel_id: 'channel-1',
           rule_id: 'rule-1',
           run_id: 'run-1',
           project_id: null,
@@ -163,7 +163,7 @@ describe('LibraryDetailPage', () => {
 
   it('deduplicates repeated item decisions in the same order used by reader next and previous links', async () => {
     vi.mocked(sourcesApi.briefing).mockResolvedValue({
-      source_connection_id: 'conn-1',
+      source_channel_id: 'channel-1',
       connection_name: 'arXiv: 3dgs',
       project_id: null,
       date: '2026-07-07',

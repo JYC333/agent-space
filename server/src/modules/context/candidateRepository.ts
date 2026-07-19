@@ -279,6 +279,14 @@ export class PgChatCandidateRepository {
     }));
   }
 
+  async selectResearchNotebookSections(spaceId: string, projectId: string, limit: number): Promise<CandidateRow[]> {
+    const result = await this.db.query<{ id: string; section_key: string; normalized_text: string }>(
+      `SELECT s.id,s.section_key,s.normalized_text FROM research_notebook_sections s JOIN research_notebooks n ON n.id=s.notebook_id WHERE n.space_id=$1 AND n.project_id=$2 AND s.normalized_text<>'' ORDER BY CASE s.section_key WHEN 'understanding' THEN 1 WHEN 'questions' THEN 2 WHEN 'ideas' THEN 3 ELSE 4 END LIMIT ${clampLimit(limit)}`,
+      [spaceId, projectId],
+    );
+    return result.rows.map((row) => ({ item_id: row.id, title: `Research notebook · ${row.section_key}`, text: row.normalized_text, source_connection_ids: [] }));
+  }
+
   /** Recent activity records readable by the given user. */
   async selectActivityRecords(
     spaceId: string,

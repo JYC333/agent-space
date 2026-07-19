@@ -298,20 +298,20 @@ const customSourceRepairActivation = z
   })
   .passthrough();
 
-const sourceConnectionCreate = z.object({
-  proposal_type: z.literal("source_connection_create"),
-  source_connection_id: z.string().min(1),
+const sourceChannelActivation = z.object({
+  proposal_type: z.literal("source_channel_activation"),
+  source_channel_id: z.string().min(1),
   draft_updated_at: z.string().min(1),
-  action_id: z.literal("source.connection.propose_create"),
+  action_id: z.literal("source.channel.propose_activation"),
 }).passthrough();
 
 const projectSourceBind = z.object({
   proposal_type: z.literal("project_source_bind"),
   project_id: z.string().min(1),
-  source_connection_id: z.string().min(1),
+  source_channel_id: z.string().min(1),
   action_id: z.literal("project.source.propose_bind"),
 }).passthrough();
-const sourceBackfillStart = z.object({ proposal_type:z.literal("source_backfill_start"),action_id:z.literal("source.backfill.propose_start"),source_connection_id:z.string().min(1),source_backfill_plan_id:z.string().min(1),strategy_json:z.record(z.unknown()),quota_policy_json:z.record(z.unknown()) }).passthrough();
+const sourceBackfillStart = z.object({ proposal_type:z.literal("source_backfill_start"),action_id:z.literal("source.backfill.propose_start"),source_channel_id:z.string().min(1),source_backfill_plan_id:z.string().min(1),strategy_json:z.record(z.unknown()),quota_policy_json:z.record(z.unknown()) }).passthrough();
 
 const evolvableAssetVersionPromote = z
   .object({
@@ -382,7 +382,7 @@ export const ProposalPayloadSchema = z.discriminatedUnion("proposal_type", [
   customSourcePolicyDelta,
   customSourceCredentialedSource,
   customSourceRepairActivation,
-  sourceConnectionCreate,
+  sourceChannelActivation,
   projectSourceBind,
   sourceBackfillStart,
   sourceRecipeActivation,

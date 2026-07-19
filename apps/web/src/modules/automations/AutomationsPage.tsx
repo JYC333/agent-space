@@ -63,11 +63,15 @@ function defaultName(target: AutomationTargetType): string {
   return 'Automation'
 }
 
+function isAutomationOut(value: unknown): value is AutomationOut {
+  return Boolean(value && typeof value === 'object' && 'id' in value && 'name' in value && 'status' in value)
+}
+
 function AddAutomationForm({ agents, projects, workflowAssets, onAdded, canCreate }: {
   agents: AgentOut[]
   projects: Project[]
   workflowAssets: EvolvableAsset[]
-  onAdded: () => void
+  onAdded: (automation: AutomationOut) => void
   canCreate: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
@@ -146,7 +150,7 @@ function AddAutomationForm({ agents, projects, workflowAssets, onAdded, canCreat
 
     setSaving(true)
     try {
-      await automationsApi.create({
+      const automation = await automationsApi.create({
         name: name.trim() || defaultName(targetType),
         agent_id: agentId,
         project_id: (targetType === 'agent_run' || targetType === 'workflow') && projectId ? projectId : undefined,
@@ -155,7 +159,7 @@ function AddAutomationForm({ agents, projects, workflowAssets, onAdded, canCreat
       })
       toast.success('Automation created')
       reset()
-      onAdded()
+      onAdded(automation)
     } catch (err) {
       toast.error(errMsg(err))
     } finally {
@@ -307,7 +311,7 @@ function AutomationCard({ auto, agentName, projectName, projects, onChanged }: {
   agentName: string
   projectName: string | null
   projects: Project[]
-  onChanged: () => void
+  onChanged: (updated?: AutomationOut) => void
 }) {
   const [busy, setBusy] = useState(false)
   const [projectDraft, setProjectDraft] = useState(auto.project_id ?? '')
@@ -330,7 +334,11 @@ function AutomationCard({ auto, agentName, projectName, projects, onChanged }: {
 
   async function act(fn: () => Promise<unknown>, ok: string) {
     setBusy(true)
-    try { await fn(); toast.success(ok); onChanged() }
+    try {
+      const result = await fn()
+      toast.success(ok)
+      onChanged(isAutomationOut(result) ? result : undefined)
+    }
     catch (err) { toast.error(errMsg(err)) }
     finally { setBusy(false) }
   }
@@ -338,9 +346,9 @@ function AutomationCard({ auto, agentName, projectName, projects, onChanged }: {
   async function saveProjectBinding() {
     setSavingProject(true)
     try {
-      await automationsApi.update(auto.id, { project_id: projectDraft || null })
+      const updated = await automationsApi.update(auto.id, { project_id: projectDraft || null })
       toast.success(projectDraft ? 'Project binding updated' : 'Project binding cleared')
-      onChanged()
+      onChanged(updated)
     } catch (err) {
       toast.error(errMsg(err))
     } finally {
@@ -463,6 +471,22 @@ export default function AutomationsPage() {
   const [loading, setLoading] = useState(true)
   const headingId = useId()
 
+  function upsertAutomation(automation: AutomationOut) {
+    setAutos(current => {
+      const existing = current.findIndex(item => item.id === automation.id)
+      if (existing === -1) return [automation, ...current]
+      return current.map(item => item.id === automation.id ? automation : item)
+    })
+  }
+
+  async function refreshAutomation(id: string) {
+    try {
+      upsertAutomation(await automationsApi.get(id))
+    } catch (error) {
+      toast.error(errMsg(error))
+    }
+  }
+
   useEffect(() => { loadAll() }, [activeSpaceId])
 
   async function loadAll() {
@@ -509,7 +533,7 @@ export default function AutomationsPage() {
         </div>
       ) : (
         <div className="space-y-4">
-          <AddAutomationForm agents={agents} projects={projects} workflowAssets={workflowAssets} onAdded={loadAll} canCreate={Boolean(activeSpaceId)} />
+          <AddAutomationForm agents={agents} projects={projects} workflowAssets={workflowAssets} onAdded={upsertAutomation} canCreate={Boolean(activeSpaceId)} />
           {visible.length === 0 ? (
             <Card>
               <p className="text-sm text-muted-foreground p-4">
@@ -520,7 +544,14 @@ export default function AutomationsPage() {
             </Card>
           ) : (
             visible.map(a => (
-              <AutomationCard key={a.id} auto={a} agentName={agentName(a.agent_id)} projectName={projectName(a.project_id)} projects={projects} onChanged={loadAll} />
+              <AutomationCard
+                key={a.id}
+                auto={a}
+                agentName={agentName(a.agent_id)}
+                projectName={projectName(a.project_id)}
+                projects={projects}
+                onChanged={updated => updated ? upsertAutomation(updated) : void refreshAutomation(a.id)}
+              />
             ))
           )}
         </div>

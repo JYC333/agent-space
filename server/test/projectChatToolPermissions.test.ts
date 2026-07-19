@@ -14,7 +14,7 @@ describe("Project Chat tool permissions",()=>{
     expect(filterGenericActionCapabilities(requested,permissions)).toEqual(["project.source.propose_bind"]);
   });
   it("publishes required model fields for proposal tools",()=>{
-    expect(proposalActionJsonSchema("project.source.propose_bind")).toMatchObject({required:["source_connection_id"]});
-    expect(proposalActionJsonSchema("source.backfill.propose_start")).toMatchObject({required:["source_connection_id","source_backfill_plan_id"]});
+    expect(proposalActionJsonSchema("project.source.propose_bind")).toMatchObject({required:["source_channel_id"]});
+    expect(proposalActionJsonSchema("source.backfill.propose_start")).toMatchObject({required:["source_channel_id","source_backfill_plan_id"]});
   });
 });

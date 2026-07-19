@@ -17,10 +17,13 @@ interface SelectProps {
   dropUp?: boolean
   disabled?: boolean
   ariaLabel?: string
+  /** Render inside the current stacking context. Useful for modal dialogs. */
+  portal?: boolean
 }
 
-export function Select({ options, value, onChange, className, size = 'md', dropUp = false, disabled = false, ariaLabel }: SelectProps) {
+export function Select({ options, value, onChange, className, size = 'md', dropUp = false, disabled = false, ariaLabel, portal = true }: SelectProps) {
   const [open, setOpen] = useState(false)
+  const [insideDialog, setInsideDialog] = useState(false)
   const triggerRef = useRef<HTMLDivElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const listboxId = useId()
@@ -38,7 +41,11 @@ export function Select({ options, value, onChange, className, size = 'md', dropU
   }, [])
 
   useLayoutEffect(() => {
-    if (!open) return undefined
+    if (!open) {
+      setInsideDialog(false)
+      return undefined
+    }
+    setInsideDialog(Boolean(triggerRef.current?.closest('[role="dialog"]')))
     function updatePosition() {
       const trigger = triggerRef.current
       if (!trigger) return
@@ -71,6 +78,40 @@ export function Select({ options, value, onChange, className, size = 'md', dropU
   }, [dropUp, open])
 
   const h = size === 'sm' ? 'h-7' : 'h-9'
+  const renderInPlace = !portal || insideDialog
+  const menu = (
+    <div
+      ref={menuRef}
+      id={listboxId}
+      role="listbox"
+      style={renderInPlace ? { maxHeight: 'min(18rem, 40vh)' } : menuStyle ?? undefined}
+      className={cn(
+        'z-[1000] overflow-auto rounded-lg border border-border bg-card shadow-md',
+        renderInPlace
+          ? ['absolute left-0 right-0', dropUp ? 'bottom-full mb-1' : 'top-full mt-1']
+          : 'fixed',
+      )}
+    >
+      {options.map(opt => (
+        <button
+          key={opt.value}
+          type="button"
+          role="option"
+          aria-selected={opt.value === value}
+          onClick={() => { onChange(opt.value); setOpen(false) }}
+          className={cn(
+            'flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors',
+            opt.value === value
+              ? 'text-foreground bg-accent'
+              : 'text-muted-foreground hover:text-foreground hover:bg-accent',
+          )}
+        >
+          <span className="flex-1 truncate">{opt.label}</span>
+          {opt.value === value && <Check size={12} className="shrink-0 text-accent-foreground" />}
+        </button>
+      ))}
+    </div>
+  )
 
   return (
     <div className={cn('relative', className)} ref={triggerRef}>
@@ -93,35 +134,7 @@ export function Select({ options, value, onChange, className, size = 'md', dropU
         <ChevronDown size={13} className="shrink-0 text-muted-foreground" />
       </button>
 
-      {open && !disabled && menuStyle && createPortal(
-        <div
-          ref={menuRef}
-          id={listboxId}
-          role="listbox"
-          style={menuStyle}
-          className="fixed z-[1000] overflow-auto rounded-lg border border-border bg-card shadow-md"
-        >
-          {options.map(opt => (
-            <button
-              key={opt.value}
-              type="button"
-              role="option"
-              aria-selected={opt.value === value}
-              onClick={() => { onChange(opt.value); setOpen(false) }}
-              className={cn(
-                'flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors',
-                opt.value === value
-                  ? 'text-foreground bg-accent'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-accent',
-              )}
-            >
-              <span className="flex-1 truncate">{opt.label}</span>
-              {opt.value === value && <Check size={12} className="shrink-0 text-accent-foreground" />}
-            </button>
-          ))}
-        </div>,
-        document.body,
-      )}
+      {open && !disabled && (renderInPlace ? menu : menuStyle ? createPortal(menu, document.body) : null)}
     </div>
   )
 }

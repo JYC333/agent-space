@@ -2,7 +2,8 @@
 
 ## Status
 
-Implemented for built-in RSS, Atom, web page, arXiv (Academic source preset
+Implemented for built-in RSS, Atom, watched web page, arXiv, OpenAlex,
+Semantic Scholar, and credentialed Brave Web Search providers
 with HTML-first extraction), manual URL, candidate evidence,
 reader, structured reader document extraction, workspace/project routing flows,
 Level 2 Source Recipe creation through Phase 8, and the Custom Source backend
@@ -26,9 +27,11 @@ normalizes, extracts, snapshots, and links candidate material while preserving
 proposal gates for durable writes.
 
 The frontend module id is `sources`, the route is `/sources`, and API paths use
-`/api/v1/sources/*`. Sources owns source pipeline configuration (connections,
-scan schedules, screening rules), recommendation/subscription state, and
-delivery permissions; it does not own the reading experience. Reading
+`/api/v1/sources/*`. Sources owns the user-facing Source configuration
+(external origins) and their Monitors (provider searches, feed subscriptions,
+and page rules), backed internally by Connections and Source Channels. It owns scan schedules, screening rules,
+recommendation/subscription state, and delivery permissions; it does not own
+the reading experience. Reading
 Sources-derived content (item streams, item full-text plus annotations, digests,
 screened items) lives in the separate Library module (`/library`):
 `apps/web/src/modules/library/LibraryItemReaderPage.tsx` is the single-item
@@ -37,7 +40,14 @@ reader, gaining prev/next across a day's briefing items when reached from
 `/library/items/:itemId` route with no day context. The shared
 annotation/inspector/selection-toolbar capability components live under
 `apps/web/src/components/reader/` so Library does not import UI from
-`modules/sources`.
+`modules/sources`. Sources supplies a permission- and consent-aware document
+resolver to the independent Reader backend; it does not own Reader routes or
+annotation persistence.
+
+Project Sources is likewise an acquisition/control-plane surface: it binds
+Sources, displays health, runs scans/backfills, and synchronizes the Project
+Corpus. Article-level triage/read review and WHY/HOW/WHAT cards live in the
+Project Research Workspace Reading List, not on the Project Sources page.
 
 The normal Sources frontend should not render source item feeds, extracted
 evidence feeds, or run-history tables. It may show scan/configuration status
@@ -46,14 +56,18 @@ for jobs, rules, and troubleshooting.
 
 ## Owns
 
-- Source connector catalog for source connectors.
+- Source Provider, Connector, and Provider–Connector catalog mapping. Connector
+  implementations are system-published; Instance Admin only controls status
+  and priority.
 - Space-scoped `SourceConnection` configuration, consent, policy, trust, and
-  scan behavior. Scheduler cursor/state for scans is stored as
-  `source_connection_scan` rows in `scheduler_tasks`; recurring source scan
-  rules live on `source_connections.schedule_rule_json`.
-- Source connection ownership, visibility, and per-user delivery state:
-  `source_connections.owner_user_id`, `source_connections.visibility`, and
-  `source_connection_user_subscriptions`.
+  transport/handler provenance. Connection does not own query or scheduling.
+- User-facing Sources and their Monitors. A Monitor is backed by a
+  `SourceChannel` query, endpoint, fingerprint, schedule, and subscription.
+  Channel is an internal execution boundary, not a required user-facing term.
+  Scheduler cursor/watermark/
+  conditional-fetch state is stored in the Channel's `scheduler_tasks.metadata_json`.
+- `SourceChannelItemLink`, which preserves every channel hit for a globally
+  deduplicated `SourceItem`.
 - `SourceItem` candidate records.
 - `ExtractionJob` scan, extraction, snapshot, manual URL, and normalization
   jobs.
@@ -83,6 +97,9 @@ for jobs, rules, and troubleshooting.
 - Capability marketplace.
 - General plugin marketplace.
 - Credential storage.
+- Project Research notebooks, paper cards, checklist items, or their proposal
+  appliers. Sources only invokes the workspace card materializer after a
+  successful project-bound deep-analysis run.
 
 ## Current Implementation
 
@@ -97,40 +114,96 @@ pauses a plan until `next_eligible_at`; the Sources scheduler reconciles
 completed extraction jobs and resumes eligible plans. Project-initiated plans
 may link to a ProjectOperation for product-level progress.
 
+For the Academic Research initial literature intake, an arXiv date window is a logical segment,
+not one API page. The extraction worker keeps paging at 100 items, persists the
+page cursor and cumulative segment count, and marks a segment exhausted only
+after a short page. Reaching the operation's `max_items` budget is recorded as
+`partial` and requires the user to explicitly raise the item limit in Project
+Settings before resuming; recovery actions never allocate a default budget. It
+is never reported as an exhausted historical range. Each request records the selected
+`submittedDate` or `lastUpdatedDate` field, while arXiv id/DOI dedupe remains
+in the normal item materialization path. For Project Research, the item cap is
+owned by `project_operations.progress_json.history.max_items`; linked Source
+plans do not mirror it in `strategy_json`. Standalone Source plans retain their
+plan-level budget, and the execution cursor applies the remaining budget as
+each segment starts.
+
+Backfill strategy JSON explicitly carries `history_mode`: `bounded_range` keeps
+the generic source default (including its bounded fallback when callers omit
+dates), while `all_available` is supported only by arXiv and is resolved to the
+connector safety floor `1991-01-01T00:00:00Z` through a frozen `to` timestamp.
+The mode is part of the query fingerprint and is never inferred from missing
+dates, so an ordinary source backfill cannot accidentally become a full-history
+import. Historical research operations use the same bounded plan shape for
+earlier ranges and store coverage on the workflow for overlap checks.
+
+For generic Source history imports, starting a plan is proposal-gated:
+`source_backfill_start` -> `ProposalApplyService` -> internal
+`source.backfill.start`. Project Research is an explicit user action: the
+initial-intake or historical-extension request records the user's scope and
+starts its linked plans directly through the Project Research orchestrator.
+Agents and generic Source routes cannot use that path.
+
 The Source Detail `History import` tab consumes these read models: it previews
 date windows and quota without writing, creates an idempotent draft, shows
 segment/item rollups and `next_eligible_at`, and offers propose-start and
 owner/admin pause/resume controls. Raw extraction-job and segment diagnostics
-remain an Advanced concern. Start remains proposal-gated:
-`source_backfill_start` -> `ProposalApplyService` -> internal
-`source.backfill.start`; agents can invoke only the proposal-producing action.
+remain an Advanced concern. The generic Source Detail start action remains
+proposal-gated; Project Research uses the explicit intake action described
+above and does not expose that path to agents.
 
 Built-in source connections are seeded for RSS, Atom, web page, and arXiv
 connectors. The extraction worker scans feeds and pages, creates candidate
 items, queues follow-up extraction or snapshot jobs, writes artifacts for
 captured content, and creates candidate evidence where appropriate.
 
-### Academic source presets (arXiv)
+### Research providers and monitors
 
-Academic Sources is a UX grouping over normal `source_connections`, not a
-database boundary. A code-defined preset registry (no table) is exposed under
-`GET /api/v1/sources/source-presets`; v1 ships only the `arxiv` preset
-(`category: academic`). `POST /api/v1/sources/source-presets/arxiv/preview`
-runs a bounded arXiv Atom API query and returns parsed sample papers without
-writing durable rows. `POST /api/v1/sources/source-presets/arxiv` validates the
-query config (`mode`, `search_query` required/<=500 chars for `search` mode,
-one or more `categories` required for `recent_by_category`, `max_results`
-1..100, and `sort_by`/`sort_order` from the arXiv API enums), then creates a
-normal active built-in connection with `connector_key='arxiv'`, `endpoint_url`
-set to the generated `export.arxiv.org/api/query` URL, and the normalized
-query config in `config_json` (`preset_id: "arxiv"`). `recent_by_category`
-creates `cat:<category>` queries, or `cat:A OR cat:B` for multiple categories,
-sorted by `submittedDate` descending, so daily scans behave like an arXiv
-new-papers stream with normal Sources dedupe. Use one source for multiple
-categories when they share the same schedule, capture policy, and project
-binding; create separate sources only when those controls need to differ. Both
-POST endpoints enforce the same `source.connection.manage` policy action as
-`POST /api/v1/sources/connections`. No credentials are accepted in v1.
+Academic Sources is a UX grouping over normal `source_channels`, not a
+database boundary. The global Sources page presents each provider origin as a
+Source and each independent query/category rule as a Monitor; the Channel term
+remains an implementation detail.
+The provider catalog is exposed through `GET /api/v1/sources/providers`.
+Academic search providers are `arxiv`, `openalex`, and `semantic_scholar`;
+`web_search` is a credentialed, untrusted web tier. The arXiv entry includes
+the provider-owned setup schema and category taxonomy used
+by the shared Add Source dialog. Users create and edit monitors through
+`/api/v1/sources/channels`; the server resolves the active
+`arxiv`–`arxiv_api` mapping, creates or reuses the underlying Connection, and
+stores the normalized provider query and generated API URL on the Channel.
+Credentials and policy remain on the Connection, while query, schedule,
+watermark, and project bindings remain Channel-owned.
+
+OpenAlex and Semantic Scholar use JSON connector handlers with provider-native
+cursor/offset state and normalize DOI, arXiv id, native id, authors, venue,
+publication date, citation/reference counts, and abstract into the same source
+item metadata contract. `paperMaterializer` recognizes that provider-neutral
+contract and deduplicates `academic_papers` by DOI, arXiv id, OpenAlex id, or
+Semantic Scholar id. Brave results remain external URL items and their
+Connection is created with `trust_level=untrusted`; screening instructions
+require independent or scholarly corroboration before high confidence.
+
+`POST /api/v1/research/engine/search` plans a bounded per-provider query set,
+previews providers concurrently, merges candidates without writing corpus, and
+persists an immutable `research_search_strategies` record. Dedupe priority is
+DOI, arXiv id, provider-native id, then normalized title and first author. Web
+search additionally requires the Space external-egress switch and a managed
+Source credential. Confirming suggestions through
+`POST /api/v1/research/engine/monitors` creates ordinary Channels and Project
+bindings; only subsequent Sources scans and materialization may populate corpus.
+The arXiv setup schema supports topic search, category streams, and all-paper
+streams. Category streams compile to `cat:<category>` or an OR expression and
+use `submittedDate` descending by default, so daily scans behave like a new-
+papers monitor with normal Source dedupe. Use one Source with multiple Monitors
+when they share the same origin; create separate Sources only when the
+external origin or governance boundary differs. No source-preset create or
+preview API remains.
+
+For an automatic research monitor, a successful scan stores the selected
+monitoring timestamp together with ETag/Last-Modified values. The next daily
+scan asks for a 48-hour overlap through now, starts at page zero, and relies on
+the same source-item/arXiv-id/DOI dedupe. Historical backfill jobs do not
+advance the live monitoring cursor.
 
 arXiv-specific parsing lives in `connectors/arxiv.ts` (query URL building, Atom
 response parsing, and id/URL normalization for abs/pdf/html URLs, `arXiv:`
@@ -139,7 +212,7 @@ feed parser. `connectors/arxivThrottle.ts` is a best-effort process-local polite
 (default 3s minimum interval, injectable clock/sleep for tests) that wraps
 only arXiv network calls.
 
-`connection_scan` for `connector_key='arxiv'` parses the Atom response into
+The Channel scan handler for the `arxiv`–`arxiv_api` mapping parses the Atom response into
 paper records and upserts `feed_entry` items with the base arXiv id (no
 version) as `source_external_id`, the canonical abs URL as
 `canonical_uri`/`source_uri`, comma-joined authors, the abstract as excerpt,
@@ -158,34 +231,35 @@ actually used. Created snapshots/reader artifacts record
 `fallback_from`/`fallback_reason` when PDF fallback occurred. Non-arXiv URLs
 keep the existing single-fetch behavior.
 
-The Sources page links to a dedicated `/sources/source-presets` page for preset
-sources. That page groups presets by category; Academic v1 shows the arXiv
-form with `Recent by category` and `Search query` modes plus name, max results,
-frequency, and capture policy. Recent mode uses a multi-select category control
-for the full official arXiv category taxonomy
-(`https://arxiv.org/category_taxonomy`), grouped by archive/category family.
-The taxonomy is source-preset-owned code in
-`server/src/modules/sources/sourcePresets/arxivCategoryTaxonomy.ts`; the preset
-list API returns it as `category_options`, and the backend validates requested
-categories against that same value set.
-Preview and create are wired to the preset API.
-The main `/sources` Create Source card remains for Web/Feed source recipes.
-Project binding happens through the Project Sources surface and direct
-`project_source_bindings`.
-The Academic Research Project preset (`academic_research`) reuses this same
-arXiv source preset. The Project preset does not create another source model or
-another academic plugin route; its Project Sources section feeds the Project
-Corpus and the core Graph `academic_citation_v1` project lens when source
-items/evidence/object links are materialized.
+The main `/sources` Create Source dialog is provider-neutral. It loads the
+provider catalog, renders provider-owned setup fields (including the arXiv
+category picker), and creates a reusable Source with one or more independent
+Monitors. Project binding happens through the Project Sources surface and
+`project_source_bindings`; creating a monitor outside a project does not bind it
+implicitly. The Academic Research Project preset reuses the same provider and
+monitor models, and its Project Sources section feeds the Project Corpus and
+the core Graph `academic_citation_v1` project lens when source items, evidence,
+and object links are materialized.
 Source health is exposed as read models instead of raw run tables:
 `/sources/source-health` reports source-level health for visible connections.
 Project binding health is Project-owned at
 `/projects/{projectId}/sources/health`.
 
+Project Research screening readiness is coordinated through the Sources-owned
+`SourcePostProcessingRecoveryService`. It checks classification coverage,
+replays only the scoped source items when ingestion advanced without a
+processing run, and returns a typed ready/waiting/failed result to the Project
+Research orchestrator. The orchestrator owns only operation/workflow state;
+it does not issue Source recovery SQL or enqueue Source processing jobs.
+Server-managed Source post-processing runs carry the typed managed-execution
+policy in their immutable run contract and use fail-fast handling. A CLI or
+provider failure therefore remains a Source/Research operation failure that
+can be retried, rather than becoming a generic runtime supervisor review.
+
 Scheduled source connections use frequency-specific rules rather than a raw
 "next run" picker. Hourly schedules choose a minute, daily schedules choose
 hour/minute, and weekly schedules choose weekday/hour/minute. The API stores
-the normalized UTC rule in `source_connections.schedule_rule_json` and returns
+the normalized UTC rule in `source_channels.schedule_rule_json` and returns
 it as `schedule_rule_json` alongside the computed `next_check_at`.
 After each scheduled scan, the next run is recomputed from the rule so schedules
 do not drift based on job completion time. The scheduler task owns only runtime
@@ -371,6 +445,25 @@ owns that job, the rule cursor, and the run audit rows:
   `relevant`/`maybe`/`not_relevant` decisions. Relevance lives in
   `source_post_processing_item_decisions`; item reading state lives per user in
   `source_item_user_states`.
+- Project Research screening sends at most 10 source items to one structured
+  output run. Explicit recovery jobs are split into the same batches, so a
+  large baseline never becomes one oversized model request; each batch remains
+  independently auditable and retryable.
+- A transient provider transport failure (for example
+  `provider_network_error` or `provider_rate_limit`) leaves the recovery job
+  pending for the queue's bounded retry attempts. Research is not failed while
+  one of those retries is pending; a permanent failure, or an exhausted retry
+  budget, is recorded on the failed screening stage and exposed through the
+  operation retry action.
+- The formal Research result contract is transport-specific at the provider
+  boundary: OpenAI-compatible providers use JSON Schema response format,
+  Anthropic-compatible providers use a forced structured tool, and Ollama uses
+  its JSON format. A plain-text response is not accepted as a Research success;
+  provider diagnostics record only safe response metadata such as finish reason,
+  block types, and tool names.
+- A project-bound rule may carry an explicit `runtime_profile_id`; the selected
+  profile is captured on its Agent Run rather than silently falling back to the
+  agent default.
 - `input_config_json.relevance_profile` lets a rule define what "relevant"
   means independent of which actions are enabled: an `objective`,
   `include_criteria`/`exclude_criteria`/`must_have`/`nice_to_have` lists, and
@@ -400,22 +493,30 @@ owns that job, the rule cursor, and the run audit rows:
   rules can wait on the same pending extraction job without overwriting each
   other, and generated deep-analysis jobs are appended back to the source
   screening run's `output_job_ids_json` for traceability.
-- Preset creation flows may stamp `input_config_json.content_profile`,
-  `summary_goal`, `output_instructions`, and `relevance_profile` so the
-  reusable post-processing agent receives source-specific content guidance
-  without cloning agents. Those preset-specific defaults live with the
-  preset implementation, not in the generic source post-processing
-  UI/service orchestration. The arXiv preset ships a frontend-only
-  `screen_relevant_papers` option
-  (`apps/web/src/modules/sources/sourcePostProcessingPresets.ts`,
-  `apps/web/src/modules/sources/sourcePresets/academic/arxivPostProcessing.ts`)
-  that enables `mark_items`, candidate prefiltering, and an enabled
-  `relevance_profile` seeded from an optional screening objective. It does not
-  enable Knowledge context by default; context domains are explicit rule options,
-  not a separate backend preset enum. Public external source connectors such as
-  arXiv, RSS, Atom, and watched public web pages default to allowing external
-  model processing unless credentials or advanced source governance override
-  that policy.
+- Source setup may stamp `input_config_json.content_profile`, `summary_goal`,
+  `output_instructions`, and `relevance_profile` so the reusable
+  post-processing agent receives source-specific content guidance without
+  cloning agents. These defaults are selected by the Source Channel setup
+  service and provider-specific profiles, not by a frontend preset generator.
+  The arXiv profile lives at
+  `server/src/modules/sources/catalog/arxivPostProcessingProfile.ts`; generic
+  source post-processing remains reusable and does not grow provider-specific
+  branches. Public external providers such as arXiv, RSS, Atom, and watched
+  public web pages default to allowing external model processing unless
+  credentials or advanced source governance override that policy.
+
+When a successful project-bound post-processing run belongs to an active
+automatic research workflow, the completion signal is handed to
+`ProjectResearchOrchestrator`. It syncs the latest decision into
+`project_corpus_items` (preserving `triage_confirmed_by_user`), merges source
+item ids into one incremental operation, and creates a screening gate. This is
+a narrow completion hook; it does not duplicate Source fetching,
+post-processing, or Agent execution. A baseline operation waits for all
+backfill extraction and post-processing jobs to drain before opening its gate.
+For generic Sources, proposal approval remains the boundary for starting the
+history plan. For Project Research, the user's Start action is the history
+authorization; the only subsequent human quality gates are screening and idea
+review.
 
 Post-processing may reuse the same `agent_id` across many sources. It is not an
 Automations `event` trigger and does not use Automations cursors. `DailyCaptureReport`

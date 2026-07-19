@@ -35,16 +35,16 @@ vi.mock('../../../api/client', () => ({
     getProjectPreset: vi.fn(),
   },
   sourcesApi: {
-    connections: vi.fn(),
+    channels: vi.fn(),
     projectSourceBindings: vi.fn(),
     projectSourceHealth: vi.fn(),
     projectItems: vi.fn(),
     createProjectSourceBinding: vi.fn(),
     backfillProjectSourceBinding: vi.fn(),
-    scanConnection: vi.fn(),
+    scanChannel: vi.fn(),
     updateProjectSourceBinding: vi.fn(),
     deleteProjectSourceBinding: vi.fn(),
-    backfillPlans:vi.fn(),previewBackfill:vi.fn(),createBackfillPlan:vi.fn(),proposeBackfillStart:vi.fn(),
+    channelBackfillPlans: vi.fn(),
   },
 }))
 
@@ -64,51 +64,32 @@ beforeEach(() => {
     updated_at: '2026-07-01T00:00:00.000Z',
   })
   vi.mocked(projectPresetsApi.getProjectPreset).mockResolvedValue({ preset_key: null })
-  vi.mocked(sourcesApi.connections).mockResolvedValue({
-    items: [{
-      id: 'conn-1',
-      space_id: 'space-1',
-      connector_id: 'connector-1',
-      connector_key:'arxiv',
-      owner_user_id: 'user-1',
-      credential_id: null,
-      visibility: 'space_shared',
-      access_level: 'full',
-      name: 'Research feed',
-      endpoint_url: 'https://example.test/feed.xml',
-      status: 'active',
-      fetch_frequency: 'daily',
-      capture_policy: 'reference_only',
-      trust_level: 'normal',
-      topic_hints_json: null,
-      consent_json: {},
-      policy_json: {},
-      config_json: {},
-      last_checked_at: null,
-      next_check_at: null,
-      schedule_rule_json: null,
-      handler_kind: 'built_in',
-      active_handler_version_id: null,
-      active_recipe_version_id: null,
-      repair_status: 'ok',
-      last_handler_run_id: null,
-      created_at: '2026-07-01T00:00:00.000Z',
-      updated_at: '2026-07-01T00:00:00.000Z',
-    }],
-    total: 1,
-    limit: 200,
-    offset: 0,
-  })
-  vi.mocked(sourcesApi.backfillPlans).mockResolvedValue([])
+  vi.mocked(sourcesApi.channels).mockResolvedValue([{
+    id: 'channel-1',
+    space_id: 'space-1',
+    source_connection_id: 'conn-1',
+    source_name: 'RSS feeds',
+    name: 'Research feed',
+    channel_type: 'feed',
+    endpoint_url: 'https://example.test/feed.xml',
+    query: {},
+    provider_query: {},
+    query_fingerprint: 'fingerprint-1',
+    status: 'active',
+    fetch_frequency: 'daily',
+    schedule_rule: null,
+    provider: { key: 'generic_rss', display_name: 'RSS' },
+    connection_status: 'active',
+    capture_policy: 'reference_only',
+    scan_state: { status: 'active', cursor: {}, watermark: {}, next_run_at: null, last_run_at: null },
+  }])
+  vi.mocked(sourcesApi.channelBackfillPlans).mockResolvedValue([])
   vi.mocked(projectsApi.proposeBindingBackfill).mockResolvedValue({operation:{id:'operation-1'},plan:{id:'plan-1'},proposal:{id:'proposal-1'}} as never)
-  vi.mocked(sourcesApi.previewBackfill).mockResolvedValue({strategy:{window_unit:'date_window',from:null,to:null,window_size:30,max_items:100,direction:'backward'},segments:[{}],quota_policy:{window:'minute',limit_count:10}})
-  vi.mocked(sourcesApi.createBackfillPlan).mockResolvedValue({id:'plan-1'} as never)
-  vi.mocked(sourcesApi.proposeBackfillStart).mockResolvedValue({proposal:{id:'proposal-1'} as never,auto_applied:false})
   vi.mocked(projectsApi.sourceBindings).mockResolvedValue([{
     id: 'binding-1',
     space_id: 'space-1',
     project_id: 'project-1',
-    source_connection_id: 'conn-1',
+    source_channel_id: 'channel-1',
     binding_key: 'default',
     status: 'active',
     priority: 0,
@@ -125,6 +106,7 @@ beforeEach(() => {
     binding_id: 'binding-1',
     project_id: 'project-1',
     source_connection_id: 'conn-1',
+    source_channel_id: 'channel-1',
     source_name: 'Research feed',
     status: 'healthy',
     last_success_at: '2026-07-01T00:00:00.000Z',
@@ -142,6 +124,7 @@ beforeEach(() => {
       space_id: 'space-1',
       project_id: 'project-1',
       project_source_binding_id: 'binding-1',
+      source_channel_id: 'channel-1',
       source_connection_id: 'conn-1',
       source_item_id: 'item-1',
       status: 'active',
@@ -277,7 +260,7 @@ beforeEach(() => {
     archived_links: 0,
     evidence_links: 1,
   })
-  vi.mocked(sourcesApi.scanConnection).mockResolvedValue({ id: 'job-1' } as never)
+  vi.mocked(sourcesApi.scanChannel).mockResolvedValue({ id: 'job-1' } as never)
 })
 
 function renderPage(initialEntry = '/spaces/space-1/projects/project-1/sources') {
@@ -295,16 +278,16 @@ describe('ProjectSourcesPage', () => {
     renderPage()
 
     expect(await screen.findByText('Research Project')).toBeInTheDocument()
-    expect(screen.getByText('Research feed')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Research feed' })).toHaveAttribute('href', '/sources/connections/conn-1')
+    expect(screen.getByText(/Monitor: Research feed/)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'RSS feeds' })).toHaveAttribute('href', '/sources/conn-1')
     expect(screen.queryByText(/a previous scan failed/i)).not.toBeInTheDocument()
-    expect(screen.getAllByText('Collected paper').length).toBeGreaterThanOrEqual(2)
-    expect(screen.getByText('Project corpus')).toBeInTheDocument()
+    expect(screen.getByText('Collected paper')).toBeInTheDocument()
+    expect(screen.queryByText('Project corpus')).not.toBeInTheDocument()
 
     await waitFor(() => {
       expect(projectsApi.sourceBindings).toHaveBeenCalledWith('project-1')
       expect(sourcesApi.projectItems).toHaveBeenCalledWith(expect.objectContaining({ project_id: 'project-1', limit: 50 }))
-      expect(projectsApi.corpus).toHaveBeenCalledWith('project-1', expect.objectContaining({ limit: 50 }))
+      expect(projectsApi.corpus).not.toHaveBeenCalled()
     })
   })
 
@@ -327,11 +310,13 @@ describe('ProjectSourcesPage', () => {
 
     const graphLink = await screen.findByRole('link', { name: /open graph/i })
     expect(graphLink).toHaveAttribute('href', '/graph?project_id=project-1&lens_id=academic_citation_v1')
-    expect(screen.getByRole('link', { name: /add arxiv/i })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /create reusable source/i })).toHaveAttribute(
       'href',
-      '/sources/source-presets?project_id=project-1&preset=arxiv',
+      '/sources',
     )
     expect(screen.getByText('Literature sources')).toBeInTheDocument()
+    expect(screen.getByText('Advanced monitor state')).toBeInTheDocument()
+    expect(screen.getByText(/Cursor empty · watermark/)).toBeInTheDocument()
     expect(projectPresetsApi.getProjectPreset).toHaveBeenCalledWith('project-1')
   })
 
@@ -348,13 +333,34 @@ describe('ProjectSourcesPage', () => {
   })
 
   it('runs scan and backfill from binding actions', async () => {
+    vi.mocked(sourcesApi.channels).mockResolvedValue([{
+      id: 'channel-1',
+      space_id: 'space-1',
+      source_connection_id: 'conn-1',
+      source_name: 'arXiv',
+      name: 'Research feed',
+      channel_type: 'search',
+      endpoint_url: 'https://export.arxiv.org/api/query',
+      query: { search_query: 'all:research' },
+      provider_query: { search_query: 'all:research' },
+      query_fingerprint: 'fingerprint-1',
+      status: 'active',
+      fetch_frequency: 'daily',
+      schedule_rule: null,
+      provider: { key: 'arxiv', display_name: 'arXiv' },
+      connection_status: 'active',
+      capture_policy: 'extract_text',
+      scan_state: { status: 'active', cursor: {}, watermark: {}, next_run_at: null, last_run_at: null },
+    }])
     renderPage()
 
     fireEvent.click(await screen.findByRole('button', { name: /run scan/i }))
-    await waitFor(() => expect(sourcesApi.scanConnection).toHaveBeenCalledWith('conn-1'))
+    await waitFor(() => expect(sourcesApi.scanChannel).toHaveBeenCalledWith('channel-1'))
 
     fireEvent.click(await screen.findByRole('button', { name: /import history/i }))
     await waitFor(() => expect(projectsApi.proposeBindingBackfill).toHaveBeenCalledWith('project-1','binding-1',expect.objectContaining({strategy:expect.objectContaining({window_unit:'date_window'})})))
+    expect(projectsApi.get).toHaveBeenCalledTimes(1)
+    expect(projectPresetsApi.getProjectPreset).toHaveBeenCalledTimes(1)
   })
 
   it('uses the product confirmation dialog before removing a binding', async () => {
@@ -379,25 +385,19 @@ describe('ProjectSourcesPage', () => {
     fireEvent.click(addSourceButtons[addSourceButtons.length - 1]!)
 
     await waitFor(() => expect(projectsApi.createSourceBinding).toHaveBeenCalledWith('project-1', expect.objectContaining({
-      source_connection_id: 'conn-1',
+      source_channel_id: 'channel-1',
       delivery_scope: 'project_members',
       backfill_history: true,
     })))
     expect(projectsApi.proposeSourceBinding).not.toHaveBeenCalled()
   })
 
-  it('syncs project corpus and updates project-level corpus state', async () => {
+  it('keeps corpus review controls out of the acquisition surface', async () => {
     renderPage()
-
-    fireEvent.click(await screen.findByRole('button', { name: /sync corpus/i }))
-    await waitFor(() => expect(projectsApi.backfillCorpusFromSources).toHaveBeenCalledWith('project-1'))
-
-    fireEvent.click(await screen.findByRole('button', { name: /new/i }))
-    fireEvent.click(await screen.findByRole('option', { name: /relevant/i }))
-    await waitFor(() => expect(projectsApi.updateCorpusItem).toHaveBeenCalledWith(
-      'project-1',
-      'corpus-1',
-      { triage_status: 'relevant' },
-    ))
+    await screen.findByText('Collected paper')
+    expect(screen.queryByRole('button', { name: /sync corpus/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^new$/i })).not.toBeInTheDocument()
+    expect(projectsApi.backfillCorpusFromSources).not.toHaveBeenCalled()
+    expect(projectsApi.updateCorpusItem).not.toHaveBeenCalled()
   })
 })

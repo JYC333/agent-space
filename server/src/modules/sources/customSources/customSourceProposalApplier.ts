@@ -12,8 +12,8 @@ import {
   type HandlerVersionRow,
 } from "./customSourceHandlerRepository";
 import {
-  getSourceConnectionScanTask,
-  upsertSourceConnectionScanTask,
+  getSourceChannelScanTask,
+  upsertSourceChannelScanTask,
 } from "../sourceConnectionScheduler";
 import { resolveRequestedSourceSchedule } from "../sourceScheduleInput";
 
@@ -30,6 +30,7 @@ interface SourceConnectionRow {
   space_id: string;
   owner_user_id: string;
   status: string;
+  channel_id: string;
   fetch_frequency: string;
   schedule_rule_json: unknown;
   active_handler_version_id: string | null;
@@ -102,10 +103,14 @@ async function loadConnection(
   connectionId: string,
 ): Promise<SourceConnectionRow> {
   const result = await context.db.query<SourceConnectionRow>(
-    `SELECT id, space_id, owner_user_id, status, fetch_frequency,
-            schedule_rule_json, active_handler_version_id, handler_kind, deleted_at
-       FROM source_connections
-      WHERE id = $1 AND space_id = $2
+    `SELECT sc.id, sc.space_id, sc.owner_user_id, sc.status,
+            ch.id AS channel_id, ch.fetch_frequency, ch.schedule_rule_json,
+            ch.status AS channel_status, sc.active_handler_version_id, sc.handler_kind, sc.deleted_at
+       FROM source_connections sc
+       JOIN source_channels ch ON ch.source_connection_id = sc.id AND ch.status <> 'archived'
+      WHERE sc.id = $1 AND sc.space_id = $2
+      ORDER BY ch.updated_at DESC
+      LIMIT 1
       FOR UPDATE`,
     [connectionId, context.proposal.space_id],
   );
@@ -284,7 +289,7 @@ async function activateHandlerVersion(
       RETURNING ${HANDLER_VERSION_COLUMNS}`,
     [version.id, context.proposal.space_id, now],
   );
-  const existingScheduleTask = await getSourceConnectionScanTask(context.db, connection.id);
+  const existingScheduleTask = await getSourceChannelScanTask(context.db, connection.channel_id);
   const schedule = resolveRequestedSourceSchedule({
     body: { next_check_at: payload.next_check_at, schedule_rule: payload.schedule_rule },
     status: "active",
@@ -297,18 +302,26 @@ async function activateHandlerVersion(
         SET active_handler_version_id = $3,
             repair_status = 'ok',
             status = 'active',
-            schedule_rule_json = $4::jsonb,
-            updated_at = $5
+            updated_at = $4
       WHERE id = $1 AND space_id = $2
-      RETURNING id, space_id, owner_user_id, status, fetch_frequency,
-                schedule_rule_json,
+      RETURNING id, space_id, owner_user_id, status,
                 active_handler_version_id, handler_kind, deleted_at`,
-    [connection.id, context.proposal.space_id, version.id, JSON.stringify(schedule.scheduleRule), now],
+    [connection.id, context.proposal.space_id, version.id, now],
   );
   const scheduleConnection = updatedConnection.rows[0];
   if (scheduleConnection) {
-    await upsertSourceConnectionScanTask(context.db, {
-      connection: scheduleConnection,
+    await context.db.query(
+      `UPDATE source_channels SET status='active', schedule_rule_json=$3::jsonb, updated_at=$4 WHERE id=$1 AND space_id=$2`,
+      [connection.channel_id, context.proposal.space_id, JSON.stringify(schedule.scheduleRule ?? null), now],
+    );
+    await upsertSourceChannelScanTask(context.db, {
+      channel: {
+        id: connection.channel_id,
+        space_id: context.proposal.space_id,
+        owner_user_id: connection.owner_user_id,
+        status: "active",
+        fetch_frequency: connection.fetch_frequency,
+      },
       nextRunAt: schedule.nextRunAt,
       updatedAt: now,
     });

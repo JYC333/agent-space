@@ -263,7 +263,21 @@ describe("CLI login engine", () => {
     // Host home that must stay untouched by the login.
     const hostHome = join(tempDir, "host-home");
     await mkdir(hostHome, { recursive: true });
-    __setLoginFactoriesForTests({ home: hostHome });
+    const pty = new FakePty();
+    __setLoginFactoriesForTests({
+      home: hostHome,
+      pty: {
+        spawn: (_command, _args, options) => {
+          void (async () => {
+            const target = join(String(options.env.HOME), ".local/share/opencode");
+            await mkdir(target, { recursive: true });
+            await writeFile(join(target, "auth.json"), "tok");
+            pty.exit(0);
+          })();
+          return pty;
+        },
+      },
+    });
 
     const cfg: LoginRuntimeConfig = {
       method: "cli",

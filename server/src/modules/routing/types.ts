@@ -46,12 +46,17 @@ export interface RouteCandidate {
   capabilities: string[];
   tools: string[];
   minimum_sandbox_level: SandboxLevel;
+  /** Whether this runtime needs a persistent workspace to execute at all. */
+  requires_workspace_for_execution: boolean;
   supports_workspace: boolean;
   supports_one_shot_docker: boolean;
   supports_live: boolean;
   supports_dry_run: boolean;
-  trust_level: RouteTrustLevel;
+  baseline_trust_level: RouteTrustLevel;
+  effective_trust_level: RouteTrustLevel;
   conformance_status?: "passed" | "failed" | "partial" | null;
+  conformance_suite_version?: string | null;
+  subagent_disable_mechanism: "not_applicable" | "runtime_config" | "unsupported" | "unknown";
   estimated_cost_usd: number | null;
   estimated_latency_ms: number | null;
   historical_verification_pass_rate: number | null;

@@ -1,3 +1,5 @@
+import type { UsageRunSummaryRecord } from "../usage/repository";
+
 export interface QueryResult<Row> {
   rows: Row[];
   rowCount: number | null;
@@ -16,6 +18,8 @@ export interface RunRecord {
   agent_id: string;
   agent_name?: string | null;
   agent_version_id: string;
+  run_role?: "execution" | "coordinator";
+  requested_runtime_profile_id?: string | null;
   runtime_profile_id?: string | null;
   runtime_profile_selection_source?: RuntimeProfileSelectionSource | null;
   system_prompt?: string | null;
@@ -51,7 +55,7 @@ export interface RunRecord {
   error_message?: string | null;
   error_json?: unknown;
   output_json?: unknown;
-  usage_json?: unknown;
+  usage?: UsageRunSummaryRecord | null;
   started_at: string | null;
   ended_at: string | null;
   created_at?: string;
@@ -72,6 +76,7 @@ export interface RunListFilters {
   workspace_id?: string | null;
   project_id?: string | null;
   workflow_version_id?: string | null;
+  run_role?: "execution" | "coordinator" | null;
   limit: number;
   offset: number;
 }
@@ -160,6 +165,7 @@ export interface RunStepDetailRecord {
   id: string;
   space_id: string;
   run_id: string;
+  attempt_number: number | null;
   parent_step_id: string | null;
   actor_id: string;
   step_index: number;
@@ -186,6 +192,7 @@ export interface RunEventDetailRecord {
   id: string;
   space_id: string;
   run_id: string;
+  attempt_number: number | null;
   step_id: string | null;
   actor_id: string | null;
   event_index: number;
@@ -313,7 +320,6 @@ export interface RunTerminalUpdate {
   error_json?: unknown;
   exit_code?: number | null;
   completed_at: string;
-  usage_json?: unknown;
 }
 
 export interface RunAttemptRecord {
@@ -330,7 +336,6 @@ export interface RunAttemptRecord {
   exit_code: number | null;
   error_code: string | null;
   error_json: unknown;
-  usage_json: unknown;
   created_at: string;
   updated_at: string;
 }

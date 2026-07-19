@@ -48,7 +48,7 @@ vi.mock('../../../api/client', () => ({
         capability_ids: ['research.source_collect'],
         input_schema_json: {},
         default_config_json: {},
-        output_artifact_types: ['research_brief.v1', 'research_source_table.v1'],
+        output_artifact_types: ['research_report.archive.v1'],
         proposal_policy: {},
         recommended_runtime_adapters: ['model_api'],
         prompt_asset_keys: ['workflow.research.technical_survey.run'],
@@ -66,7 +66,7 @@ vi.mock('../../../api/client', () => ({
         enabled: true,
         config_json: {
           source_mode: 'project_sources',
-          output_artifact_types: ['research_source_table.v1'],
+          output_artifact_types: ['research_report.archive.v1'],
           preferred_runtime_adapter: 'model_api',
         },
         created_by_user_id: 'user-1',
@@ -85,14 +85,14 @@ vi.mock('../../../api/client', () => ({
         capability_ids: ['research.source_collect'],
         input_schema_json: {},
         default_config_json: {},
-        output_artifact_types: ['research_brief.v1', 'research_source_table.v1'],
+        output_artifact_types: ['research_report.archive.v1'],
         proposal_policy: {},
         recommended_runtime_adapters: ['model_api'],
         prompt_asset_keys: ['workflow.research.technical_survey.run'],
       },
       workflow_profile: null,
       capability_ids: ['research.source_collect'],
-      output_artifact_types: ['research_brief.v1'],
+      output_artifact_types: ['research_report.archive.v1'],
       config_json: {},
       run_create_body: {
         mode: 'live',
@@ -116,7 +116,7 @@ vi.mock('../../../api/client', () => ({
         capability_ids: ['research.source_collect'],
         input_schema_json: {},
         default_config_json: {},
-        output_artifact_types: ['research_brief.v1', 'research_source_table.v1'],
+        output_artifact_types: ['research_report.archive.v1'],
         proposal_policy: {},
         recommended_runtime_adapters: ['model_api'],
         prompt_asset_keys: ['workflow.research.technical_survey.run'],
@@ -134,7 +134,7 @@ vi.mock('../../../api/client', () => ({
         updated_at: '2026-06-20T00:00:00.000Z',
       },
       capability_ids: ['research.source_collect'],
-      output_artifact_types: ['research_brief.v1'],
+      output_artifact_types: ['research_report.archive.v1'],
       config_json: {},
       run_create_body: {
         mode: 'live',
@@ -269,7 +269,7 @@ describe('ResearchWorkflowPanel', () => {
       'profile-1',
       expect.objectContaining({
         config_json: expect.objectContaining({
-          output_artifact_types: ['research_source_table.v1'],
+          output_artifact_types: ['research_report.archive.v1'],
         }),
       }),
     )

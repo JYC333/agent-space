@@ -25,7 +25,9 @@ planning and review results, but cannot create or revise a PlanVersion directly.
   execution source.
 - `plan_nodes`, `plan_node_dependencies`, and `plan_node_runs` store the
   bounded graph and its physical Run links. A node carries its A1 contract,
-  risk, budget, assigned Agent, verification recipe, and content hash.
+  risk, budget, assigned Agent, verification recipe, content hash, and explicit
+  `input_bindings`. Bindings can read `output_text`, a JSON Pointer in
+  `output_json`, or a durable Artifact from a direct dependency only.
 - `workflow_executions`, `workflow_execution_nodes`,
   `workflow_execution_dependencies`, and `workflow_execution_node_runs` store
   an immutable Workflow definition snapshot, resolution trace, checkpoints,
@@ -74,6 +76,14 @@ and consumes the latest `RunEvaluation`: a terminal adapter success without a
 passed evaluation does not complete a node. Finalization discovers the graph
 from `plan_node_runs`, so route hints are evidence only, not the primary link.
 
+Before creating a ready child Run, the scheduler resolves every declared input
+from the latest dependency Run whose evaluation passed. A missing required
+input fails the node with `input_binding_unresolved`; optional missing input is
+recorded as null. Resolved values and provenance are snapshotted on the
+node-run link and Run contract. Artifact inputs use durable context attachments,
+never another Run's sandbox path. This extends `workflow_definition.v1`
+without changing its version because there is no deployed compatibility boundary.
+
 Plan reconciliation schedules newly-ready nodes, verifies integration nodes,
 and completes the coordinator only after dependency and output checks pass.
 Retries are represented by new Run attempts/finalizations while preserving the
@@ -93,6 +103,16 @@ The shared execution behavior is exposed through `PlanExecutionService` and
 links and post-finalization reconciliation. The Automation fire transaction
 commits the Workflow Execution, coordinator Run, child scheduling, and
 `automation_runs` audit link together.
+
+Post-finalization reconciliation is the immediate path, not the only recovery
+path. `ExecutionGraphRecoveryService` scans active Plan and Workflow executions
+at startup and periodically, then idempotently reconciles each graph under its
+aggregate row lock. Per-graph failures are isolated and emit deduplicated
+operational alerts.
+
+AgentRunGroup owns interactive, policy-gated dynamic delegation inside an
+Agent Room. Plan and Workflow Execution own persistent, reviewable DAG nodes.
+Neither mechanism creates, adopts, or reschedules the other's nodes.
 
 ## UI boundary
 

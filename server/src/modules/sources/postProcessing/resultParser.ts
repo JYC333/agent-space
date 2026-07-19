@@ -35,12 +35,12 @@ export function parsePostProcessingResult(
   allowedContextRefs?: string[],
 ): ParsedPostProcessingResult {
   const value = parseModelJsonObject(output);
-  const record = recordObject(value, "post_processing_result");
+  const record = normalizeResultEnvelope(value);
   if (record.schema !== "source_post_processing.result.v1") {
     throw new HttpError(422, "Post-processing agent output schema must be source_post_processing.result.v1");
   }
   const allowedItemIds = new Set(sourceItemIds);
-  const digestMarkdown = optionalText(record.digest_markdown, "digest_markdown", 200_000) ?? "";
+  let digestMarkdown = optionalText(record.digest_markdown, "digest_markdown", 200_000) ?? "";
   const itemSummaries = arrayValue(record.item_summaries, "item_summaries").map((entry, index) =>
     parseItemSummary(entry, index, allowedItemIds),
   );
@@ -55,7 +55,12 @@ export function parsePostProcessingResult(
   requireUniqueItemIds(itemSummaries.map((item) => item.source_item_id), "item_summaries");
   requireUniqueItemIds(itemDecisions.map((item) => item.source_item_id), "item_decisions");
   if (actions.batch_digest && !digestMarkdown.trim()) {
-    throw new HttpError(422, "digest_markdown is required when batch_digest is enabled");
+    const fallbackDigest = deterministicBatchDigest(itemDecisions, sourceItemIds);
+    if (fallbackDigest) {
+      digestMarkdown = fallbackDigest;
+    } else {
+      throw new HttpError(422, "digest_markdown is required when batch_digest is enabled");
+    }
   }
   if (actions.per_item_summary && sourceItemIds.length > 0 && itemSummaries.length !== sourceItemIds.length) {
     throw new HttpError(422, "item_summaries must include every input item when per_item_summary is enabled");
@@ -80,6 +85,70 @@ export function parsePostProcessingResult(
     evidence_candidates: evidenceCandidates,
     proposal_markdown: proposalMarkdown.trim() ? proposalMarkdown : null,
   };
+}
+
+/**
+ * A screening batch can legitimately contain no relevant papers. In that
+ * case an empty model narrative should not make the whole intake fail. Once
+ * every item has a validated decision, a count-only digest is a complete and
+ * honest batch digest and keeps the formal output contract useful downstream.
+ */
+function deterministicBatchDigest(
+  decisions: SourcePostProcessingItemDecision[],
+  sourceItemIds: string[],
+): string | null {
+  if (sourceItemIds.length === 0 || decisions.length !== sourceItemIds.length) return null;
+  const counts = { relevant: 0, maybe: 0, not_relevant: 0 };
+  for (const decision of decisions) counts[decision.relevance] += 1;
+  return [
+    "### Batch screening summary",
+    `- Input items: ${sourceItemIds.length}`,
+    `- Relevant: ${counts.relevant}`,
+    `- Maybe: ${counts.maybe}`,
+    `- Not relevant: ${counts.not_relevant}`,
+    "- No narrative digest was returned; this summary was generated from the validated item decisions.",
+  ].join("\n");
+}
+
+const POST_PROCESSING_RESULT_SCHEMA = "source_post_processing.result.v1";
+const RESULT_PAYLOAD_FIELDS = [
+  "digest_markdown",
+  "item_summaries",
+  "item_decisions",
+  "evidence_candidates",
+  "proposal_markdown",
+] as const;
+
+/**
+ * Runtime adapters expose model output differently. Keep the durable source
+ * contract strict while normalizing the small set of unambiguous envelopes
+ * produced by model/CLI runtimes. Semantic validation still happens in the
+ * caller below, including completeness, item ownership, and evidence refs.
+ */
+function normalizeResultEnvelope(value: unknown): Record<string, unknown> {
+  const record = recordObject(value, "post_processing_result");
+  const candidates = [
+    record,
+    ...["result", "output", "structured_output", "data"]
+      .map((key) => record[key])
+      .filter((candidate): candidate is Record<string, unknown> => isRecord(candidate)),
+  ];
+
+  for (const candidate of candidates) {
+    if (candidate.schema === POST_PROCESSING_RESULT_SCHEMA) return candidate;
+  }
+
+  const inferred = candidates.find((candidate) =>
+    candidate.schema === undefined && RESULT_PAYLOAD_FIELDS.some((field) => Object.hasOwn(candidate, field)),
+  );
+  if (inferred) {
+    return {
+      ...inferred,
+      schema: POST_PROCESSING_RESULT_SCHEMA,
+    };
+  }
+
+  return record;
 }
 
 function parseModelJsonObject(output: string): unknown {
@@ -226,6 +295,10 @@ function recordObject(value: unknown, field: string): Record<string, unknown> {
     throw new HttpError(422, `${field} must be an object`);
   }
   return value as Record<string, unknown>;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function arrayValue(value: unknown, field: string): unknown[] {

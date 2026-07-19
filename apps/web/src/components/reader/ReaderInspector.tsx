@@ -1,6 +1,6 @@
 import { useState, type RefObject } from 'react'
 import { toast } from 'sonner'
-import { sourceReaderApi } from '../../api/client'
+import { readerApi } from '../../api/client'
 import { errMsg } from '../../lib/utils'
 import type { ReaderAnnotation, ReaderCommentThread } from '../../types/api'
 import type { TextSelection } from '../../components/editor/ReadOnlyTiptapReader'
@@ -68,7 +68,7 @@ export function ReaderInspector({
     if (!selectedAnnotation) return
     setArchiving(true)
     try {
-      await sourceReaderApi.deleteAnnotation(selectedAnnotation.id)
+      await readerApi.deleteAnnotation(selectedAnnotation.id)
       onAnnotationArchived(selectedAnnotation.id)
       toast.success('Annotation removed')
     } catch (e) {
@@ -82,7 +82,7 @@ export function ReaderInspector({
     if (!selectedAnnotation || !commentBody.trim()) return
     setCommenting(true)
     try {
-      const result = await sourceReaderApi.createComment(selectedAnnotation.id, { body: commentBody.trim() })
+      const result = await readerApi.createComment(selectedAnnotation.id, { body: commentBody.trim() })
       const updated = threads.map((t) => t.id === result.thread.id ? result.thread : t)
       if (!updated.find((t) => t.id === result.thread.id)) updated.push(result.thread)
       onThreadsUpdated(updated)
@@ -96,7 +96,7 @@ export function ReaderInspector({
 
   async function setThreadStatus(threadId: string, status: 'open' | 'resolved') {
     try {
-      const updated = await sourceReaderApi.updateThread(threadId, { status })
+      const updated = await readerApi.updateThread(threadId, { status })
       onThreadsUpdated(threads.map((t) => t.id === threadId ? updated : t))
     } catch (e) {
       toast.error(errMsg(e))
@@ -107,7 +107,7 @@ export function ReaderInspector({
     if (!selectedAnnotation) return
     setActioning(true)
     try {
-      await sourceReaderApi.createEvidence(selectedAnnotation.id, {})
+      await readerApi.createEvidence(selectedAnnotation.id, {})
       toast.success('Evidence candidate created')
     } catch (e) {
       toast.error(errMsg(e))
@@ -120,7 +120,7 @@ export function ReaderInspector({
     if (!selectedAnnotation) return
     setActioning(true)
     try {
-      await sourceReaderApi.createProposal(selectedAnnotation.id, { proposal_type: proposalType })
+      await readerApi.createProposal(selectedAnnotation.id, { proposal_type: proposalType })
       toast.success(proposalType === 'memory_create' ? 'Memory proposal created' : 'Knowledge proposal created')
     } catch (e) {
       toast.error(errMsg(e))

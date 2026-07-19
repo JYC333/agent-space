@@ -1,29 +1,51 @@
 import { describe,expect,it } from "vitest";
-import { backfillEndpointUrl } from "../src/modules/sources/extractionWorker";
+import { sourceConnectorRegistry } from "../src/modules/sources/catalog/sourceConnectorRegistry";
 import { SourceBackfillExecutionService } from "../src/modules/sources/sourceBackfillExecutionService";
 import type { Queryable } from "../src/modules/routeUtils/common";
 import { vi } from "vitest";
 
 describe("source backfill extraction windows",()=>{
   it("adds the approved date window to arXiv scans",()=>{
-    const url=backfillEndpointUrl("https://export.arxiv.org/api/query?search_query=cat%3Acs.AI","arxiv",{
-      window:{from:"2026-01-02T03:04:05.000Z",to:"2026-02-03T04:05:06.000Z",max_items:17},
-    });
+    const url=sourceConnectorRegistry.get("arxiv_api").buildBackfillRequest({ endpoint_url: "https://export.arxiv.org/api/query?search_query=cat%3Acs.AI", provider_query_json: { search_query: "cat:cs.AI", monitoring_field: "submittedDate" } }, { from: "2026-01-02T03:04:05.000Z", to: "2026-02-03T04:05:06.000Z", max_items: 17 }, {} ).url;
     const parsed=new URL(url);
     expect(parsed.searchParams.get("search_query")).toBe("(cat:cs.AI) AND submittedDate:[202601020304 TO 202602030405]");
     expect(parsed.searchParams.get("max_results")).toBe("17");
   });
 
   it("adds bounded pagination to cursor scans",()=>{
-    const url=backfillEndpointUrl("https://example.test/feed","custom",{window:{cursor:2,max_items:25}});
+    const url=sourceConnectorRegistry.get("arxiv_api").buildBackfillRequest({ endpoint_url: "https://export.arxiv.org/api/query?search_query=cat%3Acs.AI", provider_query_json: { search_query: "cat:cs.AI" } }, { from: "2026-01-01T00:00:00.000Z", to: "2026-01-02T00:00:00.000Z", cursor: 2, max_items: 25 }, {} ).url;
     const parsed=new URL(url);
     expect(parsed.searchParams.get("start")).toBe("200");
     expect(parsed.searchParams.get("max_results")).toBe("25");
   });
 
+  it("uses lastUpdatedDate for historical windows when configured", () => {
+    const url = sourceConnectorRegistry.get("arxiv_api").buildBackfillRequest({ endpoint_url: "https://export.arxiv.org/api/query?search_query=cat%3Acs.AI", provider_query_json: { search_query: "cat:cs.AI", monitoring_field: "lastUpdatedDate" } }, {
+        from: "2026-01-01T00:00:00.000Z",
+        to: "2026-01-02T00:00:00.000Z",
+        max_items: 100,
+        monitoring_field: "lastUpdatedDate",
+      }, {} ).url;
+    expect(new URL(url).searchParams.get("search_query")).toContain("lastUpdatedDate:[202601010000 TO 202601020000]");
+  });
+
+  it("keeps an overlap window for incremental arXiv scans", () => {
+    const url = sourceConnectorRegistry.get("arxiv_api").buildScanRequest(
+      { endpoint_url: "https://export.arxiv.org/api/query?search_query=cat%3Acs.AI", provider_query_json: { search_query: "cat:cs.AI", monitoring_field: "submittedDate" } },
+      { last_published_at: "2026-01-03T12:00:00.000Z" },
+    ).url;
+    const parsed = new URL(url);
+    expect(parsed.searchParams.get("search_query")).toContain("submittedDate:[202601011200 TO ");
+    expect(parsed.searchParams.get("start")).toBe("0");
+    expect(parsed.searchParams.get("max_results")).toBe("100");
+    expect(parsed.searchParams.get("sortOrder")).toBe("descending");
+  });
+
   it("claims quota and creates a segment job in one transaction",async()=>{
     const query=vi.fn(async(sql:string)=>{
-      if(sql.startsWith("SELECT * FROM source_backfill_plans"))return{rows:[{status:"approved",source_connection_id:"connection-1",quota_policy_json:{window:"minute",limit_count:2}}],rowCount:1};
+      if(sql.startsWith("SELECT p.project_operation_id"))return{rows:[{project_operation_id:null,project_operation_kind:null}],rowCount:1};
+      if(sql.startsWith("SELECT p.*, o.kind AS project_operation_kind"))return{rows:[{status:"approved",source_channel_id:"channel-1",quota_policy_json:{window:"minute",limit_count:2},strategy_json:{max_items:25},items_ingested:0,project_operation_id:null,project_operation_kind:null,operation_max_items:null}],rowCount:1};
+      if(sql.startsWith("SELECT source_connection_id FROM source_channels"))return{rows:[{source_connection_id:"connection-1"}],rowCount:1};
       if(sql.startsWith("SELECT * FROM source_backfill_segments"))return{rows:[{id:"segment-1",window_json:{cursor:0,max_items:25}}],rowCount:1};
       if(sql.startsWith("UPDATE source_quota_buckets SET used_count"))return{rows:[{reset_at:"2026-01-01T00:01:00.000Z"}],rowCount:1};
       return{rows:[],rowCount:0};
@@ -33,6 +55,7 @@ describe("source backfill extraction windows",()=>{
     expect(result).toMatchObject({segment_id:"segment-1"});
     const statements=query.mock.calls.map(call=>String(call[0]));
     expect(statements[0]).toBe("BEGIN");
+    expect(statements.find(statement => statement.startsWith("INSERT INTO source_quota_buckets"))).toContain('"window"');
     expect(statements).toEqual(expect.arrayContaining([expect.stringContaining("INSERT INTO extraction_jobs"),"COMMIT"]));
     expect(release).toHaveBeenCalledOnce();
   });
@@ -40,7 +63,9 @@ describe("source backfill extraction windows",()=>{
   it("persists the actual quota reset on both segment and plan",async()=>{
     const reset="2026-01-01T00:01:00.000Z";
     const query=vi.fn(async(sql:string)=>{
-      if(sql.startsWith("SELECT * FROM source_backfill_plans"))return{rows:[{status:"running",source_connection_id:"connection-1",quota_policy_json:{window:"minute",limit_count:1}}],rowCount:1};
+      if(sql.startsWith("SELECT p.project_operation_id"))return{rows:[{project_operation_id:null,project_operation_kind:null}],rowCount:1};
+      if(sql.startsWith("SELECT p.*, o.kind AS project_operation_kind"))return{rows:[{status:"running",source_channel_id:"channel-1",quota_policy_json:{window:"minute",limit_count:1},strategy_json:{max_items:25},items_ingested:0,project_operation_id:null,project_operation_kind:null,operation_max_items:null}],rowCount:1};
+      if(sql.startsWith("SELECT source_connection_id FROM source_channels"))return{rows:[{source_connection_id:"connection-1"}],rowCount:1};
       if(sql.startsWith("SELECT * FROM source_backfill_segments"))return{rows:[{id:"segment-1",window_json:{cursor:1}}],rowCount:1};
       if(sql.startsWith("UPDATE source_quota_buckets SET used_count"))return{rows:[],rowCount:0};
       if(sql.startsWith("SELECT reset_at FROM source_quota_buckets"))return{rows:[{reset_at:reset}],rowCount:1};
@@ -55,9 +80,25 @@ describe("source backfill extraction windows",()=>{
 
   it("keys the quota bucket by source connection so two plans on the same connection share one budget", async () => {
     const query = vi.fn(async (sql: string, _params?: readonly unknown[]) => {
-      if (sql.startsWith("SELECT * FROM source_backfill_plans")) {
-        return { rows: [{ status: "approved", source_connection_id: "connection-shared", quota_policy_json: { window: "minute", limit_count: 5 } }], rowCount: 1 };
+      if (sql.startsWith("SELECT p.project_operation_id")) {
+        return { rows: [{ project_operation_id: null, project_operation_kind: null }], rowCount: 1 };
       }
+      if (sql.startsWith("SELECT p.*, o.kind AS project_operation_kind")) {
+        return {
+          rows: [{
+            status: "approved",
+            source_channel_id: "channel-shared",
+            quota_policy_json: { window: "minute", limit_count: 5 },
+            strategy_json: { max_items: 25 },
+            items_ingested: 0,
+            project_operation_id: null,
+            project_operation_kind: null,
+            operation_max_items: null,
+          }],
+          rowCount: 1,
+        };
+      }
+      if (sql.startsWith("SELECT source_connection_id FROM source_channels")) return { rows: [{ source_connection_id: "connection-shared" }], rowCount: 1 };
       if (sql.startsWith("SELECT * FROM source_backfill_segments")) return { rows: [{ id: "segment-1", window_json: { cursor: 0, max_items: 25 } }], rowCount: 1 };
       if (sql.startsWith("UPDATE source_quota_buckets SET used_count")) return { rows: [{ reset_at: "2026-01-01T00:01:00.000Z" }], rowCount: 1 };
       return { rows: [], rowCount: 0 };
@@ -68,5 +109,64 @@ describe("source backfill extraction windows",()=>{
       .map((call) => call[1] as unknown[]);
     for (const args of scopeKeyArgs) expect(args).toContain("connection-shared");
     expect(scopeKeyArgs.some((args) => args.includes("plan-a"))).toBe(false);
+  });
+
+  it("starts a Project Research plan from the user's start action without a proposal", async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.startsWith("SELECT id FROM project_operations")) {
+        return { rows: [{ id: "operation-research" }], rowCount: 1 };
+      }
+      if (sql.startsWith("SELECT status FROM source_backfill_plans")) {
+        return { rows: [{ status: "draft" }], rowCount: 1 };
+      }
+      if (sql.startsWith("SELECT p.project_operation_id")) {
+        return { rows: [{ project_operation_id: "operation-research", project_operation_kind: "research" }], rowCount: 1 };
+      }
+      if (sql.startsWith("SELECT p.*, o.kind AS project_operation_kind")) {
+        return {
+          rows: [{
+            status: "approved",
+            source_channel_id: "channel-research",
+            quota_policy_json: { window: "minute", limit_count: 2 },
+            strategy_json: {},
+            items_ingested: 0,
+            project_operation_id: "operation-research",
+            project_operation_kind: "research",
+            operation_max_items: 25,
+          }],
+          rowCount: 1,
+        };
+      }
+      if (sql.startsWith("SELECT * FROM source_backfill_segments")) {
+        return { rows: [{ id: "segment-research", window_json: { cursor: 0, max_items: 25 } }], rowCount: 1 };
+      }
+      if (sql.startsWith("SELECT source_connection_id FROM source_channels")) {
+        return { rows: [{ source_connection_id: "connection-research" }], rowCount: 1 };
+      }
+      if (sql.startsWith("SELECT COALESCE(SUM(items_ingested)")) {
+        return { rows: [{ settled: "0" }], rowCount: 1 };
+      }
+      if (sql.startsWith("SELECT COALESCE(SUM(COALESCE(NULLIF")) {
+        return { rows: [{ reserved: "0" }], rowCount: 1 };
+      }
+      if (sql.startsWith("UPDATE source_quota_buckets SET used_count")) {
+        return { rows: [{ reset_at: "2026-01-01T00:01:00.000Z" }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+
+    const result = await new SourceBackfillExecutionService({ query } as Queryable).startUserAuthorized(
+      "space-1",
+      "plan-research",
+      "operation-research",
+      "user-1",
+    );
+
+    expect(result).toMatchObject({ segment_id: "segment-research" });
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining("SET status='approved', proposal_id=NULL"),
+      ["plan-research", "space-1", "operation-research", "user-1"],
+    );
+    expect(query.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO proposals"))).toBe(false);
   });
 });

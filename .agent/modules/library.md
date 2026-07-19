@@ -3,9 +3,8 @@
 ## Status
 
 **IMPLEMENTED** — frontend reading surface lives in
-`apps/web/src/modules/library/`. Backend reads are served by Sources item and
-post-processing endpoints under `/api/v1/sources/items*` and
-`/api/v1/sources/briefings*`.
+`apps/web/src/modules/library/`. Backend collection reads are served by Sources;
+document and annotation reads use the shared Reader API under `/api/v1/reader/*`.
 
 ## Purpose
 
@@ -50,8 +49,8 @@ source pipeline, subscription model, data model, and API.
   served at `/sources/project-items`.
 - Source recommendation/subscription decisions (`modules/sources.md`).
 - Activity Inbox notification lifecycle (`modules/activity-inbox.md`).
-- Sources reader annotation storage/APIs; Library composes the shared reader UI
-  with Sources-owned annotation endpoints.
+- Reader document resolution or annotation storage; Library supplies the
+  source-specific wrapper around the shared Reader workspace.
 
 ## Flow
 
@@ -69,6 +68,10 @@ source_connection_user_subscriptions (subscribed + library_enabled)
   -> GET /api/v1/sources/items
   -> /library/items or /library/items/:type
   -> /library/items/:itemId reader
+
+source item resolver + shared annotations
+  -> GET /api/v1/reader/documents/source_item/:itemId
+  -> /library/items/:itemId ReaderWorkspace
 ```
 
 `GET /api/v1/sources/items` is Library-only. Project collection views use
@@ -93,6 +96,7 @@ it does not mutate project source bindings or source subscriptions.
 
 - `apps/web/src/modules/library/`
 - `apps/web/src/components/reader/`
+- `server/src/modules/reader/`
 - `server/src/modules/sources/postProcessing/`
 - `server/migrations/0001_baseline.sql`
 

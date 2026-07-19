@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Queryable } from "../routeUtils/common";
-import { listDueSourceConnectionScanTasks } from "./sourceConnectionScheduler";
+import { listDueSourceChannelScanTasks } from "./sourceConnectionScheduler";
 import { computeNextRunAtFromScheduleRule, parseSourceScheduleRule } from "./sourceScheduleInput";
 
 const INTERVAL_MS: Record<string, number> = {
@@ -31,35 +31,37 @@ export function computeNextCheckAt(
 }
 
 /**
- * built_in-only: `SourceExtractionWorker` dispatches on a fixed
- * `connector_key` allowlist (rss/atom/web_page) and 422s on anything else.
- * Custom Source connections are polled separately by
- * `enqueueDueCustomSourceHandlerRuns` (customSourceScanSchedule.ts).
+ * Every scheduled scan is owned by a Channel. A Connection is only the
+ * policy/credential boundary and may therefore back multiple independent
+ * schedules.
  */
-export async function enqueueDueSourceConnectionScans(
+export async function enqueueDueSourceChannelScans(
   db: Queryable,
   batchLimit = 25,
 ): Promise<number> {
   const now = new Date().toISOString();
-  const tasks = await listDueSourceConnectionScanTasks(db, now, batchLimit);
+  const tasks = await listDueSourceChannelScanTasks(db, now, batchLimit);
   let enqueued = 0;
   for (const task of tasks) {
     if (!task.space_id) continue;
-    const due = await db.query<{ id: string; space_id: string }>(
-      `SELECT sc.id, sc.space_id
-         FROM source_connections sc
-        WHERE sc.status = 'active'
+    const due = await db.query<{ id: string; space_id: string; source_connection_id: string }>(
+      `SELECT ch.id, ch.space_id, ch.source_connection_id
+         FROM source_channels ch
+         JOIN source_connections sc ON sc.id = ch.source_connection_id
+        WHERE ch.status = 'active'
+          AND sc.status = 'active'
           AND sc.deleted_at IS NULL
-          AND sc.space_id = $1
-          AND sc.id = $2
+          AND ch.space_id = $1
+          AND ch.id = $2
+          AND ch.fetch_frequency <> 'manual'
           AND sc.handler_kind = 'built_in'
-          AND sc.fetch_frequency <> 'manual'
           AND NOT EXISTS (
             SELECT 1
               FROM extraction_jobs ej
-             WHERE ej.space_id = sc.space_id
-               AND ej.connection_id = sc.id
+             WHERE ej.space_id = ch.space_id
+               AND ej.connection_id = ch.source_connection_id
                AND ej.job_type = 'connection_scan'
+               AND ej.metadata_json->>'source_channel_id' = ch.id
                AND ej.status IN ('pending', 'running')
           )
         LIMIT 1`,
@@ -74,8 +76,8 @@ export async function enqueueDueSourceConnectionScans(
       [
         randomUUID(),
         row.space_id,
-        row.id,
-        JSON.stringify({ created_by: "scheduler" }),
+        row.source_connection_id,
+        JSON.stringify({ created_by: "scheduler", source_channel_id: row.id }),
         now,
       ],
     );
@@ -83,6 +85,7 @@ export async function enqueueDueSourceConnectionScans(
   }
   return enqueued;
 }
+
 
 function dateValue(value: unknown): Date | null {
   if (!value) return null;

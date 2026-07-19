@@ -13,6 +13,7 @@ import { Input } from '../../components/ui/input'
 import { Label } from '../../components/ui/label'
 import { Skeleton } from '../../components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs'
+import { notifyReviewAttentionChanged } from '../../core/reviewAttention'
 
 type InboxTab = 'signals' | 'bundles' | 'evidence' | 'approval'
 
@@ -83,7 +84,7 @@ export default function EvolutionInboxPage() {
     setBusy(`decision:${proposalId}`)
     try {
       const updated = await evolutionApi.decideBundle(selectedBundle.id, [{ proposal_id: proposalId, decision }])
-      setSelectedBundle(updated); setBundles(current => current.map(bundle => bundle.id === updated.id ? updated : bundle)); await load()
+      setSelectedBundle(updated); setBundles(current => current.map(bundle => bundle.id === updated.id ? updated : bundle)); notifyReviewAttentionChanged(); await load()
     } catch (error) { toast.error(errMsg(error)) } finally { setBusy(null) }
   }
 
@@ -105,6 +106,7 @@ export default function EvolutionInboxPage() {
           await proposalsApi.accept(proposalId)
         }
       } else await proposalsApi.reject(proposalId)
+      notifyReviewAttentionChanged()
       await load()
       toast.success(decision === 'approve' && isEgressProposal(proposal) ? 'Egress approval recorded' : decision === 'approve' ? 'Proposal approved' : 'Proposal rejected')
     } catch (error) { toast.error(errMsg(error)) } finally { setBusy(null) }

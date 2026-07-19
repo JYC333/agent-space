@@ -6,7 +6,7 @@ import { SpaceLink as Link } from '../../core/spaceNav'
 import { sourcesApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
 import { errMsg } from '../../lib/utils'
-import type { ExtractionJob, SourceConnection, SourceItem, SourcePostProcessingBriefingDaySummary } from '../../types/api'
+import type { ExtractionJob, SourceChannel, SourceItem, SourcePostProcessingBriefingDaySummary } from '../../types/api'
 import { Card } from '../../components/ui/card'
 import { Badge, StatusBadge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'
@@ -112,7 +112,7 @@ function DecisionCounts({ counts }: { counts: SourcePostProcessingBriefingDaySum
 
 function BriefingCard({ item }: { item: SourcePostProcessingBriefingDaySummary }) {
   return (
-    <Link to={`/library/digests/${item.source_connection_id}/${item.date}`} className="block">
+    <Link to={`/library/digests/${item.source_channel_id}/${item.date}`} className="block">
       <Card className="p-4 space-y-2 hover:bg-accent/40 transition-colors">
         <div className="flex items-start justify-between gap-3">
           <div>
@@ -245,33 +245,38 @@ export function LibraryPdfsPage() {
 
 function LibraryItemsRoute({ libraryType }: { libraryType?: LibraryItemTypeFilter }) {
   const { activeSpaceId } = useSpace()
-  const [connections, setConnections] = useState<SourceConnection[]>([])
+  const [channels, setChannels] = useState<SourceChannel[]>([])
   const [sourceItems, setSourceItems] = useState<SourceItem[]>([])
   const [itemTotal, setItemTotal] = useState(0)
   const [itemOffset, setItemOffset] = useState(0)
   const [itemFilter, setItemFilter] = useState<ItemFilter>('open')
   const [itemQuery, setItemQuery] = useState('')
-  const [connectionFilter, setConnectionFilter] = useState('')
+  const [channelFilter, setChannelFilter] = useState('')
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
   const [extractionStatuses, setExtractionStatuses] = useState<Record<string, ExtractionJob['status']>>({})
 
-  const connectionNameById = useMemo(
-    () => new Map(connections.map(connection => [connection.id, connection.name])),
-    [connections],
+  const channelByConnectionId = useMemo(
+    () => new Map(channels.map(channel => [channel.source_connection_id, channel])),
+    [channels],
   )
 
-  const connectionOptions = useMemo(
+  const channelOptions = useMemo(
     () => [
       { value: '', label: 'All sources' },
-      ...connections.map(connection => ({ value: connection.id, label: connection.name })),
+      ...channels.map(channel => ({ value: channel.id, label: `${channel.name} · ${channel.provider.display_name ?? channel.provider.key ?? 'Provider'}` })),
     ],
-    [connections],
+    [channels],
+  )
+
+  const selectedConnectionId = useMemo(
+    () => channelFilter ? channels.find(channel => channel.id === channelFilter)?.source_connection_id : undefined,
+    [channelFilter, channels],
   )
 
   const load = useCallback(async () => {
     if (!activeSpaceId) {
-      setConnections([])
+      setChannels([])
       setSourceItems([])
       setItemTotal(0)
       setLoading(false)
@@ -280,18 +285,18 @@ function LibraryItemsRoute({ libraryType }: { libraryType?: LibraryItemTypeFilte
     setLoading(true)
     try {
       const itemStatus = itemFilter
-      const [connectionPage, itemPage] = await Promise.all([
-        sourcesApi.connections({ view: 'subscribed', limit: 100 }),
+      const [channelRows, itemPage] = await Promise.all([
+        sourcesApi.channels(),
         sourcesApi.items({
           library_status: itemStatus,
-          connection_id: connectionFilter || undefined,
+          connection_id: selectedConnectionId,
           q: itemQuery.trim() || undefined,
           library_type: libraryType,
           limit: ITEM_PAGE_SIZE,
           offset: itemOffset,
         }),
       ])
-      setConnections(connectionPage.items)
+      setChannels(channelRows)
       setSourceItems(itemPage.items)
       setItemTotal(itemPage.total)
     } catch (e) {
@@ -299,7 +304,7 @@ function LibraryItemsRoute({ libraryType }: { libraryType?: LibraryItemTypeFilte
     } finally {
       setLoading(false)
     }
-  }, [activeSpaceId, itemFilter, itemQuery, connectionFilter, libraryType, itemOffset])
+  }, [activeSpaceId, itemFilter, itemQuery, channelFilter, libraryType, itemOffset, selectedConnectionId])
 
   useEffect(() => { load() }, [load])
 
@@ -313,8 +318,8 @@ function LibraryItemsRoute({ libraryType }: { libraryType?: LibraryItemTypeFilte
     setItemOffset(0)
   }
 
-  function changeConnectionFilter(value: string) {
-    setConnectionFilter(value)
+  function changeChannelFilter(value: string) {
+    setChannelFilter(value)
     setItemOffset(0)
   }
 
@@ -380,9 +385,9 @@ function LibraryItemsRoute({ libraryType }: { libraryType?: LibraryItemTypeFilte
             />
           </div>
           <Select
-            value={connectionFilter}
-            options={connectionOptions}
-            onChange={changeConnectionFilter}
+            value={channelFilter}
+            options={channelOptions}
+            onChange={changeChannelFilter}
           />
           <Select
             value={itemFilter}
@@ -416,7 +421,7 @@ function LibraryItemsRoute({ libraryType }: { libraryType?: LibraryItemTypeFilte
             <SourceItemCard
               key={item.id}
               item={item}
-              connectionName={item.connection_id ? connectionNameById.get(item.connection_id) ?? null : null}
+              connectionName={item.connection_id ? channelByConnectionId.get(item.connection_id)?.name ?? null : null}
               busy={busy}
               extractionStatus={extractionStatuses[item.id] ?? null}
               onAction={itemAction}
@@ -487,7 +492,7 @@ export function LibraryDigestsPage() {
       ) : (
         <div className="space-y-3">
           {briefings.map(item => (
-            <BriefingCard key={`${item.source_connection_id}:${item.date}`} item={item} />
+            <BriefingCard key={`${item.source_channel_id}:${item.date}`} item={item} />
           ))}
         </div>
       )}

@@ -1099,5 +1099,8 @@
   },
   {
     "action":"source.backfill.manage","resource_type":"source_backfill_plan","default_risk_level":"medium","default_decision":"allow","audit_required":true,"approval_capability":null,"default_required_approver_role":null,"current_enforcement_point":"server/src/modules/sources/routes.ts","description":"Pause or resume a Source history import plan.","lifecycle_status":"wired_direct","record_failure_mode":"fail_closed"
+  },
+  {
+    "action":"task.plan.propose","resource_type":"plan","default_risk_level":"medium","default_decision":"allow","audit_required":true,"approval_capability":null,"default_required_approver_role":null,"current_enforcement_point":"server/src/modules/systemActions/agentToolGateway.ts","description":"Submit an Agent-generated execution Plan for a source Task.","lifecycle_status":"wired_direct","record_failure_mode":"fail_closed"
   }
 ]

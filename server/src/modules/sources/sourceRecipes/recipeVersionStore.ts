@@ -5,7 +5,7 @@ import type {
   SourceRecipeDryRunResult,
 } from "@agent-space/protocol" with { "resolution-mode": "import" };
 import { dateIso, type Queryable } from "../../routeUtils/common";
-import { getSourceConnectionScanTask, upsertSourceConnectionScanTask } from "../sourceConnectionScheduler";
+import { getSourceChannelScanTask, upsertSourceChannelScanTask } from "../sourceConnectionScheduler";
 import { resolveRequestedSourceSchedule } from "../sourceScheduleInput";
 
 /**
@@ -182,19 +182,26 @@ export async function activateSourceRecipeVersionTx(
   },
 ): Promise<string> {
   const now = new Date().toISOString();
-  const existingScheduleTask = await getSourceConnectionScanTask(db, input.connectionId);
+  const existingScheduleTask = await db.query<{ id: string }>(
+    `SELECT id FROM source_channels WHERE source_connection_id = $1 AND space_id = $2 AND status <> 'archived' ORDER BY updated_at DESC LIMIT 1`,
+    [input.connectionId, input.spaceId],
+  );
+  const channelId = existingScheduleTask.rows[0]?.id;
+  if (!channelId) throw new Error("Source recipe connection has no active channel");
+  const scheduleTask = await getSourceChannelScanTask(db, channelId);
   const currentConnection = await db.query<{
     id: string;
     space_id: string;
-    owner_user_id: string;
     fetch_frequency: string;
     schedule_rule_json: unknown;
+    owner_user_id: string;
   }>(
-    `SELECT id, space_id, owner_user_id, fetch_frequency, schedule_rule_json
-       FROM source_connections
-      WHERE id = $1 AND space_id = $2
+    `SELECT sc.id, sc.space_id, sc.owner_user_id, ch.fetch_frequency, ch.schedule_rule_json
+       FROM source_connections sc
+       JOIN source_channels ch ON ch.source_connection_id = sc.id AND ch.id = $3
+      WHERE sc.id = $1 AND sc.space_id = $2
       FOR UPDATE`,
-    [input.connectionId, input.spaceId],
+    [input.connectionId, input.spaceId, channelId],
   );
   const current = currentConnection.rows[0];
   const schedule = current
@@ -202,7 +209,7 @@ export async function activateSourceRecipeVersionTx(
         body: { next_check_at: input.nextCheckAt, schedule_rule: input.scheduleRule },
         status: "active",
         fetchFrequency: current.fetch_frequency,
-        existingNextCheckAt: existingScheduleTask?.next_run_at,
+        existingNextCheckAt: scheduleTask?.next_run_at,
         existingScheduleRule: current.schedule_rule_json,
       })
     : null;
@@ -221,22 +228,30 @@ export async function activateSourceRecipeVersionTx(
     space_id: string;
     owner_user_id: string;
     status: string;
-    fetch_frequency: string;
   }>(
     `UPDATE source_connections
         SET active_recipe_version_id = $3,
             repair_status = 'ok',
             status = 'active',
-            schedule_rule_json = $4::jsonb,
-            updated_at = $5
+            updated_at = $4
       WHERE id = $1 AND space_id = $2
-      RETURNING id, space_id, owner_user_id, status, fetch_frequency`,
-    [input.connectionId, input.spaceId, input.versionId, JSON.stringify(schedule?.scheduleRule ?? null), now],
+      RETURNING id, space_id, owner_user_id, status`,
+    [input.connectionId, input.spaceId, input.versionId, now],
   );
   const connection = updatedConnection.rows[0];
   if (connection && schedule) {
-    await upsertSourceConnectionScanTask(db, {
-      connection,
+    await db.query(
+      `UPDATE source_channels SET status='active', fetch_frequency=$3, schedule_rule_json=$4::jsonb, updated_at=$5 WHERE id=$1 AND space_id=$2`,
+      [channelId, input.spaceId, current?.fetch_frequency ?? "daily", JSON.stringify(schedule.scheduleRule ?? null), now],
+    );
+    await upsertSourceChannelScanTask(db, {
+      channel: {
+        id: channelId,
+        space_id: input.spaceId,
+        owner_user_id: connection.owner_user_id,
+        status: "active",
+        fetch_frequency: current?.fetch_frequency ?? "daily",
+      },
       nextRunAt: schedule.nextRunAt,
       updatedAt: now,
     });

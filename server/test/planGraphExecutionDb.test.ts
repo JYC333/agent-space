@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, inject, it } from "vitest";
+import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { getTestPostgres, type TestPostgresDatabase } from "./support/sharedPostgres";
 import { migrate } from "../src/db/migrator";
@@ -80,6 +81,14 @@ beforeEach(async () => {
                '[]'::jsonb, '{"allowed_tools":["task.plan.propose"]}'::jsonb,
                '{}'::jsonb, $4)`,
     [AGENT_VERSION, AGENT, SPACE, now],
+  );
+  await pool.query(
+    `INSERT INTO agent_runtime_profiles (
+       id, space_id, agent_id, name, adapter_type, runtime_config_json,
+       runtime_policy_json, enabled, is_default, created_at, updated_at
+     ) VALUES ($1, $2, $3, 'Default', 'model_api', '{"adapter_type":"model_api"}'::jsonb,
+       '{}'::jsonb, true, true, $4, $4)`,
+    [randomUUID(), SPACE, AGENT, now],
   );
   await pool.query(`UPDATE agents SET current_version_id = $2 WHERE id = $1 AND space_id = $3`, [AGENT, AGENT_VERSION, SPACE]);
 });
@@ -181,8 +190,25 @@ describeWithPostgres("Task to Agent Plan real PostgreSQL lifecycle", () => {
     expect((await pool.query(`SELECT count(*)::int AS count FROM tasks WHERE space_id = $1 AND id <> $2`, [SPACE, TASK])).rows[0]?.count).toBe(0);
 
     const runs = new PgRunRepository(pool);
+    const planArtifactId = randomUUID();
+    await pool.query(
+      `INSERT INTO artifacts (
+         id, space_id, run_id, artifact_type, title, export_formats_json,
+         created_at, updated_at
+       ) VALUES ($1, $2, $3, 'result', 'Plan result', '[]'::jsonb, $4, $4)`,
+      [planArtifactId, SPACE, nodeRun!.run_id, now],
+    );
     await runs.markRunRunning({ run_id: nodeRun!.run_id, space_id: SPACE, started_at: new Date().toISOString() });
-    await runs.markRunTerminal({ run_id: nodeRun!.run_id, space_id: SPACE, status: "succeeded", output_json: { result: "done" }, completed_at: new Date().toISOString() });
+    await runs.markRunTerminal({
+      run_id: nodeRun!.run_id,
+      space_id: SPACE,
+      status: "succeeded",
+      output_json: {
+        result: "done",
+        materialization: [{ kind: "artifact", status: "succeeded", artifact_id: planArtifactId }],
+      },
+      completed_at: new Date().toISOString(),
+    });
     await runs.insertRunEvaluation({
       space_id: SPACE,
       run_id: nodeRun!.run_id,
@@ -240,7 +266,20 @@ describeWithPostgres("Task to Agent Plan real PostgreSQL lifecycle", () => {
           metadata_json: {},
           nodes: [
             { id: "work", title: "Run workflow work", depends_on: [], capability_id: "workflow-work", contract_json: {}, metadata_json: {} },
-            { id: "checkpoint", title: "Approve workflow result", depends_on: ["work"], approval_checkpoint: { required: true, proposal_type: "workflow_execution_checkpoint" }, contract_json: {}, metadata_json: {} },
+            {
+              id: "consume",
+              title: "Consume workflow output",
+              depends_on: ["work"],
+              capability_id: "workflow-consume",
+              input_bindings: [
+                { name: "summary", from_node: "work", source: "output_text" },
+                { name: "answer", from_node: "work", source: "output_json", json_pointer: "/result/answer" },
+                { name: "report", from_node: "work", source: "artifact", artifact_type: "report" },
+              ],
+              contract_json: {},
+              metadata_json: {},
+            },
+            { id: "checkpoint", title: "Approve workflow result", depends_on: ["consume"], approval_checkpoint: { required: true, proposal_type: "workflow_execution_checkpoint" }, contract_json: {}, metadata_json: {} },
           ],
         },
       },
@@ -250,6 +289,25 @@ describeWithPostgres("Task to Agent Plan real PostgreSQL lifecycle", () => {
       budgetSources: [],
     });
     expect((await pool.query(`SELECT count(*)::int AS count FROM plans WHERE space_id = $1`, [SPACE])).rows[0]?.count).toBe(0);
+    expect((await pool.query<{
+      run_role: string;
+      runtime_profile_id: string | null;
+      adapter_type: string | null;
+      attempt_count: number;
+    }>(
+      `SELECT root.run_role, root.runtime_profile_id, root.adapter_type,
+              count(attempt.id)::int AS attempt_count
+         FROM runs root
+         LEFT JOIN run_attempts attempt ON attempt.run_id = root.id AND attempt.space_id = root.space_id
+        WHERE root.space_id = $1 AND root.id = $2
+        GROUP BY root.id`,
+      [SPACE, execution.rootRunId],
+    )).rows[0]).toEqual({
+      run_role: "coordinator",
+      runtime_profile_id: null,
+      adapter_type: null,
+      attempt_count: 0,
+    });
     await new PgAutomationRepository(pool).createAutomationRun({
       automationId: AUTOMATION,
       runId: execution.rootRunId,
@@ -267,10 +325,63 @@ describeWithPostgres("Task to Agent Plan real PostgreSQL lifecycle", () => {
     )).rows[0];
     expect(work).toBeTruthy();
     const runs = new PgRunRepository(pool);
+    const artifactId = randomUUID();
+    await pool.query(
+      `INSERT INTO artifacts (
+         id, space_id, run_id, artifact_type, title, export_formats_json,
+         created_at, updated_at
+       ) VALUES ($1, $2, $3, 'report', 'Workflow report', '[]'::jsonb, $4, $4)`,
+      [artifactId, SPACE, work!.run_id, now],
+    );
     await runs.markRunRunning({ run_id: work!.run_id, space_id: SPACE, started_at: new Date().toISOString() });
-    await runs.markRunTerminal({ run_id: work!.run_id, space_id: SPACE, status: "succeeded", output_json: { result: "workflow done" }, completed_at: new Date().toISOString() });
+    await runs.markRunTerminal({
+      run_id: work!.run_id,
+      space_id: SPACE,
+      status: "succeeded",
+      output_text: "workflow done",
+      output_json: { result: { answer: 42 } },
+      completed_at: new Date().toISOString(),
+    });
     await runs.insertRunEvaluation({ space_id: SPACE, run_id: work!.run_id, outcome_status: "passed", trajectory_status: "acceptable", evaluated_at: new Date().toISOString() });
-    await service.reconcileForRun(pool, SPACE, work!.run_id, USER);
+    await Promise.all([
+      service.reconcileForRun(pool, SPACE, work!.run_id, USER),
+      service.reconcileForRun(pool, SPACE, work!.run_id, USER),
+    ]);
+
+    const consume = (await pool.query<{
+      run_id: string;
+      resolved_inputs_json: { values: Record<string, unknown>; contextArtifactIds: string[] };
+      contract_snapshot_json: { upstream_inputs_json: { values: Record<string, unknown> } };
+      request_json: { context_artifact_ids: string[] };
+    }>(
+      `SELECT wr.run_id, wr.resolved_inputs_json, r.contract_snapshot_json, snapshot.request_json
+         FROM workflow_execution_node_runs wr
+         JOIN workflow_execution_nodes n ON n.id = wr.node_id AND n.space_id = wr.space_id
+         JOIN runs r ON r.id = wr.run_id AND r.space_id = wr.space_id
+         JOIN context_snapshots snapshot ON snapshot.id = r.context_snapshot_id AND snapshot.space_id = r.space_id
+        WHERE wr.space_id = $1 AND n.execution_id = $2 AND n.node_key = 'consume'`,
+      [SPACE, execution.workflowExecutionId],
+    )).rows[0];
+    expect(consume).toBeTruthy();
+    expect((await pool.query<{ count: number }>(
+      `SELECT count(*)::int AS count
+         FROM workflow_execution_node_runs wr
+         JOIN workflow_execution_nodes n ON n.id = wr.node_id AND n.space_id = wr.space_id
+        WHERE wr.space_id = $1 AND n.execution_id = $2 AND n.node_key = 'consume'`,
+      [SPACE, execution.workflowExecutionId],
+    )).rows[0]?.count).toBe(1);
+    expect(consume!.resolved_inputs_json.values).toEqual({
+      summary: "workflow done",
+      answer: 42,
+      report: { artifact_id: artifactId, artifact_type: "report" },
+    });
+    expect(consume!.contract_snapshot_json.upstream_inputs_json.values).toEqual(consume!.resolved_inputs_json.values);
+    expect(consume!.request_json.context_artifact_ids).toContain(artifactId);
+
+    await runs.markRunRunning({ run_id: consume!.run_id, space_id: SPACE, started_at: new Date().toISOString() });
+    await runs.markRunTerminal({ run_id: consume!.run_id, space_id: SPACE, status: "succeeded", output_json: { result: "consumed" }, completed_at: new Date().toISOString() });
+    await runs.insertRunEvaluation({ space_id: SPACE, run_id: consume!.run_id, outcome_status: "passed", trajectory_status: "acceptable", evaluated_at: new Date().toISOString() });
+    await service.reconcileForRun(pool, SPACE, consume!.run_id, USER);
 
     const checkpoint = (await pool.query<{ proposal_id: string }>(
       `SELECT approval_proposal_id AS proposal_id FROM workflow_execution_nodes WHERE space_id = $1 AND execution_id = $2 AND node_key = 'checkpoint'`,
@@ -288,5 +399,78 @@ describeWithPostgres("Task to Agent Plan real PostgreSQL lifecycle", () => {
       [SPACE, execution.workflowExecutionId],
     )).rows[0];
     expect(finalState).toEqual({ execution_status: "completed", root_status: "succeeded", linked_execution_id: execution.workflowExecutionId });
+  });
+
+  it("fails closed for a missing required binding while an optional sibling continues", async () => {
+    if (!available || !pool) return;
+    const now = new Date().toISOString();
+    await pool.query(
+      `INSERT INTO automations (
+         id, space_id, owner_user_id, agent_id, name, trigger_type, status,
+         config_json, created_at, updated_at
+       ) VALUES ($1, $2, $3, $4, 'Binding workflow', 'manual', 'active',
+                 '{"target_type":"workflow"}'::jsonb, $5, $5)`,
+      [AUTOMATION, SPACE, USER, AGENT, now],
+    );
+    const automation = {
+      id: AUTOMATION, space_id: SPACE, owner_user_id: USER, agent_id: AGENT,
+      workspace_id: null, project_id: null, name: "Binding workflow", description: null,
+      trigger_type: "manual", status: "active", preflight_snapshot_json: null,
+      config_json: { target_type: "workflow" }, next_run_at: null, last_fired_at: null,
+      created_at: now, updated_at: now,
+    };
+    const service = new WorkflowExecutionService();
+    const execution = await service.start({
+      db: pool,
+      identity,
+      automation,
+      target: {
+        versionId: "workflow-version-bindings",
+        resolutionTrace: [],
+        contentJson: {
+          schema_version: "workflow_definition.v1",
+          workflow_id: "binding-failure-workflow",
+          name: "Binding failure workflow",
+          description: "Checks required and optional inputs.",
+          input_schema_json: {}, output_artifact_types: [], metadata_json: {},
+          nodes: [
+            { id: "source", title: "Source", depends_on: [], capability_id: "source", contract_json: {}, metadata_json: {} },
+            { id: "required", title: "Required", depends_on: ["source"], capability_id: "required", input_bindings: [{ name: "missing", from_node: "source", source: "output_text" }], contract_json: {}, metadata_json: {} },
+            { id: "optional", title: "Optional", depends_on: ["source"], capability_id: "optional", input_bindings: [{ name: "missing", from_node: "source", source: "output_text", required: false }], contract_json: {}, metadata_json: {} },
+          ],
+        },
+      },
+      triggerType: "manual", inputJson: {}, preflightSnapshot: { executable: true }, budgetSources: [],
+    });
+    const sourceRun = (await pool.query<{ run_id: string }>(
+      `SELECT link.run_id FROM workflow_execution_node_runs link
+       JOIN workflow_execution_nodes node ON node.id = link.node_id AND node.space_id = link.space_id
+       WHERE node.execution_id = $1 AND node.node_key = 'source'`,
+      [execution.workflowExecutionId],
+    )).rows[0]!.run_id;
+    const runs = new PgRunRepository(pool);
+    await runs.markRunRunning({ run_id: sourceRun, space_id: SPACE, started_at: now });
+    await runs.markRunTerminal({ run_id: sourceRun, space_id: SPACE, status: "succeeded", output_json: {}, completed_at: now });
+    await runs.insertRunEvaluation({ space_id: SPACE, run_id: sourceRun, outcome_status: "passed", trajectory_status: "acceptable", evaluated_at: now });
+    await service.reconcileForRun(pool, SPACE, sourceRun, USER);
+
+    const states = (await pool.query<{
+      node_key: string; status: string; blocked_reason: string | null;
+      run_count: number; resolved_inputs_json: { values: Record<string, unknown>; bindings: Array<{ missing_reason: string | null }> } | null;
+    }>(
+      `SELECT node.node_key, node.status, node.blocked_reason,
+              count(link.id)::int AS run_count,
+              max(link.resolved_inputs_json::text)::jsonb AS resolved_inputs_json
+         FROM workflow_execution_nodes node
+         LEFT JOIN workflow_execution_node_runs link ON link.node_id = node.id AND link.space_id = node.space_id
+        WHERE node.execution_id = $1 AND node.node_key IN ('required', 'optional')
+        GROUP BY node.id ORDER BY node.node_key`,
+      [execution.workflowExecutionId],
+    )).rows;
+    expect(states[0]).toMatchObject({ node_key: "optional", status: "in_progress", run_count: 1 });
+    expect(states[0]!.resolved_inputs_json?.values).toEqual({ missing: null });
+    expect(states[0]!.resolved_inputs_json?.bindings[0]?.missing_reason).toBe("output_text_missing");
+    expect(states[1]).toMatchObject({ node_key: "required", status: "failed", run_count: 0 });
+    expect(states[1]!.blocked_reason).toBe("input_binding_unresolved:missing:output_text_missing");
   });
 });

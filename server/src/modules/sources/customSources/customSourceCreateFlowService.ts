@@ -16,7 +16,7 @@ import {
   type Queryable,
   type SpaceUserIdentity,
 } from "../../routeUtils/common";
-import { SourceConnectionService } from "../sourceConnectionService";
+import { SourceChannelService } from "../channels/sourceChannelService";
 import {
   HANDLER_RUN_COLUMNS,
   HANDLER_VERSION_COLUMNS,
@@ -36,7 +36,7 @@ import {
   generateCustomSourceHandlerSource,
 } from "./customSourceHandlerTemplate";
 import { insertProposalRow } from "../../proposals/reviewPackets";
-import { getSourceConnectionScanTask, upsertSourceConnectionScanTask } from "../sourceConnectionScheduler";
+import { getSourceChannelScanTask, upsertSourceChannelScanTask } from "../sourceConnectionScheduler";
 import { resolveRequestedSourceSchedule } from "../sourceScheduleInput";
 import { loadProtocol } from "../../providers/protocolRuntime";
 import { CUSTOM_SOURCE_PIPELINE_HANDLER_ENTRYPOINT } from "./customSourcePipelineInterpreter";
@@ -84,9 +84,8 @@ export class CustomSourceCreateFlowService {
 
     const config = objectValue(body.config);
     return withDbTransaction(this.pool, async (client) => {
-      const connections = new SourceConnectionService(client, this.config);
-      const connection = await connections.createConnection(identity, {
-        connector_key: "custom_source",
+      const channel = await new SourceChannelService(client, this.config).create(identity, {
+        provider_key: "custom_source",
         name: requiredString(body.name, "name"),
         endpoint_url: endpointUrl,
         credential_id: credentialId,
@@ -95,31 +94,28 @@ export class CustomSourceCreateFlowService {
         schedule_rule: body.schedule_rule,
         capture_policy: optionalString(config.capture_policy) ?? settings.space.default_capture_policy,
         policy: { retention_policy: optionalString(config.retention_policy) ?? settings.space.default_retention_policy },
+        status: "paused",
+        query: { config },
         config,
-      }, { allowCustomSourceConnector: true });
+      });
       const now = new Date().toISOString();
-      const updatedConnection = await client.query<{
-        id: string;
-        space_id: string;
-        owner_user_id: string;
-        status: string;
-        fetch_frequency: string;
-      }>(
+      await client.query(
         `UPDATE source_connections
             SET handler_kind = 'generated_custom', status = 'paused', updated_at = $3
           WHERE id = $1 AND space_id = $2
-          RETURNING id, space_id, owner_user_id, status, fetch_frequency`,
-        [connection.id, identity.spaceId, now],
+          RETURNING id`,
+        [channel.source_connection_id, identity.spaceId, now],
       );
-      const schedulerConnection = updatedConnection.rows[0];
-      if (schedulerConnection) {
-        await upsertSourceConnectionScanTask(client, {
-          connection: schedulerConnection,
-          nextRunAt: connection.next_check_at,
-          updatedAt: now,
-        });
-      }
-      return { ...connection, handler_kind: "generated_custom", status: "paused" };
+      // Custom Source lifecycle methods and routes are keyed by the underlying
+      // connection. Preserve the channel id explicitly for channel-scoped
+      // reads while making the public `id` unambiguous for this API.
+      return {
+        ...channel,
+        id: channel.source_connection_id,
+        source_channel_id: channel.id,
+        handler_kind: "generated_custom",
+        status: "paused",
+      };
     });
   }
 
@@ -377,7 +373,11 @@ export class CustomSourceCreateFlowService {
 
     const settings = await new PgCustomSourceHandlerRepository(this.pool, this.config).getEffectiveSettings(identity);
     const activePointer = await this.pool.query<{ active_handler_version_id: string | null; fetch_frequency: string }>(
-      `SELECT active_handler_version_id, fetch_frequency FROM source_connections WHERE space_id = $1 AND id = $2`,
+      `SELECT sc.active_handler_version_id, ch.fetch_frequency
+         FROM source_connections sc
+         JOIN source_channels ch ON ch.source_connection_id = sc.id AND ch.status <> 'archived'
+        WHERE sc.space_id = $1 AND sc.id = $2
+        ORDER BY ch.updated_at DESC LIMIT 1`,
       [identity.spaceId, connectionId],
     );
     const activeVersionId = activePointer.rows[0]?.active_handler_version_id ?? null;
@@ -535,8 +535,11 @@ export class CustomSourceCreateFlowService {
       handler_kind: string;
       credential_id: string | null;
     }>(
-      `SELECT id, endpoint_url, capture_policy, config_json, policy_json, handler_kind, credential_id
-         FROM source_connections WHERE space_id = $1 AND id = $2 AND deleted_at IS NULL`,
+      `SELECT sc.id, ch.endpoint_url, sc.capture_policy, sc.config_json, sc.policy_json, sc.handler_kind, sc.credential_id
+         FROM source_connections sc
+         JOIN source_channels ch ON ch.source_connection_id = sc.id AND ch.status <> 'archived'
+        WHERE sc.space_id = $1 AND sc.id = $2 AND sc.deleted_at IS NULL
+        ORDER BY ch.updated_at DESC LIMIT 1`,
       [identity.spaceId, connectionId],
     );
     const row = result.rows[0];
@@ -738,7 +741,17 @@ export async function activateCustomSourceHandlerVersion(
 ): Promise<string> {
   const now = new Date().toISOString();
   await withDbTransaction(pool, async (client) => {
-    const existingScheduleTask = await getSourceConnectionScanTask(client, connectionId);
+    const channelResult = await client.query<{ id: string; space_id: string; owner_user_id: string; fetch_frequency: string; schedule_rule_json: unknown }>(
+      `SELECT ch.id, ch.space_id, sc.owner_user_id, ch.fetch_frequency, ch.schedule_rule_json
+         FROM source_channels ch
+         JOIN source_connections sc ON sc.id = ch.source_connection_id
+        WHERE ch.source_connection_id = $1 AND ch.space_id = $2 AND ch.status <> 'archived'
+        ORDER BY ch.updated_at DESC LIMIT 1
+        FOR UPDATE OF ch`,
+      [connectionId, identity.spaceId],
+    );
+    const channel = channelResult.rows[0];
+    const existingScheduleTask = channel ? await getSourceChannelScanTask(client, channel.id) : null;
     const currentConnection = await client.query<{
       id: string;
       space_id: string;
@@ -746,7 +759,7 @@ export async function activateCustomSourceHandlerVersion(
       fetch_frequency: string;
       schedule_rule_json: unknown;
     }>(
-      `SELECT id, space_id, owner_user_id, fetch_frequency, schedule_rule_json
+      `SELECT id, space_id, owner_user_id
          FROM source_connections
         WHERE id = $1 AND space_id = $2
         FOR UPDATE`,
@@ -757,9 +770,9 @@ export async function activateCustomSourceHandlerVersion(
       ? resolveRequestedSourceSchedule({
           body: { next_check_at: nextCheckAt, schedule_rule: scheduleRule },
           status: "active",
-          fetchFrequency: current.fetch_frequency,
+          fetchFrequency: channel?.fetch_frequency ?? "manual",
           existingNextCheckAt: existingScheduleTask?.next_run_at,
-          existingScheduleRule: current.schedule_rule_json,
+          existingScheduleRule: channel?.schedule_rule_json,
         })
       : null;
     if (previousActiveVersionId) {
@@ -783,16 +796,19 @@ export async function activateCustomSourceHandlerVersion(
           SET active_handler_version_id = $3,
               repair_status = 'ok',
               status = 'active',
-              schedule_rule_json = $4::jsonb,
-              updated_at = $5
+              updated_at = $4
         WHERE id = $1 AND space_id = $2
-        RETURNING id, space_id, owner_user_id, status, fetch_frequency`,
-      [connectionId, identity.spaceId, versionId, JSON.stringify(schedule?.scheduleRule ?? null), now],
+        RETURNING id, space_id, owner_user_id, status`,
+      [connectionId, identity.spaceId, versionId, now],
     );
     const connection = updatedConnection.rows[0];
-    if (connection && schedule) {
-      await upsertSourceConnectionScanTask(client, {
-        connection,
+    if (connection && channel && schedule) {
+      await client.query(
+        `UPDATE source_channels SET status='active', fetch_frequency=$3, schedule_rule_json=$4::jsonb, updated_at=$5 WHERE id=$1 AND space_id=$2`,
+        [channel.id, identity.spaceId, channel.fetch_frequency, JSON.stringify(schedule.scheduleRule), now],
+      );
+      await upsertSourceChannelScanTask(client, {
+        channel: { id: channel.id, space_id: channel.space_id, owner_user_id: channel.owner_user_id, status: "active", fetch_frequency: channel.fetch_frequency },
         nextRunAt: schedule.nextRunAt,
         updatedAt: now,
       });

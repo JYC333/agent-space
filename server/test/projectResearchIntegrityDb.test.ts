@@ -43,7 +43,7 @@ afterAll(async () => {
 beforeEach(async () => {
   if (!available || !pool) return;
   await pool.query(
-    `TRUNCATE project_research_claim_links, project_research_artifact_links, project_research_checkpoints,
+    `TRUNCATE project_research_claim_links, project_research_reports, project_research_checkpoints,
        project_research_workflows, project_research_profiles, project_experiment_provenance,
        project_experiment_runs, project_experiment_campaigns, claim_sources, claims, academic_papers, sources,
        space_objects, project_corpus_items, artifacts, projects, space_memberships, users, spaces CASCADE`,
@@ -204,8 +204,8 @@ describe("Project Research claim links + integrity gate (real Postgres)", () => 
     const claimId = await seedClaim();
     await repo().createClaimLink(identity, PROJECT, { claim_id: claimId, workflow_id: workflowId });
 
-    const checkpoint = await repo().runIntegrityCheck(identity, PROJECT, { workflow_id: workflowId });
-    const report = checkpoint.machine_result_json as { blocking: boolean; findings: Array<{ code: string; severity: string }> };
+    const checkpoint = await repo().evaluateWorkflowIntegrity(identity, PROJECT, workflowId);
+    const report = checkpoint as { blocking: boolean; findings: Array<{ code: string; severity: string }> };
     expect(report.blocking).toBe(true);
     expect(report.findings).toContainEqual(expect.objectContaining({ code: "no_evidence_no_gap", severity: "high" }));
   });
@@ -217,8 +217,8 @@ describe("Project Research claim links + integrity gate (real Postgres)", () => 
     const claimId = await seedClaim();
     await repo().createClaimLink(identity, PROJECT, { claim_id: claimId, workflow_id: otherWorkflow.id });
 
-    const checkpoint = await repo().runIntegrityCheck(identity, PROJECT, { workflow_id: currentWorkflowId });
-    const report = checkpoint.machine_result_json as { blocking: boolean; findings: Array<{ code: string }> };
+    const checkpoint = await repo().evaluateWorkflowIntegrity(identity, PROJECT, currentWorkflowId);
+    const report = checkpoint as { blocking: boolean; findings: Array<{ code: string }> };
     expect(report.blocking).toBe(false);
     expect(report.findings.some((f) => f.code === "no_evidence_no_gap")).toBe(false);
   });
@@ -234,8 +234,8 @@ describe("Project Research claim links + integrity gate (real Postgres)", () => 
       gap_reason: "no dataset available yet",
     });
 
-    const checkpoint = await repo().runIntegrityCheck(identity, PROJECT, { workflow_id: workflowId });
-    const report = checkpoint.machine_result_json as { blocking: boolean; findings: unknown[] };
+    const checkpoint = await repo().evaluateWorkflowIntegrity(identity, PROJECT, workflowId);
+    const report = checkpoint as { blocking: boolean; findings: unknown[] };
     expect(report.blocking).toBe(false);
     expect(report.findings).toHaveLength(0);
   });
@@ -252,8 +252,8 @@ describe("Project Research claim links + integrity gate (real Postgres)", () => 
       citation_anchors: [paperObjectId, randomUUID()],
     });
 
-    const checkpoint = await repo().runIntegrityCheck(identity, PROJECT, { workflow_id: workflowId });
-    const report = checkpoint.machine_result_json as { blocking: boolean; findings: Array<{ code: string }> };
+    const checkpoint = await repo().evaluateWorkflowIntegrity(identity, PROJECT, workflowId);
+    const report = checkpoint as { blocking: boolean; findings: Array<{ code: string }> };
     expect(report.blocking).toBe(true);
     expect(report.findings.filter((f) => f.code === "citation_not_found")).toHaveLength(1);
   });
@@ -266,13 +266,13 @@ describe("Project Research claim links + integrity gate (real Postgres)", () => 
     await addEvidence(claimId, paperObjectId);
     await repo().createClaimLink(identity, PROJECT, { claim_id: claimId, workflow_id: workflowId });
 
-    const before = await repo().runIntegrityCheck(identity, PROJECT, { workflow_id: workflowId });
-    const beforeReport = before.machine_result_json as { findings: Array<{ code: string }> };
+    const before = await repo().evaluateWorkflowIntegrity(identity, PROJECT, workflowId);
+    const beforeReport = before as { findings: Array<{ code: string }> };
     expect(beforeReport.findings.some((f) => f.code === "evidence_not_in_project_corpus")).toBe(true);
 
     await addToCorpus(paperObjectId);
-    const after = await repo().runIntegrityCheck(identity, PROJECT, { workflow_id: workflowId });
-    const afterReport = after.machine_result_json as { blocking: boolean; findings: Array<{ code: string }> };
+    const after = await repo().evaluateWorkflowIntegrity(identity, PROJECT, workflowId);
+    const afterReport = after as { blocking: boolean; findings: Array<{ code: string }> };
     expect(afterReport.findings.some((f) => f.code === "evidence_not_in_project_corpus")).toBe(false);
     expect(afterReport.blocking).toBe(false);
   });
@@ -290,25 +290,16 @@ describe("Project Research claim links + integrity gate (real Postgres)", () => 
       planned_experiment_ids: ["exp-1"],
     });
 
-    const before = await repo().runIntegrityCheck(identity, PROJECT, { workflow_id: workflowId });
-    const beforeReport = before.machine_result_json as { blocking: boolean; findings: Array<{ code: string; severity: string }> };
+    const before = await repo().evaluateWorkflowIntegrity(identity, PROJECT, workflowId);
+    const beforeReport = before as { blocking: boolean; findings: Array<{ code: string; severity: string }> };
     expect(beforeReport.blocking).toBe(true);
     expect(beforeReport.findings).toContainEqual(expect.objectContaining({ code: "experiment_provenance_not_found", severity: "high" }));
 
     await experimentRepo().createProvenance(identity, PROJECT, { experiment_key: "exp-1", planned_summary: "Ablate module X" });
-    const after = await repo().runIntegrityCheck(identity, PROJECT, { workflow_id: workflowId });
-    const afterReport = after.machine_result_json as { blocking: boolean; findings: Array<{ code: string }> };
+    const after = await repo().evaluateWorkflowIntegrity(identity, PROJECT, workflowId);
+    const afterReport = after as { blocking: boolean; findings: Array<{ code: string }> };
     expect(afterReport.findings.some((f) => f.code === "experiment_provenance_not_found")).toBe(false);
     expect(afterReport.blocking).toBe(false);
-  });
-
-  it("writes an integrity_report artifact linked to the workflow", async () => {
-    if (!available) return;
-    const workflowId = await seedWorkflow();
-    await repo().runIntegrityCheck(identity, PROJECT, { workflow_id: workflowId });
-
-    const links = await repo().listArtifactLinks(identity, PROJECT, { workflowId, artifactType: "integrity_report" });
-    expect(links).toHaveLength(1);
   });
 
   it("updates a claim link's support status and gap fields", async () => {

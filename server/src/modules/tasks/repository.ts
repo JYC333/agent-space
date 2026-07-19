@@ -20,6 +20,7 @@ import { assertBudgetSourcesAvailable } from "../runs/budgetEnforcement";
 import { contractRouteHints, type RunBudgetSource } from "../runs/contractSnapshot";
 import { runToOut } from "../runs/runReadModel";
 import { PgRunContextRepository } from "../context/repository";
+import { PgUsageRepository } from "../usage/repository";
 import { contentReadSql } from "../access/contentAccessSql";
 import { isContentVisibility } from "../access/contentAccessTypes";
 import {
@@ -616,7 +617,7 @@ export class PgTaskRepository {
               r.parent_run_id, r.project_id, r.scheduled_at, r.adapter_type, r.capability_id,
               r.model_provider_id, r.model_override_json, r.required_sandbox_level,
               r.contract_snapshot_json, r.workflow_version_id, r.trigger_origin,
-              r.instructed_by_user_id, r.error_message, r.error_json, r.output_json, r.usage_json,
+              r.instructed_by_user_id, r.error_message, r.error_json, r.output_json,
               r.started_at, r.ended_at, r.created_at, r.updated_at,
               r.owner_user_id, r.visibility, r.access_level
         FROM task_runs tr
@@ -627,8 +628,15 @@ export class PgTaskRepository {
         LIMIT $4 OFFSET $5`,
       [identity.spaceId, taskId, identity.userId, limit, offset],
     );
+    const usageByRun = await new PgUsageRepository(this.pool).summarizeRunUsageByRunIds(
+      identity.spaceId,
+      rows.rows.map((row) => row.id),
+    );
     return page(
-      rows.rows.map((row) => ({ link: taskRunOutFromList(row), run: runToOut(row) })),
+      rows.rows.map((row) => ({
+        link: taskRunOutFromList(row),
+        run: runToOut({ ...row, usage: usageByRun.get(row.id) ?? null }),
+      })),
       countFromRow(total.rows[0]),
       limit,
       offset,
@@ -877,6 +885,6 @@ function planningInstruction(task: TaskRow, referenceWorkflowVersionId: string |
     task.description ? `Goal: ${task.description}` : null,
     `Task contract: ${JSON.stringify({ acceptance_criteria_json: task.acceptance_criteria_json ?? null, definition_of_done: task.definition_of_done ?? null, required_outputs_json: task.required_outputs_json ?? null, risk_level: task.risk_level, max_runs: task.max_runs, max_cost: task.max_cost, max_duration_seconds: task.max_duration_seconds })}`,
     referenceWorkflowVersionId ? `Use workflow version '${referenceWorkflowVersionId}' as an optional reference only; do not treat it as the execution source.` : null,
-    "Use the task.plan.propose tool with a validated workflow_definition.v1 object. Do not claim that any node has already executed.",
+    "Use the task.plan.propose tool with a validated workflow_definition.v1 object. For every downstream node that consumes an upstream result, declare input_bindings from its direct depends_on nodes; do not rely on dependency order alone. Do not claim that any node has already executed.",
   ].filter(Boolean).join("\n\n");
 }

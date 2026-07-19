@@ -12,7 +12,7 @@ export type RuntimeKind = "native" | "local_cli" | "managed_api" | "custom";
 export type RuntimeExecutorFamily = "native" | "local_cli" | "managed_api" | "custom";
 export type ImplementationStatus = "implemented" | "planned" | "disabled";
 export type ContextFileType = "CLAUDE.md" | "AGENTS.md" | "prompt.md" | "custom";
-export type CredentialMode = "none" | "cli_profile" | "model_provider_api_key";
+export type CredentialMode = "none" | "cli_profile" | "cli_profile_or_model_provider" | "model_provider_api_key";
 export type CredentialReleaseChannel = "server_runtime_host";
 
 export interface RuntimeAdapterSpec {
@@ -41,7 +41,7 @@ export interface RuntimeAdapterSpec {
   observability_level: "structured" | "phase" | "opaque";
   side_effect_level: "none" | "workspace" | "external";
   data_exposure: "none" | "provider" | "space" | "unknown";
-  trust_level: "low" | "medium" | "high";
+  baseline_trust_level: "low" | "medium" | "high";
   executable?: {
     command?: string;
     allow_path_override?: boolean;
@@ -110,7 +110,7 @@ export interface LocalCliRuntimeAdapterSpec extends RuntimeAdapterSpec {
     argument_rendering_strategy: "argv_template" | "stdin";
   };
   credentials: RuntimeAdapterSpec["credentials"] & {
-    credential_mode: "cli_profile";
+    credential_mode: "cli_profile" | "cli_profile_or_model_provider";
     credential_runtime_name: string;
   };
 }
@@ -148,7 +148,7 @@ export const BUILTIN_RUNTIME_ADAPTER_SPECS: Readonly<Record<RuntimeAdapterType, 
     observability_level: "opaque",
     side_effect_level: "none",
     data_exposure: "none",
-    trust_level: "low",
+    baseline_trust_level: "low",
     context: {
       context_file_type: "custom",
       context_target_format: "generic",
@@ -190,7 +190,7 @@ export const BUILTIN_RUNTIME_ADAPTER_SPECS: Readonly<Record<RuntimeAdapterType, 
     observability_level: "structured",
     side_effect_level: "external",
     data_exposure: "provider",
-    trust_level: "high",
+    baseline_trust_level: "high",
     context: {
       context_file_type: "custom",
       context_target_format: "generic",
@@ -232,7 +232,7 @@ export const BUILTIN_RUNTIME_ADAPTER_SPECS: Readonly<Record<RuntimeAdapterType, 
     observability_level: "structured",
     side_effect_level: "external",
     data_exposure: "provider",
-    trust_level: "high",
+    baseline_trust_level: "high",
     context: {
       context_file_type: "custom",
       context_target_format: "host_request",
@@ -282,7 +282,7 @@ export const BUILTIN_RUNTIME_ADAPTER_SPECS: Readonly<Record<RuntimeAdapterType, 
     observability_level: "opaque",
     side_effect_level: "workspace",
     data_exposure: "provider",
-    trust_level: "medium",
+    baseline_trust_level: "low",
     executable: { command: "claude", allow_path_override: true },
     invocation: {
       headless_command_template: ["{executable}", "--print", "{prompt}"],
@@ -341,7 +341,7 @@ export const BUILTIN_RUNTIME_ADAPTER_SPECS: Readonly<Record<RuntimeAdapterType, 
     observability_level: "opaque",
     side_effect_level: "workspace",
     data_exposure: "provider",
-    trust_level: "medium",
+    baseline_trust_level: "low",
     executable: { command: "codex", allow_path_override: true },
     invocation: {
       headless_command_template: [
@@ -402,7 +402,7 @@ export const BUILTIN_RUNTIME_ADAPTER_SPECS: Readonly<Record<RuntimeAdapterType, 
     observability_level: "structured",
     side_effect_level: "workspace",
     data_exposure: "provider",
-    trust_level: "low",
+    baseline_trust_level: "low",
     subagent_disable_config: {
       relative_path: "opencode.json",
       deny_path: ["agent", "agent-space-locked", "permission", "task"],
@@ -434,7 +434,7 @@ export const BUILTIN_RUNTIME_ADAPTER_SPECS: Readonly<Record<RuntimeAdapterType, 
       writes_vendor_context_file: false,
     },
     credentials: {
-      credential_mode: "cli_profile",
+      credential_mode: "cli_profile_or_model_provider",
       credential_runtime_name: "opencode",
       default_target_path: "/home/agent/.local/share/opencode",
       supports_oauth_login_state: true,
@@ -475,7 +475,7 @@ export const BUILTIN_RUNTIME_ADAPTER_SPECS: Readonly<Record<RuntimeAdapterType, 
     observability_level: "opaque",
     side_effect_level: "workspace",
     data_exposure: "provider",
-    trust_level: "low",
+    baseline_trust_level: "low",
     executable: { command: "gemini", allow_path_override: true },
     invocation: {
       headless_command_template: [],
@@ -525,7 +525,7 @@ export const BUILTIN_RUNTIME_ADAPTER_SPECS: Readonly<Record<RuntimeAdapterType, 
     observability_level: "opaque",
     side_effect_level: "external",
     data_exposure: "unknown",
-    trust_level: "low",
+    baseline_trust_level: "low",
     context: {
       context_file_type: "custom",
       context_target_format: "custom",

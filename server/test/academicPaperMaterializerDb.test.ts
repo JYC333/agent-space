@@ -44,7 +44,8 @@ beforeEach(async () => {
   if (!available || !pool) return;
   await pool.query(
     `TRUNCATE academic_papers, sources, space_objects, project_corpus_items, project_source_item_links,
-       project_source_bindings, source_items, source_connections, source_connectors,
+       project_source_bindings, source_channel_item_links, source_channel_user_subscriptions, source_channels,
+       source_items, source_connections, source_provider_connectors, source_providers, source_connectors,
        project_members, projects, space_memberships, users, spaces CASCADE`,
   );
   const now = new Date().toISOString();
@@ -67,17 +68,26 @@ beforeEach(async () => {
      ) VALUES ($1,'arxiv','arXiv','external_feed','pull','active','{}'::jsonb,$2,$2)`,
     [CONNECTOR, now],
   );
+  const mappingId = randomUUID();
+  await pool.query(
+    `INSERT INTO source_providers (id, provider_key, display_name, provider_kind, category, status, capabilities_json, created_at, updated_at)
+     VALUES ($1,'arxiv','arXiv','named','academic','active','{}'::jsonb,$2,$2)`,
+    [CONNECTOR, now],
+  );
+  await pool.query(
+    `INSERT INTO source_provider_connectors (id, provider_id, connector_id, status, priority, capabilities_json, created_at, updated_at)
+     VALUES ($1,$2,$3,'active',0,'{}'::jsonb,$4,$4)`,
+    [mappingId, CONNECTOR, CONNECTOR, now],
+  );
   await pool.query(
     `INSERT INTO source_connections (
-       id, space_id, connector_id, owner_user_id, name, endpoint_url, status,
-       fetch_frequency, capture_policy, trust_level, consent_json, policy_json,
-       config_json, created_at, updated_at
-     ) VALUES ($1,$2,$3,$4,'arXiv feed','https://export.arxiv.org/api/query','active',
-       'daily','reference_only','normal',$5::jsonb,$6::jsonb,'{}'::jsonb,$7,$7)`,
+       id, space_id, provider_connector_id, owner_user_id, name, status,
+       capture_policy, trust_level, consent_json, policy_json, config_json, created_at, updated_at
+     ) VALUES ($1,$2,$3,$4,'arXiv feed','active','reference_only','normal',$5::jsonb,$6::jsonb,'{}'::jsonb,$7,$7)`,
     [
       CONNECTION,
       SPACE,
-      CONNECTOR,
+      mappingId,
       OWNER,
       JSON.stringify({
         schema_version: 1,
@@ -92,6 +102,13 @@ beforeEach(async () => {
       now,
     ],
   );
+  await pool.query(
+    `INSERT INTO source_channels (
+       id, space_id, source_connection_id, created_by_user_id, name, channel_type, endpoint_url,
+       query_json, provider_query_json, query_fingerprint, status, fetch_frequency, schedule_rule_json, created_at, updated_at
+     ) VALUES ($1,$2,$1,$3,'arXiv Channel','search','https://export.arxiv.org/api/query','{}'::jsonb,'{}'::jsonb,$1,'active','daily','{"frequency":"daily","hour":0,"minute":0}'::jsonb,$4,$4)`,
+    [CONNECTION, SPACE, OWNER, now],
+  );
 });
 
 async function seedBinding(profileKey: string | null): Promise<string> {
@@ -99,7 +116,7 @@ async function seedBinding(profileKey: string | null): Promise<string> {
   const now = new Date().toISOString();
   await pool!.query(
     `INSERT INTO project_source_bindings (
-       id, space_id, project_id, source_connection_id, binding_key,
+       id, space_id, project_id, source_channel_id, binding_key,
        status, priority, delivery_scope, collection_notifications_enabled,
        filters_json, routing_policy_json, extraction_policy_json,
        created_at, updated_at
@@ -140,6 +157,16 @@ async function seedArxivItem(arxivId: string, doi: string | null = null): Promis
         comment: null,
       }),
     ],
+  );
+  return itemId;
+}
+
+async function seedProviderItem(metadata: Record<string, unknown>, title: string): Promise<string> {
+  const itemId = randomUUID(); const now = new Date().toISOString();
+  await pool!.query(
+    `INSERT INTO source_items (id,space_id,owner_user_id,visibility,connection_id,item_type,title,source_uri,first_seen_at,last_seen_at,content_state,retention_policy,metadata_json,created_at,updated_at)
+     VALUES ($1,$2,$3,'space_shared',$4,'feed_entry',$5,$6,$7,$7,'metadata_only','metadata_only',$8::jsonb,$7,$7)`,
+    [itemId, SPACE, OWNER, CONNECTION, title, String(metadata.source_url ?? "https://example.test/paper"), now, JSON.stringify(metadata)],
   );
   return itemId;
 }
@@ -208,6 +235,18 @@ describe("Academic paper materialization from arXiv source items (real Postgres)
     expect(second).toMatchObject({ objectId: first!.objectId, created: false });
     const count = await pool!.query(`SELECT count(*)::int AS total FROM academic_papers WHERE doi = '10.1000/shared'`);
     expect(count.rows[0]!.total).toBe(1);
+  });
+
+  it("materializes OpenAlex and links a Semantic Scholar record with the same DOI to one paper", async () => {
+    if (!available) return;
+    const openAlexItem = await seedProviderItem({ academic_provider: "openalex", openalex_id: "W123", doi: "10.1000/cross-provider", authors: ["Ada"], published_at: "2026-01-01", venue: "Journal", paper_type: "article", cited_by_count: 7, reference_count: 11, source_url: "https://openalex.org/W123" }, "Cross-provider paper");
+    const first = await materializeAcademicPaperFromSourceItem(pool!, { spaceId: SPACE, sourceItemId: openAlexItem });
+    const semanticItem = await seedProviderItem({ academic_provider: "semantic_scholar", semantic_scholar_id: "s2-123", doi: "10.1000/cross-provider", authors: ["Ada"], published_at: "2026-01-01", source_url: "https://semanticscholar.org/paper/s2-123" }, "Cross-provider paper");
+    const second = await materializeAcademicPaperFromSourceItem(pool!, { spaceId: SPACE, sourceItemId: semanticItem });
+    expect(second).toEqual({ objectId: first!.objectId, created: false });
+    const row = await pool!.query(`SELECT openalex_id,semantic_scholar_id,cited_by_count,reference_count FROM academic_papers WHERE object_id=$1`, [first!.objectId]);
+    expect(row.rows[0]).toMatchObject({ openalex_id: "W123", semantic_scholar_id: "s2-123", cited_by_count: 7, reference_count: 11 });
+    expect((await pool!.query(`SELECT count(*)::int AS total FROM academic_papers WHERE doi='10.1000/cross-provider'`)).rows[0].total).toBe(1);
   });
 
   it("returns null for a non-arXiv source item", async () => {

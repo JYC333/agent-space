@@ -52,7 +52,8 @@ beforeEach(async () => {
   if (!available || !pool) return;
   await pool.query(
     `TRUNCATE evidence_links, extracted_evidence, source_snapshots, source_items, project_source_item_links,
-       project_source_bindings, source_connections, source_connectors, project_members, projects,
+       project_source_bindings, source_channel_item_links, source_channel_user_subscriptions, source_channels,
+       source_connections, source_provider_connectors, source_providers, source_connectors, project_members, projects,
        space_memberships, users, spaces CASCADE`,
   );
   const now = new Date().toISOString();
@@ -81,17 +82,27 @@ beforeEach(async () => {
      ) VALUES ($1,'rss','RSS','external_feed','pull','active','{}'::jsonb,$2,$2)`,
     [CONNECTOR, now],
   );
+  const providerId = randomUUID();
+  const mappingId = randomUUID();
+  await pool.query(
+    `INSERT INTO source_providers (id, provider_key, display_name, provider_kind, category, status, capabilities_json, created_at, updated_at)
+     VALUES ($1,'generic_rss','RSS','generic','feed','active','{}'::jsonb,$2,$2)`,
+    [providerId, now],
+  );
+  await pool.query(
+    `INSERT INTO source_provider_connectors (id, provider_id, connector_id, status, priority, capabilities_json, created_at, updated_at)
+     VALUES ($1,$2,$3,'active',0,'{}'::jsonb,$4,$4)`,
+    [mappingId, providerId, CONNECTOR, now],
+  );
   await pool.query(
     `INSERT INTO source_connections (
-       id, space_id, connector_id, owner_user_id, name, endpoint_url, status,
-       fetch_frequency, capture_policy, trust_level, consent_json, policy_json,
-       config_json, created_at, updated_at
-     ) VALUES ($1,$2,$3,$4,'arXiv feed','https://example.org/rss','active',
-       'daily','reference_only','normal',$5::jsonb,$6::jsonb,'{}'::jsonb,$7,$7)`,
+       id, space_id, provider_connector_id, owner_user_id, name, status,
+       capture_policy, trust_level, consent_json, policy_json, config_json, created_at, updated_at
+     ) VALUES ($1,$2,$3,$4,'arXiv feed','active','reference_only','normal',$5::jsonb,$6::jsonb,'{}'::jsonb,$7,$7)`,
     [
       CONNECTION,
       SPACE,
-      CONNECTOR,
+      mappingId,
       OWNER,
       JSON.stringify({
         schema_version: 1,
@@ -106,6 +117,18 @@ beforeEach(async () => {
       now,
     ],
   );
+  await pool.query(
+    `INSERT INTO source_channels (
+       id, space_id, source_connection_id, created_by_user_id, name, channel_type, endpoint_url,
+       query_json, provider_query_json, query_fingerprint, status, fetch_frequency, schedule_rule_json, created_at, updated_at
+     ) VALUES ($1,$2,$1,$3,'RSS Channel','feed','https://example.org/rss','{}'::jsonb,'{}'::jsonb,$1,'active','daily','{"frequency":"daily","hour":0,"minute":0}'::jsonb,$4,$4)`,
+    [CONNECTION, SPACE, OWNER, now],
+  );
+  await pool.query(
+    `INSERT INTO source_channel_user_subscriptions (id, space_id, source_channel_id, user_id, status, library_enabled, digest_enabled, created_at, updated_at)
+     VALUES ($1,$2,$3,$4,'subscribed',true,true,$5,$5)`,
+    [randomUUID(), SPACE, CONNECTION, OWNER, now],
+  );
 });
 
 async function seedBinding(projectId: string, status = "active", bindingKey = "default"): Promise<string> {
@@ -113,7 +136,7 @@ async function seedBinding(projectId: string, status = "active", bindingKey = "d
   const now = new Date().toISOString();
   await pool!.query(
     `INSERT INTO project_source_bindings (
-       id, space_id, project_id, source_connection_id, binding_key,
+       id, space_id, project_id, source_channel_id, binding_key,
        status, priority, delivery_scope, collection_notifications_enabled,
        filters_json, routing_policy_json, extraction_policy_json,
        created_at, updated_at
@@ -159,6 +182,24 @@ async function seedSourceSnapshot(itemId: string, connectionId: string): Promise
 }
 
 describe("Evidence→project auto-link (real Postgres)", () => {
+  it("rejects duplicate post-processing evidence for the same source content", async () => {
+    if (!available || !pool) return;
+    const { itemId } = await seedItemWithEvidence();
+    const now = new Date().toISOString();
+    const key = [randomUUID(), SPACE, OWNER, itemId, "post-processing-hash", now];
+    const insert = `INSERT INTO extracted_evidence (
+       id, space_id, owner_user_id, visibility, source_item_id, source_object_type, source_object_id,
+       evidence_type, title, content_excerpt, content_hash, extraction_method, trust_level,
+       confidence, status, metadata_json, created_at, updated_at
+     ) VALUES ($1,$2,$3,'space_shared',$4,'source_item',$4,'summary','Summary','Content',$5,'source_post_processing','normal',
+       0.7,'candidate','{}'::jsonb,$6,$6)`;
+    await pool.query(insert, key);
+    await expect(pool.query(insert, [randomUUID(), SPACE, OWNER, itemId, "post-processing-hash", now])).rejects.toMatchObject({
+      code: "23505",
+      constraint: "uq_extracted_evidence_source_content",
+    });
+  });
+
   it("links new evidence to the bound project and is idempotent on re-run", async () => {
     if (!available) return;
     const bindingId = await seedBinding(PROJECT);

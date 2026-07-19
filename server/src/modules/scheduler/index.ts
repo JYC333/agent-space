@@ -15,6 +15,6 @@ export {
 export {
   startBackgroundServices,
   pruneMemoryAccessLogs,
-  enqueueDueSourceConnectionScans,
+  enqueueDueSourceChannelScansForConfig,
   type BackgroundServicesHandle,
 } from "./backgroundServices";

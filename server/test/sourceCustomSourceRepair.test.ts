@@ -122,14 +122,15 @@ async function createActiveConnection(): Promise<{ connectionId: string; activeV
     endpoint_url: "https://example.com/list",
     config: { list_selector: "article" },
   });
-  const version = await createFlow!.generateHandler(IDENTITY, connection.id, {});
-  await createFlow!.testHandler(IDENTITY, connection.id, {
+  const connectionId = connection.source_connection_id;
+  const version = await createFlow!.generateHandler(IDENTITY, connectionId, {});
+  await createFlow!.testHandler(IDENTITY, connectionId, {
     handler_version_id: version.id,
     fixture_html: FIXTURE_HTML,
   });
-  const activation = await createFlow!.activateHandler(IDENTITY, connection.id, { handler_version_id: version.id });
+  const activation = await createFlow!.activateHandler(IDENTITY, connectionId, { handler_version_id: version.id });
   expect(activation.status).toBe("active");
-  return { connectionId: connection.id, activeVersionId: version.id };
+  return { connectionId, activeVersionId: version.id };
 }
 
 const PIPELINE = {
@@ -147,18 +148,19 @@ async function createActivePipelineConnection(): Promise<{ connectionId: string;
     endpoint_url: "https://example.com/list",
     config: {},
   });
-  const version = await createFlow!.generateHandler(IDENTITY, connection.id, {
+  const connectionId = connection.source_connection_id;
+  const version = await createFlow!.generateHandler(IDENTITY, connectionId, {
     generation_mode: "pipeline",
     pipeline: PIPELINE,
   });
   expect(version.language).toBe("declarative_pipeline_v1");
-  await createFlow!.testHandler(IDENTITY, connection.id, {
+  await createFlow!.testHandler(IDENTITY, connectionId, {
     handler_version_id: version.id,
     fixture_html: FIXTURE_HTML,
   });
-  const activation = await createFlow!.activateHandler(IDENTITY, connection.id, { handler_version_id: version.id });
+  const activation = await createFlow!.activateHandler(IDENTITY, connectionId, { handler_version_id: version.id });
   expect(activation.status).toBe("active");
-  return { connectionId: connection.id, activeVersionId: version.id };
+  return { connectionId, activeVersionId: version.id };
 }
 
 describe("CustomSourceRepairService.repairHandler (declarative_pipeline_v1)", () => {

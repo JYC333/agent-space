@@ -93,35 +93,36 @@ class RunCreateSqlShapeDb implements Queryable {
         space_id: "space-1",
         agent_id: "agent-1",
         agent_version_id: "version-1",
-        runtime_profile_id: "profile-1",
-        context_snapshot_id: String(params[5]),
+        runtime_profile_id: params[6] === null ? null : String(params[6]),
+        run_role: String(params[4]) as "execution" | "coordinator",
+        requested_runtime_profile_id: params[5] === null ? null : String(params[5]),
+        context_snapshot_id: String(params[7]),
         run_type: "agent",
         status: "queued",
-        mode: String(params[16]),
-        prompt: params[17] === null ? null : String(params[17]),
-        instruction: params[18] === null ? null : String(params[18]),
-        workspace_id: params[6] === null ? null : String(params[6]),
-        session_id: params[7] === null ? null : String(params[7]),
-        parent_run_id: params[8] === null ? null : String(params[8]),
-        root_run_id: params[9] === null ? null : String(params[9]),
-        run_group_id: params[10] === null ? null : String(params[10]),
-        delegation_id: params[11] === null ? null : String(params[11]),
-        project_id: params[30] === null ? null : String(params[30]),
+        mode: String(params[18]),
+        prompt: params[19] === null ? null : String(params[19]),
+        instruction: params[20] === null ? null : String(params[20]),
+        workspace_id: params[8] === null ? null : String(params[8]),
+        session_id: params[9] === null ? null : String(params[9]),
+        parent_run_id: params[10] === null ? null : String(params[10]),
+        root_run_id: params[11] === null ? null : String(params[11]),
+        run_group_id: params[12] === null ? null : String(params[12]),
+        delegation_id: params[13] === null ? null : String(params[13]),
+        project_id: params[32] === null ? null : String(params[32]),
         scheduled_at: null,
-        adapter_type: "codex_cli",
+        adapter_type: params[23] === null ? null : String(params[23]),
         capability_id: null,
         capabilities_json: [],
-        model_provider_id: null,
+        model_provider_id: params[26] === null ? null : String(params[26]),
         model_override_json: null,
         runtime_profile_snapshot_json: {},
-        required_sandbox_level: "ephemeral",
-        trigger_origin: String(params[15]),
+        required_sandbox_level: String(params[29]),
+        trigger_origin: String(params[17]),
         instructed_by_user_id: "user-1",
         instructed_by_agent_id: null,
         error_message: null,
         error_json: null,
         output_json: null,
-        usage_json: null,
         started_at: null,
         ended_at: null,
         created_at: "2026-07-05T00:00:00.000Z",
@@ -192,14 +193,14 @@ describe("PgRunRepository SQL shape", () => {
     expect(runInsert).toBeTruthy();
     const { columns, values } = insertColumnsAndValues(runInsert!.sql);
     expect(values).toHaveLength(columns.length);
-    expect(runInsert!.params).toHaveLength(34);
-    expect(runInsert!.params[33]).toBe("default");
-    expect(columns.slice(14, 17)).toEqual(["run_type", "trigger_origin", "status"]);
-    expect(values.slice(14, 17)).toEqual(["$15", "$16", "'queued'"]);
-    expect(runInsert!.params.slice(14, 17)).toEqual(["agent", "manual", "live"]);
+    expect(runInsert!.params).toHaveLength(36);
+    expect(runInsert!.params[35]).toBe("default");
+    expect(columns.slice(16, 19)).toEqual(["run_type", "trigger_origin", "status"]);
+    expect(values.slice(16, 19)).toEqual(["$17", "$18", "'queued'"]);
+    expect(runInsert!.params.slice(16, 19)).toEqual(["agent", "manual", "live"]);
   });
 
-  it("persists an explicitly selected runtime profile as explicit", async () => {
+  it("persists an explicitly requested runtime profile without preselecting it", async () => {
     const db = new RunCreateSqlShapeDb();
     await new PgRunRepository(db).createQueuedRun({
       agent_id: "agent-1",
@@ -213,7 +214,29 @@ describe("PgRunRepository SQL shape", () => {
     });
 
     const runInsert = db.calls.find((call) => call.sql.includes("INSERT INTO runs"));
-    expect(runInsert?.params[33]).toBe("explicit");
+    expect(runInsert?.params[5]).toBe("profile-1");
+    expect(runInsert?.params[6]).toBeNull();
+    expect(runInsert?.params[23]).toBeNull();
+    expect(runInsert?.params[35]).toBe("explicit");
+  });
+
+  it("creates coordinator runs without physical attempts", async () => {
+    const db = new RunCreateSqlShapeDb();
+    const run = await new PgRunRepository(db).createCoordinatorRun({
+      agent_id: "agent-1",
+      space_id: "space-1",
+      user_id: "user-1",
+      mode: "live",
+      run_type: "workflow",
+      trigger_origin: "manual",
+      prompt: "coordinate",
+    });
+    expect(run.run_role).toBe("coordinator");
+    expect(run.runtime_profile_id).toBeNull();
+    expect(run.adapter_type).toBeNull();
+    expect(run.model_provider_id).toBeNull();
+    expect(db.calls.some((call) => call.sql.includes("FROM agent_runtime_profiles"))).toBe(false);
+    expect(db.calls.some((call) => call.sql.includes("INSERT INTO run_attempts"))).toBe(false);
   });
 
   it("creates grouped agent runs with root and group lineage", async () => {
@@ -243,7 +266,7 @@ describe("PgRunRepository SQL shape", () => {
       trigger_origin: "manual",
     });
     const runInsert = db.calls.find((call) => call.sql.includes("INSERT INTO runs"));
-    expect(runInsert?.params.slice(8, 11)).toEqual(["run-root", "run-root", "group-1"]);
+    expect(runInsert?.params.slice(10, 13)).toEqual(["run-root", "run-root", "group-1"]);
     const snapshotInsert = db.calls.find((call) => call.sql.includes("INSERT INTO context_snapshots"));
     expect(JSON.parse(String(snapshotInsert?.params[4]))).toMatchObject({
       root_run_id: "run-root",

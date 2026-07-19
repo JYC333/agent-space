@@ -10,15 +10,18 @@ import { PgRunRepository, type RunRecord } from "../../runs/repository";
 import { RunMaterializationService } from "../../runs/materializationService";
 import { RunOrchestrationService } from "../../runs/orchestrationService";
 import { sharedCliProcessRegistry } from "../../runs/processRegistry";
+import { createManagedExecutionPolicy } from "../../policy/managedExecutionPolicy";
 import { PgCodePatchCollector, PgWorkspaceManager } from "../../workspaces";
 import { PgVerificationEngine } from "../../runs/verification";
 import {
   HttpError,
+  objectValue,
   optionalString,
   requiredString,
   type Queryable,
   type SpaceUserIdentity,
 } from "../../routeUtils/common";
+import { researchQuestionDrift } from "../../projectResearch/questionDrift";
 import {
   enforceSourceDerivedImportTarget,
   normalizeSourceConnectionReadGovernance,
@@ -69,6 +72,8 @@ import {
   type SourcePostProcessingTriggerConfig,
   type SourcePostProcessingTriggerType,
 } from "./repository";
+import { ProjectResearchWorkspaceService } from "../../projectResearch/workspaceService";
+import { resolveProjectResearchPaperCardPrompt } from "../../projectResearch/promptRegistry";
 import {
   buildRetrievalContextQuery,
   renderInstruction,
@@ -81,6 +86,8 @@ import {
   type ParsedPostProcessingResult,
 } from "./resultParser";
 import { joinText, stringList } from "./textUtils";
+import { SOURCE_POST_PROCESSING_LIMITS } from "./config";
+import { SOURCE_POST_PROCESSING_OUTPUT_CONTRACT } from "../../projectResearch/outputSchemas";
 
 interface RetrievalContextDomainConfig {
   registry: RetrievalRegistry;
@@ -134,7 +141,7 @@ export class SourcePostProcessingService {
     const name = optionalString(body.name) ?? defaultRuleName(triggerType, actions);
     return new PgSourcePostProcessingRepository(this.db).createRule({
       spaceId: identity.spaceId,
-      sourceConnectionId: connectionId,
+      sourceChannelId: connectionId,
       agentId,
       projectId,
       name,
@@ -154,7 +161,7 @@ export class SourcePostProcessingService {
   ): Promise<SourcePostProcessingRuleOut> {
     const repo = new PgSourcePostProcessingRepository(this.db);
     const existing = await repo.getRule(identity.spaceId, ruleId);
-    if (!existing || existing.source_connection_id !== connectionId) {
+    if (!existing || existing.source_channel_id !== connectionId) {
       throw new HttpError(404, "Post-processing rule not found");
     }
     const connection = await this.requireConnection(identity.spaceId, connectionId);
@@ -203,7 +210,7 @@ export class SourcePostProcessingService {
   ): Promise<SourcePostProcessingRunOut> {
     const repo = new PgSourcePostProcessingRepository(this.db);
     const rule = await repo.getRule(identity.spaceId, ruleId);
-    if (!rule || rule.source_connection_id !== connectionId) {
+    if (!rule || rule.source_channel_id !== connectionId) {
       throw new HttpError(404, "Post-processing rule not found");
     }
     return this.executeRule(rule, {
@@ -227,12 +234,12 @@ export class SourcePostProcessingService {
     const baseInputConfig = normalizeInputConfig(rule.input_config_json);
     if (!baseInputConfig.deep_analysis.enabled) return null;
     this.validateInputContextBinding(rule.project_id, baseInputConfig, normalizeActions(rule.actions_json));
-    const connection = await this.requireConnection(rule.space_id, rule.source_connection_id);
+    const connection = await this.requireConnection(rule.space_id, rule.source_channel_id);
     const deepInputConfig = deepAnalysisInputConfig(baseInputConfig, input.sourceRunId);
     const itemIds = input.itemIds.slice(0, deepInputConfig.deep_analysis.max_candidates_per_run);
     const batch = await repo.collectInputBatch({
       spaceId: rule.space_id,
-      sourceConnectionId: rule.source_connection_id,
+      sourceChannelId: rule.source_channel_id,
       inputConfig: deepInputConfig,
       cursor: null,
       viewerUserId: input.actorUserId ?? connection.owner_user_id,
@@ -249,6 +256,7 @@ export class SourcePostProcessingService {
     };
     return this.executeBatch({
       rule,
+      sourceChannelId: rule.source_channel_id,
       connection,
       agentId: rule.agent_id,
       projectId: rule.project_id,
@@ -262,6 +270,58 @@ export class SourcePostProcessingService {
     });
   }
 
+  /**
+   * Re-run a rule for a known set of source items without consulting the
+   * monitor cursor. Research recovery uses this path when ingestion already
+   * advanced the rule cursor but the corresponding classification run was
+   * never materialized.
+   */
+  async runRuleForItems(input: {
+    spaceId: string;
+    ruleId: string;
+    itemIds: string[];
+  }): Promise<SourcePostProcessingRunOut | null> {
+    if (input.itemIds.length === 0) return null;
+    if (input.itemIds.length > SOURCE_POST_PROCESSING_LIMITS.researchStructuredOutputBatchSize) {
+      throw new HttpError(
+        422,
+        `Research structured-output recovery accepts at most ${SOURCE_POST_PROCESSING_LIMITS.researchStructuredOutputBatchSize} source items per run`,
+      );
+    }
+    const repo = new PgSourcePostProcessingRepository(this.db);
+    const rule = await repo.getRule(input.spaceId, input.ruleId);
+    if (!rule || rule.status !== "active") return null;
+    const connection = await this.requireConnection(rule.space_id, rule.source_channel_id);
+    const actions = normalizeActions(rule.actions_json);
+    const inputConfig = { ...normalizeInputConfig(rule.input_config_json), window: "explicit" as const };
+    const triggerConfig = normalizeTriggerConfig(rule.trigger_config_json, rule.trigger_type);
+    await this.enforceSourceTargets(connection, actions);
+    this.validateInputContextBinding(rule.project_id, inputConfig, actions);
+    const batch = await repo.collectInputBatch({
+      spaceId: rule.space_id,
+      sourceChannelId: rule.source_channel_id,
+      inputConfig,
+      cursor: null,
+      viewerUserId: rule.created_by_user_id,
+      explicitItemIds: input.itemIds,
+    });
+    if (batch.items.length === 0 && batch.evidence.length === 0) return null;
+    return this.executeBatch({
+      rule,
+      sourceChannelId: rule.source_channel_id,
+      connection,
+      agentId: rule.agent_id,
+      projectId: rule.project_id,
+      triggerType: "items_materialized",
+      actorUserId: rule.created_by_user_id,
+      actions,
+      inputConfig,
+      triggerConfig,
+      batch,
+      summaryGoal: inputConfig.summary_goal ?? null,
+    });
+  }
+
   async drainRuleNow(
     identity: SpaceUserIdentity,
     connectionId: string,
@@ -269,7 +329,7 @@ export class SourcePostProcessingService {
   ): Promise<{ runs: SourcePostProcessingRunOut[]; stopped_reason: string; pending_item_count: number }> {
     const repo = new PgSourcePostProcessingRepository(this.db);
     const firstRule = await repo.getRule(identity.spaceId, ruleId);
-    if (!firstRule || firstRule.source_connection_id !== connectionId) {
+    if (!firstRule || firstRule.source_channel_id !== connectionId) {
       throw new HttpError(404, "Post-processing rule not found");
     }
     const maxBatches = normalizeInputConfig(firstRule.input_config_json).max_batches_per_event;
@@ -277,7 +337,7 @@ export class SourcePostProcessingService {
     let stoppedReason = "max_batches_reached";
     for (let index = 0; index < maxBatches; index += 1) {
       const rule = await repo.getRule(identity.spaceId, ruleId);
-      if (!rule || rule.source_connection_id !== connectionId) {
+      if (!rule || rule.source_channel_id !== connectionId) {
         stoppedReason = "rule_missing";
         break;
       }
@@ -407,7 +467,7 @@ export class SourcePostProcessingService {
     const repo = new PgSourcePostProcessingRepository(this.db);
     const decision = await repo.getDecision(identity.spaceId, decisionId);
     if (!decision) throw new HttpError(404, "Post-processing decision not found");
-    const connection = await this.requireConnection(identity.spaceId, decision.source_connection_id);
+    const connection = await this.requireConnection(identity.spaceId, decision.source_channel_id);
     const action = requiredString(body.action, "action");
     if (action === "select" || action === "triage" || action === "ignore") {
       const status = action === "select" ? "selected" : action === "ignore" ? "ignored" : "triaged";
@@ -504,7 +564,7 @@ export class SourcePostProcessingService {
           metadata: {
             generated_by: "source_post_processing_decision_review",
             source_post_processing_decision_id: decision.id,
-            source_connection_id: decision.source_connection_id,
+            source_channel_id: decision.source_channel_id,
             project_id: decision.project_id,
           },
         },
@@ -525,7 +585,7 @@ export class SourcePostProcessingService {
       const inputConfig = { ...normalizeInputConfig(rule.input_config_json), window: "explicit" as const };
       const batch = await repo.collectInputBatch({
         spaceId: identity.spaceId,
-        sourceConnectionId: decision.source_connection_id,
+        sourceChannelId: decision.source_channel_id,
         inputConfig,
         cursor: null,
         viewerUserId: identity.userId,
@@ -533,6 +593,7 @@ export class SourcePostProcessingService {
       });
       const run = await this.executeBatch({
         rule,
+        sourceChannelId: decision.source_channel_id,
         connection,
         agentId: rule.agent_id,
         projectId: rule.project_id,
@@ -597,8 +658,8 @@ export class SourcePostProcessingService {
       throw new HttpError(422, "At least one source_item_id or evidence_id is required");
     }
     const repo = new PgSourcePostProcessingRepository(this.db);
-    const sourceConnectionId = await this.resolveOneOffSourceConnection(identity.spaceId, itemIds, evidenceIds, identity.userId);
-    const connection = await this.requireConnection(identity.spaceId, sourceConnectionId);
+    const sourceChannelId = await this.resolveOneOffSourceConnection(identity.spaceId, itemIds, evidenceIds, identity.userId);
+    const connection = await this.requireConnection(identity.spaceId, sourceChannelId);
     const actions = normalizeActions(body.actions_json ?? { batch_digest: true });
     this.assertActions(actions);
     await this.enforceSourceTargets(connection, actions);
@@ -608,7 +669,7 @@ export class SourcePostProcessingService {
     this.validateInputContextBinding(projectId, normalizeInputConfig(body.input_config_json), actions);
     const batch = await repo.collectInputBatch({
       spaceId: identity.spaceId,
-      sourceConnectionId,
+      sourceChannelId,
       inputConfig: {
         ...normalizeInputConfig(body.input_config_json),
         window: "explicit",
@@ -620,6 +681,7 @@ export class SourcePostProcessingService {
     });
     const run = await this.executeBatch({
       rule: null,
+      sourceChannelId,
       connection,
       agentId,
       projectId,
@@ -641,16 +703,22 @@ export class SourcePostProcessingService {
 
   async fireSourceEvent(input: {
     spaceId: string;
-    sourceConnectionId: string;
+    sourceChannelId: string;
     newItemCount: number;
-  }): Promise<{ matched: number; fired: number; skipped: Array<{ rule_id: string; reason: string }> }> {
+  }): Promise<{
+    matched: number;
+    fired: number;
+    skipped: Array<{ rule_id: string; reason: string }>;
+    successful_runs: Array<{ run_id: string; project_id: string | null; source_channel_id: string; source_item_ids: string[]; user_id: string | null }>;
+  }> {
     const repo = new PgSourcePostProcessingRepository(this.db);
     const rules = await repo.listActiveRulesForSource(
       input.spaceId,
-      input.sourceConnectionId,
+      input.sourceChannelId,
       "items_materialized",
     );
     const skipped: Array<{ rule_id: string; reason: string }> = [];
+    const successfulRuns: Array<{ run_id: string; project_id: string | null; source_channel_id: string; source_item_ids: string[]; user_id: string | null }> = [];
     let fired = 0;
     for (const rule of rules) {
       const triggerConfig = normalizeTriggerConfig(rule.trigger_config_json, rule.trigger_type);
@@ -671,7 +739,15 @@ export class SourcePostProcessingService {
         if (result.runs.length === 0 || result.runs.every((run) => run.status === "skipped")) {
           skipped.push({ rule_id: rule.id, reason: "no_inputs" });
         } else {
-          fired += result.runs.filter((run) => run.status === "succeeded").length;
+          const succeeded = result.runs.filter((run) => run.status === "succeeded");
+          fired += succeeded.length;
+          successfulRuns.push(...succeeded.map((run) => ({
+            run_id: run.id,
+            project_id: run.project_id,
+            source_channel_id: run.source_channel_id,
+            source_item_ids: run.input_item_ids,
+            user_id: run.triggered_by_user_id,
+          })));
           if (result.stopped_reason === "run_failed") skipped.push({ rule_id: rule.id, reason: "run_failed" });
         }
       } catch (error) {
@@ -679,7 +755,7 @@ export class SourcePostProcessingService {
         skipped.push({ rule_id: rule.id, reason: error instanceof Error ? error.message : "run_failed" });
       }
     }
-    return { matched: rules.length, fired, skipped };
+    return { matched: rules.length, fired, skipped, successful_runs: successfulRuns };
   }
 
   async fireScheduledRule(rule: SourcePostProcessingRuleRow): Promise<SourcePostProcessingRunOut> {
@@ -734,16 +810,40 @@ export class SourcePostProcessingService {
     if (rule.status !== "active" && !options.force) {
       throw new HttpError(409, "Post-processing rule is not active");
     }
-    const connection = await this.requireConnection(rule.space_id, rule.source_connection_id);
+    if (await this.researchQuestionDrift(rule)) {
+      const repo = new PgSourcePostProcessingRepository(this.db);
+      const cursor = cursorWatermark(rule.cursor_json);
+      const run = await repo.createRun({
+        spaceId: rule.space_id,
+        ruleId: rule.id,
+        sourceChannelId: rule.source_channel_id,
+        agentId: rule.agent_id,
+        projectId: rule.project_id,
+        triggeredByUserId: options.actorUserId,
+        triggerType: options.triggerType,
+        inputItemIds: [],
+        inputEvidenceIds: [],
+        cursorBefore: cursor,
+        cursorAfter: cursor,
+      });
+      await repo.recordRuleFire(rule.space_id, rule.id);
+      return repo.markRunFinished({
+        runId: run.id,
+        spaceId: rule.space_id,
+        status: "skipped",
+        summary: "Research question changed; source processing is paused until the new question is applied to future runs.",
+      });
+    }
+    const connection = await this.requireConnection(rule.space_id, rule.source_channel_id);
     const actions = normalizeActions(rule.actions_json);
-    const inputConfig = normalizeInputConfig(rule.input_config_json);
+    const inputConfig = effectiveInputConfig(rule);
     const triggerConfig = normalizeTriggerConfig(rule.trigger_config_json, rule.trigger_type);
     await this.enforceSourceTargets(connection, actions);
     this.validateInputContextBinding(rule.project_id, inputConfig, actions);
     const repo = new PgSourcePostProcessingRepository(this.db);
     const batch = await repo.collectInputBatch({
       spaceId: rule.space_id,
-      sourceConnectionId: rule.source_connection_id,
+      sourceChannelId: rule.source_channel_id,
       inputConfig,
       cursor: cursorWatermark(rule.cursor_json),
       viewerUserId: options.actorUserId,
@@ -752,7 +852,7 @@ export class SourcePostProcessingService {
       const run = await repo.createRun({
         spaceId: rule.space_id,
         ruleId: rule.id,
-        sourceConnectionId: rule.source_connection_id,
+        sourceChannelId: rule.source_channel_id,
         agentId: rule.agent_id,
         projectId: rule.project_id,
         triggeredByUserId: options.actorUserId,
@@ -772,6 +872,7 @@ export class SourcePostProcessingService {
     }
     return this.executeBatch({
       rule,
+      sourceChannelId: rule.source_channel_id,
       connection,
       agentId: rule.agent_id,
       projectId: rule.project_id,
@@ -785,8 +886,38 @@ export class SourcePostProcessingService {
     });
   }
 
+  private async researchQuestionDrift(rule: SourcePostProcessingRuleRow): Promise<boolean> {
+    if (!rule.project_id || !rule.name.startsWith("Auto Research:")) return false;
+    const result = await this.db.query<{
+      current_focus: string | null;
+      research_question: string | null;
+      workflow_state_json: unknown;
+    }>(
+      `SELECT p.current_focus, pr.research_question, w.state_json AS workflow_state_json
+         FROM projects p
+         LEFT JOIN project_research_profiles pr ON pr.space_id=p.space_id AND pr.project_id=p.id
+         LEFT JOIN LATERAL (
+           SELECT state_json
+             FROM project_research_workflows
+            WHERE space_id=p.space_id AND project_id=p.id AND status IN ('active','paused')
+            ORDER BY updated_at DESC
+            LIMIT 1
+         ) w ON TRUE
+        WHERE p.space_id=$1 AND p.id=$2
+        LIMIT 1`,
+      [rule.space_id, rule.project_id],
+    );
+    const row = result.rows[0];
+    if (!row) return false;
+    return researchQuestionDrift(
+      optionalString(row.current_focus) ?? optionalString(row.research_question),
+      optionalString(objectValue(row.workflow_state_json).research_question),
+    );
+  }
+
   private async executeBatch(input: {
     rule: SourcePostProcessingRuleRow | null;
+    sourceChannelId: string;
     connection: SourceConnectionRow;
     agentId: string;
     projectId: string | null;
@@ -798,6 +929,9 @@ export class SourcePostProcessingService {
     batch: SourcePostProcessingInputBatch;
     summaryGoal: string | null;
   }): Promise<SourcePostProcessingRunOut> {
+    if (input.rule && await this.researchQuestionDrift(input.rule)) {
+      throw new HttpError(409, "Research question changed; apply it to future runs before processing this item");
+    }
     const repo = new PgSourcePostProcessingRepository(this.db);
     const batch = fitBatchToPromptBudget(input.batch, input.inputConfig);
     const prefilter = await this.prefilterCandidateBatch({
@@ -816,7 +950,7 @@ export class SourcePostProcessingService {
     const postRun = await repo.createRun({
       spaceId: input.connection.space_id,
       ruleId: input.rule?.id ?? null,
-      sourceConnectionId: input.connection.id,
+      sourceChannelId: input.sourceChannelId,
       agentId: input.agentId,
       projectId: input.projectId,
       triggeredByUserId: input.actorUserId,
@@ -830,8 +964,18 @@ export class SourcePostProcessingService {
       input.inputConfig.retrieval_context.domains,
     );
     let agentOutputPreview: string | null = null;
+    let paperCardPromptHash: string | null = null;
     try {
       await this.enforceSourcePromptEgress(input.connection, input.agentId);
+      const paperCardPrompt = input.projectId && input.inputConfig.processing_phase === "deep_analysis"
+        ? await resolveProjectResearchPaperCardPrompt(this.db, {
+            spaceId: input.connection.space_id,
+            userId: input.actorUserId,
+            projectId: input.projectId,
+            agentId: input.agentId,
+          })
+        : null;
+      paperCardPromptHash = paperCardPrompt?.resolveResult.rendered_hash ?? null;
       retrievalContext = await this.buildRetrievalContext({
         connection: input.connection,
         projectId: input.projectId,
@@ -856,7 +1000,7 @@ export class SourcePostProcessingService {
         projectId: input.projectId,
         prompt: input.summaryGoal ?? input.inputConfig.summary_goal ?? promptForActions(input.actions),
         triggerType: input.triggerType,
-        instruction: renderInstruction({
+        instruction: [renderInstruction({
           connection: input.connection,
           items: promptBatch.items,
           evidence: promptBatch.evidence,
@@ -866,10 +1010,16 @@ export class SourcePostProcessingService {
           retrievalContext,
           extractedTextSnippets,
           candidatePrefilter: prefilter.metadata,
-        }),
+        }), paperCardPrompt?.instruction].filter(Boolean).join("\n\n"),
+        runtimeProfileId: input.inputConfig.runtime_profile_id ?? null,
+        structuredOutputContract: input.inputConfig.structured_output_schema_id === "source_post_processing.result.v1"
+          ? SOURCE_POST_PROCESSING_OUTPUT_CONTRACT
+          : null,
         postProcessingRunId: postRun.id,
       });
       if (agentRun.status !== "succeeded" && agentRun.status !== "degraded") {
+        const agentOutput = recordValue(agentRun.output_json);
+        const structuredOutputDiagnostics = recordValue(agentOutput.structured_output_diagnostics);
         return repo.markRunFinished({
           runId: postRun.id,
           spaceId: input.connection.space_id,
@@ -883,10 +1033,13 @@ export class SourcePostProcessingService {
             agent_run_error_code: errorCodeFromRun(agentRun),
             agent_run_model_provider_id: agentRun.model_provider_id,
             error_message: agentRun.error_message ?? null,
+            ...(Object.keys(structuredOutputDiagnostics).length > 0
+              ? { structured_output_diagnostics: structuredOutputDiagnostics }
+              : {}),
           },
         });
       }
-      const output = structuredOutput(agentRun);
+      const output = structuredOutput(agentRun, input.inputConfig.structured_output_schema_id ?? null);
       agentOutputPreview = output.slice(0, 1200);
       if (!output.trim()) {
         return repo.markRunFinished({
@@ -908,6 +1061,7 @@ export class SourcePostProcessingService {
       );
       result.item_decisions = mergeSyntheticItemDecisions(result.item_decisions, prefilter.syntheticDecisions);
       const materialized = await this.materializeOutputs({
+        sourceChannelId: input.sourceChannelId,
         connection: input.connection,
         rule: input.rule,
         postProcessingRunId: postRun.id,
@@ -921,6 +1075,7 @@ export class SourcePostProcessingService {
         cursorAfter: batch.cursorAfter,
         retrievalContext,
         result,
+        paperCardPromptHash,
       });
       if (input.rule && input.inputConfig.window !== "explicit") {
         await repo.advanceRuleCursor({
@@ -1105,6 +1260,8 @@ export class SourcePostProcessingService {
     prompt: string;
     triggerType: SourcePostProcessingTriggerType;
     instruction: string;
+    runtimeProfileId: string | null;
+    structuredOutputContract: typeof SOURCE_POST_PROCESSING_OUTPUT_CONTRACT | null;
     postProcessingRunId: string;
   }): Promise<RunRecord> {
     const pool = this.requirePool();
@@ -1118,9 +1275,23 @@ export class SourcePostProcessingService {
       workspace_id: null,
       prompt: input.prompt,
       instruction: input.instruction,
-      trigger_origin: input.triggerType === "manual" ? "manual" : "automation",
+      // Source post-processing is a Sources-owned job, not a user Automation.
+      // The rule was configured by the user before this unattended job runs;
+      // preserve that authorization in the immutable run contract so the
+      // runtime credential gate does not ask for a second approval.
+      trigger_origin: input.triggerType === "manual" ? "manual" : "job",
       run_type: "agent",
       mode: "live",
+      runtime_profile_id: input.runtimeProfileId,
+      contract_snapshot: {
+        source: { kind: "direct", id: input.postProcessingRunId },
+        project_id: input.projectId,
+        ...(input.structuredOutputContract ? { structured_output_json: input.structuredOutputContract } : {}),
+        policy_context_json: createManagedExecutionPolicy(
+          "source_post_processing",
+          input.triggerType !== "manual",
+        ),
+      },
     });
     await new PgSourcePostProcessingRepository(this.db).updateRunAgentRunId(
       input.spaceId,
@@ -1149,7 +1320,7 @@ export class SourcePostProcessingService {
 
   private async enqueueDeepAnalysisFollowUp(input: {
     spaceId: string;
-    sourceConnectionId: string;
+    sourceChannelId: string;
     ruleId: string;
     itemIds: string[];
     sourceRunId: string;
@@ -1161,7 +1332,7 @@ export class SourcePostProcessingService {
       payload: {
         phase: "deep_analysis",
         trigger_type: "manual",
-        source_connection_id: input.sourceConnectionId,
+        source_channel_id: input.sourceChannelId,
         rule_id: input.ruleId,
         source_item_ids: input.itemIds,
         source_post_processing_run_id: input.sourceRunId,
@@ -1322,6 +1493,7 @@ export class SourcePostProcessingService {
   }
 
   private async materializeOutputs(input: {
+    sourceChannelId: string;
     connection: SourceConnectionRow;
     rule: SourcePostProcessingRuleRow | null;
     postProcessingRunId: string;
@@ -1335,6 +1507,7 @@ export class SourcePostProcessingService {
     cursorAfter: SourcePostProcessingInputBatch["cursorAfter"];
     retrievalContext: SourcePostProcessingRetrievalContextSnapshot;
     result: ParsedPostProcessingResult;
+    paperCardPromptHash: string | null;
   }): Promise<{ artifactIds: string[]; proposalIds: string[]; jobIds: string[] }> {
     const repo = new PgSourcePostProcessingRepository(this.db);
     const artifactIds: string[] = [];
@@ -1348,7 +1521,7 @@ export class SourcePostProcessingService {
       source_post_processing_parent_run_id: input.inputConfig.source_post_processing_parent_run_id ?? null,
       processing_strategy: input.inputConfig.processing_strategy,
       content_source: input.inputConfig.content_source,
-      source_connection_id: input.connection.id,
+      source_channel_id: input.sourceChannelId,
       source_post_processing_rule_id: input.rule?.id ?? null,
       source_post_processing_run_id: input.postProcessingRunId,
       agent_id: input.agentRun.agent_id,
@@ -1397,6 +1570,15 @@ export class SourcePostProcessingService {
         });
         await repo.updateItemSummary(input.connection.space_id, item.id, artifactId);
         artifactIds.push(artifactId);
+      }
+      if (projectId && input.inputConfig.processing_phase === "deep_analysis" && input.result.item_summaries.length) {
+        await new ProjectResearchWorkspaceService(this.db).materializePaperCardsFromDeepAnalysis({
+          spaceId: input.connection.space_id,
+          projectId,
+          runId: input.agentRun.id,
+          promptHash: input.paperCardPromptHash,
+          summaries: input.result.item_summaries,
+        });
       }
     }
     if (input.actions.extract_evidence) {
@@ -1448,7 +1630,7 @@ export class SourcePostProcessingService {
         if (readyItemIds.length > 0) {
           const followUp = await this.enqueueDeepAnalysisFollowUp({
             spaceId: input.connection.space_id,
-            sourceConnectionId: input.connection.id,
+            sourceChannelId: input.sourceChannelId,
             ruleId: input.rule.id,
             itemIds: readyItemIds,
             sourceRunId: input.postProcessingRunId,
@@ -1497,7 +1679,7 @@ export class SourcePostProcessingService {
     }
     await repo.persistItemDecisions({
       spaceId: input.connection.space_id,
-      sourceConnectionId: input.connection.id,
+      sourceChannelId: input.sourceChannelId,
       ruleId: input.rule?.id ?? null,
       runId: input.postProcessingRunId,
       projectId,
@@ -2056,6 +2238,20 @@ function deepAnalysisInputConfig(
   };
 }
 
+function effectiveInputConfig(rule: SourcePostProcessingRuleRow): SourcePostProcessingInputConfig {
+  const inputConfig = normalizeInputConfig(rule.input_config_json);
+  if (inputConfig.structured_output_schema_id !== "source_post_processing.result.v1") {
+    return inputConfig;
+  }
+  return {
+    ...inputConfig,
+    item_limit: Math.min(
+      inputConfig.item_limit,
+      SOURCE_POST_PROCESSING_LIMITS.researchStructuredOutputBatchSize,
+    ),
+  };
+}
+
 function fitBatchToPromptBudget(
   batch: SourcePostProcessingInputBatch,
   inputConfig: SourcePostProcessingInputConfig,
@@ -2167,11 +2363,16 @@ function errorCodeFromRun(run: RunRecord): string | null {
   return stringValue(errorJson.error_code);
 }
 
-function structuredOutput(run: RunRecord): string {
+function structuredOutput(run: RunRecord, expectedSchemaId: string | null): string {
   const output = run.output_json && typeof run.output_json === "object" && !Array.isArray(run.output_json)
     ? run.output_json as Record<string, unknown>
     : {};
-  if (output.schema === "source_post_processing.result.v1") return JSON.stringify(output);
+  if (expectedSchemaId) {
+    if (output.schema !== expectedSchemaId) {
+      throw new HttpError(422, `Structured output schema must be ${expectedSchemaId}`);
+    }
+    return JSON.stringify(output);
+  }
   const value = output.output_text;
   return typeof value === "string" ? value : "";
 }

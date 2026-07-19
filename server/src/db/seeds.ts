@@ -206,6 +206,40 @@ async function seedEvolutionStrategyAssets(pool: Pool): Promise<void> {
 
 async function seedSourceConnectors(pool: Pool): Promise<void> {
   await pool.query(`
+    INSERT INTO source_providers (
+      id, provider_key, display_name, provider_kind, category, status,
+      capabilities_json, config_schema_json, created_at, updated_at
+    ) VALUES
+      ('00000000-0000-4000-8000-00000000e001', 'arxiv', 'arXiv', 'named', 'academic', 'active',
+       '{"search":true,"supports_full_history":true,"date_fields":["submittedDate","lastUpdatedDate"],"dedupe_keys":["arxiv_id","doi"]}',
+       '{"type":"object"}', now(), now()),
+      ('00000000-0000-4000-8000-00000000e002', 'generic_rss', 'RSS Feed', 'generic', 'feed', 'active',
+       '{"search":false,"formats":["rss"]}', '{"type":"object"}', now(), now()),
+      ('00000000-0000-4000-8000-00000000e003', 'generic_atom', 'Atom Feed', 'generic', 'feed', 'active',
+       '{"search":false,"formats":["atom"]}', '{"type":"object"}', now(), now()),
+      ('00000000-0000-4000-8000-00000000e004', 'generic_web_page', 'Web Page', 'generic', 'web', 'active',
+       '{"search":false,"formats":["html"]}', '{"type":"object"}', now(), now()),
+      ('00000000-0000-4000-8000-00000000e005', 'custom_source', 'Custom Source', 'generic', 'custom', 'active',
+       '{"search":false,"formats":["html"]}', '{"type":"object"}', now(), now()),
+      ('00000000-0000-4000-8000-00000000e006', 'openalex', 'OpenAlex', 'named', 'academic', 'active',
+       '{"search":true,"supports_full_history":true,"date_fields":["publication_date"],"dedupe_keys":["doi","arxiv_id","openalex_id"],"credential_optional":true}',
+       '{"type":"object"}', now(), now()),
+      ('00000000-0000-4000-8000-00000000e007', 'semantic_scholar', 'Semantic Scholar', 'named', 'academic', 'active',
+       '{"search":true,"supports_full_history":false,"date_fields":["publication_date"],"dedupe_keys":["doi","arxiv_id","semantic_scholar_id"],"credential_optional":true}',
+       '{"type":"object"}', now(), now()),
+      ('00000000-0000-4000-8000-00000000e008', 'web_search', 'Web Search', 'named', 'web', 'active',
+       '{"search":true,"supports_full_history":false,"dedupe_keys":["canonical_uri"],"credential_optional":false,"trust_level":"untrusted"}',
+       '{"type":"object"}', now(), now())
+    ON CONFLICT (provider_key) DO UPDATE SET
+      display_name = EXCLUDED.display_name,
+      provider_kind = EXCLUDED.provider_kind,
+      category = EXCLUDED.category,
+      status = EXCLUDED.status,
+      capabilities_json = EXCLUDED.capabilities_json,
+      config_schema_json = EXCLUDED.config_schema_json,
+      updated_at = now()
+  `);
+  await pool.query(`
     INSERT INTO source_connectors (
       id, connector_key, display_name, connector_type, ingestion_mode, status,
       capabilities_json, config_schema_json, created_at, updated_at
@@ -239,11 +273,32 @@ async function seedSourceConnectors(pool: Pool): Promise<void> {
       '2026-07-01 00:00:00+00', '2026-07-01 00:00:00+00'
     ),
     (
-      '00000000-0000-4000-8000-00000000f005', 'arxiv', 'arXiv',
+      '00000000-0000-4000-8000-00000000f005', 'arxiv_api', 'arXiv API',
       'external_feed', 'pull', 'active',
       '{"category":"academic","formats":["atom","html","pdf"],"supports_cursor":true,"supports_conditional_fetch":false,"item_type":"feed_entry"}',
       '{"type":"object","required":["mode"],"properties":{"mode":{"type":"string","enum":["search","recent_by_category"]},"search_query":{"type":"string","maxLength":500},"categories":{"type":"array","items":{"type":"string","maxLength":64},"maxItems":10},"max_results":{"type":"integer","minimum":1,"maximum":100},"sort_by":{"type":"string","enum":["relevance","lastUpdatedDate","submittedDate"]},"sort_order":{"type":"string","enum":["ascending","descending"]}}}',
       '2026-07-03 00:00:00+00', '2026-07-03 00:00:00+00'
+    ),
+    (
+      '00000000-0000-4000-8000-00000000f006', 'openalex_api', 'OpenAlex API',
+      'external_feed', 'pull', 'active',
+      '{"category":"academic","formats":["json"],"supports_cursor":true,"supports_conditional_fetch":false,"item_type":"feed_entry"}',
+      '{"type":"object","required":["search"],"properties":{"search":{"type":"string","maxLength":500},"per_page":{"type":"integer","minimum":1,"maximum":100},"from_publication_date":{"type":"string"},"to_publication_date":{"type":"string"}}}',
+      '2026-07-19 00:00:00+00', '2026-07-19 00:00:00+00'
+    ),
+    (
+      '00000000-0000-4000-8000-00000000f007', 'semantic_scholar_api', 'Semantic Scholar Graph API',
+      'external_feed', 'pull', 'active',
+      '{"category":"academic","formats":["json"],"supports_cursor":true,"supports_conditional_fetch":false,"item_type":"feed_entry"}',
+      '{"type":"object","required":["query"],"properties":{"query":{"type":"string","maxLength":500},"limit":{"type":"integer","minimum":1,"maximum":100},"from_publication_date":{"type":"string"},"to_publication_date":{"type":"string"}}}',
+      '2026-07-19 00:00:00+00', '2026-07-19 00:00:00+00'
+    ),
+    (
+      '00000000-0000-4000-8000-00000000f008', 'brave_web_search_api', 'Brave Web Search API',
+      'external_feed', 'pull', 'active',
+      '{"category":"web","formats":["json"],"supports_cursor":true,"supports_conditional_fetch":false,"item_type":"external_url"}',
+      '{"type":"object","required":["q"],"properties":{"q":{"type":"string","maxLength":400},"count":{"type":"integer","minimum":1,"maximum":20},"freshness":{"type":"string"}}}',
+      '2026-07-19 00:00:00+00', '2026-07-19 00:00:00+00'
     )
     ON CONFLICT (id) DO UPDATE SET
       connector_key     = EXCLUDED.connector_key,
@@ -254,5 +309,25 @@ async function seedSourceConnectors(pool: Pool): Promise<void> {
       capabilities_json = EXCLUDED.capabilities_json,
       config_schema_json = EXCLUDED.config_schema_json,
       updated_at        = now()
+  `);
+  await pool.query(`
+    INSERT INTO source_provider_connectors (
+      id, provider_id, connector_id, status, priority, capabilities_json,
+      config_schema_json, created_at, updated_at
+    ) VALUES
+      ('00000000-0000-4000-8000-00000000d001', '00000000-0000-4000-8000-00000000e001', '00000000-0000-4000-8000-00000000f005', 'active', 10, '{"search":true,"supports_full_history":true}', '{"type":"object"}', now(), now()),
+      ('00000000-0000-4000-8000-00000000d002', '00000000-0000-4000-8000-00000000e002', '00000000-0000-4000-8000-00000000f001', 'active', 10, '{"search":false}', '{"type":"object"}', now(), now()),
+      ('00000000-0000-4000-8000-00000000d003', '00000000-0000-4000-8000-00000000e003', '00000000-0000-4000-8000-00000000f002', 'active', 10, '{"search":false}', '{"type":"object"}', now(), now()),
+      ('00000000-0000-4000-8000-00000000d004', '00000000-0000-4000-8000-00000000e004', '00000000-0000-4000-8000-00000000f003', 'active', 10, '{"search":false}', '{"type":"object"}', now(), now()),
+      ('00000000-0000-4000-8000-00000000d005', '00000000-0000-4000-8000-00000000e005', '00000000-0000-4000-8000-00000000f004', 'active', 10, '{"search":false}', '{"type":"object"}', now(), now()),
+      ('00000000-0000-4000-8000-00000000d006', '00000000-0000-4000-8000-00000000e006', '00000000-0000-4000-8000-00000000f006', 'active', 10, '{"search":true,"supports_full_history":true}', '{"type":"object"}', now(), now()),
+      ('00000000-0000-4000-8000-00000000d007', '00000000-0000-4000-8000-00000000e007', '00000000-0000-4000-8000-00000000f007', 'active', 10, '{"search":true,"supports_full_history":false}', '{"type":"object"}', now(), now()),
+      ('00000000-0000-4000-8000-00000000d008', '00000000-0000-4000-8000-00000000e008', '00000000-0000-4000-8000-00000000f008', 'active', 10, '{"search":true,"supports_full_history":false,"trust_level":"untrusted"}', '{"type":"object"}', now(), now())
+    ON CONFLICT (provider_id, connector_id) DO UPDATE SET
+      status = EXCLUDED.status,
+      priority = EXCLUDED.priority,
+      capabilities_json = EXCLUDED.capabilities_json,
+      config_schema_json = EXCLUDED.config_schema_json,
+      updated_at = now()
   `);
 }

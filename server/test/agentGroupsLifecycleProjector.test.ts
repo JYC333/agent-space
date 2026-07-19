@@ -194,6 +194,20 @@ class FakeClient {
         rowCount: row && row.space_id === params[0] ? 1 : 0,
       };
     }
+    if (sql.includes("WITH scoped_runs AS")) {
+      return {
+        rows: [{
+          agent_run_count: 1,
+          completed_agent_run_count: 0,
+          input_tokens: null,
+          output_tokens: null,
+          total_tokens: null,
+          estimated_cost_usd: null,
+          model_names: [],
+        }] as Row[],
+        rowCount: 1,
+      };
+    }
     if (sql.includes("FROM agent_run_groups")) {
       const row = this.state.group;
       return {

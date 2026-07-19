@@ -2,11 +2,12 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { ReactNode } from 'react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { toast } from 'sonner'
 import ProjectDetailPage from '../ProjectDetailPage'
-import { automationsApi, sourcesApi, sourceReaderApi, projectsApi, workspacesApi, projectPresetsApi, projectResearchApi } from '../../../api/client'
+import { automationsApi, sourcesApi, readerApi, projectsApi, workspacesApi, projectPresetsApi, projectResearchApi } from '../../../api/client'
 
 vi.mock('sonner', () => ({
-  toast: { success: vi.fn(), error: vi.fn() },
+  toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), dismiss: vi.fn() },
 }))
 
 vi.mock('../../../contexts/SpaceContext', () => ({
@@ -53,6 +54,14 @@ vi.mock('../../../api/client', () => ({
     archive: vi.fn(),
     linkWorkspace: vi.fn(),
     unlinkWorkspace: vi.fn(),
+    deleteSourceBinding: vi.fn().mockResolvedValue({ id: 'binding-1', status: 'archived' }),
+    createSourceBinding: vi.fn().mockResolvedValue({
+      id: 'binding-new',
+      project_id: 'project-1',
+      source_channel_id: 'channel-1',
+      binding_key: 'default',
+      status: 'active',
+    }),
   },
   projectPresetsApi: {
     getProjectPreset: vi.fn().mockResolvedValue({ preset_key: null }),
@@ -62,6 +71,7 @@ vi.mock('../../../api/client', () => ({
     upsertProfile: vi.fn(),
     approveProfile: vi.fn(),
     workflows: vi.fn().mockResolvedValue([]),
+    scanSummaries: vi.fn().mockResolvedValue([]),
     startWorkflow: vi.fn(),
     runStage: vi.fn(),
     checkpoints: vi.fn().mockResolvedValue([]),
@@ -82,9 +92,19 @@ vi.mock('../../../api/client', () => ({
     upsertScreeningCriteria: vi.fn(),
     literatureMatrix: vi.fn().mockResolvedValue([]),
     rebuildLiteratureMatrix: vi.fn(),
-    synthesis: vi.fn().mockResolvedValue([]),
-    artifacts: vi.fn(),
-    runIntegrity: vi.fn(),
+    reports: vi.fn().mockResolvedValue([]),
+    runReportIntegrity: vi.fn(),
+    questionChangeImpact: vi.fn().mockResolvedValue({
+      workflow_id: 'workflow-1', previous_question: 'Old question', current_question: 'New question',
+      previous_version: 1, screened_papers: 0, reports: 0,
+    }),
+    resolveQuestionChange: vi.fn().mockResolvedValue({}),
+  },
+  providersApi: {
+    list: vi.fn().mockResolvedValue([]),
+  },
+  credentialsApi: {
+    profiles: vi.fn().mockResolvedValue([]),
   },
   workspacesApi: {
     list: vi.fn().mockResolvedValue({ items: [], total: 0, limit: 200, offset: 0 }),
@@ -105,40 +125,32 @@ vi.mock('../../../api/client', () => ({
     list: vi.fn().mockResolvedValue({ items: [], total: 0, limit: 5, offset: 0 }),
   },
   sourcesApi: {
-    createConnection: vi.fn(),
+    channels: vi.fn().mockResolvedValue([{
+      id: 'channel-1',
+      space_id: 'space-1',
+      source_connection_id: 'conn-1',
+      source_name: 'Engineering feeds',
+      name: 'Engineering feed',
+      channel_type: 'feed',
+      endpoint_url: 'https://example.test/feed.xml',
+      query: {},
+      provider_query: {},
+      query_fingerprint: 'fingerprint-1',
+      status: 'active',
+      fetch_frequency: 'daily',
+      schedule_rule: null,
+      provider: { key: 'generic_rss', display_name: 'RSS' },
+      connection_status: 'active',
+      capture_policy: 'reference_only',
+      scan_state: { status: 'active', cursor: {}, watermark: {}, next_run_at: null, last_run_at: null },
+    }]),
     createSourceRecipe: vi.fn(),
     createCustomSourceDraft: vi.fn(),
-    connections: vi.fn().mockResolvedValue({
-      items: [{
-        id: 'conn-1',
-        space_id: 'space-1',
-        connector_id: 'connector-1',
-        owner_user_id: 'user-1',
-        credential_id: null,
-        name: 'Engineering feed',
-        endpoint_url: 'https://example.test/feed.xml',
-        status: 'active',
-        fetch_frequency: 'daily',
-        capture_policy: 'reference_only',
-        trust_level: 'normal',
-        topic_hints_json: null,
-        consent_json: {},
-        policy_json: {},
-        config_json: {},
-        last_checked_at: null,
-        next_check_at: null,
-        created_at: '2026-06-30T00:00:00.000Z',
-        updated_at: '2026-06-30T00:00:00.000Z',
-      }],
-      total: 1,
-      limit: 100,
-      offset: 0,
-    }),
     projectSourceBindings: vi.fn().mockResolvedValue([{
       id: 'binding-1',
       space_id: 'space-1',
       project_id: 'project-1',
-      source_connection_id: 'conn-1',
+      source_channel_id: 'channel-1',
       binding_key: 'engineering',
       status: 'active',
       priority: 0,
@@ -155,7 +167,7 @@ vi.mock('../../../api/client', () => ({
       id: 'binding-new',
       space_id: 'space-1',
       project_id: 'project-1',
-      source_connection_id: 'conn-1',
+      source_channel_id: 'channel-1',
       binding_key: 'default',
       status: 'active',
       priority: 0,
@@ -250,7 +262,8 @@ vi.mock('../../../api/client', () => ({
         id: 'project-item-1',
         space_id: 'space-1',
         project_id: 'project-1',
-        project_source_binding_id: 'binding-1',
+      project_source_binding_id: 'binding-1',
+        source_channel_id: 'channel-1',
         source_connection_id: 'conn-1',
         source_item_id: 'item-1',
         status: 'active',
@@ -337,7 +350,7 @@ vi.mock('../../../api/client', () => ({
       offset: 0,
     }),
   },
-  sourceReaderApi: {
+  readerApi: {
     listByProject: vi.fn().mockResolvedValue({ items: [] }),
   },
   automationsApi: {
@@ -376,7 +389,6 @@ describe('ProjectDetailPage Source consumption', () => {
       expect(sourcesApi.evidence).toHaveBeenCalledWith({ project_id: 'project-1', status: 'active', limit: 5 })
       expect(automationsApi.list).toHaveBeenCalledWith({ project_id: 'project-1' })
       expect(projectPresetsApi.getProjectPreset).toHaveBeenCalledWith('project-1')
-      expect(sourcesApi.createConnection).not.toHaveBeenCalled()
       expect(sourcesApi.createSourceRecipe).not.toHaveBeenCalled()
       expect(sourcesApi.createCustomSourceDraft).not.toHaveBeenCalled()
     })
@@ -386,22 +398,165 @@ describe('ProjectDetailPage Source consumption', () => {
     vi.mocked(projectPresetsApi.getProjectPreset).mockResolvedValueOnce({ preset_key: 'academic_research' })
     renderPage()
 
-    expect(await screen.findByText('Auto research workflow')).toBeInTheDocument()
-    expect(screen.getByText('Research question to literature intake to screening matrix to synthesis to integrity gate.')).toBeInTheDocument()
-    expect(screen.getByText('Research corpus')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /start auto research/i })).toBeDisabled()
-    expect(screen.getByRole('link', { name: /add arxiv source/i })).toHaveAttribute(
-      'href',
-      '/sources/source-presets?project_id=project-1&preset=arxiv',
-    )
-    expect(screen.getByRole('link', { name: /citation graph/i })).toHaveAttribute(
-      'href',
-      '/graph?project_id=project-1&lens_id=academic_citation_v1',
-    )
+    expect(await screen.findByText('Research status')).toBeInTheDocument()
+    expect(screen.getByText('Set the research question that screening and synthesis should answer.')).toBeInTheDocument()
+    expect(screen.queryByText('Research corpus')).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Open reading list, notebook, checklist, and reports/ })).toHaveAttribute('href', '/projects/project-1/research')
+    expect(screen.getByRole('button', { name: /^start initial research$/i })).toBeDisabled()
+    expect(screen.getAllByRole('button', { name: /set up intake/i }).length).toBeGreaterThan(0)
+    expect(screen.queryByRole('link', { name: /citation graph/i })).not.toBeInTheDocument()
     await waitFor(() => {
       expect(projectResearchApi.workflows).toHaveBeenCalledWith('project-1')
       expect(projectResearchApi.literatureMatrix).toHaveBeenCalledWith('project-1')
     })
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    expect(screen.getByText('Saved intake configuration')).toBeInTheDocument()
+    expect(screen.getByLabelText('Research question')).toBeInTheDocument()
+    expect(screen.getByText(/Engineering feed/)).toBeInTheDocument()
+  })
+
+  it('does not flash the initial intake setup while research data is loading', async () => {
+    let resolveWorkflows!: (value: Awaited<ReturnType<typeof projectResearchApi.workflows>>) => void
+    const workflows = new Promise<Awaited<ReturnType<typeof projectResearchApi.workflows>>>(resolve => {
+      resolveWorkflows = resolve
+    })
+    vi.mocked(projectPresetsApi.getProjectPreset).mockResolvedValueOnce({ preset_key: 'academic_research' })
+    vi.mocked(projectResearchApi.workflows).mockReturnValueOnce(workflows)
+
+    renderPage()
+
+    expect(await screen.findByText('Project One')).toBeInTheDocument()
+    expect(screen.getByLabelText('Loading academic research')).toBeInTheDocument()
+    expect(screen.queryByText('Set up initial literature intake')).toBeNull()
+
+    resolveWorkflows([])
+    await waitFor(() => expect(screen.getByText('Set up initial literature intake')).toBeInTheDocument())
+  })
+
+  it('announces a pending research review instead of silently pausing', async () => {
+    vi.mocked(projectPresetsApi.getProjectPreset).mockResolvedValueOnce({ preset_key: 'academic_research' })
+    vi.mocked(projectResearchApi.workflows).mockResolvedValueOnce([{
+      id: 'workflow-1',
+      project_id: 'project-1',
+      workflow_type: 'literature_review',
+      current_stage: 'screening',
+      status: 'active',
+      mode: 'autonomous',
+      state_json: {},
+      started_by_user_id: 'user-1',
+      started_run_id: null,
+      created_at: '2026-06-30T00:00:00.000Z',
+      updated_at: '2026-06-30T00:00:00.000Z',
+    }])
+    vi.mocked(projectResearchApi.checkpoints).mockResolvedValueOnce([{
+      id: 'checkpoint-1',
+      project_id: 'project-1',
+      workflow_id: 'workflow-1',
+      stage_key: 'screening',
+      checkpoint_type: 'screening_gate',
+      status: 'pending',
+      machine_result_json: { relevant: 4, maybe: 1 },
+      review: null,
+      user_decision: null,
+      decision_reason: null,
+      decided_by_user_id: null,
+      decided_at: null,
+      created_at: '2026-06-30T00:00:00.000Z',
+      updated_at: '2026-06-30T00:00:00.000Z',
+    }])
+
+    renderPage()
+
+    expect((await screen.findAllByText('Review required')).length).toBeGreaterThan(0)
+    await waitFor(() => expect(toast.warning).toHaveBeenCalledWith(
+      'Research review required',
+      expect.objectContaining({
+        id: 'research-review:project-1:checkpoint-1',
+        duration: Infinity,
+      }),
+    ))
+  })
+
+  it('offers project-level source removal and keeps the source available', async () => {
+    vi.mocked(projectsApi.deleteSourceBinding).mockResolvedValueOnce({ id: 'binding-1', status: 'archived' } as never)
+    renderPage()
+
+    fireEvent.click(await screen.findByRole('button', { name: /^remove$/i }))
+    expect(screen.getByRole('heading', { name: /remove source from project/i })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /remove source/i }))
+
+    await waitFor(() => expect(projectsApi.deleteSourceBinding).toHaveBeenCalledWith('project-1', 'binding-1'))
+  })
+
+  it('keeps the research question editable after it has been set', async () => {
+    vi.mocked(projectsApi.get).mockResolvedValueOnce({
+      id: 'project-1',
+      space_id: 'space-1',
+      owner_user_id: 'user-1',
+      name: 'Project One',
+      description: null,
+      status: 'active',
+      current_focus: 'How should agents use source evidence?',
+      settings_json: null,
+      created_at: '2026-06-30T00:00:00.000Z',
+      updated_at: '2026-06-30T00:00:00.000Z',
+      archived_at: null,
+    })
+    vi.mocked(projectPresetsApi.getProjectPreset).mockResolvedValueOnce({ preset_key: 'academic_research' })
+    renderPage()
+
+    expect(await screen.findByRole('button', { name: /edit question/i })).toBeInTheDocument()
+  })
+
+  it('warns that saving a changed question does not rewrite started research', async () => {
+    vi.mocked(projectPresetsApi.getProjectPreset).mockResolvedValueOnce({ preset_key: 'academic_research' })
+    vi.mocked(projectResearchApi.workflows).mockResolvedValueOnce([{
+      id: 'workflow-1', project_id: 'project-1', workflow_type: 'literature_review', current_stage: 'complete',
+      status: 'active', mode: 'autonomous', state_json: { research_question: 'Old question', research_question_version: 1 },
+      started_by_user_id: 'user-1', started_run_id: null, created_at: '2026-06-30T00:00:00.000Z', updated_at: '2026-06-30T00:00:00.000Z',
+    }])
+    renderPage()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Settings' }))
+    expect(screen.getByText(/saving a new question does not rewrite existing screening decisions or reports/i)).toBeInTheDocument()
+  })
+
+  it('resolves question drift through the impact-aware decision dialog', async () => {
+    vi.mocked(projectsApi.get).mockResolvedValueOnce({
+      id: 'project-1', space_id: 'space-1', owner_user_id: 'user-1', name: 'Project One', description: null,
+      status: 'active', current_focus: 'New question', settings_json: null,
+      created_at: '2026-06-30T00:00:00.000Z', updated_at: '2026-06-30T00:00:00.000Z', archived_at: null,
+    })
+    vi.mocked(projectPresetsApi.getProjectPreset).mockResolvedValueOnce({ preset_key: 'academic_research' })
+    vi.mocked(projectResearchApi.workflows).mockResolvedValueOnce([{
+      id: 'workflow-1', project_id: 'project-1', workflow_type: 'literature_review', current_stage: 'complete',
+      status: 'active', mode: 'autonomous', state_json: { research_question: 'Old question', research_question_version: 3, monitoring: { active: true } },
+      started_by_user_id: 'user-1', started_run_id: null, created_at: '2026-06-30T00:00:00.000Z', updated_at: '2026-06-30T00:00:00.000Z',
+    }])
+    vi.mocked(projectResearchApi.questionChangeImpact).mockResolvedValueOnce({
+      workflow_id: 'workflow-1', previous_question: 'Old question', current_question: 'New question',
+      previous_version: 3, screened_papers: 27, reports: 2,
+    })
+    vi.mocked(projectResearchApi.resolveQuestionChange).mockResolvedValueOnce({} as never)
+    renderPage()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Resolve question change' }))
+    expect(await screen.findByText('27 papers screened against the previous question · 2 reports')).toBeInTheDocument()
+    expect(screen.getByText('Question version 3 → 4')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /re-screen against the new question/i }))
+
+    await waitFor(() => expect(projectResearchApi.resolveQuestionChange).toHaveBeenCalledWith('project-1', 'rescreen'))
+  })
+
+  it('uses the unified confirmation dialog before archiving a project', async () => {
+    vi.mocked(projectsApi.archive).mockResolvedValueOnce({} as never)
+    renderPage()
+
+    fireEvent.click(await screen.findByRole('button', { name: /^archive$/i }))
+    expect(screen.getByRole('heading', { name: /archive “project one”/i })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /archive project/i }))
+
+    await waitFor(() => expect(projectsApi.archive).toHaveBeenCalledWith('project-1'))
   })
 
   it('backfills historical evidence for an existing linked source', async () => {
@@ -459,16 +614,15 @@ describe('ProjectDetailPage Source consumption', () => {
     renderPage()
 
     fireEvent.click(await screen.findByRole('button', { name: /^link source$/i }))
-    expect(await screen.findByRole('dialog', { name: /^link source$/i })).toBeInTheDocument()
-    expect(screen.getByText('Engineering feed')).toBeInTheDocument()
+    expect(await screen.findByRole('dialog', { name: /^use an existing source$/i })).toBeInTheDocument()
+    expect(screen.getByText(/Engineering feed · RSS/)).toBeInTheDocument()
 
     const buttons = screen.getAllByRole('button', { name: /^link source$/i })
     fireEvent.click(buttons[buttons.length - 1]!)
 
     await waitFor(() => {
-      expect(sourcesApi.createProjectSourceBinding).toHaveBeenCalledWith({
-        project_id: 'project-1',
-        source_connection_id: 'conn-1',
+      expect(projectsApi.createSourceBinding).toHaveBeenCalledWith('project-1', {
+        source_channel_id: 'channel-1',
         backfill_history: true,
       })
     })
@@ -479,7 +633,7 @@ describe('ProjectDetailPage Source consumption', () => {
       id: 'binding-1',
       space_id: 'space-1',
       project_id: 'project-1',
-      source_connection_id: 'conn-1',
+      source_channel_id: 'channel-1',
       binding_key: 'default',
       status: 'active',
       priority: 0,
@@ -519,7 +673,7 @@ describe('ProjectDetailPage Source consumption', () => {
       id: 'binding-1',
       space_id: 'space-1',
       project_id: 'project-1',
-      source_connection_id: 'conn-1',
+      source_channel_id: 'channel-1',
       binding_key: 'default',
       status: 'active',
       priority: 0,
@@ -582,65 +736,52 @@ describe('ProjectDetailPage Source consumption', () => {
   })
 
   it('changes the source for a manually saved URL item from the Project page', async () => {
-    vi.mocked(sourcesApi.connections).mockResolvedValue({
-      items: [
-        {
-          id: 'conn-1',
-          space_id: 'space-1',
-          connector_id: 'connector-1',
-          owner_user_id: 'user-1',
-          credential_id: null,
-          visibility: 'space_shared',
-          access_level: 'full',
-          name: 'Engineering feed',
-          endpoint_url: 'https://example.test/feed.xml',
-          status: 'active',
-          fetch_frequency: 'daily',
-          capture_policy: 'reference_only',
-          trust_level: 'normal',
-          topic_hints_json: null,
-          consent_json: {},
-          policy_json: {},
-          config_json: {},
-          last_checked_at: null,
-          next_check_at: null,
-          created_at: '2026-06-30T00:00:00.000Z',
-          updated_at: '2026-06-30T00:00:00.000Z',
-        },
-        {
-          id: 'conn-2',
-          space_id: 'space-1',
-          connector_id: 'connector-1',
-          owner_user_id: 'user-1',
-          credential_id: null,
-          visibility: 'space_shared',
-          access_level: 'full',
-          name: 'Research feed',
-          endpoint_url: 'https://example.test/research.xml',
-          status: 'active',
-          fetch_frequency: 'daily',
-          capture_policy: 'reference_only',
-          trust_level: 'normal',
-          topic_hints_json: null,
-          consent_json: {},
-          policy_json: {},
-          config_json: {},
-          last_checked_at: null,
-          next_check_at: null,
-          created_at: '2026-06-30T00:00:00.000Z',
-          updated_at: '2026-06-30T00:00:00.000Z',
-        },
-      ],
-      total: 2,
-      limit: 100,
-      offset: 0,
-    })
+    vi.mocked(sourcesApi.channels).mockResolvedValue([
+      {
+        id: 'channel-1',
+        space_id: 'space-1',
+        source_connection_id: 'conn-1',
+        source_name: 'Engineering feeds',
+        name: 'Engineering feed',
+        channel_type: 'feed',
+        endpoint_url: 'https://example.test/feed.xml',
+        query: {},
+        provider_query: {},
+        query_fingerprint: 'fingerprint-1',
+        status: 'active',
+        fetch_frequency: 'daily',
+        schedule_rule: null,
+        provider: { key: 'generic_rss', display_name: 'RSS' },
+        connection_status: 'active',
+        capture_policy: 'reference_only',
+        scan_state: { status: 'active', cursor: {}, watermark: {}, next_run_at: null, last_run_at: null },
+      },
+      {
+        id: 'channel-2',
+        space_id: 'space-1',
+        source_connection_id: 'conn-2',
+        source_name: 'Research feeds',
+        name: 'Research feed',
+        channel_type: 'feed',
+        endpoint_url: 'https://example.test/research.xml',
+        query: {},
+        provider_query: {},
+        query_fingerprint: 'fingerprint-2',
+        status: 'active',
+        fetch_frequency: 'daily',
+        schedule_rule: null,
+        provider: { key: 'generic_rss', display_name: 'RSS' },
+        connection_status: 'active',
+        capture_policy: 'reference_only',
+        scan_state: { status: 'active', cursor: {}, watermark: {}, next_run_at: null, last_run_at: null },
+      },
+    ])
     vi.mocked(sourcesApi.projectSourceBindings).mockResolvedValue([
       {
         id: 'binding-1',
         space_id: 'space-1',
         project_id: 'project-1',
-        source_connection_id: 'conn-1',
+        source_channel_id: 'channel-1',
         binding_key: 'default',
         status: 'active',
         priority: 0,
@@ -657,7 +798,7 @@ describe('ProjectDetailPage Source consumption', () => {
         id: 'binding-2',
         space_id: 'space-1',
         project_id: 'project-1',
-        source_connection_id: 'conn-2',
+        source_channel_id: 'channel-2',
         binding_key: 'default',
         status: 'active',
         priority: 0,
@@ -677,6 +818,7 @@ describe('ProjectDetailPage Source consumption', () => {
         space_id: 'space-1',
         project_id: 'project-1',
         project_source_binding_id: 'binding-1',
+        source_channel_id: 'channel-1',
         source_connection_id: 'conn-1',
         source_item_id: 'item-1',
         status: 'active',
@@ -726,8 +868,8 @@ describe('ProjectDetailPage Source consumption', () => {
 
     renderPage()
 
-    fireEvent.click(await screen.findByRole('button', { name: /^engineering feed$/i }))
-    fireEvent.click(screen.getByRole('option', { name: /^research feed$/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /^engineering feed .*rss$/i }))
+    fireEvent.click(screen.getByRole('option', { name: /^research feed .*rss$/i }))
 
     await waitFor(() => {
       expect(sourcesApi.updateItem).toHaveBeenCalledWith('item-1', { connection_id: 'conn-2' })
@@ -735,13 +877,12 @@ describe('ProjectDetailPage Source consumption', () => {
   })
 
   it('shows reader annotation quote linked to the Library reader, with no annotation controls', async () => {
-    vi.mocked(sourceReaderApi.listByProject).mockResolvedValueOnce({
+    vi.mocked(readerApi.listByProject).mockResolvedValueOnce({
       items: [{
         id: 'ann-1',
         space_id: 'space-1',
-        source_item_id: 'item-1',
-        artifact_id: null,
-        source_snapshot_id: null,
+        document_type: 'source_item',
+        document_id: 'item-1',
         annotation_type: 'excerpt',
         quote_text: 'Highlighted content from the article.',
         anchor_json: { schema_version: 1, normalizer: 'plain_text_v1', quote_text: 'Highlighted content from the article.', text_range: { start: 0, end: 38, unit: 'utf16' as const }, before_context: '', after_context: '' },
@@ -770,7 +911,7 @@ describe('ProjectDetailPage Source consumption', () => {
     expect(screen.queryByRole('button', { name: /delete annotation/i })).toBeNull()
 
     await waitFor(() => {
-      expect(sourceReaderApi.listByProject).toHaveBeenCalledWith('project-1', 5)
+      expect(readerApi.listByProject).toHaveBeenCalledWith('project-1', 5)
     })
   })
 })

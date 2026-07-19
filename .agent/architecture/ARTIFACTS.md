@@ -2,11 +2,16 @@
 
 Date: 2026-06-16
 
-Artifacts are durable managed content records. Most are durable outputs produced
-by runs; Sources also writes artifacts for captured source material and reader
-documents. Artifacts let users inspect generated or captured content after
-sandbox/source processing and can be linked to proposals, activities, source
-snapshots, or other domain records.
+Artifacts are durable managed records for run output, operational intermediates,
+and system archives. They are an audit/export boundary, not the primary reading
+model for domain reports. User-facing structured documents such as Project
+Research Reports are materialized into their owning domain and opened with the
+shared Reader.
+
+`surface_role` makes the product boundary explicit: `user_output`,
+`operational`, or `system_archive`. Ordinary `GET /api/v1/artifacts` lists omit
+`system_archive`; audit callers may request `include_system_archives=true`, and
+known IDs remain readable/exportable under normal access policy.
 
 An `Artifact` records its production context with `artifacts.run_id` when it was
 produced by a run. Task attachment is a separate product relationship:
@@ -33,6 +38,8 @@ artifact's production context remains unchanged.
   Workspaces with no readable linked Project fail closed for non-owner reads.
 - Export returns inline artifact content when present, or a file download from
   managed artifact storage when `storage_path` is present.
+- Artifact Detail exposes identity, scope, permissions, producing Run, storage
+  provenance, and export. It does not act as a domain report renderer.
 
 ## Sources
 

@@ -1,0 +1,338 @@
+import { HttpError } from "../../routeUtils/common";
+import { parseFeed } from "../feedParser";
+import {
+  ARXIV_SORT_BY_VALUES,
+  ARXIV_SORT_ORDER_VALUES,
+  buildArxivQueryUrl,
+  parseArxivFeed,
+  type ArxivPaper,
+  type ArxivQueryConfig,
+} from "../connectors/arxiv";
+import { acquireArxivRequestSlot } from "../connectors/arxivThrottle";
+import { BraveWebSearchConnectorHandler, OpenAlexConnectorHandler, SemanticScholarConnectorHandler } from "../connectors/academicJson";
+
+const ARXIV_FIELD_PREFIX_RE = /\b(ti|au|abs|co|jr|cat|rn|id|all|submittedDate|lastUpdatedDate)\s*:/i;
+
+/**
+ * arXiv's search_query requires field-prefixed syntax (e.g. `all:"agent memory"`).
+ * Free text typed without a prefix silently matches nothing rather than erroring,
+ * so plain-language input is auto-wrapped in `all:"..."` instead of being sent verbatim.
+ */
+function normalizeArxivSearchQuery(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed || ARXIV_FIELD_PREFIX_RE.test(trimmed)) return trimmed;
+  const unwrapped = trimmed.replace(/^["']|["']$/g, "").replace(/"/g, "'");
+  return `all:"${unwrapped}"`;
+}
+
+export interface SourceConnectorCapabilities {
+  protocol: string;
+  supports_search: boolean;
+  supports_categories: boolean;
+  supports_date_range: boolean;
+  supports_all_history: boolean;
+  supports_incremental: boolean;
+  supports_conditional_requests: boolean;
+  id_fields: string[];
+}
+
+export interface CompiledSourceQuery {
+  query: Record<string, unknown>;
+  providerQuery: Record<string, unknown>;
+  endpointUrl: string | null;
+  fingerprintInput: Record<string, unknown>;
+}
+
+export interface SourceConnectorHandler {
+  readonly connectorKey: string;
+  validateChannelConfig(input: Record<string, unknown>): void;
+  compileQuery(input: Record<string, unknown>): CompiledSourceQuery;
+  buildScanRequest(channel: { endpoint_url: string | null; provider_query_json: unknown }, cursor: Record<string, unknown>): RequestSpec;
+  buildBackfillRequest(channel: { endpoint_url: string | null; provider_query_json: unknown }, window: Record<string, unknown>, cursor: Record<string, unknown>): RequestSpec;
+  parseResponse(response: string): NormalizedSourceItem[];
+  parseCursor?(response: string): Record<string, unknown>;
+  getCapabilities(): SourceConnectorCapabilities;
+  prepareRequest?(): Promise<void>;
+}
+
+export interface RequestSpec {
+  url: string;
+  headers?: Record<string, string>;
+}
+
+export interface NormalizedSourceItem {
+  itemType?: "feed_entry" | "external_url";
+  externalId: string;
+  title: string;
+  sourceUri: string | null;
+  canonicalUri: string | null;
+  sourceExternalId: string | null;
+  author: string | null;
+  occurredAt: string | null;
+  excerpt: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export class SourceConnectorRegistry {
+  private readonly handlers = new Map<string, SourceConnectorHandler>();
+
+  register(handler: SourceConnectorHandler): void {
+    if (this.handlers.has(handler.connectorKey)) {
+      throw new Error(`Source connector handler already registered: ${handler.connectorKey}`);
+    }
+    this.handlers.set(handler.connectorKey, handler);
+  }
+
+  get(connectorKey: string): SourceConnectorHandler {
+    const handler = this.handlers.get(connectorKey);
+    if (!handler) throw new HttpError(422, `No source connector handler is registered for ${connectorKey}`);
+    return handler;
+  }
+}
+
+class ArxivConnectorHandler implements SourceConnectorHandler {
+  readonly connectorKey = "arxiv_api";
+
+  validateChannelConfig(input: Record<string, unknown>): void {
+    const query = input.query && typeof input.query === "object" && !Array.isArray(input.query)
+      ? input.query as Record<string, unknown>
+      : input;
+    const searchQuery = typeof query.search_query === "string" ? query.search_query.trim() : "";
+    const categories = Array.isArray(query.categories) ? query.categories : [];
+    const allPapers = query.mode === "all";
+    if (!searchQuery && categories.length === 0 && !allPapers) {
+      throw new HttpError(422, "arXiv channel requires query.search_query, query.categories, or query.mode=all");
+    }
+  }
+
+  compileQuery(input: Record<string, unknown>): CompiledSourceQuery {
+    this.validateChannelConfig(input);
+    const query = input.query && typeof input.query === "object" && !Array.isArray(input.query)
+      ? input.query as Record<string, unknown>
+      : input;
+    const allPapers = query.mode === "all";
+    const searchQuery = allPapers
+      ? "all:*"
+      : typeof query.search_query === "string" && query.search_query.trim()
+      ? normalizeArxivSearchQuery(query.search_query)
+      : (Array.isArray(query.categories) ? (query.categories as unknown[]).map((value) => `cat:${String(value)}`).join(" OR ") : "");
+    const sortBy = typeof query.sort_by === "string" && (ARXIV_SORT_BY_VALUES as readonly string[]).includes(query.sort_by)
+      ? query.sort_by as ArxivQueryConfig["sort_by"]
+      : "submittedDate";
+    const sortOrder = typeof query.sort_order === "string" && (ARXIV_SORT_ORDER_VALUES as readonly string[]).includes(query.sort_order)
+      ? query.sort_order as ArxivQueryConfig["sort_order"]
+      : "descending";
+    const maxResults = Number.isInteger(query.max_results) && Number(query.max_results) > 0 ? Number(query.max_results) : 100;
+    const providerQuery = {
+      mode: allPapers ? "all" : query.mode === "recent_by_category" ? "recent_by_category" : "search",
+      search_query: searchQuery,
+      categories: Array.isArray(query.categories) ? [...new Set(query.categories.map(String))] : [],
+      max_results: Math.min(maxResults, 100),
+      sort_by: sortBy,
+      sort_order: sortOrder,
+      monitoring_field: query.monitoring_field === "lastUpdatedDate" ? "lastUpdatedDate" : "submittedDate",
+    } satisfies Record<string, unknown>;
+    const url = buildArxivQueryUrl(providerQuery as ArxivQueryConfig);
+    return {
+      query: { ...query },
+      providerQuery,
+      endpointUrl: url,
+      fingerprintInput: {
+        normalized_query: searchQuery,
+        sort_field: sortBy,
+        sort_order: sortOrder,
+        monitoring_field: providerQuery.monitoring_field,
+        endpoint: "arxiv_api",
+      },
+    };
+  }
+
+  buildScanRequest(channel: { endpoint_url: string | null; provider_query_json: unknown }, cursor: Record<string, unknown>): RequestSpec {
+    const query = objectValue(channel.provider_query_json);
+    const lastSeen = typeof cursor.last_published_at === "string" ? new Date(cursor.last_published_at) : null;
+    if (lastSeen && !Number.isNaN(lastSeen.getTime())) {
+      const monitoringField = query.monitoring_field === "lastUpdatedDate" ? "lastUpdatedDate" : "submittedDate";
+      const from = new Date(lastSeen.getTime() - 48 * 60 * 60 * 1000);
+      const formatDate = (value: Date) => value.toISOString().replace(/\D/g, "").slice(0, 12);
+      const current = String(query.search_query ?? "");
+      const range = `${monitoringField}:[${formatDate(from)} TO ${formatDate(new Date())}]`;
+      const url = buildArxivQueryUrl({
+        search_query: current ? `(${current}) AND ${range}` : range,
+        max_results: 100,
+        sort_by: monitoringField as ArxivQueryConfig["sort_by"],
+        sort_order: "descending",
+      });
+      return { url: this.withCursor(url, { ...cursor, start: 0 }) };
+    }
+    return { url: this.withCursor(channel.endpoint_url, cursor) };
+  }
+
+  buildBackfillRequest(channel: { endpoint_url: string | null; provider_query_json: unknown }, window: Record<string, unknown>, cursor: Record<string, unknown>): RequestSpec {
+    const query = objectValue(channel.provider_query_json);
+    const monitoringField = query.monitoring_field === "lastUpdatedDate" ? "lastUpdatedDate" : "submittedDate";
+    const from = typeof window.from === "string" ? window.from : null;
+    const to = typeof window.to === "string" ? window.to : null;
+    if (!from || !to) throw new HttpError(422, "arXiv backfill window requires from and to");
+    const formatDate = (value: string) => {
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) throw new HttpError(422, "arXiv backfill window dates must be valid ISO timestamps");
+      return date.toISOString().replace(/\D/g, "").slice(0, 12);
+    };
+    const baseQuery = String(query.search_query ?? "").trim();
+    const dateQuery = baseQuery
+      ? `(${baseQuery}) AND ${monitoringField}:[${formatDate(from)} TO ${formatDate(to)}]`
+      : `${monitoringField}:[${formatDate(from)} TO ${formatDate(to)}]`;
+    const compiled = buildArxivQueryUrl({
+      search_query: dateQuery,
+      max_results: Number(query.max_results) || 100,
+      sort_by: monitoringField as ArxivQueryConfig["sort_by"],
+      sort_order: "ascending",
+    });
+    const pageCursor = Number.isInteger(window.cursor)
+      ? Number(window.cursor) * 100
+      : Number.isInteger(cursor.start)
+        ? Number(cursor.start)
+        : 0;
+    const pageSize = Number(window.max_items ?? window.page_size ?? query.max_results ?? 100);
+    return { url: this.withCursor(compiled, { start: pageCursor, max_results: Math.min(100, Math.max(1, pageSize)) }) };
+  }
+
+  parseResponse(response: string): NormalizedSourceItem[] {
+    return parseArxivFeed(response).map((paper: ArxivPaper) => ({
+      externalId: paper.arxiv_id,
+      title: paper.title,
+      sourceUri: paper.abs_url,
+      canonicalUri: paper.abs_url,
+      sourceExternalId: paper.arxiv_id,
+      author: paper.authors.join(", ") || null,
+      occurredAt: paper.published_at,
+      excerpt: paper.summary,
+      metadata: {
+        arxiv_id: paper.arxiv_id,
+        arxiv_version: paper.arxiv_version,
+        doi: paper.doi,
+        updated_at: paper.updated_at,
+        categories: paper.categories,
+        primary_category: paper.primary_category,
+        pdf_url: paper.pdf_url,
+        html_url: paper.html_url,
+      },
+    }));
+  }
+
+  getCapabilities(): SourceConnectorCapabilities {
+    return {
+      protocol: "arxiv_atom_api",
+      supports_search: true,
+      supports_categories: true,
+      supports_date_range: true,
+      supports_all_history: true,
+      supports_incremental: true,
+      supports_conditional_requests: false,
+      id_fields: ["arxiv_id", "doi"],
+    };
+  }
+
+  async prepareRequest(): Promise<void> {
+    await acquireArxivRequestSlot();
+  }
+
+  private withCursor(url: string | null, cursor: Record<string, unknown>): string {
+    if (!url) throw new HttpError(422, "Source channel has no endpoint URL");
+    const parsed = new URL(url);
+    const start = Number.isInteger(cursor.start) && Number(cursor.start) >= 0 ? Number(cursor.start) : 0;
+    parsed.searchParams.set("start", String(start));
+    if (Number.isInteger(cursor.max_results) && Number(cursor.max_results) > 0) {
+      parsed.searchParams.set("max_results", String(Math.min(100, Number(cursor.max_results))));
+    }
+    return parsed.toString();
+  }
+}
+
+class GenericFeedConnectorHandler implements SourceConnectorHandler {
+  constructor(public readonly connectorKey: string, private readonly feedFormat: "rss" | "atom") {}
+  validateChannelConfig(input: Record<string, unknown>): void {
+    const endpoint = typeof input.endpoint_url === "string" ? input.endpoint_url : null;
+    if (!endpoint) throw new HttpError(422, "Feed channel requires endpoint_url");
+    try { new URL(endpoint); } catch { throw new HttpError(422, "endpoint_url must be a valid URL"); }
+  }
+  compileQuery(input: Record<string, unknown>): CompiledSourceQuery {
+    this.validateChannelConfig(input);
+    const endpointUrl = String(input.endpoint_url);
+    return { query: {}, providerQuery: {}, endpointUrl, fingerprintInput: { endpoint: endpointUrl } };
+  }
+  buildScanRequest(channel: { endpoint_url: string | null }): RequestSpec {
+    if (!channel.endpoint_url) throw new HttpError(422, "Feed channel has no endpoint URL");
+    return { url: channel.endpoint_url };
+  }
+  buildBackfillRequest(channel: { endpoint_url: string | null }): RequestSpec { return this.buildScanRequest(channel); }
+  parseResponse(response: string): NormalizedSourceItem[] {
+    return parseFeed(response, this.feedFormat).map((item) => ({
+      itemType: "feed_entry",
+      externalId: item.externalId ?? item.url ?? item.title,
+      title: item.title,
+      sourceUri: item.url,
+      canonicalUri: item.url,
+      sourceExternalId: item.externalId,
+      author: item.author,
+      occurredAt: item.occurredAt,
+      excerpt: item.excerpt,
+      metadata: item.metadata,
+    }));
+  }
+  getCapabilities(): SourceConnectorCapabilities {
+    return { protocol: this.connectorKey, supports_search: false, supports_categories: false, supports_date_range: false, supports_all_history: false, supports_incremental: true, supports_conditional_requests: true, id_fields: ["guid", "link"] };
+  }
+}
+
+class WebPageConnectorHandler implements SourceConnectorHandler {
+  readonly connectorKey = "web_page";
+  validateChannelConfig(input: Record<string, unknown>): void {
+    const endpoint = typeof input.endpoint_url === "string" ? input.endpoint_url : null;
+    if (!endpoint) throw new HttpError(422, "Web page channel requires endpoint_url");
+    try { new URL(endpoint); } catch { throw new HttpError(422, "endpoint_url must be a valid URL"); }
+  }
+  compileQuery(input: Record<string, unknown>): CompiledSourceQuery {
+    this.validateChannelConfig(input);
+    const endpointUrl = String(input.endpoint_url);
+    return { query: {}, providerQuery: {}, endpointUrl, fingerprintInput: { endpoint: endpointUrl } };
+  }
+  buildScanRequest(channel: { endpoint_url: string | null }): RequestSpec {
+    if (!channel.endpoint_url) throw new HttpError(422, "Web page channel has no endpoint URL");
+    return { url: channel.endpoint_url };
+  }
+  buildBackfillRequest(channel: { endpoint_url: string | null }): RequestSpec { return this.buildScanRequest(channel); }
+  parseResponse(response: string): NormalizedSourceItem[] {
+    const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(response)?.[1]?.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() || "Web page";
+    const text = response.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    return [{
+      itemType: "external_url",
+      externalId: title,
+      title,
+      sourceUri: null,
+      canonicalUri: null,
+      sourceExternalId: null,
+      author: null,
+      occurredAt: null,
+      excerpt: text.slice(0, 2048),
+      metadata: { page_title: title, content_length: response.length },
+    }];
+  }
+  getCapabilities(): SourceConnectorCapabilities {
+    return { protocol: "web_page", supports_search: false, supports_categories: false, supports_date_range: false, supports_all_history: false, supports_incremental: true, supports_conditional_requests: true, id_fields: ["canonical_uri"] };
+  }
+}
+
+export const sourceConnectorRegistry = new SourceConnectorRegistry();
+sourceConnectorRegistry.register(new ArxivConnectorHandler());
+sourceConnectorRegistry.register(new OpenAlexConnectorHandler());
+sourceConnectorRegistry.register(new SemanticScholarConnectorHandler());
+sourceConnectorRegistry.register(new BraveWebSearchConnectorHandler());
+sourceConnectorRegistry.register(new GenericFeedConnectorHandler("rss", "rss"));
+sourceConnectorRegistry.register(new GenericFeedConnectorHandler("atom", "atom"));
+sourceConnectorRegistry.register(new WebPageConnectorHandler());
+sourceConnectorRegistry.register(new GenericFeedConnectorHandler("custom_source", "rss"));
+
+function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}

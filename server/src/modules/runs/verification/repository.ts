@@ -111,12 +111,21 @@ export class PgVerificationRepository implements VerificationPlanReader {
   ): Promise<VerificationResultRecord[]> {
     const persisted: VerificationResultRecord[] = [];
     for (const result of results) {
+      // Results belong to the attempt that produced them. The engine runs
+      // inside the currently executing attempt (before the Supervisor can
+      // create the next one), so the latest attempt number is that attempt.
+      // The upsert therefore only replaces re-verification of the same
+      // attempt; a retry's verification never overwrites a prior attempt's rows.
       const inserted = await this.db.query<VerificationResultRecord>(
         `INSERT INTO verification_results (
-           id, space_id, run_id, verifier_type, verifier_version, status,
+           id, space_id, run_id, attempt_number, verifier_type, verifier_version, status,
            summary, evidence_refs_json, details_json, started_at, completed_at, created_at
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12)
-         ON CONFLICT (run_id, verifier_type, verifier_version)
+         ) VALUES ($1, $2, $3,
+           COALESCE((SELECT max(attempt_number)
+                       FROM run_attempts
+                      WHERE space_id = $2::varchar AND run_id = $3::varchar), 1),
+           $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12)
+         ON CONFLICT (run_id, attempt_number, verifier_type, verifier_version)
          DO UPDATE SET
            status = EXCLUDED.status,
            summary = EXCLUDED.summary,
@@ -124,7 +133,7 @@ export class PgVerificationRepository implements VerificationPlanReader {
            details_json = EXCLUDED.details_json,
            started_at = EXCLUDED.started_at,
            completed_at = EXCLUDED.completed_at
-         RETURNING id, space_id, run_id, verifier_type, verifier_version, status,
+         RETURNING id, space_id, run_id, attempt_number, verifier_type, verifier_version, status,
                    summary, evidence_refs_json, details_json, started_at, completed_at, created_at`,
         [
           randomUUID(),

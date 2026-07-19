@@ -25,8 +25,24 @@ See `runtime-adapters.md` for the full adapter registry and license notes.
 - `AgentTemplateService` — author templates + copy-on-create `create_agent_from_template`
 - `Run` rows created through `RunService` (queued work, lifecycle, delegation links)
 - Runtime adapter selection fields on `AgentVersion`
-- System AgentTemplate seeding (factories; no built-in concrete agents are seeded)
+- System AgentTemplate seeding (factories; concrete system agents are provisioned on demand)
 - Agent seeding and product-level agent configuration
+
+### Project Research execution defaults
+
+Project Research uses the normal Agent/AgentVersion/AgentRuntimeProfile path,
+but users do not need to create those objects before starting Auto Research.
+`ProjectResearchExecutionProfileService` provisions or reuses a space-scoped
+`agent_kind="system_research"` Agent and a `model_api` runtime profile from
+the selected ModelProvider/model. Research persists the resolved Agent/profile
+IDs on the workflow and operation, so incremental runs keep the same managed
+execution selection. Research setup does not expose runtime adapter or CLI
+credential configuration.
+
+OpenCode supports both CLI login state and a direct ModelProvider path. Provider
+mode materializes a sandbox-local `opencode.json` using
+`@ai-sdk/openai-compatible` and an expiring provider-proxy lease. Raw provider
+API keys are never passed through subprocess environment variables.
 
 ## Agent Template Model (factory → instance)
 

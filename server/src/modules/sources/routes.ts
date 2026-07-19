@@ -13,15 +13,13 @@ import {
   sendRouteError,
   toDbDate,
 } from "../routeUtils/common";
-import { requireSpaceOwnerOrAdmin } from "../routeUtils/access";
+import { requireSpaceOwnerOrAdmin, requireInstanceAdmin } from "../routeUtils/access";
 import { enforceSources } from "./enforceSources";
 import { PgSourcesRepository } from "./repository";
 import { SourcePostProcessingService } from "./postProcessing/service";
 import { registerCustomSourceRoutes } from "./customSources/customSourceRoutes";
 import { registerSourceRecipeRoutes } from "./sourceRecipeRoutes";
-import { registerSourcePresetRoutes } from "./sourcePresets/routes";
 import { listSourceRuns } from "./sourceRunReadModel";
-import { PgAnnotationRepository, PgCommentRepository, PgReaderActionRepository, PgReaderRepository } from "./readerRepository";
 import {
   RetrievalProjectionService,
   RetrievalSearchService,
@@ -37,97 +35,220 @@ import { resolveProviderCommandStore } from "../providers/commands/store";
 import { enqueueRetrievalEmbeddingBackfill } from "../retrieval/embedding/job";
 import { loadProtocol } from "../providers/protocolRuntime";
 import { sourceRetrievalRegistry } from "./retrievalAdapter";
-import { SourceConnectionService } from "./sourceConnectionService";
 import { SourceBackfillPlanningService } from "./sourceBackfillService";
+import { SourceChannelService } from "./channels/sourceChannelService";
+import { SourceProviderCatalogService } from "./catalog/sourceProviderCatalogService";
+import { SourceQueryPreviewService } from "./sourceQueryPreviewService";
 
 export function registerRoutes(app: FastifyInstance, context: ModuleContext): void {
   const repository = () => new PgSourcesRepository(dbPool(context.config), context.config);
-  const connections = () => new SourceConnectionService(dbPool(context.config), context.config);
   const backfills = () => new SourceBackfillPlanningService(dbPool(context.config), context.config);
+  const channels = () => new SourceChannelService(dbPool(context.config), context.config);
+  const catalog = () => new SourceProviderCatalogService(dbPool(context.config));
+  const queryPreviews = () => new SourceQueryPreviewService(dbPool(context.config), context.config);
 
-  app.post("/api/v1/sources/:connectionId/backfill/plans/preview", async (request, reply) => {
+  app.get("/api/v1/sources/providers", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
     try {
-      const gate = await enforceSources(context, identity, "source.backfill.plan", "source_backfill_plan");
-      if (gate.blocked) return reply.code(403).send(gate.reply403);
-      return reply.send(await backfills().preview(identity, requiredString(params(request).connectionId, "connection_id"), jsonBody(request)));
+      return reply.send(await catalog().listPublicProviders());
     } catch (error) {
       return sendRouteError(reply, error);
     }
   });
 
-  app.post("/api/v1/sources/:connectionId/backfill/plans", async (request, reply) => {
+  app.post("/api/v1/sources/channels", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
     try {
-      const gate = await enforceSources(context, identity, "source.backfill.plan", "source_backfill_plan");
+      const gate = await enforceSources(context, identity, "source.connection.manage", "source_channel");
       if (gate.blocked) return reply.code(403).send(gate.reply403);
-      return reply.code(201).send(await backfills().create(identity, requiredString(params(request).connectionId, "connection_id"), jsonBody(request)));
+      return reply.code(201).send(await channels().create(identity, jsonBody(request)));
     } catch (error) {
       return sendRouteError(reply, error);
     }
   });
 
-  app.get("/api/v1/sources/:connectionId/backfill/plans", async (request, reply) => {
+  app.post("/api/v1/sources/query-preview", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
     try {
-      const gate = await enforceSources(context, identity, "source.backfill.plan", "source_backfill_plan");
+      const gate = await enforceSources(context, identity, "source.connection.manage", "source_channel");
       if (gate.blocked) return reply.code(403).send(gate.reply403);
-      return reply.send(await backfills().list(identity, requiredString(params(request).connectionId, "connection_id")));
+      return reply.send(await queryPreviews().preview(identity, jsonBody(request)));
     } catch (error) {
       return sendRouteError(reply, error);
     }
   });
 
-  app.get("/api/v1/sources/:connectionId/backfill/plans/:planId", async (request, reply) => {
+  app.get("/api/v1/sources/channels", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const q = query(request);
+      return reply.send(await channels().list(identity, { status: optionalString(q.status), providerKey: optionalString(q.provider_key) }));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.get("/api/v1/sources/channels/:channelId", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const channel = await channels().get(identity, params(request).channelId ?? "");
+      if (!channel) return reply.code(404).send({ detail: "Source channel not found" });
+      return reply.send(channel);
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.patch("/api/v1/sources/channels/:channelId", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const gate = await enforceSources(context, identity, "source.connection.manage", "source_channel", params(request).channelId);
+      if (gate.blocked) return reply.code(403).send(gate.reply403);
+      return reply.send(await channels().update(identity, params(request).channelId ?? "", jsonBody(request)));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.post("/api/v1/sources/channels/:channelId/scan", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const gate = await enforceSources(context, identity, "source.connection.manage", "source_channel", params(request).channelId);
+      if (gate.blocked) return reply.code(403).send(gate.reply403);
+      return reply.code(202).send(await channels().scan(identity, params(request).channelId ?? ""));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.get("/api/v1/instance/source-catalog", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    if (!(await requireInstanceAdmin(context.config, identity, reply))) return reply;
+    try {
+      return reply.send(await catalog().listCatalog());
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.patch("/api/v1/instance/source-catalog/providers/:providerId", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    if (!(await requireInstanceAdmin(context.config, identity, reply))) return reply;
+    try { return reply.send(await catalog().updateProvider(params(request).providerId ?? "", { status: optionalString(jsonBody(request).status) ?? undefined })); }
+    catch (error) { return sendRouteError(reply, error); }
+  });
+
+  app.patch("/api/v1/instance/source-catalog/connectors/:connectorId", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    if (!(await requireInstanceAdmin(context.config, identity, reply))) return reply;
+    try { return reply.send(await catalog().updateConnector(params(request).connectorId ?? "", { status: optionalString(jsonBody(request).status) ?? undefined })); }
+    catch (error) { return sendRouteError(reply, error); }
+  });
+
+  app.patch("/api/v1/instance/source-catalog/mappings/:mappingId", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    if (!(await requireInstanceAdmin(context.config, identity, reply))) return reply;
+    try {
+      const body = jsonBody(request);
+      const priority = body.priority === undefined ? undefined : Number(body.priority);
+      return reply.send(await catalog().updateMapping(params(request).mappingId ?? "", { status: optionalString(body.status) ?? undefined, priority }));
+    } catch (error) { return sendRouteError(reply, error); }
+  });
+
+  app.post("/api/v1/sources/channels/:channelId/backfill/plans/preview", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const gate = await enforceSources(context, identity, "source.backfill.plan", "source_backfill_plan");
+      if (gate.blocked) return reply.code(403).send(gate.reply403);
+      return reply.send(await backfills().preview(identity, requiredString(params(request).channelId, "source_channel_id"), jsonBody(request)));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.post("/api/v1/sources/channels/:channelId/backfill/plans", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const gate = await enforceSources(context, identity, "source.backfill.plan", "source_backfill_plan");
+      if (gate.blocked) return reply.code(403).send(gate.reply403);
+      return reply.code(201).send(await backfills().create(identity, requiredString(params(request).channelId, "source_channel_id"), jsonBody(request)));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.get("/api/v1/sources/channels/:channelId/backfill/plans", async (request, reply) => {
+    const identity = await resolveIdentity(context.config, request, reply);
+    if (!identity) return reply;
+    try {
+      const gate = await enforceSources(context, identity, "source.backfill.plan", "source_backfill_plan");
+      if (gate.blocked) return reply.code(403).send(gate.reply403);
+      return reply.send(await backfills().list(identity, requiredString(params(request).channelId, "source_channel_id")));
+    } catch (error) {
+      return sendRouteError(reply, error);
+    }
+  });
+
+  app.get("/api/v1/sources/channels/:channelId/backfill/plans/:planId", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
     try {
       const p = params(request);
       const gate = await enforceSources(context, identity, "source.backfill.plan", "source_backfill_plan", p.planId);
       if (gate.blocked) return reply.code(403).send(gate.reply403);
-      return reply.send(await backfills().get(identity, requiredString(p.connectionId, "connection_id"), requiredString(p.planId, "plan_id")));
+      return reply.send(await backfills().get(identity, requiredString(p.channelId, "source_channel_id"), requiredString(p.planId, "plan_id")));
     } catch (error) {
       return sendRouteError(reply, error);
     }
   });
 
-  app.post("/api/v1/sources/:connectionId/backfill/plans/:planId/propose-start", async (request, reply) => {
+  app.post("/api/v1/sources/channels/:channelId/backfill/plans/:planId/propose-start", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
     try {
       const p = params(request);
       const gate = await enforceSources(context, identity, "source.backfill.plan", "source_backfill_plan", p.planId);
       if (gate.blocked) return reply.code(403).send(gate.reply403);
-      return reply.code(201).send(await backfills().proposeStart(identity, requiredString(p.connectionId, "connection_id"), requiredString(p.planId, "plan_id")));
+      return reply.code(201).send(await backfills().proposeStart(identity, requiredString(p.channelId, "source_channel_id"), requiredString(p.planId, "plan_id")));
     } catch (error) {
       return sendRouteError(reply, error);
     }
   });
 
-  app.post("/api/v1/sources/:connectionId/backfill/plans/:planId/pause", async (request, reply) => {
+  app.post("/api/v1/sources/channels/:channelId/backfill/plans/:planId/pause", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
     try {
       const p = params(request);
       const gate = await enforceSources(context, identity, "source.backfill.manage", "source_backfill_plan", p.planId);
       if (gate.blocked) return reply.code(403).send(gate.reply403);
-      return reply.send(await backfills().setPaused(identity, requiredString(p.connectionId, "connection_id"), requiredString(p.planId, "plan_id"), true));
+      return reply.send(await backfills().setPaused(identity, requiredString(p.channelId, "source_channel_id"), requiredString(p.planId, "plan_id"), true));
     } catch (error) {
       return sendRouteError(reply, error);
     }
   });
 
-  app.post("/api/v1/sources/:connectionId/backfill/plans/:planId/resume", async (request, reply) => {
+  app.post("/api/v1/sources/channels/:channelId/backfill/plans/:planId/resume", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
     try {
       const p = params(request);
       const gate = await enforceSources(context, identity, "source.backfill.manage", "source_backfill_plan", p.planId);
       if (gate.blocked) return reply.code(403).send(gate.reply403);
-      return reply.send(await backfills().setPaused(identity, requiredString(p.connectionId, "connection_id"), requiredString(p.planId, "plan_id"), false));
+      return reply.send(await backfills().setPaused(identity, requiredString(p.channelId, "source_channel_id"), requiredString(p.planId, "plan_id"), false));
     } catch (error) {
       return sendRouteError(reply, error);
     }
@@ -136,7 +257,6 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
   const postProcessing = () => new SourcePostProcessingService(dbPool(context.config), context.config);
   registerCustomSourceRoutes(app, context);
   registerSourceRecipeRoutes(app, context);
-  registerSourcePresetRoutes(app, context);
 
   app.get("/api/v1/sources", sourcesHealth(context));
   app.get("/api/v1/sources/", sourcesHealth(context));
@@ -311,102 +431,40 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     }
   });
 
-  app.get("/api/v1/sources/connectors", async (request, reply) => {
-    const identity = await resolveIdentity(context.config, request, reply);
-    if (!identity) return reply;
-    try {
-      return reply.send(await connections().listConnectors());
-    } catch (error) {
-      return sendRouteError(reply, error);
-    }
-  });
-
   app.get("/api/v1/sources/connections", async (request, reply) => {
-    const identity = await resolveIdentity(context.config, request, reply);
-    if (!identity) return reply;
-    try {
-      const q = query(request);
-      const { limit, offset } = parsePage(q);
-      return reply.send(await connections().listConnections(identity, {
-        view: optionalString(q.view),
-        status: optionalString(q.status),
-        limit,
-        offset,
-      }));
-    } catch (error) {
-      return sendRouteError(reply, error);
-    }
+    return reply.code(410).send({ detail: "Source connections are internal provenance; use Source Channels" });
   });
 
   app.post("/api/v1/sources/connections", async (request, reply) => {
-    const identity = await resolveIdentity(context.config, request, reply);
-    if (!identity) return reply;
-    try {
-      const gate = await enforceSources(context, identity, "source.connection.manage", "source_connection");
-      if (gate.blocked) return reply.code(403).send(gate.reply403);
-      return reply.code(201).send(await connections().createConnection(identity, jsonBody(request)));
-    } catch (error) {
-      return sendRouteError(reply, error);
-    }
+    return reply.code(410).send({ detail: "Source connections are not user-created resources; create a Source Channel" });
   });
 
   app.post("/api/v1/sources/connections/drafts", async (request, reply) => {
-    const identity = await resolveIdentity(context.config, request, reply); if (!identity) return reply;
-    try { const gate = await enforceSources(context, identity, "source.connection.manage", "source_connection"); if (gate.blocked) return reply.code(403).send(gate.reply403);
-      return reply.code(201).send(await connections().createDraft(identity, jsonBody(request))); } catch (error) { return sendRouteError(reply, error); }
+    return reply.code(410).send({ detail: "Source connection drafts were replaced by Source Channels" });
   });
 
   app.post("/api/v1/sources/connections/proposals", async (request, reply) => {
-    const identity = await resolveIdentity(context.config, request, reply); if (!identity) return reply;
-    try { const gate = await enforceSources(context, identity, "source.connection.manage", "source_connection"); if (gate.blocked) return reply.code(403).send(gate.reply403);
-      return reply.code(201).send(await connections().proposeCreate(identity, jsonBody(request))); } catch (error) { return sendRouteError(reply, error); }
+    return reply.code(410).send({ detail: "Source connection proposals were replaced by Source Channel activation proposals" });
   });
 
   app.get("/api/v1/sources/connections/:connectionId", async (request, reply) => {
-    const identity = await resolveIdentity(context.config, request, reply);
-    if (!identity) return reply;
-    try {
-      const connection = await connections().getConnection(identity, params(request).connectionId ?? "");
-      if (!connection) return reply.code(404).send({ detail: "Source connection not found" });
-      return reply.send(connection);
-    } catch (error) {
-      return sendRouteError(reply, error);
-    }
+    return reply.code(410).send({ detail: "Source connections are internal provenance; use Source Channels" });
   });
 
   app.post("/api/v1/sources/connections/:connectionId/recommendations", async (request, reply) => {
-    const identity = await resolveIdentity(context.config, request, reply);
-    if (!identity) return reply;
-    try {
-      const connectionId = params(request).connectionId ?? "";
-      const gate = await enforceSources(context, identity, "source.connection.manage", "source_connection", connectionId);
-      if (gate.blocked) return reply.code(403).send(gate.reply403);
-      return reply.send(await connections().recommendConnection(identity, connectionId, jsonBody(request)));
-    } catch (error) {
-      return sendRouteError(reply, error);
-    }
+    return reply.code(410).send({ detail: "Subscriptions are managed at Source Channel level" });
   });
 
   app.post("/api/v1/sources/connections/:connectionId/subscription", async (request, reply) => {
-    const identity = await resolveIdentity(context.config, request, reply);
-    if (!identity) return reply;
-    try {
-      return reply.send(await connections().updateConnectionSubscription(
-        identity,
-        params(request).connectionId ?? "",
-        jsonBody(request),
-      ));
-    } catch (error) {
-      return sendRouteError(reply, error);
-    }
+    return reply.code(410).send({ detail: "Subscriptions are managed at Source Channel level" });
   });
 
-  app.get("/api/v1/sources/connections/:connectionId/source-runs", async (request, reply) => {
+  app.get("/api/v1/sources/channels/:channelId/source-runs", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
     try {
       const { limit, offset } = parsePage(query(request));
-      return reply.send(await listSourceRuns(dbPool(context.config), identity, params(request).connectionId ?? "", {
+      return reply.send(await listSourceRuns(dbPool(context.config), identity, params(request).channelId ?? "", {
         limit,
         offset,
       }));
@@ -415,22 +473,22 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     }
   });
 
-  app.get("/api/v1/sources/connections/:connectionId/post-processing/rules", async (request, reply) => {
+  app.get("/api/v1/sources/channels/:channelId/post-processing/rules", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
     try {
-      return reply.send(await postProcessing().listRules(identity, params(request).connectionId ?? ""));
+      return reply.send(await postProcessing().listRules(identity, params(request).channelId ?? ""));
     } catch (error) {
       return sendRouteError(reply, error);
     }
   });
 
-  app.post("/api/v1/sources/connections/:connectionId/post-processing/rules", async (request, reply) => {
+  app.post("/api/v1/sources/channels/:channelId/post-processing/rules", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
     try {
-      const connectionId = params(request).connectionId ?? "";
-      const gate = await enforceSources(context, identity, "source.connection.manage", "source_connection", connectionId);
+      const connectionId = params(request).channelId ?? "";
+      const gate = await enforceSources(context, identity, "source.connection.manage", "source_channel", connectionId);
       if (gate.blocked) return reply.code(403).send(gate.reply403);
       return reply.code(201).send(await postProcessing().createRule(identity, connectionId, jsonBody(request)));
     } catch (error) {
@@ -438,12 +496,12 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     }
   });
 
-  app.patch("/api/v1/sources/connections/:connectionId/post-processing/rules/:ruleId", async (request, reply) => {
+  app.patch("/api/v1/sources/channels/:channelId/post-processing/rules/:ruleId", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
     try {
-      const connectionId = params(request).connectionId ?? "";
-      const gate = await enforceSources(context, identity, "source.connection.manage", "source_connection", connectionId);
+      const connectionId = params(request).channelId ?? "";
+      const gate = await enforceSources(context, identity, "source.connection.manage", "source_channel", connectionId);
       if (gate.blocked) return reply.code(403).send(gate.reply403);
       return reply.send(await postProcessing().updateRule(
         identity,
@@ -456,12 +514,12 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     }
   });
 
-  app.post("/api/v1/sources/connections/:connectionId/post-processing/rules/:ruleId/run", async (request, reply) => {
+  app.post("/api/v1/sources/channels/:channelId/post-processing/rules/:ruleId/run", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
     try {
-      const connectionId = params(request).connectionId ?? "";
-      const gate = await enforceSources(context, identity, "source.connection.manage", "source_connection", connectionId);
+      const connectionId = params(request).channelId ?? "";
+      const gate = await enforceSources(context, identity, "source.connection.manage", "source_channel", connectionId);
       if (gate.blocked) return reply.code(403).send(gate.reply403);
       return reply.code(202).send(await postProcessing().runRuleNow(
         identity,
@@ -473,35 +531,35 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     }
   });
 
-  app.get("/api/v1/sources/connections/:connectionId/post-processing/runs", async (request, reply) => {
+  app.get("/api/v1/sources/channels/:channelId/post-processing/runs", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
     try {
       const { limit, offset } = parsePage(query(request));
-      return reply.send(await postProcessing().listRuns(identity, params(request).connectionId ?? "", limit, offset));
+      return reply.send(await postProcessing().listRuns(identity, params(request).channelId ?? "", limit, offset));
     } catch (error) {
       return sendRouteError(reply, error);
     }
   });
 
-  app.get("/api/v1/sources/connections/:connectionId/post-processing/backlog", async (request, reply) => {
+  app.get("/api/v1/sources/channels/:channelId/post-processing/backlog", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
     try {
-      return reply.send(await postProcessing().backlog(identity, params(request).connectionId ?? ""));
+      return reply.send(await postProcessing().backlog(identity, params(request).channelId ?? ""));
     } catch (error) {
       return sendRouteError(reply, error);
     }
   });
 
-  app.get("/api/v1/sources/connections/:connectionId/post-processing/decisions", async (request, reply) => {
+  app.get("/api/v1/sources/channels/:channelId/post-processing/decisions", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
     try {
       const q = query(request);
       const { limit, offset } = parsePage(q);
       return reply.send(await postProcessing().listDecisions(identity, {
-        connectionId: params(request).connectionId ?? "",
+        connectionId: params(request).channelId ?? "",
         ruleId: optionalString(q.rule_id),
         relevance: optionalString(q.relevance),
         reviewStatus: optionalString(q.review_status),
@@ -513,12 +571,12 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     }
   });
 
-  app.post("/api/v1/sources/connections/:connectionId/post-processing/rules/:ruleId/drain", async (request, reply) => {
+  app.post("/api/v1/sources/channels/:channelId/post-processing/rules/:ruleId/drain", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
     try {
-      const connectionId = params(request).connectionId ?? "";
-      const gate = await enforceSources(context, identity, "source.connection.manage", "source_connection", connectionId);
+      const connectionId = params(request).channelId ?? "";
+      const gate = await enforceSources(context, identity, "source.connection.manage", "source_channel", connectionId);
       if (gate.blocked) return reply.code(403).send(gate.reply403);
       return reply.code(202).send(await postProcessing().drainRuleNow(
         identity,
@@ -537,7 +595,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       const q = query(request);
       const { limit, offset } = parsePage(q);
       return reply.send(await postProcessing().listDecisions(identity, {
-        connectionId: optionalString(q.connection_id),
+        connectionId: optionalString(q.channel_id),
         projectId: optionalString(q.project_id),
         ruleId: optionalString(q.rule_id),
         relevance: optionalString(q.relevance),
@@ -557,7 +615,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       const q = query(request);
       const { limit, offset } = parsePage(q);
       return reply.send(await postProcessing().listBriefings(identity, {
-        connectionId: optionalString(q.connection_id),
+        connectionId: optionalString(q.channel_id),
         projectId: optionalString(q.project_id),
         limit,
         offset,
@@ -567,13 +625,13 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     }
   });
 
-  app.get("/api/v1/sources/briefings/:connectionId/:date", async (request, reply) => {
+  app.get("/api/v1/sources/briefings/:channelId/:date", async (request, reply) => {
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
     try {
       return reply.send(await postProcessing().getBriefing(
         identity,
-        params(request).connectionId ?? "",
+        params(request).channelId ?? "",
         params(request).date ?? "",
       ));
     } catch (error) {
@@ -599,41 +657,15 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
   });
 
   app.patch("/api/v1/sources/connections/:connectionId", async (request, reply) => {
-    const identity = await resolveIdentity(context.config, request, reply);
-    if (!identity) return reply;
-    try {
-      const connectionId = params(request).connectionId ?? "";
-      const gate = await enforceSources(context, identity, "source.connection.manage", "source_connection", connectionId);
-      if (gate.blocked) return reply.code(403).send(gate.reply403);
-      return reply.send(await connections().updateConnection(identity, connectionId, jsonBody(request)));
-    } catch (error) {
-      return sendRouteError(reply, error);
-    }
+    return reply.code(410).send({ detail: "Source connections are internal provenance; update the Source Channel" });
   });
 
   app.delete("/api/v1/sources/connections/:connectionId", async (request, reply) => {
-    const identity = await resolveIdentity(context.config, request, reply);
-    if (!identity) return reply;
-    try {
-      const connectionId = params(request).connectionId ?? "";
-      const gate = await enforceSources(context, identity, "source.connection.manage", "source_connection", connectionId);
-      if (gate.blocked) return reply.code(403).send(gate.reply403);
-      return reply.send(await connections().archiveConnection(identity, connectionId));
-    } catch (error) {
-      return sendRouteError(reply, error);
-    }
+    return reply.code(410).send({ detail: "Source connections are internal provenance; archive the Source Channel" });
   });
 
   app.post("/api/v1/sources/connections/:connectionId/scan", async (request, reply) => {
-    const identity = await resolveIdentity(context.config, request, reply);
-    if (!identity) return reply;
-    try {
-      const gate = await enforceSources(context, identity, "source.item_create", "extraction_job");
-      if (gate.blocked) return reply.code(403).send(gate.reply403);
-      return reply.code(202).send(await connections().scanConnection(identity, params(request).connectionId ?? ""));
-    } catch (error) {
-      return sendRouteError(reply, error);
-    }
+    return reply.code(410).send({ detail: "Scan the Source Channel instead" });
   });
 
   app.get("/api/v1/sources/items", async (request, reply) => {
@@ -845,7 +877,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       const { limit, offset } = parsePage(q);
       return reply.send(await repository().listProjectItems(identity, {
         projectId: requiredString(q.project_id, "project_id"),
-        sourceConnectionId: optionalString(q.source_connection_id),
+        sourceChannelId: optionalString(q.source_channel_id),
         itemType: optionalString(q.item_type),
         sourceDomain: optionalString(q.source_domain),
         matchedDate: optionalString(q.matched_date),
@@ -876,7 +908,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     if (!identity) return reply;
     try {
       const q = query(request);
-      return reply.send(await repository().sourceHealth(identity, { connectionId: optionalString(q.connection_id) }));
+      return reply.send(await repository().sourceHealth(identity, { channelId: optionalString(q.channel_id) }));
     } catch (error) {
       return sendRouteError(reply, error);
     }
@@ -892,164 +924,6 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     }
   });
 
-  // ── Reader routes ────────────────────────────────────────────────────────────
-
-  const readerRepo = () => new PgReaderRepository(dbPool(context.config), context.config);
-  const annotationRepo = () => new PgAnnotationRepository(dbPool(context.config));
-  const commentRepo = () => new PgCommentRepository(dbPool(context.config));
-  const actionRepo = () => new PgReaderActionRepository(dbPool(context.config));
-
-  app.get("/api/v1/sources/reader/documents/:documentType/:documentId", async (request, reply) => {
-    const identity = await resolveIdentity(context.config, request, reply);
-    if (!identity) return reply;
-    try {
-      const p = params(request);
-      const doc = await readerRepo().getDocument(identity, p.documentType ?? "", p.documentId ?? "");
-      if (!doc) return reply.code(404).send({ detail: "Document not found or not accessible" });
-      return reply.send(doc);
-    } catch (error) {
-      return sendRouteError(reply, error);
-    }
-  });
-
-  app.get("/api/v1/sources/reader/documents/:documentType/:documentId/annotations", async (request, reply) => {
-    const identity = await resolveIdentity(context.config, request, reply);
-    if (!identity) return reply;
-    try {
-      const p = params(request);
-      const items = await annotationRepo().listAnnotations(identity, p.documentType ?? "", p.documentId ?? "");
-      return reply.send({ items });
-    } catch (error) {
-      return sendRouteError(reply, error);
-    }
-  });
-
-  app.post("/api/v1/sources/reader/annotations", async (request, reply) => {
-    const identity = await resolveIdentity(context.config, request, reply);
-    if (!identity) return reply;
-    try {
-      const result = await annotationRepo().createAnnotation(identity, jsonBody(request));
-      return reply.code(201).send(result);
-    } catch (error) {
-      return sendRouteError(reply, error);
-    }
-  });
-
-  app.patch("/api/v1/sources/reader/annotations/:annotationId", async (request, reply) => {
-    const identity = await resolveIdentity(context.config, request, reply);
-    if (!identity) return reply;
-    try {
-      const p = params(request);
-      const result = await annotationRepo().updateAnnotation(identity, p.annotationId ?? "", jsonBody(request));
-      return reply.send(result);
-    } catch (error) {
-      return sendRouteError(reply, error);
-    }
-  });
-
-  app.delete("/api/v1/sources/reader/annotations/:annotationId", async (request, reply) => {
-    const identity = await resolveIdentity(context.config, request, reply);
-    if (!identity) return reply;
-    try {
-      const p = params(request);
-      await annotationRepo().archiveAnnotation(identity, p.annotationId ?? "");
-      return reply.code(204).send();
-    } catch (error) {
-      return sendRouteError(reply, error);
-    }
-  });
-
-  app.post("/api/v1/sources/reader/annotations/:annotationId/comments", async (request, reply) => {
-    const identity = await resolveIdentity(context.config, request, reply);
-    if (!identity) return reply;
-    try {
-      const p = params(request);
-      const result = await commentRepo().createComment(identity, p.annotationId ?? "", jsonBody(request));
-      return reply.code(201).send(result);
-    } catch (error) {
-      return sendRouteError(reply, error);
-    }
-  });
-
-  app.get("/api/v1/sources/reader/annotations/:annotationId/threads", async (request, reply) => {
-    const identity = await resolveIdentity(context.config, request, reply);
-    if (!identity) return reply;
-    try {
-      const p = params(request);
-      const threads = await commentRepo().listThreads(identity, p.annotationId ?? "");
-      return reply.send({ items: threads });
-    } catch (error) {
-      return sendRouteError(reply, error);
-    }
-  });
-
-  app.patch("/api/v1/sources/reader/comments/:commentId", async (request, reply) => {
-    const identity = await resolveIdentity(context.config, request, reply);
-    if (!identity) return reply;
-    try {
-      const p = params(request);
-      const result = await commentRepo().updateComment(identity, p.commentId ?? "", jsonBody(request));
-      return reply.send(result);
-    } catch (error) {
-      return sendRouteError(reply, error);
-    }
-  });
-
-  app.patch("/api/v1/sources/reader/comment-threads/:threadId", async (request, reply) => {
-    const identity = await resolveIdentity(context.config, request, reply);
-    if (!identity) return reply;
-    try {
-      const p = params(request);
-      const result = await commentRepo().updateThread(identity, p.threadId ?? "", jsonBody(request));
-      return reply.send(result);
-    } catch (error) {
-      return sendRouteError(reply, error);
-    }
-  });
-
-  // Evidence and proposal creation from reader annotations
-
-  app.post("/api/v1/sources/reader/annotations/:annotationId/evidence", async (request, reply) => {
-    const identity = await resolveIdentity(context.config, request, reply);
-    if (!identity) return reply;
-    try {
-      const p = params(request);
-      const result = await actionRepo().createEvidence(identity, p.annotationId ?? "", jsonBody(request));
-      return reply.code(201).send(result);
-    } catch (error) {
-      return sendRouteError(reply, error);
-    }
-  });
-
-  app.post("/api/v1/sources/reader/annotations/:annotationId/proposals", async (request, reply) => {
-    const identity = await resolveIdentity(context.config, request, reply);
-    if (!identity) return reply;
-    try {
-      const p = params(request);
-      const result = await actionRepo().createProposal(identity, p.annotationId ?? "", jsonBody(request));
-      return reply.code(201).send(result);
-    } catch (error) {
-      return sendRouteError(reply, error);
-    }
-  });
-
-  // Project-scoped annotation summaries
-
-  app.get("/api/v1/sources/reader/annotations", async (request, reply) => {
-    const identity = await resolveIdentity(context.config, request, reply);
-    if (!identity) return reply;
-    try {
-      const q = query(request);
-      const projectId = optionalString(q.project_id);
-      if (!projectId) return reply.code(400).send({ detail: "project_id is required" });
-      const limitRaw = Number(q.limit ?? "20");
-      const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 100) : 20;
-      const items = await actionRepo().listProjectAnnotations(identity, projectId, limit);
-      return reply.send({ items });
-    } catch (error) {
-      return sendRouteError(reply, error);
-    }
-  });
 }
 
 function sourcesHealth(context: ModuleContext) {

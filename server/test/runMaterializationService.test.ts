@@ -86,11 +86,62 @@ class FakeDb implements Queryable {
         rowCount: 1,
       };
     }
+    if (sql.includes("UPDATE proposals SET status='superseded'")) {
+      return { rows: [], rowCount: 0 };
+    }
     throw new Error(`Unexpected SQL: ${sql}`);
   }
 }
 
 describe("RunMaterializationService", () => {
+  it("serializes structured artifact content objects for the text-backed artifact store", async () => {
+    const db = new FakeDb();
+    const config = loadConfig({
+      SERVER_DATABASE_URL: "postgresql://server@localhost:5432/agent_space",
+    });
+    const service = new RunMaterializationService(
+      config,
+      db,
+      undefined,
+      async () => ({ status: "allow" }),
+    );
+
+    const result = await service.materializeAdapterResult({
+      run: run(),
+      adapterResult: {
+        adapter_type: "model_api",
+        adapter_kind: "managed_api",
+        success: true,
+        output_text: "",
+        output_json: {
+          artifacts: [{
+            title: "Brief",
+            artifact_type: "research_report.archive.v1",
+            mime_type: "application/json",
+            content: {
+              schema_version: "research_report.v1",
+              research_question: "Does X improve Y?",
+              summary: "A bounded summary.",
+              findings: [],
+              limitations: [],
+            },
+          }],
+        },
+        exit_code: 0,
+      },
+    });
+
+    expect(result.errors).toEqual([]);
+    expect(db.artifacts).toHaveLength(1);
+    expect(JSON.parse(db.artifacts[0][5] as string)).toEqual({
+      schema_version: "research_report.v1",
+      research_question: "Does X improve Y?",
+      summary: "A bounded summary.",
+      findings: [],
+      limitations: [],
+    });
+  });
+
   it("materializes structured runtime delegations through the agent group materializer", async () => {
     const db = new FakeDb();
     const config = loadConfig({
@@ -299,6 +350,25 @@ describe("RunMaterializationService", () => {
 
     expect(result).toEqual({ items: [], errors: [] });
     expect(db.artifacts).toHaveLength(0);
+  });
+
+  it("rejects removed research proposal types instead of materializing them", async () => {
+    const db = new FakeDb();
+    const config = loadConfig({ SERVER_DATABASE_URL: "postgresql://server@localhost:5432/agent_space" });
+    const service = new RunMaterializationService(config, db, undefined, async () => ({ status: "allow" }));
+    const result = await service.materializeAdapterResult({
+      run: run(),
+      adapterResult: {
+        adapter_type: "model_api", adapter_kind: "managed_api", success: true, output_text: "", exit_code: 0,
+        output_json: { proposed_changes: [{
+          proposal_type: "research_notebook_update", title: "Update understanding", rationale: "New comparison",
+          payload: { project_id: "project-1", section_key: "understanding", base_version: 3, new_content_md: "Revised understanding", refs: [] },
+        }] },
+      },
+    });
+    expect(result.errors).toHaveLength(1);
+    expect(String(result.errors[0])).toContain("unsupported proposal_type");
+    expect(db.proposals).toHaveLength(0);
   });
 
   it("does not materialize proposals for projects outside the run space", async () => {

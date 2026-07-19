@@ -28,11 +28,11 @@ interface SourceRunProjectionRow {
 export async function listSourceRuns(
   db: Queryable,
   identity: SpaceUserIdentity,
-  connectionId: string,
+  channelId: string,
   filters: { limit: number; offset: number },
 ) {
-  await requireConnection(db, identity, connectionId);
-  const baseParams = [identity.spaceId, connectionId];
+  await requireChannel(db, identity, channelId);
+  const baseParams = [identity.spaceId, channelId];
   const total = await db.query<{ total: string }>(
     `WITH projected AS (${SOURCE_RUNS_PROJECTED_SQL})
      SELECT count(*)::text AS total FROM projected`,
@@ -49,12 +49,15 @@ export async function listSourceRuns(
   return page(rows.rows.map(sourceRunOut), countFromRow(total.rows[0]), filters.limit, filters.offset);
 }
 
-async function requireConnection(db: Queryable, identity: SpaceUserIdentity, connectionId: string): Promise<void> {
+async function requireChannel(db: Queryable, identity: SpaceUserIdentity, channelId: string): Promise<void> {
   const result = await db.query<{ id: string }>(
-    `SELECT id FROM source_connections WHERE space_id = $1 AND id = $2 AND deleted_at IS NULL`,
-    [identity.spaceId, connectionId],
+    `SELECT ch.id
+       FROM source_channels ch
+       JOIN source_connections sc ON sc.id = ch.source_connection_id
+      WHERE ch.space_id = $1 AND ch.id = $2 AND ch.status <> 'archived' AND sc.deleted_at IS NULL`,
+    [identity.spaceId, channelId],
   );
-  if (!result.rows[0]) throw new HttpError(404, "Source connection not found");
+  if (!result.rows[0]) throw new HttpError(404, "Source channel not found");
 }
 
 function sourceRunOut(row: SourceRunProjectionRow): SourceRunSummaryDTO {
@@ -113,7 +116,7 @@ const SOURCE_RUNS_PROJECTED_SQL = `
     ON sc.space_id = ej.space_id
    AND sc.id = ej.connection_id
   WHERE ej.space_id = $1
-    AND ej.connection_id = $2
+    AND ej.metadata_json->>'source_channel_id' = $2
     AND NOT EXISTS (
       SELECT 1
         FROM source_handler_runs shr
@@ -143,7 +146,10 @@ const SOURCE_RUNS_PROJECTED_SQL = `
     ON ej.space_id = shr.space_id
    AND ej.id = shr.extraction_job_id
   WHERE shr.space_id = $1
-    AND shr.source_connection_id = $2
+    AND EXISTS (
+      SELECT 1 FROM source_channels ch
+       WHERE ch.id = $2 AND ch.source_connection_id = shr.source_connection_id
+    )
 
   UNION ALL
 
@@ -174,6 +180,9 @@ const SOURCE_RUNS_PROJECTED_SQL = `
     (srv.test_result_json->>'completed_at')::timestamptz AS completed_at
   FROM source_recipe_versions srv
   WHERE srv.space_id = $1
-    AND srv.source_connection_id = $2
+    AND EXISTS (
+      SELECT 1 FROM source_channels ch
+       WHERE ch.id = $2 AND ch.source_connection_id = srv.source_connection_id
+    )
     AND srv.test_result_json IS NOT NULL
 `;

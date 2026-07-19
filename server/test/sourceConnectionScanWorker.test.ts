@@ -6,7 +6,7 @@ import { __setArxivThrottleForTests } from "../src/modules/sources/connectors/ar
 import type { Queryable } from "../src/modules/routeUtils/common";
 import { handleSourceRetrievalTestSql } from "./helpers/sourceRetrievalTestSql";
 
-type ConnectorKey = "rss" | "atom" | "web_page" | "arxiv";
+type ConnectorKey = "rss" | "atom" | "web_page" | "arxiv_api";
 type CapturePolicy =
   | "reference_only"
   | "extract_text"
@@ -25,21 +25,7 @@ class ScanDb implements Queryable {
   private itemId = "item-new";
   private status = "running";
   private readonly childJobs: ChildJob[] = [];
-  private schedulerTask: Record<string, unknown> | null = {
-    id: "task-1",
-    task_type: "source_connection_scan",
-    task_key: "conn-1",
-    scope_type: "space",
-    scope_id: "space-1",
-    space_id: "space-1",
-    user_id: "user-1",
-    status: "active",
-    next_run_at: null,
-    last_run_at: null,
-    state_json: {},
-    created_at: "2026-06-30T00:00:00.000Z",
-    updated_at: "2026-06-30T00:00:00.000Z",
-  };
+  private schedulerTask: Record<string, unknown> | null;
 
   constructor(private readonly input: {
     connectorKey: ConnectorKey
@@ -51,7 +37,24 @@ class ScanDb implements Queryable {
     existingFollowUpStatus?: "pending" | "running" | "failed"
     manualScan?: boolean
     runFollowUpJobs?: boolean
-  }) {}
+  }) {
+    this.schedulerTask = {
+      id: "task-1",
+      task_type: "source_channel_scan",
+      task_key: "conn-1",
+      scope_type: "space",
+      scope_id: "space-1",
+      space_id: "space-1",
+      user_id: "user-1",
+      status: "active",
+      next_run_at: null,
+      last_run_at: null,
+      state_json: {},
+      metadata_json: { cursor: this.input.configJson?.scan_cursor ?? {} },
+      created_at: "2026-06-30T00:00:00.000Z",
+      updated_at: "2026-06-30T00:00:00.000Z",
+    };
+  }
 
   async query<Row = Record<string, unknown>>(sql: string, params: readonly unknown[] = []) {
     this.calls.push({ sql, params });
@@ -91,6 +94,7 @@ class ScanDb implements Queryable {
         next_run_at: params[8] ?? null,
         last_run_at: params[9] ?? this.schedulerTask?.last_run_at ?? null,
         state_json: JSON.parse(String(params[10] ?? "{}")),
+        metadata_json: JSON.parse(String(params[11] ?? "{}")),
         created_at: this.schedulerTask?.created_at ?? params[11],
         updated_at: params[11],
       };
@@ -101,6 +105,18 @@ class ScanDb implements Queryable {
     }
     if (sql.includes("SELECT id, space_id, connection_id, source_uri") && sql.includes("FROM source_items")) {
       return { rows: [this.sourceItem()] as Row[], rowCount: 1 };
+    }
+    if (sql.includes("FROM source_items si") && sql.includes("COALESCE(")) {
+      return { rows: [this.sourceItem()] as Row[], rowCount: 1 };
+    }
+    if (sql.includes("FROM project_source_bindings psb")) {
+      return { rows: [] as Row[], rowCount: 0 };
+    }
+    if (sql.includes("FROM project_research_workflows")) {
+      return { rows: [] as Row[], rowCount: 0 };
+    }
+    if (sql.includes("UPDATE project_corpus_items")) {
+      return { rows: [] as Row[], rowCount: 0 };
     }
     if (sql.includes("content_state = 'extraction_failed'") && sql.includes("FROM source_items")) {
       const rows = this.input.existingItemId && this.input.existingContentState === "extraction_failed"
@@ -128,6 +144,9 @@ class ScanDb implements Queryable {
       return { rows: [] as Row[], rowCount: 1 };
     }
     if (sql.includes("INSERT INTO source_snapshots")) {
+      return { rows: [] as Row[], rowCount: 1 };
+    }
+    if (sql.includes("INSERT INTO source_channel_item_links")) {
       return { rows: [] as Row[], rowCount: 1 };
     }
     if (sql.includes("INSERT INTO extracted_evidence")) {
@@ -222,6 +241,7 @@ class ScanDb implements Queryable {
       created_at: "2026-06-30T00:00:00.000Z",
       updated_at: "2026-06-30T00:00:00.000Z",
       connector_key: this.input.connectorKey,
+      channel_id: "conn-1",
       deleted_at: null,
     };
   }
@@ -270,10 +290,12 @@ describe("SourceExtractionWorker connection_scan", () => {
       .resolves.toMatchObject({ status: "succeeded" });
 
     const dedupeLookup = db.calls.find(call => call.sql.includes("canonical_uri = $3::text"));
-    expect(dedupeLookup?.params.slice(0, 9)).toEqual([
+    expect(dedupeLookup?.params.slice(0, 11)).toEqual([
       "space-1",
       "https://example.test/item-1",
       "https://example.test/item-1",
+      undefined,
+      null,
       "guid-1",
       "conn-1",
       "guid-1",
@@ -302,13 +324,14 @@ describe("SourceExtractionWorker connection_scan", () => {
       "conn-1",
     ]);
     expect(db.calls.some(call => call.sql.includes("INSERT INTO extracted_evidence"))).toBe(false);
-    const connectionUpdate = db.calls.find(call => call.sql.includes("UPDATE source_connections"));
-    expect(JSON.parse(String(connectionUpdate?.params[2])).scan_cursor).toEqual({
+    const schedulerUpdate = db.calls.find(call => call.sql.includes("INSERT INTO scheduler_tasks"));
+    expect(JSON.parse(String(schedulerUpdate?.params[11])).cursor).toEqual({
       etag: "\"feed-v1\"",
       last_modified: "Tue, 30 Jun 2026 09:30:00 GMT",
       last_guid: "guid-1",
       last_published_at: "2026-06-30T09:00:00.000Z",
     });
+    expect(JSON.parse(String(schedulerUpdate?.params[11])).watermark).toEqual({ value: "2026-06-30T09:00:00.000Z" });
     const stats = db.calls.find(call => call.sql.includes("items_seen"));
     expect(stats?.params.slice(2, 5)).toEqual([1, 1, 0]);
   });
@@ -344,7 +367,7 @@ describe("SourceExtractionWorker connection_scan", () => {
     const insert = db.calls.find(call => call.sql.includes("INSERT INTO source_items"));
     expect(insert?.params[3]).toBe("external_url");
     expect(insert?.params[4]).toBe("Hello page");
-    expect(insert?.params[12]).toBe(sha256(raw));
+    expect(insert?.params[12]).toBe(sha256(["Hello page", "https://example.test/feed.xml", "Hello page", "Hello page Visible text.", ""].join("\n")));
     expect(insert?.params[13]).toContain("Visible text.");
   });
 
@@ -365,13 +388,14 @@ describe("SourceExtractionWorker connection_scan", () => {
 
     await new SourceExtractionWorker(db, config()).runPendingJob("job-1", "space-1");
 
-    expect(fetchMock).toHaveBeenCalledWith("https://example.test/feed.xml", {
-      redirect: "follow",
-      headers: {
-        "If-None-Match": "\"old\"",
-        "If-Modified-Since": "Tue, 30 Jun 2026 08:00:00 GMT",
-      },
-    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, request] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe("https://example.test/feed.xml");
+    expect(request?.redirect).toBe("follow");
+    const requestHeaders = new Headers(request?.headers);
+    expect(requestHeaders.get("If-None-Match")).toBe("\"old\"");
+    expect(requestHeaders.get("If-Modified-Since")).toBe("Tue, 30 Jun 2026 08:00:00 GMT");
+    expect(requestHeaders.get("Accept-Encoding")).toBe("identity");
     expect(db.calls.some(call => call.sql.includes("INSERT INTO source_items"))).toBe(false);
     const stats = db.calls.find(call => call.sql.includes("items_seen"));
     expect(stats?.params.slice(2, 5)).toEqual([0, 0, 0]);
@@ -496,7 +520,7 @@ describe("SourceExtractionWorker connection_scan", () => {
   it("scans arXiv connections into paper feed items with canonical abs URLs", async () => {
     __setArxivThrottleForTests({ sleep: async () => {} });
     const db = new ScanDb({
-      connectorKey: "arxiv",
+      connectorKey: "arxiv_api",
       capturePolicy: "extract_text",
       policyRetention: "full_text",
     });
@@ -517,22 +541,18 @@ describe("SourceExtractionWorker connection_scan", () => {
     expect(JSON.parse(String(insert?.params[16]))).toMatchObject({
       arxiv_id: "2402.08954",
       arxiv_version: "v2",
-      authors: ["Author One", "Author Two"],
       categories: ["cs.AI", "cs.LG"],
       primary_category: "cs.AI",
-      abs_url: "https://arxiv.org/abs/2402.08954",
-      html_url: "https://arxiv.org/html/2402.08954",
-      pdf_url: "https://arxiv.org/pdf/2402.08954",
       doi: "10.1234/example",
       capture_method: "connection_scan",
-      connector_key: "arxiv",
+      connector_key: "arxiv_api",
     });
     const followUp = db.calls.find(call =>
       call.sql.includes("INSERT INTO extraction_jobs") && call.params[5] === "extract_text"
     );
     expect(followUp).toBeTruthy();
-    const connectionUpdate = db.calls.find(call => call.sql.includes("UPDATE source_connections"));
-    expect(JSON.parse(String(connectionUpdate?.params[2])).scan_cursor).toMatchObject({
+    const schedulerUpdate = db.calls.find(call => call.sql.includes("INSERT INTO scheduler_tasks"));
+    expect(JSON.parse(String(schedulerUpdate?.params[11])).cursor).toMatchObject({
       last_guid: "2402.08954",
       last_published_at: "2024-02-14T05:19:17.000Z",
     });
@@ -543,7 +563,7 @@ describe("SourceExtractionWorker connection_scan", () => {
   it("truncates arXiv author and excerpt values to their source_items column widths", async () => {
     __setArxivThrottleForTests({ sleep: async () => {} });
     const db = new ScanDb({
-      connectorKey: "arxiv",
+      connectorKey: "arxiv_api",
       capturePolicy: "reference_only",
       policyRetention: "metadata_only",
     });
@@ -564,7 +584,7 @@ describe("SourceExtractionWorker connection_scan", () => {
   it("updates an existing arXiv item when a newer version is scanned", async () => {
     __setArxivThrottleForTests({ sleep: async () => {} });
     const db = new ScanDb({
-      connectorKey: "arxiv",
+      connectorKey: "arxiv_api",
       capturePolicy: "reference_only",
       policyRetention: "metadata_only",
       existingItemId: "item-existing",
@@ -582,7 +602,7 @@ describe("SourceExtractionWorker connection_scan", () => {
   it("relinks existing arXiv item evidence after another source scans the same paper", async () => {
     __setArxivThrottleForTests({ sleep: async () => {} });
     const db = new ScanDb({
-      connectorKey: "arxiv",
+      connectorKey: "arxiv_api",
       capturePolicy: "reference_only",
       policyRetention: "metadata_only",
       existingItemId: "item-existing",

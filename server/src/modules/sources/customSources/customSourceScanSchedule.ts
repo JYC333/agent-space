@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Queryable } from "../../routeUtils/common";
-import { listDueSourceConnectionScanTasks } from "../sourceConnectionScheduler";
+import { listDueSourceChannelScanTasks } from "../sourceConnectionScheduler";
 
 const STUCK_RUN_AFTER_SECONDS = 600;
 
@@ -50,32 +50,34 @@ export async function enqueueDueCustomSourceHandlerRuns(
   batchLimit = 25,
 ): Promise<number> {
   const now = new Date().toISOString();
-  const tasks = await listDueSourceConnectionScanTasks(db, now, batchLimit);
+  const tasks = await listDueSourceChannelScanTasks(db, now, batchLimit);
 
   let enqueued = 0;
   for (const task of tasks) {
     if (!task.space_id) continue;
     const due = await db.query<{
       id: string;
+      channel_id: string;
       space_id: string;
       active_handler_version_id: string;
     }>(
-      `SELECT sc.id, sc.space_id, sc.active_handler_version_id
-         FROM source_connections sc
-        WHERE sc.status = 'active'
+      `SELECT sc.id, ch.id AS channel_id, sc.space_id, sc.active_handler_version_id
+         FROM source_channels ch
+         JOIN source_connections sc ON sc.id = ch.source_connection_id
+        WHERE ch.status = 'active' AND sc.status = 'active'
           AND sc.deleted_at IS NULL
           AND sc.space_id = $1
-          AND sc.id = $2
+          AND ch.id = $2
           AND sc.handler_kind = 'generated_custom'
           AND sc.active_handler_version_id IS NOT NULL
           AND sc.repair_status <> 'disabled'
-          AND sc.fetch_frequency <> 'manual'
+          AND ch.fetch_frequency <> 'manual'
           AND NOT EXISTS (
             SELECT 1
-              FROM source_handler_runs shr
-             WHERE shr.space_id = sc.space_id
-               AND shr.source_connection_id = sc.id
-               AND shr.status IN ('queued', 'running')
+              FROM extraction_jobs ej
+             WHERE ej.space_id = ch.space_id
+               AND ej.metadata_json->>'source_channel_id' = ch.id
+               AND ej.status IN ('pending', 'running')
           )
         LIMIT 1`,
       [task.space_id, task.task_key],
@@ -87,7 +89,7 @@ export async function enqueueDueCustomSourceHandlerRuns(
       `INSERT INTO extraction_jobs (
          id, space_id, connection_id, job_type, status, metadata_json, created_at
        ) VALUES ($1, $2, $3, 'connection_scan', 'pending', $4::jsonb, $5)`,
-      [jobId, row.space_id, row.id, JSON.stringify({ created_by: "custom_source_scheduler" }), now],
+      [jobId, row.space_id, row.id, JSON.stringify({ created_by: "custom_source_scheduler", source_channel_id: row.channel_id }), now],
     );
     await db.query(
       `INSERT INTO source_handler_runs (

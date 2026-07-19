@@ -21,7 +21,9 @@ export function runToOut(
     space_id: run.space_id,
     agent_id: run.agent_id,
     agent_version_id: run.agent_version_id,
-    runtime_profile_id: run.runtime_profile_id ?? null,
+    run_role: run.run_role ?? "execution",
+    requested_runtime_profile_id: run.requested_runtime_profile_id ?? null,
+    selected_runtime_profile_id: run.runtime_profile_id ?? null,
     runtime_profile_selection_source: run.runtime_profile_selection_source ?? null,
     context_snapshot_id: run.context_snapshot_id ?? null,
     workspace_id: run.workspace_id ?? null,
@@ -46,11 +48,11 @@ export function runToOut(
     error_message: run.error_message ?? null,
     error_json: run.error_json ?? null,
     output_json: run.output_json ?? null,
-    usage_json: run.usage_json ?? null,
-    adapter_type: run.adapter_type ?? null,
+    usage: runUsageToOut(run.usage),
+    selected_adapter_type: run.adapter_type ?? null,
     capability_id: run.capability_id ?? null,
     capabilities_json: Array.isArray(run.capabilities_json) ? run.capabilities_json : [],
-    model_provider_id: run.model_provider_id ?? null,
+    selected_model_provider_id: run.model_provider_id ?? null,
     resolved_model: buildResolvedModel(run, provider),
     required_sandbox_level: run.required_sandbox_level,
     owner_user_id: run.owner_user_id ?? null,
@@ -59,7 +61,21 @@ export function runToOut(
     project_id: run.project_id ?? null,
     contract_snapshot_json: run.contract_snapshot_json ?? {},
     workflow_version_id: run.workflow_version_id ?? null,
-    route_decision_id: run.route_decision_id ?? null,
+    active_route_decision_id: run.route_decision_id ?? null,
+  };
+}
+
+function runUsageToOut(usage: RunRecord["usage"]): Record<string, unknown> | null {
+  if (!usage) return null;
+  return {
+    agent_run_count: numberOrNull(usage.agent_run_count) ?? 0,
+    completed_agent_run_count: numberOrNull(usage.completed_agent_run_count) ?? 0,
+    input_tokens: numberOrNull(usage.input_tokens),
+    output_tokens: numberOrNull(usage.output_tokens),
+    total_tokens: numberOrNull(usage.total_tokens),
+    estimated_cost_usd: numberOrNull(usage.estimated_cost_usd),
+    cost_known: numberOrNull(usage.estimated_cost_usd) !== null,
+    model_names: usage.model_names ?? [],
   };
 }
 
@@ -99,6 +115,7 @@ export function verificationResultToOut(row: VerificationResultRecord): Record<s
     id: row.id,
     space_id: row.space_id,
     run_id: row.run_id,
+    attempt_number: row.attempt_number,
     verifier_type: row.verifier_type,
     verifier_version: row.verifier_version,
     status: row.status,
@@ -176,6 +193,7 @@ export function runStepToOut(row: RunStepDetailRecord): Record<string, unknown> 
     id: row.id,
     space_id: row.space_id,
     run_id: row.run_id,
+    attempt_number: row.attempt_number,
     parent_step_id: row.parent_step_id,
     actor_id: row.actor_id,
     step_index: row.step_index,
@@ -204,6 +222,7 @@ export function runEventToOut(row: RunEventDetailRecord): Record<string, unknown
     id: row.id,
     space_id: row.space_id,
     run_id: row.run_id,
+    attempt_number: row.attempt_number,
     step_id: row.step_id,
     actor_id: row.actor_id,
     event_index: row.event_index,
@@ -324,6 +343,12 @@ function recordValue(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+}
+
+function numberOrNull(value: number | string | null | undefined): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function stringValue(value: unknown): string | null {

@@ -119,19 +119,20 @@ primary operations. Changing a Project's preset after creation is not a normal
 user workflow.
 
 The current built-in preset is `academic_research`. It reuses normal Project
-Sources plus the `arxiv` source preset, `academic_paper_v1` extraction profile
+Sources plus the arXiv, OpenAlex, and Semantic Scholar providers and their monitors, `academic_paper_v1` extraction profile
 key, and `academic_citation_v1` graph lens id. Its advertised sections are
 `source_monitoring`, `corpus`, and `project_graph`; paper/citation objects are
 represented through the core relation/object model and surfaced through the
 project corpus and graph lens, not through a second project hierarchy. Academic
-projects render an Academic Research workbench with direct literature
-monitoring, paper screening/corpus, arXiv source setup, and citation graph
-actions.
+projects render a compact Academic Research workflow/status surface with
+research-engine discovery, provider monitors, and an entry to the dedicated
+Research Workspace. Paper triage, reading state, living documents, and report
+snapshots no longer share the Project overview surface.
 
 A project source binding whose `extraction_policy_json.profile_key` is
-`academic_paper_v1` materializes matching arXiv-scanned source items into a
+`academic_paper_v1` materializes matching academic-provider source items into a
 paper object (`space_objects` + `sources` + `academic_papers`, deduped per
-space by `arxiv_id`/`doi`) before the normal Project Corpus sync runs — see
+space by DOI, arXiv, OpenAlex, and Semantic Scholar ids) before the normal Project Corpus sync runs — see
 `materializeAcademicPaperFromSourceItem`
 (`server/src/modules/academic/paperMaterializer.ts`). Once
 `source_items.source_object_id` is set, the object is picked up by the
@@ -139,16 +140,285 @@ existing corpus/graph sync with no preset-specific wiring.
 
 The `project_research` module (`/api/v1/projects/{id}/research/*`, see below)
 adds a project-owned research workflow foundation on top of Project Corpus:
-a research profile requiring human approval before a workflow can start,
-workflow/stage/checkpoint state, Artifact-per-stage links, project screening
-criteria, and a literature-matrix read model. Editing an approved research
-profile returns it to `draft` and clears approval metadata so downstream
-workflows require a fresh human confirmation. The module dispatches through
-existing Runs/Artifacts rather than a parallel execution system. Its integrity
-gate writes an `integrity_report` Artifact and a pending checkpoint after
-checking workflow-scoped claim links for missing citations, missing evidence
-or explicit gaps, evidence outside the project corpus, and missing experiment
+research profile state for the general workflow API, workflow/stage/checkpoint
+state, Artifact-per-stage links, project screening criteria, and a
+literature-matrix read model. The general workflow-start endpoint may require
+an approved profile, while the Auto Research initial-intake endpoint collects
+its own research question and execution selection in one explicit setup action.
+Editing an approved research profile returns it to `draft` for general
+workflow consumers. The module dispatches through existing Runs/Artifacts
+rather than a parallel execution system. Its integrity gate writes an
+`integrity_report` Artifact and a pending checkpoint after checking
+workflow-scoped claim links for missing citations, missing evidence or
+explicit gaps, evidence outside the project corpus, and missing experiment
 provenance.
+
+### Research Workspace
+
+`/projects/:projectId/research` is the project-owned workspace for three living
+research documents plus immutable report snapshots:
+
+- `research_notebooks` owns one notebook per project. Its fixed
+  `research_notebook_sections` rows (`understanding`, `questions`, `ideas`,
+  `experiments`) store canonical Tiptap JSON, server-derived normalized text and
+  hash, and an optimistic version. Reader resolves a section id as document type
+  `research_notebook`, so ordinary annotations and hash-mismatch behavior apply.
+- the Reading List is a Project Corpus read model joined to
+  `research_paper_cards`. A deep-analysis run resolves
+  `project_research.paper_card`, creates the initial WHY/HOW/WHAT card directly,
+  and records run/prompt provenance. Once a person edits a card, AI
+  regeneration never overwrites it.
+- `research_checklist_items` is the ordered progress document. People use CRUD
+  directly; synthesis ideas/limitations and integrity alerts add
+  `origin='agent'` items directly, dismissable like any other item.
+
+AI writes to the notebook are direct co-edits, not proposals (revised D2).
+Every write path — user save, seeding, monitoring, ad-hoc analysis, rollback —
+goes through `notebookWriteService.writeNotebookSection`, which bumps the
+optimistic version and records a full-content row in
+`research_notebook_section_revisions` (source, block-op diff, user/run
+attribution). AI edits are expressed as block-level ops (`append` / `insert` /
+`replace` / `delete` against top-level Tiptap blocks), so untouched blocks are
+carried over byte-identical and user formatting survives. The UI highlights the
+latest AI edit with its diff and offers one-click rollback; restoring any
+revision writes a new version, so history is never destroyed. An ad-hoc run
+whose base version was overtaken degrades to a clearly labeled append instead
+of merging blindly.
+
+The first completed synthesis seeds only empty version-1 notebook sections.
+Later report snapshots never overwrite evolved sections; legacy projects with
+reports but no notebook are seeded from the latest non-rejected report on first
+workspace initialization. The Ask-AI entry is separately budgeted: at most
+`RESEARCH_ADHOC_DAILY_RUN_LIMIT` `research.adhoc_analyze` runs per project per
+UTC day, enforced at queue time. Its output contract is a `notebook_update` ops
+document applied by the research reconciler on run completion. `POST
+.../research/reports` queues a `synthesis_only` operation over the current
+reviewed corpus to create a new immutable snapshot.
+
+Notebook sections also persist referenced source-item ids. Applied AI updates
+merge their `refs` into that durable set, so integrity monitoring audits the
+papers the living understanding actually depends on instead of inferring
+citations from prose.
+
+### Automatic academic research lifecycle
+
+Initial intake starts with a stateless, managed-Provider question-refinement
+interaction. The client may carry at most three rounds of clarification; the
+server evaluates answerability plus FINER dimensions and returns bounded
+rewrites, sub-questions, scope, and clarification prompts. Refinement is a
+hard start gate: discovery and initial intake stay disabled until the assessment
+passes (answerable with mean FINER score at least 3) or the user adopts one of
+the bounded suggested rewrites. Drafts may still be saved before the gate
+passes; the legacy-named `question_refine_skipped` state field records whether
+the gate is still outstanding. Saving or starting intake makes the submitted research question the project's
+`current_focus`, so the durable workflow snapshot and the question-drift guard
+cannot diverge immediately after a rewrite is adopted.
+
+Source discovery is owned by the `research` module. `POST
+/api/v1/research/engine/search` resolves a bounded LLM query plan, previews the
+supported academic providers and optionally policy-gated web search, merges
+duplicate candidates, and persists the completed strategy in
+`research_search_strategies`. `POST /api/v1/research/engine/monitors` is the
+explicit confirmation boundary that transactionally creates the selected
+Source Monitors and Project Source bindings. Web candidates and monitors are
+marked untrusted and require a managed Source credential; secrets remain in the
+trusted fetch channel. The attached strategy id follows the initial-intake
+operation and its provider queries, hit counts, and failures are emitted in the
+report limitations for reproducibility.
+
+Automatic research uses a long-lived workflow plus a managed
+`project_operations` execution. Baseline and incremental executions reuse the
+same operation/step/link tables; progress JSON carries the run kind, query
+fingerprint, source binding/rule/plan ids, watermark before/after, current
+stage, checkpoint ids, and idempotency key. The orchestrator owns lifecycle and
+recovery, while Sources owns fetching, pagination, post-processing cursors,
+evidence materialization, and source policy.
+
+Initial literature intake is saved independently as a `not_started` workflow
+draft. Saving a draft persists the research question, attached search strategy, selected Source Monitors,
+history scope, monitoring field, and execution selection without creating a
+backfill plan or execution operation. A Source Monitor is the reusable query
+configuration; intake discovery proposes monitors and the user explicitly
+confirms which suggestions are created and bound. The project UI shows a compact intake summary and opens the full setup
+editor only on request. A saved draft keeps explicit Edit setup and Start
+research actions visible. Once the initial intake operation is created, the
+setup summary is removed; runtime progress is shown by the operation, stage
+status, artifacts, monitor state, and human-review checkpoints. Saving a draft
+applies the returned workflow to the project page's local research state, so
+unrelated project data is not reloaded. Initial intake execution resolves the
+selected monitors and creates/reuses their project bindings; it does not create
+an implicit query or duplicate monitor. Its history mode is either an explicit
+bounded arXiv `from`/`to` range or an explicit `all_available` choice.
+The latter freezes the current time as `to` and walks back to the arXiv safety
+floor (`1991-01-01T00:00:00Z`); a max-item cap is partial rather than complete
+and can be resumed from the persisted Source cursor only after the user
+explicitly raises the item limit in Project Settings. Recovery actions never
+choose or add an item budget.
+Once a Project Research operation exists, its
+`progress_json.history.max_items` is the sole writable budget authority;
+project-owned Source backfill plans link to that operation and do not mirror
+the total in `strategy_json`. Standalone Source backfill plans retain their
+own plan-level budget. The research execution-profile service resolves the
+selected Model Provider/model and
+automatically reuses or provisions the system-managed research Agent/profile;
+Research does not expose runtime adapter, CLI credential, Agent, or profile
+overrides. It reuses or creates the selected monitor's project binding,
+post-processing rule, and history plan. The user's explicit Start action
+authorizes the history import for this Project Research operation; Auto Research
+does not create a second `source_backfill_start` proposal. Generic Source and
+agent-triggered history plans remain proposal-gated. After the history window
+and post-processing drain, a `screening_gate` must be approved before synthesis.
+The synthesis instruction is resolved through the Prompt Library asset
+`project_research.synthesis` and its resolved version/hash are captured in the
+Run contract. Synthesis output is schema-validated and must carry
+source/evidence references;
+intake also snapshots `report_depth=quick|full`. Quick reports are bounded to
+five findings and skip the revision loop. Every valid synthesis draft is
+reference-numbered and then receives a second managed
+`synthesis_critique` run inside the synthesis stage. Critique results are
+durable `research_critique` artifacts and are projected in
+`progress_json.synthesis_critique`. A full report with a critical critique is
+revised at most once; a second critical result, or any quick-report critical
+result, is retained in report limitations with an unresolved marker. Only the
+post-critique report is materialized into `project_research_reports` and moved
+to `idea_review`. The periodic reconciler can recover an unqueued critique or
+revision from operation state, preserving the level-triggered lifecycle.
+it uses a standard result envelope: successful synthesis returns the required
+artifacts, while an unactionable question or incoherent approved corpus returns
+`status=rejected` with a machine-readable reason and user-facing suggestions;
+that rejection is projected into the operation progress JSON so the caller can
+correct the input and retry. Successful artifact `content` should be emitted as
+a JSON object; the server still accepts legacy JSON-encoded strings and safely
+normalizes a standalone JSON code fence before writing the text-backed artifact.
+If inner artifact JSON or its protocol shape is invalid, the operation stores a
+stable error code plus safe diagnostics (artifact id/type, length, SHA-256,
+preview/tail, parser error and position where available), the run is marked
+`degraded`, and a failed `validation_completed` run event is written. Full
+artifact content remains available through the artifact record; logs only add a
+bounded, redacted preview/tail for diagnosis. The operation and Run detail
+views expose the same diagnostics, and the server emits a structured
+`[project-research.synthesis] validation_failed` log line. An `idea_review` checkpoint is the final gate before
+the source schedule is activated.
+
+When a failed synthesis operation is retried, the retry clears the old
+`synthesis_progress` snapshot and writes the new run id and queued/started
+timestamps immediately. The workbench therefore does not have to wait for a
+later reconciliation tick before showing the new attempt's age. While the run
+is active, that read model also projects the linked `agent_run` job status,
+attempt count, worker heartbeat/update timestamps, and latest run-event type.
+The UI uses these fields to distinguish waiting for a worker, an active worker,
+an old heartbeat, and a completed worker whose result has not yet been
+reconciled. This is operational health/progress telemetry, not a model-generated
+percentage: the synthesis agent does not currently emit a reliable inner-step
+completion percentage. Project detail's Recent Runs list re-fetches canonical
+run status while a project run or research operation is active, so it does not
+retain a stale `running` badge after the run detail has reached a terminal
+state. If the scheduler projection is still stale, the workbench offers a
+repair-only reconcile action; it observes the terminal run and advances or
+fails the operation without queuing a second run.
+The state reader also recovers `synthesis_run_id` from the legacy
+`synthesis_progress.run_id` location, so older projections remain repairable.
+
+During screening, the operation's progress JSON also exposes a durable
+`screening_progress` read model: total/classified/unclassified papers, batch
+size, total/completed/active/failed batches, relevant/maybe/excluded counts,
+missing-full-text and evidence counts, and a human-readable next-step message.
+Each recovery batch updates this state when it starts and finishes, so the UI
+can distinguish batch preparation, active screening, and a review-ready gate;
+`running` alone is not the research progress contract.
+
+After a bounded baseline is complete, `historical_backfill` creates a separate
+managed operation against the same workflow, monitor bindings, and rules. It
+rejects overlapping coverage and runs through the same explicit intake action,
+screening, synthesis, and idea-review gates. While it runs, successful source
+post-processing still materializes items but queues live items in the workflow;
+the queue is flushed into one incremental operation after the historical
+operation reaches a terminal review state. This keeps ingestion available while
+preventing concurrent operations from overwriting workflow state.
+
+Incremental runs are created by successful project-bound post-processing or an
+explicit trigger after monitoring is active. A 48-hour overlap around the
+stored `submittedDate`/`lastUpdatedDate` watermark protects against scan gaps,
+while arXiv id/DOI/source-item dedupe keeps the corpus idempotent. After
+incremental screening is approved, the managed `research.monitor_compare` pass
+resolves `project_research.monitor_compare` and compares every relevant/maybe
+paper with the current `understanding` section. It classifies each paper as
+`supports`, `contradicts`, or `new_direction`, writes the stance and comparison
+detail to the paper card and scan outcome, and completes without producing a
+new formal report. Supporting evidence is recorded silently; contradictions
+and new directions append one labeled, dated block to the `understanding`
+section directly (a rollbackable `ai_monitoring` revision carrying source
+refs). Formal synthesis remains an explicit report-snapshot action.
+
+Every completed live scan has an append-only `research_scan_summaries` outcome
+for each participating research workflow. Reconciliation-backed outcomes store
+the scan window, completion time, new-item count, relevant/maybe/excluded
+counts, comparison details, and supports/contradicts/new-direction counts; a
+successful zero-item source scan also writes an explicit zero row.
+Consequently the project timeline can distinguish "scanned, no updates" from
+an absent day, which means no scan was recorded. Workflow and operation rows
+remain mutable projections, while scan summaries are stable across later
+question re-screening.
+
+A separate daily `project_research_integrity_monitor` job checks DOI references
+from accepted Notebook sections and non-rejected reports against the production
+Crossref work record, including Retraction Watch `updated-by` metadata.
+Retractions, corrections, expressions of concern, and reinstatements are
+deduplicated in `research_integrity_alerts`. New events are pinned into the
+daily scan digest, create a pending monitoring `integrity_gate`, and add an
+agent-origin checklist item directly; repeated checks do not duplicate those
+review obligations.
+
+The editable project question (`projects.current_focus`) is compared with the
+question snapshot in the active research workflow before any new judgement
+run. If they differ, Auto Research source post-processing rules skip without
+advancing their source cursor, post-processing reconciliation queues incoming
+items instead of creating an old-question incremental operation, and explicit
+incremental runs, historical extensions, failed-operation retries, and empty
+backfill rescans return `409` until the drift is resolved. This protection also
+applies to the automatic source-processing path, so changing the project
+question cannot silently create new AI screening decisions under the old
+question.
+
+Question changes are resolved explicitly by a project writer. The workflow
+keeps the latest and previous question/version; source-processing decisions
+store `research_question_version` and remain append-only, and screening
+coverage only counts decisions from the operation's version. The corpus read
+model selects the newest decision per item/version while preserving every
+human-confirmed `triage_status`.
+
+`GET /projects/{id}/research/question/impact` reports affected paper/report
+counts. `POST /projects/{id}/research/question/resolve` accepts `rescreen`,
+`synthesis_only`, or `apply_forward`: all three refresh the profile and Auto
+Research rule judgement fields; re-screen resets only unconfirmed AI corpus
+projection and runs the normal screening/review/synthesis gates, synthesis-only
+reuses the corpus and queues a new synthesis, and apply-forward leaves existing
+decisions and artifacts unchanged. The older apply-forward endpoint delegates
+to the same transaction. Active or queued research/source-processing work must
+finish before resolution begins.
+
+Operation progress is derived from the same effective stage used by the
+operation steps. A failed operation retains its failed stage in
+`progress_json.failed_stage`; the UI must render that stage as failed rather
+than falling back to the sentinel `current_stage = failed`. The progress bar,
+detail counters, and step indicator therefore remain consistent even when a
+screening batch fails part way through.
+
+The Project Research state authority has a level-triggered recovery invariant:
+every research stage must be recoverable by the periodic reconciler from the
+durable operation, workflow, source, checkpoint, and run tables alone. Event
+hooks for source post-processing and terminal agent runs are latency
+optimizations only; they enqueue a reconcile nudge and must not mutate
+operation state. The reconciler observes those tables and applies the next
+legal transition through the research state machine, so a lost hook cannot
+stall an operation.
+
+Research workflows may contain multiple Source Monitors for independent
+scanning. The workflow stores channel ids, binding ids, query fingerprints,
+per-channel coverage, and pending incremental channel events; it does not store
+a provider-specific query as its source of truth. Monitor configuration remains
+owned by Sources, while the workflow only records which monitors are included
+and how their collected corpus participates in the research lifecycle.
 
 ### project_id on durable objects
 
@@ -243,17 +513,35 @@ Space scoping is enforced via the `space_id` query parameter resolved by `get_id
 | GET | `/projects/{id}/preset` | Read the Project's selected preset key |
 | GET / PUT | `/projects/{id}/research/profile` | Read / upsert the project's research profile (draft until approved) |
 | POST | `/projects/{id}/research/profile/approve` | Approve the research profile; required before a workflow can start |
+| PUT | `/projects/{id}/research/initial-intake` | Save or update the initial literature intake draft without starting ingestion or execution |
+| POST | `/projects/{id}/research/initial-intake/start` | Start or idempotently resume the initial literature intake for the selected monitors; source and backfill policies still apply |
 | GET | `/projects/{id}/research/workflow` | List research workflows for the project |
+| GET | `/projects/{id}/research/scan-summaries` | List immutable monitoring scan outcomes newest-first; an absent date is not synthesized as a zero-result scan |
 | POST | `/projects/{id}/research/workflow/start` | Start a research workflow (requires an approved profile) |
 | POST | `/projects/{id}/research/workflow/{workflowId}/stages/{stageKey}/run` | Record a workflow stage transition, optionally linking a `run_id` |
+| POST | `/projects/{id}/research/workflow/{workflowId}/trigger` | Trigger an incremental run after baseline monitoring is active |
+| POST | `/projects/{id}/research/workflow/{workflowId}/history-backfill` | Extend a bounded baseline into a non-overlapping earlier arXiv range |
 | GET | `/projects/{id}/research/workflow/{workflowId}/checkpoints` | List checkpoints for a workflow |
 | POST | `/projects/{id}/research/workflow/{workflowId}/checkpoints/{checkpointId}/decide` | Record a human decision (`approved` / `rejected` / `waived`) on a checkpoint |
-| GET / POST | `/projects/{id}/research/artifacts` | List / link Artifacts to a workflow stage (`artifact_type` is a fixed vocabulary, e.g. `rq_brief`, `literature_matrix`, `synthesis_report`) |
+| POST | `/projects/{id}/research/operations/{operationId}/retry` | Retry a failed managed research operation from its persisted stage |
+| POST | `/projects/{id}/research/operations/{operationId}/reconcile` | Repair a stale operation projection from the canonical run; never re-queues the run |
+| PUT | `/projects/{id}/research/operations/{operationId}/item-limit` | Explicitly raise the active research item limit from Project Settings and resume a partial import if needed |
+| PUT | `/projects/{id}/research/item-limit` | Save the intake item limit independently before the research question or source monitors are configured |
+| POST | `/projects/{id}/research/question/apply-forward` | Explicitly apply the edited project question to future research runs; existing decisions and artifacts remain unchanged |
+| GET | `/projects/{id}/research/question/impact` | Count papers screened under the previous question version and existing synthesis reports before resolution |
+| POST | `/projects/{id}/research/question/resolve` | Resolve question drift with `rescreen`, `synthesis_only`, or `apply_forward` |
+| GET | `/projects/{id}/research/reports` | List immutable structured reports, newest first |
+| GET | `/projects/{id}/research/reports/{reportId}` | Read combined content, Reader projection, safe resolved references, provenance, integrity, and archive descriptors |
+| POST | `/projects/{id}/research/reports/{reportId}/integrity` | Run report integrity and attach its system archive |
 | GET / PUT | `/projects/{id}/research/screening-criteria` | Read / upsert project screening criteria (keywords, methods, date range, venues, required evidence fields) |
 | GET | `/projects/{id}/research/literature-matrix` | Literature matrix read model over included/maybe corpus papers, with academic metadata and evidence/annotation counts |
 | POST | `/projects/{id}/research/literature-matrix/rebuild` | Backfill the project corpus from sources, then return the refreshed matrix |
-| GET | `/projects/{id}/research/synthesis` | List `synthesis_report`-typed artifact links |
-| POST | `/projects/{id}/research/integrity/run` | Run V1 integrity checks, write an `integrity_report` artifact, and record a pending `integrity_gate` checkpoint |
+
+One synthesis run atomically materializes one `project_research_reports` row and
+one hidden `research_report.archive.v1` Artifact. Reports are readable while
+`awaiting_review`; idea approval moves them to `complete`, rejection to
+`rejected`. Literature matrix and integrity archives are explicit report FKs.
+Historical Artifact links and synthesis Artifact list routes do not exist.
 
 ## project_id query filter on durable object list APIs
 
@@ -296,7 +584,7 @@ space.
   active `project_members.role` of `owner` or `member`. `viewer` is read-only for
   concrete project memory and cannot mutate project metadata or public summary.
 - Project source binding creation requires project writer authority and binds a
-  Source connection directly to a Project. Removing project-workspace links does
+  Source Monitor directly to a Project. Removing project-workspace links does
   not mutate project source bindings.
 - Project Detail shows a compact Sources summary and links to the Project
   Sources surface. Project Sources supports binding sources, backfill, scan,

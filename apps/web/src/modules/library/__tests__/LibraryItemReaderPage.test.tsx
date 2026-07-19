@@ -5,7 +5,7 @@ import type { ReactNode } from 'react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { toast } from 'sonner'
 import LibraryItemReaderPage from '../LibraryItemReaderPage'
-import { sourcesApi, sourceReaderApi } from '../../../api/client'
+import { readerApi, sourcesApi } from '../../../api/client'
 import type { TextSelection } from '../../../components/editor/ReadOnlyTiptapReader'
 import type {
   ReaderAnnotation,
@@ -38,7 +38,7 @@ vi.mock('../../../api/client', () => ({
     runJob: vi.fn(),
     briefing: vi.fn(),
   },
-  sourceReaderApi: {
+  readerApi: {
     getDocument: vi.fn(),
     listAnnotations: vi.fn(),
     createAnnotation: vi.fn(),
@@ -79,7 +79,7 @@ vi.mock('../../../components/editor/ReadOnlyTiptapReader', async () => {
   }
 })
 
-const mockedApi = vi.mocked(sourceReaderApi)
+const mockedApi = vi.mocked(readerApi)
 const mockedSourcesApi = vi.mocked(sourcesApi)
 
 const docPayload: ReaderDocumentPayload = {
@@ -108,9 +108,8 @@ function makeAnnotation(overrides: Partial<ReaderAnnotation> = {}): ReaderAnnota
   return {
     id: 'ann-1',
     space_id: 'space-1',
-    source_item_id: 'item-1',
-    artifact_id: null,
-    source_snapshot_id: null,
+    document_type: 'source_item',
+    document_id: 'item-1',
     annotation_type: 'highlight',
     quote_text: 'First paragraph.',
     anchor_json: {
@@ -184,7 +183,7 @@ async function renderPage(initialEntry = '/library/items/item-1') {
 
 function makeBriefing(overrides: Partial<SourcePostProcessingBriefingDetail> = {}): SourcePostProcessingBriefingDetail {
   return {
-    source_connection_id: 'conn-1',
+    source_channel_id: 'channel-1',
     connection_name: 'arXiv: 3dgs',
     project_id: null,
     date: '2026-07-07',
@@ -203,7 +202,7 @@ function makeDecision(
   return {
     id: `decision-${itemId}`,
     space_id: 'space-1',
-    source_connection_id: 'conn-1',
+    source_channel_id: 'channel-1',
     rule_id: 'rule-1',
     run_id: 'run-1',
     project_id: null,
@@ -292,7 +291,8 @@ describe('LibraryItemReaderPage', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Highlight' }))
 
     expect(mockedApi.createAnnotation).toHaveBeenCalledWith(expect.objectContaining({
-      source_item_id: 'item-1',
+      document_type: 'source_item',
+      document_id: 'item-1',
       annotation_type: 'highlight',
       quote_text: 'Second paragraph.',
       visibility: 'private',
@@ -535,7 +535,7 @@ describe('LibraryItemReaderPage', () => {
       .mockResolvedValueOnce({
         items: [makeAnnotation({
           id: 'ann-2',
-          source_item_id: 'item-2',
+          document_id: 'item-2',
           quote_text: 'Next item quote.',
           anchor_json: {
             ...makeAnnotation().anchor_json,

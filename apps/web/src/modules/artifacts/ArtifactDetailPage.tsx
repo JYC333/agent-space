@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
 import { SpaceLink as Link } from '../../core/spaceNav'
-import { ArrowLeft, FilePlus2 } from 'lucide-react'
+import { ArrowLeft } from 'lucide-react'
 import { toast } from 'sonner'
 import { artifactsApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
@@ -13,8 +13,6 @@ import { Badge } from '../../components/ui/badge'
 import { Skeleton } from '../../components/ui/skeleton'
 import { PreviewBadge } from '../../components/PreviewBadge'
 import { ScopeBadge } from '../../components/ScopeBadge'
-import { ArtifactInlineRenderer } from './ArtifactRendererRegistry'
-import { isContextAttachableArtifactType } from './contextArtifactTypes'
 import { ContentAccessControl } from '../../components/ContentAccessControl'
 
 function fmt(dt: string | null | undefined) {
@@ -65,13 +63,6 @@ export default function ArtifactDetailPage() {
     }
   }
 
-  function contextHref(artifact: Artifact): string {
-    const params = new URLSearchParams({ artifact_id: artifact.id })
-    const scopedWorkspaceId = artifact.workspace_id ?? workspaceId
-    if (scopedWorkspaceId) params.set('workspace_id', scopedWorkspaceId)
-    return `/context?${params.toString()}`
-  }
-
   return (
     <div className="p-6 space-y-6 max-w-3xl">
       <Button variant="ghost" size="sm" asChild>
@@ -92,12 +83,7 @@ export default function ArtifactDetailPage() {
             <h1 className="text-lg font-semibold tracking-tight">{a.title}</h1>
             <div className="flex flex-wrap items-center gap-2">
               <ContentAccessControl resourceType="artifact" resourceId={a.id} ownerUserId={a.owner_user_id ?? null} />
-              {isContextAttachableArtifactType(a.artifact_type) && (
-                <Button size="sm" variant="outline" asChild>
-                  <Link to={contextHref(a)}><FilePlus2 className="size-3.5" />Context</Link>
-                </Button>
-              )}
-              <Button size="sm" variant="outline" onClick={exportArt}>Export</Button>
+              <Button size="sm" variant="outline" disabled={!a.exportable} onClick={exportArt}>Export</Button>
             </div>
           </div>
           <p className="text-xs text-muted-foreground">Viewing: {activeSpaceName ?? activeSpaceId ?? 'No operational space selected'}</p>
@@ -113,7 +99,14 @@ export default function ArtifactDetailPage() {
               </Link>
             )}
           </div>
-          <ArtifactInlineRenderer artifact={a} />
+          <div className="grid gap-3 rounded-md border border-border bg-muted/15 p-3 text-xs sm:grid-cols-2">
+            <div><p className="text-muted-foreground">Artifact ID</p><p className="break-all font-mono">{a.id}</p></div>
+            <div><p className="text-muted-foreground">Surface role</p><p>{a.surface_role.replace(/_/g, ' ')}</p></div>
+            {a.project_id && <div><p className="text-muted-foreground">Project ID</p><p className="break-all font-mono">{a.project_id}</p></div>}
+            {a.workspace_id && <div><p className="text-muted-foreground">Workspace ID</p><p className="break-all font-mono">{a.workspace_id}</p></div>}
+            <div><p className="text-muted-foreground">Updated</p><p>{fmt(a.updated_at)}</p></div>
+            <div><p className="text-muted-foreground">Storage</p><p>{a.storage_ref ?? (a.has_inline_content ? 'Inline archive' : 'Unavailable')}</p></div>
+          </div>
         </Card>
       )}
     </div>

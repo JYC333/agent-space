@@ -39,9 +39,8 @@ convenience `POST /api/v1/evolution/signals/:signalId/dismiss`. Triage is
 space-scoped and does not mutate system-wide signals.
 
 Cost uses the finalization-time sum of `token_usage_events.estimated_cost_usd`
-for the run. Duration uses `usage_json.duration_ms` when available, otherwise
-`started_at` to `ended_at`. Unknown observations do not produce threshold
-signals.
+for the run. Duration uses the run's `started_at` to `ended_at` timestamps.
+Unknown observations do not produce threshold signals.
 
 ## Evolution bundles (D3)
 

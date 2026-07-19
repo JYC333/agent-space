@@ -36,7 +36,6 @@ beforeEach(() => {
     name: 'Academic Research',
     description: 'Literature monitoring workflow over normal Project Sources with academic paper extraction defaults.',
     sections: ['source_monitoring', 'corpus', 'project_graph'],
-    source_preset_ids: ['arxiv'],
     extraction_profile_key: 'academic_paper_v1',
     graph_lens_id: 'academic_citation_v1',
   }])

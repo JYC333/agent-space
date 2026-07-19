@@ -89,6 +89,11 @@ export class ChatContextCandidateCollector {
     const items: ChatContextCandidateItem[] = [];
     const promptGate = this.llmPromptGate(request);
 
+    if (request.project_id && allowed.has("project")) {
+      const rows = await this.repo.selectResearchNotebookSections(request.space_id, request.project_id, maxItems);
+      pushItems(items, await promptGate("project", rows), "project", 0.9, "research_notebook");
+    }
+
     // Priority order is stable. manual_context, workspace, and the raw `project`
     // source never fire on the chat path (the request carries no such fields),
     // so only the DB-backed space-scoped selectors run. `project_public_summary`

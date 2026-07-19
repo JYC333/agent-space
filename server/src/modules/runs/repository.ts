@@ -7,10 +7,6 @@ import {
   sanitizeErrorJson,
   sanitizeEvidenceJson,
 } from "./evidenceRedaction";
-import {
-  BUILTIN_RUNTIME_ADAPTER_SPECS,
-  type RuntimeAdapterType,
-} from "../runtimeAdapters/specs";
 import { assertProjectInSpace } from "../projects/access";
 import { contentReadSql } from "../access/contentAccessSql";
 import { contentDecisionFromDb } from "../access/contentAccessQuery";
@@ -18,8 +14,6 @@ import {
   addOptionalFilter,
   extractErrorMessage,
   recordValue,
-  requiredSandboxLevelForRun,
-  trimmed,
   validateRunCreateInput,
 } from "./runRepositoryHelpers";
 import {
@@ -63,6 +57,7 @@ import {
 import { assertBudgetSourcesAvailable, checkRunBudget } from "./budgetEnforcement";
 import { withQueryableTransaction } from "../routeUtils/common";
 import type { VerificationResultRecord } from "./verification/types";
+import { PgUsageRepository } from "../usage/repository";
 
 export {
   RunCreateValidationError,
@@ -111,7 +106,26 @@ interface RuntimeProfileForRun {
 }
 
 export class PgRunRepository {
-  constructor(private readonly db: Queryable) {}
+  private readonly usageRepository: PgUsageRepository;
+
+  constructor(private readonly db: Queryable) {
+    this.usageRepository = new PgUsageRepository(db);
+  }
+
+  private async withRunUsage(run: RunRecord): Promise<RunRecord> {
+    return {
+      ...run,
+      usage: await this.usageRepository.summarizeRunUsage(run.space_id, run.project_id, [run.id]),
+    };
+  }
+
+  private async withRunsUsage(runs: RunRecord[]): Promise<RunRecord[]> {
+    const summaries = await this.usageRepository.summarizeRunUsageByRunIds(
+      runs[0]?.space_id ?? "",
+      runs.map((run) => run.id),
+    );
+    return runs.map((run) => ({ ...run, usage: summaries.get(run.id) ?? null }));
+  }
 
   static fromConfig(config: ServerConfig): PgRunRepository {
     if (!config.databaseUrl) {
@@ -186,6 +200,11 @@ export class PgRunRepository {
   async createQueuedRun(input: RunCreateInput): Promise<RunRecord> {
     validateRunCreateInput(input);
     return this.createQueuedRunInternal(input);
+  }
+
+  async createCoordinatorRun(input: RunCreateInput): Promise<RunRecord> {
+    validateRunCreateInput(input);
+    return this.createQueuedRunInternal(input, { run_role: "coordinator" });
   }
 
   /**
@@ -313,7 +332,7 @@ export class PgRunRepository {
                   capabilities_json, model_provider_id, model_override_json,
                   runtime_profile_snapshot_json, required_sandbox_level, contract_snapshot_json, workflow_version_id, trigger_origin,
                   instructed_by_user_id, instructed_by_agent_id, error_message, error_json,
-                  output_json, usage_json, started_at, ended_at, created_at, updated_at,
+                  output_json, started_at, ended_at, created_at, updated_at,
                   visibility`,
       [input.space_id, input.run_id, input.run_group_id, now],
     );
@@ -329,8 +348,10 @@ export class PgRunRepository {
       instructed_by_agent_id?: string | null;
       budget_json?: Record<string, unknown> | null;
       context_policy_json?: Record<string, unknown> | null;
+      run_role?: "execution" | "coordinator";
     } = {},
   ): Promise<RunRecord> {
+    const isCoordinator = links.run_role === "coordinator";
     const agent = await this.getAgentForRun(input.space_id, input.agent_id);
     if (!agent) {
       throw new RunCreateValidationError(
@@ -373,51 +394,20 @@ export class PgRunRepository {
         );
       }
     }
-    const runtimeProfile = input.runtime_profile_id
+    const requestedRuntimeProfile = input.runtime_profile_id
       ? await this.requireRuntimeProfileForRun(
           input.space_id,
           input.agent_id,
           input.runtime_profile_id,
         )
-      : await this.getDefaultRuntimeProfileForRun(input.space_id, input.agent_id);
+      : null;
     const runtimeProfileSelectionSource: RuntimeProfileSelectionSource =
       input.runtime_profile_selection_source
       ?? (input.runtime_profile_id ? "explicit" : "default");
-    if (!runtimeProfile) {
-      throw new RunCreateValidationError(
-        `Agent '${input.agent_id}' has no enabled runtime profile`,
-        409,
-      );
-    }
-    // Resolve adapter type + model provider from the selected/default runtime
-    // profile and space provider defaults. Public run creation does not accept
-    // per-run adapter/model overrides.
-    const resolved = await this.resolveRunModelConfig(
-      input.space_id,
-      runtimeProfile,
-    );
-    const requiredSandboxLevel = requiredSandboxLevelForRun(
-      resolved.adapterType,
-      input.workspace_id,
-    );
-    if (resolved.modelProviderId) {
-      const provider = await this.getModelProviderSummary(
-        input.space_id,
-        resolved.modelProviderId,
-      );
-      if (!provider) {
-        throw new RunCreateValidationError(
-          `ModelProvider '${resolved.modelProviderId}' not found in this space`,
-          400,
-        );
-      }
-      if (!provider.enabled) {
-        throw new RunCreateValidationError(
-          `ModelProvider '${resolved.modelProviderId}' is disabled`,
-          400,
-        );
-      }
-    }
+    // Requested route state is immutable. The router is the sole authority
+    // that stamps selected runtime, adapter, provider, and route decision.
+    const resolved = { adapterType: null, modelProviderId: null, modelName: null, source: "unrouted" };
+    const requiredSandboxLevel = "none";
 
     const now = new Date().toISOString();
     const contractSnapshot = createRunContractSnapshot(input.contract_snapshot, now);
@@ -439,7 +429,7 @@ export class PgRunRepository {
           space_id: input.space_id,
           user_id: input.user_id,
           agent_version_id: agent.current_version_id,
-          runtime_profile_id: runtimeProfile?.id ?? null,
+          runtime_profile_id: requestedRuntimeProfile?.id ?? null,
           session_id: input.session_id ?? null,
           workspace_id: input.workspace_id ?? null,
           project_id: input.project_id ?? null,
@@ -468,28 +458,28 @@ export class PgRunRepository {
     const modelOverrideJson = Object.keys(modelOverride).length > 0
       ? JSON.stringify(modelOverride)
       : null;
-    const runtimeProfileSnapshotJson = runtimeProfile
-      ? JSON.stringify(runtimeProfileSnapshot(runtimeProfile))
-      : null;
+    const runtimeProfileSnapshotJson = null;
     const result = await this.db.query<RunRecord>(
       `INSERT INTO runs (
-          id, space_id, agent_id, agent_version_id, runtime_profile_id,
+          id, space_id, agent_id, agent_version_id, run_role,
+          requested_runtime_profile_id, runtime_profile_id,
           context_snapshot_id,
           workspace_id, session_id, parent_run_id, root_run_id, run_group_id,
           delegation_id, instructed_by_user_id, instructed_by_agent_id,
           run_type, trigger_origin, status, mode, prompt, instruction,
           scheduled_at, created_at, updated_at, adapter_type, capability_id,
                   capabilities_json, model_provider_id, model_override_json, runtime_profile_snapshot_json,
-                  required_sandbox_level, usage_accuracy, owner_user_id, visibility, access_level, project_id,
+                  required_sandbox_level, owner_user_id, visibility, access_level, project_id,
                   contract_snapshot_json, workflow_version_id, source, runtime_profile_selection_source
        )
        VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-          $11, $12, $13, $14, $15, $16, 'queued', $17, $18, $19, $20, $21, $21,
-          $22, $23, $24::jsonb, $25, $26::jsonb, $27::jsonb, $28, 'estimated',
-          $13, $29, $30, $31, $32::jsonb, $33, 'managed', $34
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+          $12, $13, $14, $15, $16, $17, $18, 'queued', $19, $20, $21, $22, $23, $23,
+          $24, $25, $26::jsonb, $27, $28::jsonb, $29::jsonb, $30,
+          $15, $31, $32, $33, $34::jsonb, $35, 'managed', $36
        )
-       RETURNING id, space_id, agent_id, agent_version_id, runtime_profile_id,
+       RETURNING id, space_id, agent_id, agent_version_id, run_role,
+                 requested_runtime_profile_id, runtime_profile_id,
                  context_snapshot_id,
                  run_type, status, mode, prompt, instruction, workspace_id,
                  session_id, parent_run_id, root_run_id, run_group_id,
@@ -499,14 +489,17 @@ export class PgRunRepository {
                  required_sandbox_level, trigger_origin,
                  instructed_by_user_id, instructed_by_agent_id, error_message,
                  error_json, output_json,
-                 usage_json, started_at, ended_at, created_at, updated_at,
-                 owner_user_id, visibility, access_level, contract_snapshot_json, workflow_version_id, runtime_profile_selection_source`,
+                 started_at, ended_at, created_at, updated_at,
+                 owner_user_id, visibility, access_level, contract_snapshot_json,
+                 workflow_version_id, route_decision_id, runtime_profile_selection_source`,
       [
         runId,
         input.space_id,
         input.agent_id,
         agent.current_version_id,
-        runtimeProfile?.id ?? null,
+        links.run_role ?? "execution",
+        input.runtime_profile_id ?? null,
+        null,
         contextSnapshotId,
         input.workspace_id ?? null,
         input.session_id ?? null,
@@ -540,14 +533,16 @@ export class PgRunRepository {
     );
     const row = result.rows[0];
     if (!row) throw new Error("Run insert returned no row");
-    await this.db.query(
-      `INSERT INTO run_attempts (
-         id, space_id, run_id, attempt_number, status,
-         created_at, updated_at
-       ) VALUES ($1, $2, $3, 1, 'queued', $4, $4)
-       ON CONFLICT (space_id, run_id, attempt_number) DO NOTHING`,
-      [randomUUID(), input.space_id, row.id, now],
-    );
+    if (!isCoordinator) {
+      await this.db.query(
+        `INSERT INTO run_attempts (
+           id, space_id, run_id, attempt_number, status,
+           created_at, updated_at
+         ) VALUES ($1, $2, $3, 1, 'queued', $4, $4)
+         ON CONFLICT (space_id, run_id, attempt_number) DO NOTHING`,
+        [randomUUID(), input.space_id, row.id, now],
+      );
+    }
     await this.db.query(
       `UPDATE context_snapshots SET run_id = $3 WHERE space_id = $1 AND id = $2`,
       [input.space_id, contextSnapshotId, row.id],
@@ -656,7 +651,7 @@ export class PgRunRepository {
           run_type, trigger_origin, status, mode, prompt, instruction,
           scheduled_at, started_at, created_at, updated_at, adapter_type,
           capability_id, capabilities_json, model_provider_id, model_override_json,
-          runtime_profile_snapshot_json, required_sandbox_level, usage_accuracy,
+          runtime_profile_snapshot_json, required_sandbox_level,
           owner_user_id, visibility, access_level, project_id, contract_snapshot_json, workflow_version_id, source
        )
        VALUES (
@@ -664,7 +659,7 @@ export class PgRunRepository {
           'system', $8, 'running', 'live', $9, $10,
           NULL, $11, $11, $11, NULL,
           $12, $13::jsonb, NULL, $14::jsonb,
-          NULL, 'none', 'estimated',
+          NULL, 'none',
           $7, 'space_shared', 'full', $15, $16::jsonb, $17, $18
        )
        RETURNING id, space_id, agent_id, agent_version_id, runtime_profile_id,
@@ -677,7 +672,7 @@ export class PgRunRepository {
                  required_sandbox_level, trigger_origin,
                  instructed_by_user_id, instructed_by_agent_id, error_message,
                  error_json, output_json,
-                 usage_json, started_at, ended_at, created_at, updated_at,
+                 started_at, ended_at, created_at, updated_at,
                  owner_user_id, visibility, access_level, contract_snapshot_json, workflow_version_id`,
       [
         runId,
@@ -757,25 +752,6 @@ export class PgRunRepository {
     return profile;
   }
 
-  private async getDefaultRuntimeProfileForRun(
-    spaceId: string,
-    agentId: string,
-  ): Promise<RuntimeProfileForRun | null> {
-    const result = await this.db.query<RuntimeProfileForRun>(
-      `SELECT id, space_id, agent_id, name, adapter_type, model_provider_id,
-              model_name, credential_profile_id, runtime_config_json,
-              runtime_policy_json, enabled, is_default, created_at, updated_at
-         FROM agent_runtime_profiles
-        WHERE space_id = $1
-          AND agent_id = $2
-          AND enabled = true
-        ORDER BY is_default DESC, created_at ASC, id ASC
-        LIMIT 1`,
-      [spaceId, agentId],
-    );
-    return result.rows[0] ?? null;
-  }
-
   private async getRuntimeProfileForRun(
     spaceId: string,
     agentId: string,
@@ -791,114 +767,6 @@ export class PgRunRepository {
       [spaceId, agentId, runtimeProfileId],
     );
     return result.rows[0] ?? null;
-  }
-
-  /**
-   * Resolve adapter type + model provider + model for a new run. Priority:
-   * runtime profile → space default provider (for adapters that require one).
-   */
-  private async resolveRunModelConfig(
-    spaceId: string,
-    runtimeProfile: RuntimeProfileForRun,
-  ): Promise<{
-    adapterType: string;
-    modelProviderId: string | null;
-    modelName: string | null;
-    source: string;
-  }> {
-    const profileRuntimeConfig = recordValue(runtimeProfile?.runtime_config_json);
-    const profileRuntimePolicy = recordValue(runtimeProfile?.runtime_policy_json);
-    const adapterType =
-      trimmed(runtimeProfile?.adapter_type) ||
-      trimmed(profileRuntimeConfig.adapter_type) ||
-      trimmed(profileRuntimePolicy.default_adapter_type) ||
-      "model_api";
-    const mode =
-      BUILTIN_RUNTIME_ADAPTER_SPECS[adapterType as RuntimeAdapterType]?.model
-        .model_provider_mode ?? "none";
-    const profileModel = trimmed(runtimeProfile?.model_name) || null;
-
-    if (runtimeProfile?.model_provider_id) {
-      return {
-        adapterType,
-        modelProviderId: runtimeProfile.model_provider_id,
-        modelName: profileModel,
-        source: "runtime_profile",
-      };
-    }
-    if (mode === "required") {
-      const fallback = await this.resolveDefaultProvider(spaceId, adapterType);
-      if (fallback) {
-        return {
-          adapterType,
-          modelProviderId: fallback.id,
-          modelName: profileModel ?? fallback.default_model,
-          source: fallback.source,
-        };
-      }
-    }
-    return {
-      adapterType,
-      modelProviderId: null,
-      modelName: profileModel,
-      source: profileModel ? "runtime_profile" : "none",
-    };
-  }
-
-  /**
-   * Port of `resolve_default_provider_for_runtime`: a runtime-scoped default
-   * ModelProvider is expressed on `config_json` (`runtime_default_for` /
-   * `runtime_default_adapter_type(s)` / `runtime_defaults`); otherwise the space
-   * default is the enabled provider with `config_json.is_default = true`.
-   */
-  private async resolveDefaultProvider(
-    spaceId: string,
-    adapterType: string,
-  ): Promise<{ id: string; default_model: string | null; source: string } | null> {
-    const result = await this.db.query<{
-      id: string;
-      default_model: string | null;
-      config_json: unknown;
-    }>(
-      `SELECT p.id,
-              p.default_model,
-              jsonb_set(
-                COALESCE(p.config_json, '{}'::jsonb),
-                '{is_default}',
-                to_jsonb(g.is_default),
-                true
-              ) AS config_json
-         FROM model_provider_space_grants g
-         JOIN model_providers p ON p.id = g.provider_id
-        WHERE g.space_id = $1
-          AND g.enabled = TRUE
-          AND p.enabled = TRUE`,
-      [spaceId],
-    );
-    let spaceDefault: { id: string; default_model: string | null } | null = null;
-    for (const row of result.rows) {
-      const cfg = recordValue(row.config_json);
-      if (cfg.runtime_default_for === adapterType) {
-        return { id: row.id, default_model: row.default_model, source: "runtime_default" };
-      }
-      if (cfg.runtime_default_adapter_type === adapterType) {
-        return { id: row.id, default_model: row.default_model, source: "runtime_default" };
-      }
-      const types = cfg.runtime_default_adapter_types;
-      if (Array.isArray(types) && types.includes(adapterType)) {
-        return { id: row.id, default_model: row.default_model, source: "runtime_default" };
-      }
-      const defaults = cfg.runtime_defaults;
-      if (defaults && typeof defaults === "object" && (defaults as Record<string, unknown>)[adapterType] === true) {
-        return { id: row.id, default_model: row.default_model, source: "runtime_default" };
-      }
-      if (spaceDefault === null && cfg.is_default === true) {
-        spaceDefault = { id: row.id, default_model: row.default_model };
-      }
-    }
-    return spaceDefault
-      ? { id: spaceDefault.id, default_model: spaceDefault.default_model, source: "space_default" }
-      : null;
   }
 
   private async agentVersionBelongsToAgent(
@@ -939,6 +807,7 @@ export class PgRunRepository {
     const result = await this.db.query<RunRecord>(
       `SELECT r.id, r.space_id, r.agent_id, r.agent_version_id,
               a.name AS agent_name,
+              r.run_role, r.requested_runtime_profile_id,
               r.runtime_profile_id, r.runtime_profile_selection_source,
               av.system_prompt AS system_prompt,
               r.context_snapshot_id, r.run_type, r.status, r.mode, r.prompt,
@@ -950,7 +819,7 @@ export class PgRunRepository {
               COALESCE(r.runtime_profile_snapshot_json->'runtime_config_json', '{}'::jsonb) AS runtime_config_json,
               r.contract_snapshot_json, r.workflow_version_id, r.route_decision_id,
               r.trigger_origin, r.instructed_by_user_id, r.instructed_by_agent_id, r.error_message,
-              r.error_json, r.output_json, r.usage_json, r.started_at,
+              r.error_json, r.output_json, r.started_at,
               r.ended_at, r.created_at, r.updated_at, r.owner_user_id, r.visibility, r.access_level
          FROM runs r
          LEFT JOIN agent_versions av
@@ -963,7 +832,7 @@ export class PgRunRepository {
         WHERE r.space_id = $1 AND r.id = $2`,
       [spaceId, runId],
     );
-    return result.rows[0] ?? null;
+    return result.rows[0] ? this.withRunUsage(result.rows[0]) : null;
   }
 
   async getVisibleRun(spaceId: string, userId: string, runId: string): Promise<RunRecord | null> {
@@ -989,11 +858,14 @@ export class PgRunRepository {
     addOptionalFilter(clauses, params, "workspace_id", filters.workspace_id);
     addOptionalFilter(clauses, params, "project_id", filters.project_id);
     addOptionalFilter(clauses, params, "workflow_version_id", filters.workflow_version_id);
+    if (filters.run_role) addOptionalFilter(clauses, params, "run_role", filters.run_role);
+    else clauses.push("run_role = 'execution'");
     params.push(filters.limit, filters.offset);
     const limitIndex = params.length - 1;
     const offsetIndex = params.length;
     const result = await this.db.query<RunRecord>(
-      `SELECT id, space_id, agent_id, agent_version_id, runtime_profile_id, runtime_profile_selection_source,
+      `SELECT id, space_id, agent_id, agent_version_id, run_role,
+              requested_runtime_profile_id, runtime_profile_id, runtime_profile_selection_source,
               context_snapshot_id,
               run_type, status, mode, prompt, instruction, workspace_id,
               session_id, parent_run_id, root_run_id, run_group_id, delegation_id,
@@ -1002,7 +874,7 @@ export class PgRunRepository {
               runtime_profile_snapshot_json,
               required_sandbox_level, contract_snapshot_json, workflow_version_id, route_decision_id, trigger_origin, instructed_by_user_id,
               instructed_by_agent_id,
-              error_message, error_json, output_json, usage_json, started_at,
+              error_message, error_json, output_json, started_at,
               ended_at, created_at, updated_at, owner_user_id, visibility, access_level
          FROM runs
         WHERE ${clauses.join(" AND ")}
@@ -1010,7 +882,7 @@ export class PgRunRepository {
         LIMIT $${limitIndex} OFFSET $${offsetIndex}`,
       params,
     );
-    return result.rows;
+    return this.withRunsUsage(result.rows);
   }
 
   async getModelProviderSummary(
@@ -1045,7 +917,7 @@ export class PgRunRepository {
 
   async listRunSteps(spaceId: string, runId: string): Promise<RunStepDetailRecord[]> {
     const result = await this.db.query<RunStepDetailRecord>(
-      `SELECT id, space_id, run_id, parent_step_id, actor_id, step_index,
+      `SELECT id, space_id, run_id, attempt_number, parent_step_id, actor_id, step_index,
               step_type, status, title, workspace_id, session_id, task_id,
               artifact_id, proposal_id, started_at, ended_at, input_summary,
               output_summary, error_type, error_message, metadata_json,
@@ -1060,7 +932,7 @@ export class PgRunRepository {
 
   async listRunEvents(spaceId: string, runId: string): Promise<RunEventDetailRecord[]> {
     const result = await this.db.query<RunEventDetailRecord>(
-      `SELECT id, space_id, run_id, step_id, actor_id, event_index, event_type,
+      `SELECT id, space_id, run_id, attempt_number, step_id, actor_id, event_index, event_type,
               status, summary, error_code, error_message, workspace_id,
               artifact_id, proposal_id, data_exposure_level, trust_level,
               metadata_json, created_at
@@ -1087,7 +959,7 @@ export class PgRunRepository {
     addOptionalFilter(clauses, params, "status", filters.status);
     const limitParam = params.length + 1;
     const rows = await this.db.query<RunEventDetailRecord>(
-      `SELECT id, space_id, run_id, step_id, actor_id, event_index, event_type,
+      `SELECT id, space_id, run_id, attempt_number, step_id, actor_id, event_index, event_type,
               status, summary, error_code, error_message, workspace_id,
               artifact_id, proposal_id, data_exposure_level, trust_level,
               metadata_json, created_at
@@ -1224,15 +1096,25 @@ export class PgRunRepository {
     return result.rows;
   }
 
+  /**
+   * Returns the current attempt's verification results. Rows are persisted
+   * per attempt; evaluation and the run detail read model must never treat a
+   * prior attempt's checks as evidence for the attempt being finalized, so a
+   * retry that failed before verification yields an empty (incomplete) set
+   * instead of borrowing the previous attempt's rows.
+   */
   async listVerificationResults(
     spaceId: string,
     runId: string,
   ): Promise<VerificationResultRecord[]> {
     const result = await this.db.query<VerificationResultRecord>(
-      `SELECT id, space_id, run_id, verifier_type, verifier_version, status,
+      `SELECT id, space_id, run_id, attempt_number, verifier_type, verifier_version, status,
               summary, evidence_refs_json, details_json, started_at, completed_at, created_at
          FROM verification_results
         WHERE space_id = $1 AND run_id = $2
+          AND attempt_number = COALESCE((SELECT max(attempt_number)
+                                           FROM run_attempts
+                                          WHERE space_id = $1 AND run_id = $2), 1)
         ORDER BY created_at ASC, id ASC`,
       [spaceId, runId],
     );
@@ -1584,13 +1466,15 @@ export class PgRunRepository {
        ), inserted_attempt AS (
          INSERT INTO run_attempts (
            id, space_id, run_id, attempt_number, status,
-           started_at, last_activity_at, created_at, updated_at
+           started_at, last_activity_at, error_json, created_at, updated_at
          )
          SELECT $5, u.space_id, u.id,
                 COALESCE((SELECT max(a.attempt_number)
                             FROM run_attempts a
                            WHERE a.space_id = u.space_id AND a.run_id = u.id), 0) + 1,
-                'running', $3, $3, $3, $3
+                'running', $3, $3,
+                jsonb_build_object('error_code', 'attempt_backfilled_on_dispatch'),
+                $3, $3
            FROM updated u
           WHERE NOT EXISTS (SELECT 1 FROM updated_attempt)
          ON CONFLICT (space_id, run_id, attempt_number) DO NOTHING
@@ -1651,7 +1535,6 @@ export class PgRunRepository {
       ...(input.output_text ? { output_text: redactSecretPatterns(input.output_text) } : {}),
     };
     const errorJson = sanitizeErrorJson(input.error_json ?? {});
-    const usageJson = sanitizeEvidenceJson(input.usage_json ?? {});
     const terminalErrorCode = typeof recordValue(errorJson).error_code === "string"
       ? recordValue(errorJson).error_code as string
       : null;
@@ -1662,10 +1545,9 @@ export class PgRunRepository {
               output_json = $4::jsonb,
               error_json = $5::jsonb,
               exit_code = $6,
-              usage_json = $7::jsonb,
-              ended_at = $8,
-              updated_at = $8,
-              error_message = $9
+              ended_at = $7,
+              updated_at = $7,
+              error_message = $8
         WHERE space_id = $1 AND id = $2
           AND status NOT IN ('succeeded', 'failed', 'degraded', 'cancelled', 'orphaned')
         RETURNING id, space_id, agent_id, agent_version_id, run_type, status, mode,
@@ -1677,14 +1559,13 @@ export class PgRunRepository {
        ), updated_attempt AS (
          UPDATE run_attempts a
             SET status = $3,
-                error_code = NULLIF($10::text, ''),
+                error_code = NULLIF($9::text, ''),
                 error_json = $5::jsonb,
-                usage_json = $7::jsonb,
                 exit_code = $6,
-                ended_at = $8,
-                last_activity_at = $8,
-                cancel_confirmed_at = CASE WHEN $3 = 'cancelled' THEN $8 ELSE cancel_confirmed_at END,
-                updated_at = $8
+                ended_at = $7,
+                last_activity_at = $7,
+                cancel_confirmed_at = CASE WHEN $3 = 'cancelled' THEN $7 ELSE cancel_confirmed_at END,
+                updated_at = $7
            FROM updated u
           WHERE a.space_id = u.space_id
             AND a.run_id = u.id
@@ -1702,7 +1583,6 @@ export class PgRunRepository {
         JSON.stringify(outputJson),
         JSON.stringify(errorJson),
         input.exit_code ?? null,
-        JSON.stringify(usageJson),
         input.completed_at,
         redactEvidenceText(extractErrorMessage(errorJson)),
         terminalErrorCode,
@@ -1716,7 +1596,7 @@ export class PgRunRepository {
       `SELECT id, space_id, run_id, attempt_number, status,
               started_at, ended_at, last_activity_at,
               cancel_requested_at, cancel_confirmed_at, exit_code,
-              error_code, error_json, usage_json, created_at, updated_at
+              error_code, error_json, created_at, updated_at
          FROM run_attempts
         WHERE space_id = $1 AND run_id = $2
         ORDER BY attempt_number DESC
@@ -1731,7 +1611,7 @@ export class PgRunRepository {
       `SELECT id, space_id, run_id, attempt_number, status,
               started_at, ended_at, last_activity_at,
               cancel_requested_at, cancel_confirmed_at, exit_code,
-              error_code, error_json, usage_json, created_at, updated_at
+              error_code, error_json, created_at, updated_at
          FROM run_attempts
         WHERE space_id = $1 AND run_id = $2
         ORDER BY attempt_number DESC, id ASC`,
@@ -2063,7 +1943,7 @@ export class PgRunRepository {
               r.runtime_profile_snapshot_json,
               COALESCE(r.runtime_profile_snapshot_json->'runtime_config_json', '{}'::jsonb) AS runtime_config_json,
               r.trigger_origin, r.instructed_by_user_id, r.instructed_by_agent_id, r.error_message,
-              r.error_json, r.output_json, r.usage_json, r.started_at,
+              r.error_json, r.output_json, r.started_at,
               r.ended_at, r.created_at, r.updated_at, r.visibility
          FROM runs r
          LEFT JOIN agent_versions av
@@ -2118,8 +1998,10 @@ export class PgRunRepository {
        ), updated_attempt AS (
          UPDATE run_attempts a
             SET status = 'queued',
-                error_code = NULL,
-                error_json = NULL,
+                error_json = COALESCE(a.error_json, '{}'::jsonb) || jsonb_build_object(
+                  'approval_granted_by_user_id', $3::text,
+                  'approval_granted_at', $4::text
+                ),
                 updated_at = $4::timestamptz
            FROM updated u
           WHERE a.space_id = u.space_id
@@ -2193,10 +2075,12 @@ export class PgRunRepository {
     completed_at: string;
     error_code: string;
     error_message: string;
+    diagnostics?: unknown;
   }): Promise<RunRecord | null> {
     const errorJson = sanitizeErrorJson({
       error_code: input.error_code,
       error_text: input.error_message,
+      ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
     });
     const result = await this.db.query<RunRecord>(
       `UPDATE runs
@@ -2231,12 +2115,15 @@ export class PgRunRepository {
     // fails with "inconsistent types deduced for parameter".
     const result = await this.db.query<RunEventRecord>(
       `INSERT INTO run_events (
-          id, space_id, run_id, event_index, step_id, actor_id, event_type,
+          id, space_id, run_id, attempt_number, event_index, step_id, actor_id, event_type,
           status, summary, error_code, error_message, workspace_id,
           artifact_id, proposal_id, data_exposure_level,
           trust_level, metadata_json, created_at
        )
        VALUES ($3, $1, $2,
+               (SELECT MAX(attempt_number)
+                  FROM run_attempts
+                 WHERE space_id = $1::varchar AND run_id = $2::varchar),
                (SELECT COALESCE(MAX(event_index) + 1, 0)
                   FROM run_events
                  WHERE space_id = $1::varchar AND run_id = $2::varchar),
@@ -2272,13 +2159,17 @@ export class PgRunRepository {
     // Same ::varchar casts as appendRunEvent — see the comment there.
     const result = await this.db.query<RunStepRecord>(
       `INSERT INTO run_steps (
-          id, space_id, run_id, parent_step_id, actor_id, step_index,
+          id, space_id, run_id, attempt_number, parent_step_id, actor_id, step_index,
           step_type, status, title, workspace_id, session_id, task_id,
           artifact_id, proposal_id, started_at, ended_at,
           input_summary, output_summary, error_type, error_message,
           metadata_json, created_at, updated_at
        )
-       VALUES ($3, $1, $2, $4, $5,
+       VALUES ($3, $1, $2,
+               (SELECT MAX(attempt_number)
+                  FROM run_attempts
+                 WHERE space_id = $1::varchar AND run_id = $2::varchar),
+               $4, $5,
                (SELECT COALESCE(MAX(step_index) + 1, 0)
                   FROM run_steps
                  WHERE space_id = $1::varchar AND run_id = $2::varchar),
@@ -2389,18 +2280,4 @@ function normalizeRunCapabilitiesJson(value: unknown[] | null | undefined): stri
     throw new RunCreateValidationError("capabilities_json must contain non-empty strings");
   }
   return [...new Set(result)];
-}
-
-function runtimeProfileSnapshot(profile: RuntimeProfileForRun): Record<string, unknown> {
-  return {
-    id: profile.id,
-    name: profile.name,
-    adapter_type: profile.adapter_type,
-    model_provider_id: profile.model_provider_id,
-    model_name: profile.model_name,
-    credential_profile_id: profile.credential_profile_id,
-    runtime_config_json: recordValue(profile.runtime_config_json),
-    runtime_policy_json: recordValue(profile.runtime_policy_json),
-    is_default: profile.is_default,
-  };
 }

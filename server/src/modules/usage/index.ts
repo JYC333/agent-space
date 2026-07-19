@@ -11,6 +11,7 @@ export {
   PgUsageRepository,
   usageRepositoryFromPool,
   type UsageQueryFilters,
+  type UsageRunSummaryRecord,
 } from "./repository";
 export {
   UsageService,

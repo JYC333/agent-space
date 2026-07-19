@@ -469,9 +469,11 @@ export class ProjectCorpusRepository {
     }
     if (sourceDecisionId) {
       const decision = await this.db.query<{ source_connection_id: string | null; source_item_id: string }>(
-        `SELECT source_connection_id, source_item_id
-           FROM source_post_processing_item_decisions
-         WHERE space_id = $1 AND project_id = $2 AND id = $3
+        `SELECT sc.id AS source_connection_id, d.source_item_id
+           FROM source_post_processing_item_decisions d
+           LEFT JOIN source_channels ch ON ch.id = d.source_channel_id AND ch.space_id = d.space_id
+           LEFT JOIN source_connections sc ON sc.id = ch.source_connection_id
+         WHERE d.space_id = $1 AND d.project_id = $2 AND d.id = $3
           LIMIT 1`,
         [identity.spaceId, projectId, sourceDecisionId],
       );
@@ -519,6 +521,17 @@ export async function syncProjectCorpusEvidenceForSourceItem(
   const evidenceItems = await upsertProjectCorpusEvidenceFromLinks(db, input);
   const evidenceObjects = await upsertProjectCorpusObjectsFromEvidence(db, input);
   return { evidence_items: evidenceItems, evidence_objects: evidenceObjects };
+}
+
+/**
+ * Applies the latest source-post-processing decision to the project corpus.
+ * User-confirmed triage is intentionally preserved by the SQL upsert below.
+ */
+export async function syncProjectCorpusDecisionForSourceItem(
+  db: Queryable,
+  input: { spaceId: string; sourceItemId: string; projectId?: string | null },
+): Promise<number> {
+  return syncProjectCorpusSourceDecisions(db, input);
 }
 
 async function upsertProjectCorpusSourceItemsFromLinks(
@@ -680,16 +693,18 @@ async function syncProjectCorpusSourceDecisions(
   const result = await db.query(
     `WITH latest_decisions AS (
        SELECT DISTINCT ON (d.project_id, d.source_item_id)
-              d.id, d.space_id, d.project_id, d.source_connection_id, d.source_item_id,
+              d.id, d.space_id, d.project_id, sc.id AS source_connection_id, d.source_item_id,
               d.relevance, d.confidence, d.reason
          FROM source_post_processing_item_decisions d
          JOIN source_items si ON si.id = d.source_item_id AND si.space_id = d.space_id
+         LEFT JOIN source_channels ch ON ch.id = d.source_channel_id AND ch.space_id = d.space_id
+         LEFT JOIN source_connections sc ON sc.id = ch.source_connection_id
         WHERE d.space_id = $1
           AND si.deleted_at IS NULL
           AND d.project_id IS NOT NULL
           AND ($2::varchar IS NULL OR d.source_item_id = $2)
           AND ($3::varchar IS NULL OR d.project_id = $3)
-        ORDER BY d.project_id, d.source_item_id, d.updated_at DESC, d.id ASC
+        ORDER BY d.project_id, d.source_item_id, d.research_question_version DESC, d.updated_at DESC, d.id ASC
      )
      INSERT INTO project_corpus_items (
        id, space_id, project_id, source_item_id, source_connection_id, source_decision_id,

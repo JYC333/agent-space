@@ -1,4 +1,4 @@
-import type { SourceItem, SourceCapturePolicy, SourceConnection, SourceScheduleRule } from '../../types/api'
+import type { SourceItem, SourceCapturePolicy, SourceScheduleRule } from '../../types/api'
 
 export type ItemFilter = 'open' | 'new' | 'triaged' | 'selected' | 'ignored'
 
@@ -73,32 +73,6 @@ export function scheduleRuleFromForm(fetchFrequency: string, value: ScheduleForm
     return utcRuleFromLocalCandidate('daily', nextDailyLocalOccurrence(Number(value.hour), Number(value.minute), now))
   }
   return utcRuleFromLocalCandidate('weekly', nextWeeklyLocalOccurrence(Number(value.weekday), Number(value.hour), Number(value.minute), now))
-}
-
-export function scheduleFormValueFromConnection(connection: Pick<SourceConnection, 'fetch_frequency' | 'next_check_at' | 'schedule_rule_json'>): ScheduleFormValue {
-  if (!isScheduledFrequency(connection.fetch_frequency)) return emptyScheduleFormValue()
-  if (connection.next_check_at) {
-    const date = new Date(connection.next_check_at)
-    if (!Number.isNaN(date.getTime())) {
-      return {
-        minute: String(date.getMinutes()),
-        hour: connection.fetch_frequency === 'hourly' ? '' : String(date.getHours()),
-        weekday: connection.fetch_frequency === 'weekly' ? String(isoLocalWeekday(date)) : '',
-      }
-    }
-  }
-  const rule = connection.schedule_rule_json
-  if (!rule || rule.frequency !== connection.fetch_frequency) return emptyScheduleFormValue()
-  if (rule.frequency === 'hourly') return { minute: String(rule.minute), hour: '', weekday: '' }
-  const local = new Date()
-  local.setUTCSeconds(0, 0)
-  if (rule.frequency === 'daily') {
-    local.setUTCHours(rule.hour, rule.minute, 0, 0)
-    return { minute: String(local.getMinutes()), hour: String(local.getHours()), weekday: '' }
-  }
-  local.setUTCDate(local.getUTCDate() + (rule.weekday - isoUtcWeekday(local) + 7) % 7)
-  local.setUTCHours(rule.hour, rule.minute, 0, 0)
-  return { minute: String(local.getMinutes()), hour: String(local.getHours()), weekday: String(isoLocalWeekday(local)) }
 }
 
 function nextDailyLocalOccurrence(hour: number, minute: number, now: Date) {

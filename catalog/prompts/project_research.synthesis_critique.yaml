@@ -1,0 +1,33 @@
+asset_key: project_research.synthesis_critique
+display_name: Project Research Synthesis Critique Prompt
+description: Adversarial quality review for a structured Project Research report.
+content:
+  schema_version: prompt_asset.v1
+  prompt_type: workflow
+  template: |-
+    Project: {project_id}
+    Research question: {research_question}
+    Report depth: {report_depth}
+    Report JSON: {report_json}
+    Corpus summary: {corpus_summary}
+
+    Act as a devil's advocate. Check for cherry-picking, missing contradictory evidence,
+    unsupported claims, plausible alternative explanations, and overreach. References in
+    affected_refs must use the report's ref-N labels exactly. Use verdict="revise" only when
+    at least one issue materially changes the report; otherwise use verdict="pass". Return only
+    the JSON object required by the output schema.
+  variables_schema:
+    type: object
+    required: [project_id, research_question, report_depth, report_json, corpus_summary]
+    properties:
+      project_id: { type: string }
+      research_question: { type: string }
+      report_depth: { type: string }
+      report_json: { type: string }
+      corpus_summary: { type: string }
+  output_schema: {}
+  model_config: {}
+  rendering: { engine: plain }
+  safety:
+    untrusted_data_delimiters: false
+    requires_proposal_for_promotion: false

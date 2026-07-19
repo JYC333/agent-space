@@ -19,7 +19,11 @@ and never replaces schedule advancement or the originating failure state.
 
 Source post-processing is not an Automation trigger. Source-level
 summaries, evidence extraction, proposal creation, item marking, and per-source
-cursors are owned by the Sources module.
+cursors are owned by the Sources module. Its unattended agent runs use the
+Sources-owned `job` execution origin and retain the user's rule/setup
+authorization in the immutable run contract; they must not request an
+Automation credential grant a second time. Ordinary Automation-origin runs
+continue to require their own explicit pre-authorization.
 
 ## Owns
 
@@ -40,6 +44,13 @@ cursors are owned by the Sources module.
   `automation_scheduler` heartbeat sweeps `listDue` and fires. There is no
   per-automation registration into the scheduler — it is a poll/sweep model.
 External/webhook triggers remain deferred (roadmap Capability 6).
+
+Project Research history expansion is not an Automation fire. Its
+`historical_backfill` operation is created by the Project Research
+orchestrator, is proposal-gated through Sources, and uses the existing source
+cursor and operation reconciliation path. Source events that arrive while it
+is active are queued on the research workflow and become an incremental
+operation only after the historical checkpoints finish.
 
 ## Project Binding
 
@@ -70,7 +81,12 @@ select a source Task and ask its Agent to plan. That is the separate
 
 Sources materialization enqueues Sources-owned
 `source_post_processing_event` jobs. Automations does not consume source item
-deltas and does not own per-source cursors.
+deltas and does not own per-source cursors. Project Research is a separate
+orchestration consumer: a successful project-bound post-processing run may
+notify `ProjectResearchOrchestrator`, which creates or merges a managed
+incremental Project operation. It reuses the existing Source cursor and Run
+pipeline; Automations must not create a second research scheduler or bypass
+the screening/idea checkpoints.
 
 ## Related Files
 

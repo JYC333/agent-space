@@ -6,6 +6,7 @@ import { PgJobQueueRepository } from "../jobs/repository";
 import { PgRouteDecisionRepository } from "../routing/repository";
 import { EvolutionSignalEmitter } from "../evolution/signalEmitters";
 import { contractRecord } from "./contractSnapshot";
+import { isManagedFailFastRun } from "../policy/managedExecutionPolicy";
 import { PgRunRepository, type RunRecord } from "./repository";
 import type { RunEvaluationRecord, RunAttemptRecord } from "./runRepositoryTypes";
 
@@ -58,7 +59,12 @@ export class PgRunSupervisor implements RunSupervisorPort {
     run: RunRecord;
     evaluation: Pick<RunEvaluationRecord, "failure_reason_code" | "outcome_status">;
   }): Promise<SupervisorDecision | null> {
+    if (input.run.run_role === "coordinator") return null;
     if (!isSupervisableStatus(input.run.status)) return null;
+    // Managed Source/Research executions have an owning operation that
+    // records the terminal failure and exposes its own retry action. Sending
+    // them through the generic Supervisor would create a second review gate.
+    if (isManagedFailFastRun(input.run)) return null;
 
     return withQueryableTransaction(this.db, async (db) => {
       const repository = new PgRunRepository(db);

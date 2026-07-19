@@ -27,11 +27,38 @@ export const WorkflowTemplateSchema = z
   .passthrough();
 export type WorkflowTemplate = z.infer<typeof WorkflowTemplateSchema>;
 
+export const WorkflowNodeInputBindingSchema = z
+  .object({
+    name: z.string().min(1),
+    from_node: z.string().min(1),
+    source: z.enum(["output_text", "output_json", "artifact"]),
+    json_pointer: z.string().startsWith("/").optional(),
+    artifact_type: z.string().min(1).optional(),
+    required: z.boolean().default(true),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.source === "output_json" && !value.json_pointer) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "output_json bindings require json_pointer", path: ["json_pointer"] });
+    }
+    if (value.source !== "output_json" && value.json_pointer !== undefined) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "json_pointer is only valid for output_json bindings", path: ["json_pointer"] });
+    }
+    if (value.source === "artifact" && !value.artifact_type) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "artifact bindings require artifact_type", path: ["artifact_type"] });
+    }
+    if (value.source !== "artifact" && value.artifact_type !== undefined) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "artifact_type is only valid for artifact bindings", path: ["artifact_type"] });
+    }
+  });
+export type WorkflowNodeInputBinding = z.infer<typeof WorkflowNodeInputBindingSchema>;
+
 export const WorkflowNodeSchema = z
   .object({
     id: z.string().min(1),
     title: z.string().min(1),
     depends_on: z.array(z.string().min(1)).default([]),
+    input_bindings: z.array(WorkflowNodeInputBindingSchema).default([]),
     capability_id: z.string().min(1).nullish(),
     prompt_asset_key: z.string().min(1).nullish(),
     agent_id: IdSchema.nullish(),
@@ -79,6 +106,20 @@ export const WorkflowDefinitionSchema = z
             path: ["nodes"],
           });
         }
+      }
+      const bindingNames = new Set<string>();
+      for (const binding of node.input_bindings) {
+        if (!node.depends_on.includes(binding.from_node)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `workflow node '${node.id}' input '${binding.name}' must reference a direct dependency`,
+            path: ["nodes"],
+          });
+        }
+        if (bindingNames.has(binding.name)) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: `duplicate input binding '${binding.name}' on node '${node.id}'`, path: ["nodes"] });
+        }
+        bindingNames.add(binding.name);
       }
     }
     const byId = new Map(value.nodes.map((node) => [node.id, node]));

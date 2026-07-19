@@ -72,12 +72,12 @@ async function insertMembership(spaceId: string, userId: string, role: string): 
 async function insertConnection(spaceId: string, id: string): Promise<void> {
   await pool!.query(
     `INSERT INTO source_connections (
-       id, space_id, connector_id, owner_user_id, name, status, fetch_frequency,
+       id, space_id, provider_connector_id, owner_user_id, name, status,
        capture_policy, trust_level, consent_json, policy_json, config_json,
        created_at, updated_at
-     ) VALUES ($1, $2, 'connector-1', 'user-1', 'Test source', 'active', 'manual',
+     ) VALUES ($1, $2, 'mapping-1', 'user-1', $3, 'active',
        'reference_only', 'normal', '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, now(), now())`,
-    [id, spaceId],
+    [id, spaceId, `Test source ${id}`],
   );
 }
 

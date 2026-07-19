@@ -10,6 +10,7 @@ import {
 import { contentReadSql } from "../access/contentAccessSql";
 import { assertProjectReadable, assertProjectWriter } from "../projects/access";
 import { ProjectCorpusRepository } from "../projects/corpusRepository";
+import { PgUsageRepository, type UsageRunSummaryRecord } from "../usage/repository";
 
 const OUTPUT_TYPES = new Set(["paper", "thesis", "report", "review", "proposal", "other"]);
 const PAPER_TYPES = new Set(["empirical", "theory", "survey", "review", "position", "case_study", "other"]);
@@ -17,22 +18,8 @@ const CITATION_STYLES = new Set(["apa", "mla", "chicago", "ieee", "acm", "vancou
 const EXPERIMENT_INTAKE = new Set(["none", "code_experiments", "human_study", "both", "undecided"]);
 const WORKFLOW_TYPES = new Set(["literature_review", "empirical_paper", "theory_paper", "paper_review", "revision"]);
 const WORKFLOW_MODES = new Set(["manual", "agent_assisted", "autonomous"]);
-const CHECKPOINT_TYPES = new Set(["profile_approval", "screening_gate", "integrity_gate", "manuscript_gate", "review_gate", "other"]);
-export const ARTIFACT_TYPES = new Set([
-  "rq_brief",
-  "methodology_blueprint",
-  "search_strategy",
-  "annotated_bibliography",
-  "literature_matrix",
-  "synthesis_report",
-  "integrity_report",
-  "outline",
-  "draft",
-  "review_package",
-  "revision_plan",
-  "final_export",
-  "process_summary",
-]);
+const CHECKPOINT_TYPES = new Set(["profile_approval", "screening_gate", "idea_review", "integrity_gate", "manuscript_gate", "review_gate", "other"]);
+const SCREENING_REVIEW_ITEM_LIMIT = 200;
 const CHECKPOINT_DECISIONS = new Set(["approved", "rejected", "waived"]);
 const SUPPORT_STATUSES = new Set(["unsupported", "supported", "partial", "gap_declared"]);
 
@@ -70,6 +57,22 @@ interface WorkflowRow {
   updated_at: unknown;
 }
 
+interface ScanSummaryDayRow {
+  workflow_id: string;
+  scan_date: string;
+  scanned_at: unknown;
+  new_item_count: number;
+  relevant_count: number;
+  maybe_count: number;
+  excluded_count: number;
+  supports_count: number;
+  contradicts_count: number;
+  new_direction_count: number;
+  comparisons_json: unknown;
+  integrity_alerts_json: unknown;
+  scan_count: number;
+}
+
 interface CheckpointRow {
   id: string;
   project_id: string;
@@ -86,19 +89,148 @@ interface CheckpointRow {
   updated_at: unknown;
 }
 
-interface ArtifactLinkRow {
-  id: string;
-  project_id: string;
-  workflow_id: string | null;
-  stage_key: string | null;
-  artifact_id: string;
-  artifact_type: string;
-  created_by_user_id: string | null;
-  created_by_run_id: string | null;
-  created_at: unknown;
-  artifact_title: string | null;
-  artifact_content: string | null;
-  artifact_created_at: unknown;
+interface ScreeningReviewItemRow {
+  source_item_id: string;
+  title: string | null;
+  source_uri: string | null;
+  source_external_id: string | null;
+  author: string | null;
+  occurred_at: unknown;
+  content_state: string | null;
+  object_id: string | null;
+  evidence_id: string | null;
+  triage_status: string;
+  relevance: string | null;
+  ai_relevance: string | null;
+  ai_confidence: number | null;
+  ai_reason: string | null;
+  has_full_text: boolean;
+  has_evidence: boolean;
+}
+
+interface ScreeningReviewSummaryRow {
+  total: string;
+  relevant: string;
+  maybe: string;
+  excluded: string;
+  missing_full_text: string;
+  evidence_count: string;
+  failed_items: string;
+}
+
+/**
+ * A source item is an ingestion record. A paper can have more than one of
+ * those records when a scan is retried, a backfill window overlaps, or the
+ * same work is found through more than one channel. Review surfaces must
+ * operate on the stable paper identity instead of the ingestion record ID.
+ */
+function screeningPaperIdentitySql(alias = "si"): string {
+  return `CASE
+    WHEN NULLIF(${alias}.metadata_json->>'arxiv_id', '') IS NOT NULL
+      THEN 'arxiv:' || lower(regexp_replace(regexp_replace(${alias}.metadata_json->>'arxiv_id', '^arxiv:', '', 'i'), 'v[0-9]+$', '', 'i'))
+    WHEN lower(COALESCE(${alias}.source_domain, '')) LIKE '%arxiv.org'
+      AND NULLIF(${alias}.source_external_id, '') IS NOT NULL
+      THEN 'arxiv:' || lower(regexp_replace(regexp_replace(${alias}.source_external_id, '^arxiv:', '', 'i'), 'v[0-9]+$', '', 'i'))
+    WHEN NULLIF(${alias}.metadata_json->>'doi', '') IS NOT NULL
+      THEN 'doi:' || lower(regexp_replace(${alias}.metadata_json->>'doi', '^https?://(dx\\.)?doi\\.org/', '', 'i'))
+    WHEN NULLIF(${alias}.source_external_id, '') IS NOT NULL
+      THEN 'external:' || lower(COALESCE(${alias}.source_domain, '') || ':' || ${alias}.source_external_id)
+    WHEN NULLIF(${alias}.canonical_uri, '') IS NOT NULL
+      THEN 'uri:' || lower(${alias}.canonical_uri)
+    ELSE 'item:' || ${alias}.id
+  END`;
+}
+
+/**
+ * Build the common read model used by the screening list and its summary.
+ * `source_papers` de-duplicates source ingestion records, while
+ * `corpus_candidates` preserves all corpus rows long enough to merge full-text
+ * and evidence availability before selecting the best row for display.
+ */
+function screeningPaperReviewCtes(): string {
+  const sourcePaperKey = screeningPaperIdentitySql("si");
+  return `WITH source_items_scoped AS (
+           SELECT si.id AS source_item_id,
+                  si.title,
+                  si.source_uri,
+                  si.source_external_id,
+                  si.author,
+                  si.occurred_at,
+                  si.content_state,
+                  si.last_seen_at,
+                  si.updated_at,
+                  ${sourcePaperKey} AS paper_key
+             FROM source_items si
+            WHERE si.space_id=$1
+              AND si.deleted_at IS NULL
+              AND si.id=ANY($3::text[])
+         ), source_papers AS (
+           SELECT DISTINCT ON (paper_key) *
+             FROM source_items_scoped
+            ORDER BY paper_key, last_seen_at DESC NULLS LAST, updated_at DESC NULLS LAST, source_item_id ASC
+         ), corpus_candidates AS (
+           SELECT ${screeningPaperIdentitySql("si")} AS paper_key,
+                  pci.source_item_id,
+                  pci.object_id,
+                  pci.evidence_id,
+                  pci.source_decision_id,
+                  pci.triage_status,
+                  pci.triage_confirmed_by_user,
+                  pci.relevance,
+                  pci.metadata_json,
+                  pci.updated_at,
+                  pci.id,
+                  d.relevance AS ai_relevance,
+                  d.confidence AS ai_confidence,
+                  d.reason AS ai_reason
+             FROM project_corpus_items pci
+             JOIN source_items si
+               ON si.space_id=pci.space_id AND si.id=pci.source_item_id AND si.deleted_at IS NULL
+             LEFT JOIN source_post_processing_item_decisions d
+               ON d.space_id=pci.space_id AND d.id=pci.source_decision_id
+            WHERE pci.space_id=$1 AND pci.project_id=$2
+              AND pci.status='active'
+              AND pci.source_item_id=ANY($3::text[])
+         ), corpus_best AS (
+           SELECT DISTINCT ON (paper_key) *
+             FROM corpus_candidates
+            ORDER BY paper_key,
+                     triage_confirmed_by_user DESC,
+                     (source_decision_id IS NOT NULL) DESC,
+                     (object_id IS NOT NULL) DESC,
+                     (evidence_id IS NOT NULL) DESC,
+                     updated_at DESC NULLS LAST,
+                     id ASC
+         ), corpus_features AS (
+           SELECT paper_key,
+                  bool_or(object_id IS NOT NULL) AS has_full_text,
+                  bool_or(evidence_id IS NOT NULL) AS has_evidence,
+                  bool_or(metadata_json->>'processing_status'='failed') AS has_failed_item
+             FROM corpus_candidates
+            GROUP BY paper_key
+         ), paper_rows AS (
+           SELECT sp.paper_key,
+                  sp.source_item_id,
+                  sp.title,
+                  sp.source_uri,
+                  sp.source_external_id,
+                  sp.author,
+                  sp.occurred_at,
+                  sp.content_state,
+                  cb.object_id,
+                  cb.evidence_id,
+                  cb.triage_status,
+                  cb.relevance,
+                  cb.ai_relevance,
+                  cb.ai_confidence,
+                  cb.ai_reason,
+                  COALESCE(cf.has_full_text, false) AS has_full_text,
+                  COALESCE(cf.has_evidence, false) AS has_evidence,
+                  COALESCE(cf.has_failed_item, false) AS has_failed_item
+             FROM source_papers sp
+             LEFT JOIN corpus_best cb ON cb.paper_key=sp.paper_key
+             LEFT JOIN corpus_features cf ON cf.paper_key=sp.paper_key
+         ) `;
 }
 
 interface ClaimLinkRow {
@@ -180,7 +312,7 @@ function workflowOut(row: WorkflowRow): Record<string, unknown> {
   };
 }
 
-function checkpointOut(row: CheckpointRow): Record<string, unknown> {
+function checkpointOut(row: CheckpointRow, review: Record<string, unknown> | null = null): Record<string, unknown> {
   return {
     id: row.id,
     project_id: row.project_id,
@@ -189,6 +321,7 @@ function checkpointOut(row: CheckpointRow): Record<string, unknown> {
     checkpoint_type: row.checkpoint_type,
     status: row.status,
     machine_result_json: row.machine_result_json === null ? null : objectValue(row.machine_result_json),
+    review,
     user_decision: row.user_decision,
     decision_reason: row.decision_reason,
     decided_by_user_id: row.decided_by_user_id,
@@ -198,24 +331,48 @@ function checkpointOut(row: CheckpointRow): Record<string, unknown> {
   };
 }
 
-function artifactLinkOut(row: ArtifactLinkRow): Record<string, unknown> {
+function numberValue(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.filter((value) => value.length > 0))];
+}
+
+function numericValue(value: string | number | null | undefined): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function reviewUsageOut(row: UsageRunSummaryRecord | undefined): Record<string, unknown> {
+  const inputTokens = numericValue(row?.input_tokens);
+  const outputTokens = numericValue(row?.output_tokens);
+  const totalTokens = numericValue(row?.total_tokens);
+  const estimatedCost = numericValue(row?.estimated_cost_usd);
   return {
-    id: row.id,
-    project_id: row.project_id,
-    workflow_id: row.workflow_id,
-    stage_key: row.stage_key,
-    artifact_id: row.artifact_id,
-    artifact_type: row.artifact_type,
-    created_by_user_id: row.created_by_user_id,
-    created_by_run_id: row.created_by_run_id,
-    created_at: requiredDateIso(row.created_at),
-    artifact: {
-      id: row.artifact_id,
-      title: row.artifact_title,
-      content: row.artifact_content,
-      created_at: dateIso(row.artifact_created_at),
-    },
+    agent_run_count: Number(row?.agent_run_count ?? 0),
+    completed_agent_run_count: Number(row?.completed_agent_run_count ?? 0),
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    total_tokens: totalTokens,
+    estimated_cost_usd: estimatedCost,
+    cost_known: estimatedCost !== null,
+    model_names: row?.model_names ?? [],
   };
+}
+
+function reviewRecommendation(row: ScreeningReviewItemRow): string {
+  if (row.ai_relevance === "relevant" || row.ai_relevance === "maybe" || row.ai_relevance === "not_relevant") {
+    return row.ai_relevance;
+  }
+  if (row.relevance === "relevant" || row.relevance === "maybe" || row.relevance === "not_relevant") {
+    return row.relevance;
+  }
+  if (row.triage_status === "relevant" || row.triage_status === "included") return "relevant";
+  if (row.triage_status === "maybe") return "maybe";
+  if (row.triage_status === "excluded") return "not_relevant";
+  return "unreviewed";
 }
 
 function claimLinkOut(row: ClaimLinkRow): Record<string, unknown> {
@@ -243,7 +400,11 @@ function enumValue(value: unknown, allowed: Set<string>, field: string): string 
 }
 
 export class ProjectResearchRepository {
-  constructor(private readonly db: Queryable) {}
+  private readonly usageRepository: PgUsageRepository;
+
+  constructor(private readonly db: Queryable) {
+    this.usageRepository = new PgUsageRepository(db);
+  }
 
   // --- Profile ---------------------------------------------------------
 
@@ -345,6 +506,53 @@ export class ProjectResearchRepository {
     return result.rows.map(workflowOut);
   }
 
+  /**
+   * Day-aggregated monitoring outcomes. One entry per (workflow, UTC day) —
+   * UTC matches the pinned timezone of research post-processing rules — so
+   * several same-day scans read as a single daily result. A missing day still
+   * means "no scan recorded that day".
+   */
+  async listScanSummaries(identity: SpaceUserIdentity, projectId: string, limit = 30): Promise<Record<string, unknown>[]> {
+    await assertProjectReadable(this.db, identity.spaceId, projectId, identity.userId);
+    const boundedLimit = Math.max(1, Math.min(100, Math.trunc(limit)));
+    const result = await this.db.query<ScanSummaryDayRow>(
+      `SELECT workflow_id,
+              (scanned_at AT TIME ZONE 'UTC')::date::text AS scan_date,
+              max(scanned_at) AS scanned_at,
+              sum(new_item_count)::int AS new_item_count,
+              sum(relevant_count)::int AS relevant_count,
+              sum(maybe_count)::int AS maybe_count,
+              sum(excluded_count)::int AS excluded_count,
+              sum(supports_count)::int AS supports_count,
+              sum(contradicts_count)::int AS contradicts_count,
+              sum(new_direction_count)::int AS new_direction_count,
+              jsonb_path_query_array(jsonb_agg(comparisons_json ORDER BY scanned_at,scan_key), '$[*][*]') AS comparisons_json,
+              jsonb_path_query_array(jsonb_agg(integrity_alerts_json ORDER BY scanned_at,scan_key), '$[*][*]') AS integrity_alerts_json,
+              count(*)::int AS scan_count
+         FROM research_scan_summaries
+        WHERE space_id=$1 AND project_id=$2
+        GROUP BY workflow_id, (scanned_at AT TIME ZONE 'UTC')::date
+        ORDER BY scan_date DESC, workflow_id ASC
+        LIMIT $3`,
+      [identity.spaceId, projectId, boundedLimit],
+    );
+    return result.rows.map((row) => ({
+      workflow_id: row.workflow_id,
+      scan_date: row.scan_date,
+      scanned_at: dateIso(row.scanned_at),
+      new_item_count: row.new_item_count,
+      relevant_count: row.relevant_count,
+      maybe_count: row.maybe_count,
+      excluded_count: row.excluded_count,
+      supports_count: row.supports_count,
+      contradicts_count: row.contradicts_count,
+      new_direction_count: row.new_direction_count,
+      comparisons: Array.isArray(row.comparisons_json) ? row.comparisons_json : [],
+      integrity_alerts: Array.isArray(row.integrity_alerts_json) ? row.integrity_alerts_json : [],
+      scan_count: row.scan_count,
+    }));
+  }
+
   async startWorkflow(identity: SpaceUserIdentity, projectId: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
     await assertProjectWriter(this.db, identity.spaceId, projectId, identity.userId);
     const profile = await this.profileRow(identity.spaceId, projectId);
@@ -358,10 +566,13 @@ export class ProjectResearchRepository {
     const id = randomUUID();
     await this.db.query(
       `INSERT INTO project_research_workflows (
-         id, space_id, project_id, workflow_type, status, mode, state_json,
+       id, space_id, project_id, workflow_type, status, mode, state_json,
          started_by_user_id, created_at, updated_at
-       ) VALUES ($1, $2, $3, $4, 'active', $5, '{}'::jsonb, $6, $7, $7)`,
-      [id, identity.spaceId, projectId, workflowType, mode, identity.userId, now],
+       ) VALUES ($1, $2, $3, $4, 'active', $5, $6::jsonb, $7, $8, $8)`,
+      [id, identity.spaceId, projectId, workflowType, mode, JSON.stringify({
+        research_question: profile.research_question,
+        research_question_version: 1,
+      }), identity.userId, now],
     );
     const row = await this.workflowRow(identity.spaceId, projectId, id);
     if (!row) throw new HttpError(500, "Failed to start research workflow");
@@ -425,7 +636,7 @@ export class ProjectResearchRepository {
         ORDER BY created_at DESC, id ASC`,
       [identity.spaceId, projectId, workflowId],
     );
-    return result.rows.map(checkpointOut);
+    return Promise.all(result.rows.map(async (row) => checkpointOut(row, await this.checkpointReview(identity.spaceId, projectId, row))));
   }
 
   async createCheckpoint(
@@ -449,7 +660,7 @@ export class ProjectResearchRepository {
     );
     const row = await this.checkpointRow(identity.spaceId, projectId, id);
     if (!row) throw new HttpError(500, "Failed to create checkpoint");
-    return checkpointOut(row);
+    return checkpointOut(row, await this.checkpointReview(identity.spaceId, projectId, row));
   }
 
   async decideCheckpoint(
@@ -465,6 +676,29 @@ export class ProjectResearchRepository {
     if (!decision) throw new HttpError(422, "decision is required and must be one of approved, rejected, waived");
     const row = await this.checkpointRow(identity.spaceId, projectId, checkpointId);
     if (!row || row.workflow_id !== workflowId) throw new HttpError(404, "Checkpoint not found");
+    if (["approved", "waived"].includes(decision) && row.checkpoint_type === "screening_gate") {
+      const operationId = optionalString(objectValue(row.machine_result_json).operation_id);
+      const priorSynthesis = operationId
+        ? await this.db.query<{ started: boolean }>(
+            `SELECT (progress_json->>'synthesis_run_id') IS NOT NULL AS started
+               FROM project_operations WHERE space_id=$1 AND project_id=$2 AND id=$3 LIMIT 1`,
+            [identity.spaceId, projectId, operationId],
+          )
+        : { rows: [] };
+      // A previously approved checkpoint may be replayed to repair a stale
+      // operation projection. Once synthesis exists, do not reinterpret that
+      // historical approval through today's corpus projection.
+      if (priorSynthesis.rows[0]?.started !== true) {
+        const review = await this.checkpointReview(identity.spaceId, projectId, row);
+        const processingStatus = optionalString(objectValue(review?.summary).processing_status);
+        if (processingStatus === "incomplete") {
+          throw new HttpError(409, "Screening is not complete; wait for every paper to receive an AI classification before approving this batch");
+        }
+        if (processingStatus === "empty") {
+          throw new HttpError(409, "No papers matched this search window; revise the search query or date range and rescan before continuing");
+        }
+      }
+    }
     const now = new Date().toISOString();
     await this.db.query(
       `UPDATE project_research_checkpoints
@@ -475,7 +709,261 @@ export class ProjectResearchRepository {
     );
     const updated = await this.checkpointRow(identity.spaceId, projectId, checkpointId);
     if (!updated) throw new HttpError(500, "Failed to decide checkpoint");
-    return checkpointOut(updated);
+    return checkpointOut(updated, await this.checkpointReview(identity.spaceId, projectId, updated));
+  }
+
+  /**
+   * Checkpoint machine results are intentionally opaque workflow state. The
+   * UI consumes this separate read model so a reviewer sees the decision in
+   * research terms rather than internal IDs and JSON flags.
+   */
+  private async checkpointReview(spaceId: string, projectId: string, checkpoint: CheckpointRow): Promise<Record<string, unknown> | null> {
+    if (checkpoint.checkpoint_type !== "screening_gate" && checkpoint.checkpoint_type !== "idea_review") return null;
+    const machineResult = objectValue(checkpoint.machine_result_json);
+    const operationId = optionalString(machineResult.operation_id);
+    if (!operationId) return null;
+
+    const operation = await this.db.query<{ progress_json: unknown }>(
+      `SELECT progress_json FROM project_operations
+        WHERE space_id=$1 AND project_id=$2 AND id=$3 AND kind='research'
+        LIMIT 1`,
+      [spaceId, projectId, operationId],
+    );
+    const progress = objectValue(operation.rows[0]?.progress_json);
+
+    if (checkpoint.checkpoint_type === "screening_gate") {
+      const sourceItemIds = await this.reviewSourceItemIds(spaceId, progress);
+      const ruleIds = uniqueStrings([
+        ...stringArray(progress.source_post_processing_rule_ids),
+        optionalString(progress.source_post_processing_rule_id) ?? "",
+      ]);
+      const [items, corpusSummary, decisionCoverage, usage] = await Promise.all([
+        sourceItemIds.length
+          ? this.db.query<ScreeningReviewItemRow>(
+            `${screeningPaperReviewCtes()}
+             SELECT source_item_id,
+                    title,
+                    source_uri,
+                    source_external_id,
+                    author,
+                    occurred_at,
+                    content_state,
+                    object_id,
+                    evidence_id,
+                    COALESCE(triage_status, 'new') AS triage_status,
+                    relevance,
+                    ai_relevance,
+                    ai_confidence,
+                    ai_reason,
+                    has_full_text,
+                    has_evidence
+               FROM paper_rows
+              ORDER BY
+              CASE COALESCE(ai_relevance, relevance, triage_status)
+                WHEN 'relevant' THEN 0
+                WHEN 'maybe' THEN 1
+                WHEN 'included' THEN 2
+                ELSE 3
+              END,
+              occurred_at DESC NULLS LAST,
+              title ASC,
+              source_item_id ASC
+            LIMIT ${SCREENING_REVIEW_ITEM_LIMIT}`,
+            [spaceId, projectId, sourceItemIds],
+          )
+          : Promise.resolve({ rows: [] as ScreeningReviewItemRow[] }),
+        sourceItemIds.length
+          ? this.db.query<ScreeningReviewSummaryRow>(
+              `${screeningPaperReviewCtes()}
+               SELECT count(*)::int AS total,
+                      count(*) FILTER (WHERE COALESCE(ai_relevance, relevance, triage_status) IN ('relevant','included'))::int AS relevant,
+                      count(*) FILTER (WHERE COALESCE(ai_relevance, relevance, triage_status)='maybe')::int AS maybe,
+                      count(*) FILTER (WHERE COALESCE(ai_relevance, relevance, triage_status) IN ('excluded','not_relevant'))::int AS excluded,
+                      count(*) FILTER (WHERE NOT has_full_text)::int AS missing_full_text,
+                      count(*) FILTER (WHERE has_evidence)::int AS evidence_count,
+                      count(*) FILTER (WHERE has_failed_item)::int AS failed_items
+                 FROM paper_rows`,
+              [spaceId, projectId, sourceItemIds],
+            )
+          : Promise.resolve({ rows: [] as ScreeningReviewSummaryRow[] }),
+        sourceItemIds.length
+          ? this.db.query<{ classified: string }>(
+              `SELECT count(DISTINCT ${screeningPaperIdentitySql("si")})::int AS classified
+                 FROM source_post_processing_item_decisions d
+                 JOIN source_items si
+                   ON si.space_id=d.space_id AND si.id=d.source_item_id AND si.deleted_at IS NULL
+                WHERE d.space_id=$1 AND d.project_id=$2 AND d.source_item_id=ANY($3::text[])
+                  AND d.created_at <= $4::timestamptz
+                  AND d.research_question_version=$5`,
+              [spaceId, projectId, sourceItemIds, dateIso(checkpoint.created_at), Math.max(1, numberValue(progress.research_question_version))],
+            )
+          : Promise.resolve({ rows: [{ classified: "0" }] }),
+        this.screeningReviewUsage(spaceId, projectId, ruleIds, sourceItemIds, dateIso(checkpoint.created_at) ?? new Date().toISOString()),
+      ]);
+      const machineTotal = numberValue(machineResult.total);
+      const summaryRow = corpusSummary.rows[0];
+      const sourceTotal = sourceItemIds.length ? Number(summaryRow?.total ?? 0) : machineTotal;
+      const classified = Number(decisionCoverage.rows[0]?.classified ?? 0);
+      const summary = {
+        total: sourceTotal,
+        classified,
+        unclassified: Math.max(0, sourceTotal - classified),
+        relevant: Number(summaryRow?.relevant ?? 0),
+        maybe: Number(summaryRow?.maybe ?? 0),
+        excluded: Number(summaryRow?.excluded ?? 0),
+        missing_full_text: Number(summaryRow?.missing_full_text ?? 0),
+        evidence_count: Number(summaryRow?.evidence_count ?? 0),
+        failed_items: Number(summaryRow?.failed_items ?? 0),
+        processing_status: classified >= sourceTotal && sourceTotal > 0 ? "complete" : sourceTotal === 0 ? "empty" : "incomplete",
+        partial: machineResult.partial === true,
+      };
+      const isEmpty = summary.processing_status === "empty";
+      return {
+        type: "screening",
+        title: "Screening results",
+        description: "Confirm that this screening batch is complete and worth moving into the literature matrix and synthesis.",
+        decision_scope: "batch",
+        decision_help: isEmpty
+          ? "No papers matched this search window. Synthesis is paused; revise the search query or date range and rescan before continuing."
+          : "Approve accepts the completed batch and starts synthesis. Reject keeps it out of the formal outputs so the search or screening criteria can be revised.",
+        summary,
+        usage,
+        next_step: {
+          key: isEmpty ? "rescan" : "synthesis",
+          label: isEmpty ? "Rescan empty windows" : "Generate synthesis",
+          description: isEmpty
+            ? "Update the source query or date range, then rescan the empty windows. No synthesis run will be started for an empty corpus."
+            : "Approval will build or refresh the literature matrix and spend additional model budget on the synthesis and idea candidates.",
+        },
+        items: items.rows.map((item) => ({
+          source_item_id: item.source_item_id,
+          title: item.title ?? "Untitled paper",
+          source_uri: item.source_uri,
+          external_id: item.source_external_id,
+          author: item.author,
+          occurred_at: dateIso(item.occurred_at),
+          recommendation: reviewRecommendation(item),
+          confidence: item.ai_confidence,
+          reason: item.ai_reason,
+          full_text_status: item.has_full_text ? "available" : (item.content_state ?? "not_available"),
+          evidence_available: item.has_evidence,
+          human_triage: item.triage_status,
+        })),
+        item_count: sourceTotal,
+        displayed_item_count: items.rows.length,
+        truncated: sourceTotal > items.rows.length,
+      };
+    }
+
+    if (checkpoint.checkpoint_type === "idea_review") {
+      const reportId = optionalString(machineResult.report_id);
+      const report = reportId
+        ? await this.db.query<{ content_json: unknown }>(
+            `SELECT content_json FROM project_research_reports
+              WHERE space_id=$1 AND project_id=$2 AND id=$3 LIMIT 1`,
+            [spaceId, projectId, reportId],
+          )
+        : { rows: [] as Array<{ content_json: unknown }> };
+      const content = objectValue(report.rows[0]?.content_json);
+      const ideas = Array.isArray(content.ideas)
+        ? content.ideas.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)))
+        : [];
+      return {
+        type: "ideas",
+        title: "Idea candidates",
+        description: "Confirm the generated idea batch before it becomes part of the project’s formal research outputs.",
+        decision_scope: "batch",
+        decision_help: "Approve accepts the complete batch. Reject keeps the candidates out of the formal research outputs.",
+        summary: { total: numberValue(machineResult.idea_count) || ideas.length, classified: ideas.length, unclassified: 0, processing_status: "complete" },
+        usage: await this.runUsage(spaceId, projectId, optionalString(progress.synthesis_run_id)),
+        next_step: {
+          key: "monitoring",
+          label: "Activate monitoring",
+          description: "Approval makes this idea batch part of the workflow record and activates ongoing literature monitoring.",
+        },
+        items: ideas.slice(0, 50).map((idea) => ({
+          title: optionalString(idea.title) ?? "Untitled idea",
+          problem: optionalString(idea.problem),
+          novelty: optionalString(idea.novelty),
+          testability: optionalString(idea.testability),
+          reference_count: Array.isArray(idea.references) ? idea.references.length : 0,
+        })),
+        item_count: ideas.length || numberValue(machineResult.idea_count),
+        displayed_item_count: Math.min(ideas.length, 50),
+        truncated: ideas.length > 50,
+      };
+    }
+
+    return null;
+  }
+
+  private async reviewSourceItemIds(spaceId: string, progress: Record<string, unknown>): Promise<string[]> {
+    const stateItemIds = stringArray(progress.source_item_ids);
+    const planIds = uniqueStrings([
+      ...stringArray(progress.source_backfill_plan_ids),
+      optionalString(progress.source_backfill_plan_id) ?? "",
+    ]);
+    if (planIds.length === 0) return stateItemIds;
+    const result = await this.db.query<{ id: string }>(
+      `SELECT id
+         FROM source_items
+        WHERE space_id=$1
+          AND deleted_at IS NULL
+          AND (
+            metadata_json->>'source_backfill_plan_id'=ANY($2::text[])
+            OR metadata_json->>'source_backfill_created_plan_id'=ANY($2::text[])
+          )`,
+      [spaceId, planIds],
+    );
+    return uniqueStrings([...stateItemIds, ...result.rows.map((row) => row.id)]);
+  }
+
+  private async screeningReviewUsage(
+    spaceId: string,
+    projectId: string,
+    ruleIds: string[],
+    sourceItemIds: string[],
+    createdBefore: string,
+  ): Promise<Record<string, unknown>> {
+    if (ruleIds.length === 0 || sourceItemIds.length === 0) return this.emptyReviewUsage();
+    const result = await this.db.query<{ id: string }>(
+      `SELECT DISTINCT r.id
+         FROM source_post_processing_runs pr
+         JOIN runs r ON r.space_id=pr.space_id AND r.id=pr.agent_run_id
+        WHERE pr.space_id=$1 AND pr.project_id=$2
+          AND r.project_id=$2
+          AND pr.rule_id=ANY($3::text[])
+          AND pr.created_at <= $4::timestamptz
+          AND EXISTS (
+            SELECT 1
+              FROM jsonb_array_elements_text(COALESCE(pr.input_item_ids_json, '[]'::jsonb)) input_item_id
+             WHERE input_item_id = ANY($5::text[])
+          )`,
+      [spaceId, projectId, ruleIds, createdBefore, sourceItemIds],
+    );
+    return reviewUsageOut(await this.usageRepository.summarizeRunUsage(
+      spaceId,
+      projectId,
+      result.rows.map((row) => row.id),
+    ));
+  }
+
+  private async runUsage(spaceId: string, projectId: string, runId: string | null): Promise<Record<string, unknown>> {
+    if (!runId) return this.emptyReviewUsage();
+    return reviewUsageOut(await this.usageRepository.summarizeRunUsage(spaceId, projectId, [runId]));
+  }
+
+  private emptyReviewUsage(): Record<string, unknown> {
+    return {
+      agent_run_count: 0,
+      completed_agent_run_count: 0,
+      input_tokens: null,
+      output_tokens: null,
+      total_tokens: null,
+      estimated_cost_usd: null,
+      cost_known: false,
+      model_names: [],
+    };
   }
 
   private async checkpointRow(spaceId: string, projectId: string, checkpointId: string): Promise<CheckpointRow | null> {
@@ -492,115 +980,35 @@ export class ProjectResearchRepository {
     if (!row) throw new HttpError(404, "Research workflow not found");
   }
 
-  // --- Artifact links ---------------------------------------------------------
-
-  async listArtifactLinks(
-    identity: SpaceUserIdentity,
-    projectId: string,
-    filters: { workflowId?: string | null; artifactType?: string | null },
-  ): Promise<Record<string, unknown>[]> {
-    await assertProjectReadable(this.db, identity.spaceId, projectId, identity.userId);
-    return this.artifactLinkRows(identity.spaceId, projectId, identity.userId, filters);
-  }
-
-  private async artifactLinkRows(
-    spaceId: string,
-    projectId: string,
-    viewerUserId: string,
-    filters: { id?: string | null; workflowId?: string | null; artifactType?: string | null },
-  ): Promise<Record<string, unknown>[]> {
-    const params: unknown[] = [spaceId, projectId, viewerUserId];
-    const clauses = ["ral.space_id = $1", "ral.project_id = $2", contentReadSql("artifact", "a", "$3")];
-    if (filters.id) {
-      params.push(filters.id);
-      clauses.push(`ral.id = $${params.length}`);
-    }
-    if (filters.workflowId) {
-      params.push(filters.workflowId);
-      clauses.push(`ral.workflow_id = $${params.length}`);
-    }
-    if (filters.artifactType) {
-      if (!ARTIFACT_TYPES.has(filters.artifactType)) throw new HttpError(422, "artifact_type is invalid");
-      params.push(filters.artifactType);
-      clauses.push(`ral.artifact_type = $${params.length}`);
-    }
-    const result = await this.db.query<ArtifactLinkRow>(
-      `SELECT ral.id, ral.project_id, ral.workflow_id, ral.stage_key, ral.artifact_id, ral.artifact_type,
-              ral.created_by_user_id, ral.created_by_run_id, ral.created_at,
-              a.title AS artifact_title, a.content AS artifact_content, a.created_at AS artifact_created_at
-         FROM project_research_artifact_links ral
-         JOIN artifacts a ON a.id = ral.artifact_id AND a.space_id = ral.space_id
-        WHERE ${clauses.join(" AND ")}
-        ORDER BY ral.created_at DESC, ral.id ASC`,
-      params,
-    );
-    return result.rows.map(artifactLinkOut);
-  }
-
-  async linkArtifact(
-    identity: SpaceUserIdentity,
-    projectId: string,
-    body: Record<string, unknown>,
-  ): Promise<Record<string, unknown>> {
-    await assertProjectWriter(this.db, identity.spaceId, projectId, identity.userId);
-    const artifactId = optionalString(body.artifact_id);
-    if (!artifactId) throw new HttpError(422, "artifact_id is required");
-    const artifactType = enumValue(body.artifact_type, ARTIFACT_TYPES, "artifact_type");
-    if (!artifactType) throw new HttpError(422, "artifact_type is required");
-    const artifactExists = await this.db.query<{ id: string }>(
-      `SELECT a.id
-         FROM artifacts a
-        WHERE a.id = $1
-          AND a.space_id = $2
-          AND ${contentReadSql("artifact", "a", "$3")}
-          AND (a.project_id IS NULL OR a.project_id = $4)
-        LIMIT 1`,
-      [artifactId, identity.spaceId, identity.userId, projectId],
-    );
-    if (!artifactExists.rows[0]) {
-      throw new HttpError(422, "artifact_id does not reference an artifact available to this project");
-    }
-    const workflowId = optionalString(body.workflow_id);
-    if (workflowId) await this.requireWorkflow(identity.spaceId, projectId, workflowId);
-    const id = randomUUID();
-    const now = new Date().toISOString();
-    await this.db.query(
-      `INSERT INTO project_research_artifact_links (
-         id, space_id, project_id, workflow_id, stage_key, artifact_id, artifact_type,
-         created_by_user_id, created_by_run_id, created_at
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-      [id, identity.spaceId, projectId, workflowId, optionalString(body.stage_key), artifactId, artifactType, identity.userId, optionalString(body.run_id), now],
-    );
-    const created = (await this.artifactLinkRows(identity.spaceId, projectId, identity.userId, { id }))[0];
-    if (!created) throw new HttpError(500, "Failed to link artifact");
-    return created;
-  }
-
   // --- Integrity ---------------------------------------------------------
 
-  async runIntegrityCheck(identity: SpaceUserIdentity, projectId: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
-    const workflowId = optionalString(body.workflow_id);
-    if (!workflowId) throw new HttpError(422, "workflow_id is required");
-    const stageKey = optionalString(body.stage_key) ?? "integrity_gate";
+  async runReportIntegrity(identity: SpaceUserIdentity, projectId: string, reportId: string): Promise<Record<string, unknown>> {
     await assertProjectWriter(this.db, identity.spaceId, projectId, identity.userId);
-    await this.requireWorkflow(identity.spaceId, projectId, workflowId);
-    const report = await this.computeIntegrityReport(identity.spaceId, projectId, workflowId, identity.userId);
+    const target = await this.db.query<{ workflow_id: string }>(
+      `SELECT workflow_id FROM project_research_reports WHERE id=$1 AND space_id=$2 AND project_id=$3`,
+      [reportId, identity.spaceId, projectId],
+    );
+    const workflowId = target.rows[0]?.workflow_id;
+    if (!workflowId) throw new HttpError(404, "Research report not found");
+    const report = await this.evaluateWorkflowIntegrity(identity, projectId, workflowId);
     const artifactId = await this.createArtifact(identity, projectId, {
       artifactType: "integrity_report",
       title: `Integrity Report (${new Date().toISOString()})`,
       content: JSON.stringify(report),
     });
-    await this.linkArtifactInternal(identity, projectId, {
-      workflowId,
-      stageKey,
-      artifactId,
-      artifactType: "integrity_report",
-    });
-    return this.createCheckpoint(identity, projectId, workflowId, {
-      stageKey,
-      checkpointType: "integrity_gate",
-      machineResult: report,
-    });
+    await this.db.query(`UPDATE artifacts SET surface_role='system_archive' WHERE id=$1 AND space_id=$2`, [artifactId, identity.spaceId]);
+    await this.db.query(
+      `UPDATE project_research_reports SET integrity_artifact_id=$4, updated_at=now()
+        WHERE id=$1 AND space_id=$2 AND project_id=$3`,
+      [reportId, identity.spaceId, projectId, artifactId],
+    );
+    return report;
+  }
+
+  async evaluateWorkflowIntegrity(identity: SpaceUserIdentity, projectId: string, workflowId: string): Promise<Record<string, unknown>> {
+    await assertProjectReadable(this.db, identity.spaceId, projectId, identity.userId);
+    await this.requireWorkflow(identity.spaceId, projectId, workflowId);
+    return this.computeIntegrityReport(identity.spaceId, projectId, workflowId, identity.userId);
   }
 
   /**
@@ -741,22 +1149,6 @@ export class ProjectResearchRepository {
       [artifactId, identity.spaceId, projectId, input.artifactType, input.title.slice(0, 512), input.content, JSON.stringify(["json"]), now, identity.userId],
     );
     return artifactId;
-  }
-
-  private async linkArtifactInternal(
-    identity: SpaceUserIdentity,
-    projectId: string,
-    input: { workflowId: string | null; stageKey: string | null; artifactId: string; artifactType: string },
-  ): Promise<void> {
-    const id = randomUUID();
-    const now = new Date().toISOString();
-    await this.db.query(
-      `INSERT INTO project_research_artifact_links (
-         id, space_id, project_id, workflow_id, stage_key, artifact_id, artifact_type,
-         created_by_user_id, created_at
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-      [id, identity.spaceId, projectId, input.workflowId, input.stageKey, input.artifactId, input.artifactType, identity.userId, now],
-    );
   }
 
   // --- Claim links ---------------------------------------------------------
@@ -937,7 +1329,9 @@ export class ProjectResearchRepository {
                 WHERE ee.space_id = pci.space_id AND ee.source_item_id = pci.source_item_id
                   AND pci.source_item_id IS NOT NULL AND ee.deleted_at IS NULL) AS evidence_count,
               (SELECT count(*) FROM reader_annotations ra
-                WHERE ra.space_id = pci.space_id AND ra.source_item_id = pci.source_item_id
+                WHERE ra.space_id = pci.space_id
+                  AND ra.document_type = 'source_item'
+                  AND ra.document_id = pci.source_item_id
                   AND pci.source_item_id IS NOT NULL AND ra.status = 'active') AS annotation_count
          FROM project_corpus_items pci
          LEFT JOIN space_objects so ON so.id = pci.object_id AND so.space_id = pci.space_id
@@ -980,10 +1374,6 @@ export class ProjectResearchRepository {
   async rebuildLiteratureMatrix(identity: SpaceUserIdentity, projectId: string): Promise<Record<string, unknown>[]> {
     await new ProjectCorpusRepository(this.db).backfillFromSources(identity, projectId);
     return this.getLiteratureMatrix(identity, projectId);
-  }
-
-  async listSynthesisArtifacts(identity: SpaceUserIdentity, projectId: string): Promise<Record<string, unknown>[]> {
-    return this.listArtifactLinks(identity, projectId, { artifactType: "synthesis_report" });
   }
 
   // --- Screening criteria ---------------------------------------------------------

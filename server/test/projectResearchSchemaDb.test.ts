@@ -6,10 +6,7 @@ import { getTestPostgres, type TestPostgresDatabase } from "./support/sharedPost
 import { migrate } from "../src/db/migrator";
 
 // Real-Postgres coverage for the Academic Research schema foundation:
-// the project_research_profiles/workflows/checkpoints/artifact_links schema
-// — one profile per project, workflow status/type checks, checkpoint cascade
-// on workflow delete, and artifact links surviving workflow deletion with a
-// nulled workflow_id.
+// profiles, workflows, checkpoints, scan outcomes, and report FK isolation.
 
 const MIGRATIONS_DIR = join(process.cwd(), "migrations");
 const SPACE = "11111111-1111-4111-8111-111111111111";
@@ -39,7 +36,7 @@ afterAll(async () => {
 beforeEach(async () => {
   if (!available || !pool) return;
   await pool.query(
-    `TRUNCATE project_research_artifact_links, project_research_checkpoints, project_research_workflows,
+    `TRUNCATE project_research_reports, project_research_checkpoints, project_research_workflows,
        project_research_profiles, artifacts, projects, space_memberships, users, spaces CASCADE`,
   );
   const now = new Date().toISOString();
@@ -82,6 +79,31 @@ async function insertWorkflow(): Promise<string> {
 }
 
 describe("project_research_* schema (real Postgres)", () => {
+  it("stores immutable scan outcomes and rejects duplicate scan keys", async () => {
+    if (!available) return;
+    const workflowId = await insertWorkflow();
+    const now = new Date().toISOString();
+    const values = [randomUUID(), SPACE, PROJECT, workflowId, "scan:daily:1", now];
+    await pool!.query(
+      `INSERT INTO research_scan_summaries (
+         id,space_id,project_id,workflow_id,scan_key,scanned_at,new_item_count,relevant_count,maybe_count,excluded_count,created_at
+       ) VALUES ($1,$2,$3,$4,$5,$6,7,2,1,4,$6)`,
+      values,
+    );
+    await expect(pool!.query(
+      `INSERT INTO research_scan_summaries (
+         id,space_id,project_id,workflow_id,scan_key,scanned_at,created_at
+       ) VALUES ($1,$2,$3,$4,$5,$6,$6)`,
+      [randomUUID(), SPACE, PROJECT, workflowId, "scan:daily:1", now],
+    )).rejects.toThrow();
+    await expect(pool!.query(
+      `INSERT INTO research_scan_summaries (
+         id,space_id,project_id,workflow_id,scan_key,scanned_at,new_item_count,created_at
+       ) VALUES ($1,$2,$3,$4,$5,$6,-1,$6)`,
+      [randomUUID(), SPACE, PROJECT, workflowId, "scan:daily:2", now],
+    )).rejects.toThrow();
+  });
+
   it("allows only one research profile per project", async () => {
     if (!available) return;
     await insertProfile();
@@ -118,51 +140,25 @@ describe("project_research_* schema (real Postgres)", () => {
     expect(remaining.rows).toHaveLength(0);
   });
 
-  it("nulls the artifact link's workflow_id when the workflow is deleted, keeping the link", async () => {
+  it("binds every report artifact reference to the report space", async () => {
     if (!available) return;
-    const workflowId = await insertWorkflow();
-    const artifactId = randomUUID();
-    const now = new Date().toISOString();
-    await pool!.query(
-      `INSERT INTO artifacts (
-         id, space_id, artifact_type, title, exportable, export_formats_json, created_at, updated_at
-       ) VALUES ($1,$2,'research_artifact','RQ Brief',true,'[]'::jsonb,$3,$3)`,
-      [artifactId, SPACE, now],
-    );
-    const linkId = randomUUID();
-    await pool!.query(
-      `INSERT INTO project_research_artifact_links (
-         id, space_id, project_id, workflow_id, stage_key, artifact_id, artifact_type, created_at
-       ) VALUES ($1,$2,$3,$4,'research_setup',$5,'rq_brief',$6)`,
-      [linkId, SPACE, PROJECT, workflowId, artifactId, now],
-    );
-
-    await pool!.query(`DELETE FROM project_research_workflows WHERE id = $1`, [workflowId]);
-    const link = await pool!.query<{ workflow_id: string | null }>(
-      `SELECT workflow_id FROM project_research_artifact_links WHERE id = $1`,
-      [linkId],
-    );
-    expect(link.rows).toHaveLength(1);
-    expect(link.rows[0]!.workflow_id).toBeNull();
+    for (const constraint of [
+      "project_research_reports_archive_artifact_id_fkey",
+      "project_research_reports_matrix_artifact_id_fkey",
+      "project_research_reports_integrity_artifact_id_fkey",
+    ]) {
+      const columns = await pool!.query<{ column_name: string }>(
+        `SELECT column_name
+           FROM information_schema.key_column_usage
+          WHERE table_schema='public' AND table_name='project_research_reports' AND constraint_name=$1
+          ORDER BY ordinal_position`,
+        [constraint],
+      );
+      expect(columns.rows.map(row => row.column_name)).toEqual([
+        constraint.includes("archive") ? "archive_artifact_id" : constraint.includes("matrix") ? "literature_matrix_artifact_id" : "integrity_artifact_id",
+        "space_id",
+      ]);
+    }
   });
 
-  it("rejects an invalid artifact_type on the artifact link", async () => {
-    if (!available) return;
-    const artifactId = randomUUID();
-    const now = new Date().toISOString();
-    await pool!.query(
-      `INSERT INTO artifacts (
-         id, space_id, artifact_type, title, exportable, export_formats_json, created_at, updated_at
-       ) VALUES ($1,$2,'research_artifact','Draft',true,'[]'::jsonb,$3,$3)`,
-      [artifactId, SPACE, now],
-    );
-    await expect(
-      pool!.query(
-        `INSERT INTO project_research_artifact_links (
-           id, space_id, project_id, artifact_id, artifact_type, created_at
-         ) VALUES ($1,$2,$3,$4,'not_a_type',$5)`,
-        [randomUUID(), SPACE, PROJECT, artifactId, now],
-      ),
-    ).rejects.toThrow();
-  });
 });

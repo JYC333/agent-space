@@ -85,6 +85,7 @@ export interface RunContextRecord {
   has_personal_grant_context: boolean;
   personal_grant_context_json: unknown;
   request_json: unknown;
+  contract_snapshot_json?: unknown;
   system_prompt: string | null;
   capabilities_json: unknown;
   memory_policy_json: unknown;
@@ -249,7 +250,7 @@ export class PgRunContextRepository {
               r.session_id, r.instructed_by_user_id, r.capability_id, r.trigger_origin,
               r.data_exposure_level, r.trust_level,
               r.has_personal_grant_context, r.personal_grant_context_json,
-              cs.request_json,
+              cs.request_json, r.contract_snapshot_json,
               av.system_prompt,
               COALESCE(NULLIF(r.capabilities_json, '[]'::jsonb), av.capabilities_json) AS capabilities_json,
               av.memory_policy_json, av.model_config_json

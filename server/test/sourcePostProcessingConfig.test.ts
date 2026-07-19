@@ -121,6 +121,15 @@ describe("source post-processing config", () => {
     })).toThrow(/deep_analysis\.content_source/);
   });
 
+  it("enforces the deep-analysis candidate cap", () => {
+    expect(normalizeInputConfig({
+      deep_analysis: { max_candidates_per_run: 25 },
+    }).deep_analysis.max_candidates_per_run).toBe(25);
+    expect(() => normalizeInputConfig({
+      deep_analysis: { max_candidates_per_run: 26 },
+    })).toThrow(/deep_analysis\.max_candidates_per_run/);
+  });
+
   it("rejects invalid processing strategy and auto batch cap", () => {
     expect(() => normalizeInputConfig({ processing_strategy: "magic" })).toThrow(/processing_strategy/);
     expect(() => normalizeInputConfig({ max_batches_per_event: 0 })).toThrow(/max_batches_per_event/);

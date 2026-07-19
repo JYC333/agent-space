@@ -503,7 +503,6 @@ export function buildRunFinalizationRules(
   }
 
   const contract = recordValue(input.run.contract_snapshot_json);
-  const usage = recordValue(input.run.usage_json);
   const cost = numberValue(input.estimated_cost_usd);
   const maxCost = numberValue(contract.max_cost);
   if (cost !== null && maxCost !== null && maxCost > 0 && cost >= maxCost * 0.8) {
@@ -519,7 +518,7 @@ export function buildRunFinalizationRules(
     }));
   }
 
-  const durationSeconds = runDurationSeconds(input.run, usage);
+  const durationSeconds = runDurationSeconds(input.run);
   const maxDuration = numberValue(contract.max_duration_seconds);
   if (durationSeconds !== null && maxDuration !== null && maxDuration > 0 && durationSeconds >= maxDuration * 0.8) {
     rules.push(thresholdRule({
@@ -634,9 +633,7 @@ function thresholdRule(input: {
   };
 }
 
-function runDurationSeconds(run: RunRecord, usage: Record<string, unknown>): number | null {
-  const usageDurationMs = numberValue(usage.duration_ms);
-  if (usageDurationMs !== null && usageDurationMs >= 0) return usageDurationMs / 1000;
+function runDurationSeconds(run: RunRecord): number | null {
   if (!run.started_at || !run.ended_at) return null;
   const started = Date.parse(run.started_at);
   const ended = Date.parse(run.ended_at);

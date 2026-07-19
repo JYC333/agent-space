@@ -37,14 +37,14 @@ beforeEach(async () => {
   await pool.query("TRUNCATE tasks, space_memberships, users, spaces CASCADE");
   const now = new Date().toISOString();
   await pool.query(
-    `INSERT INTO spaces (id, name, type, created_by_user_id, created_at, updated_at)
-     VALUES ($1, 'Task Contract Space', 'personal', $2, $3, $3)`,
-    [SPACE, OWNER, now],
-  );
-  await pool.query(
     `INSERT INTO users (id, display_name, status, created_at, updated_at)
      VALUES ($1, 'Task Contract Owner', 'active', $2, $2)`,
     [OWNER, now],
+  );
+  await pool.query(
+    `INSERT INTO spaces (id, name, type, created_by_user_id, created_at, updated_at)
+     VALUES ($1, 'Task Contract Space', 'personal', $2, $3, $3)`,
+    [SPACE, OWNER, now],
   );
   await pool.query(
     `INSERT INTO space_memberships (id, space_id, user_id, role, status, created_at, updated_at)

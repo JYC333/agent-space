@@ -1,0 +1,72 @@
+import { describe, expect, it } from 'vitest'
+import { researchSetupDraftFromWorkflow, serializeResearchSetupDraft } from './researchSetupDraft'
+
+describe('research setup draft', () => {
+  it('reads selected literature monitors from workflow state', () => {
+    const draft = researchSetupDraftFromWorkflow({
+      id: 'workflow-1',
+      project_id: 'project-1',
+      workflow_type: 'literature_review',
+      current_stage: 'initial_intake_setup',
+      status: 'not_started',
+      mode: 'autonomous',
+      state_json: {
+        research_question: 'How should agents remember?',
+        source_channel_ids: ['channel-1', 'channel-2'],
+        initial_intake: { history_mode: 'all_available', max_items: 10000 },
+        execution: {},
+      },
+      started_by_user_id: null,
+      started_run_id: null,
+      created_at: '2026-07-15T00:00:00.000Z',
+      updated_at: '2026-07-15T00:00:00.000Z',
+    }, 'Fallback question')
+
+    expect(draft.research_question).toBe('How should agents remember?')
+    expect(draft.source_channel_ids).toEqual(['channel-1', 'channel-2'])
+    expect(draft.history_mode).toBe('all_available')
+  })
+
+  it('serializes an initial intake without duplicating monitor query configuration', () => {
+    const input = serializeResearchSetupDraft({
+      research_question: 'How should agents remember?',
+      source_channel_ids: ['channel-1', 'channel-1'],
+      history_mode: 'bounded_range',
+      from: '2020-01-01',
+      to: '2026-01-01',
+      max_items: '1000',
+      monitoring_field: 'submittedDate',
+      report_depth: 'quick',
+      question_refine_skipped: true,
+      execution: {
+        model_provider_id: 'provider-1',
+        model_name: '',
+      },
+    })
+
+    expect(input).toMatchObject({
+      research_question: 'How should agents remember?',
+      source_channel_ids: ['channel-1'],
+      history_mode: 'bounded_range',
+      from: '2020-01-01',
+      to: '2026-01-01',
+    })
+    expect(input).not.toHaveProperty('search_directions')
+  })
+
+  it('round-trips the refinement assessment through workflow state', () => {
+    const refinement = {
+      assessment: { answerable: true, finer: { feasible: 4, interesting: 4, novel: 3, ethical: 5, relevant: 4 }, issues: [] },
+      suggested_questions: ['q'], sub_questions: [], scope: { in: [], out: [] }, clarifying_questions: [],
+    }
+    const draft = researchSetupDraftFromWorkflow({
+      id: 'workflow-1', project_id: 'project-1', workflow_type: 'literature_review',
+      current_stage: 'initial_intake_setup', status: 'not_started', mode: 'autonomous',
+      state_json: { research_question: 'Q', question_refinement: refinement, execution: {} },
+      started_by_user_id: null, started_run_id: null,
+      created_at: '2026-07-15T00:00:00.000Z', updated_at: '2026-07-15T00:00:00.000Z',
+    } as never, 'Q')
+    expect(draft.question_refinement).toEqual(refinement)
+    expect(serializeResearchSetupDraft(draft)).toMatchObject({ question_refinement: refinement })
+  })
+})

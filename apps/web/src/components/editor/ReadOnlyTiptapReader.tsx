@@ -58,6 +58,8 @@ interface ReadOnlyTiptapReaderProps {
   onTextSelected?: (selection: TextSelection | null) => void
   onBlockFocused?: (index: number | null) => void
   onAnnotationClick?: (annotationId: string) => void
+  /** Makes "[ref-N]" citation tokens clickable; called with the token (e.g. "ref-3"). */
+  onReferenceClick?: (referenceId: string) => void
   annotations?: ReaderAnnotation[]
   selectedAnnotationId?: string | null
   /** Top-level block with the keyboard focus indicator. */
@@ -236,6 +238,7 @@ export const ReadOnlyTiptapReader = forwardRef<ReadOnlyTiptapReaderHandle, ReadO
     onTextSelected,
     onBlockFocused,
     onAnnotationClick,
+    onReferenceClick,
     annotations,
     selectedAnnotationId,
     focusedBlockIndex,
@@ -246,6 +249,8 @@ export const ReadOnlyTiptapReader = forwardRef<ReadOnlyTiptapReaderHandle, ReadO
     onBlockFocusedRef.current = onBlockFocused
     const onAnnotationClickRef = useRef(onAnnotationClick)
     onAnnotationClickRef.current = onAnnotationClick
+    const onReferenceClickRef = useRef(onReferenceClick)
+    onReferenceClickRef.current = onReferenceClick
     const suppressClickSelectionUpdateRef = useRef(false)
 
     const annotationsRef = useRef<ReaderAnnotation[]>([])
@@ -291,6 +296,26 @@ export const ReadOnlyTiptapReader = forwardRef<ReadOnlyTiptapReaderHandle, ReadO
                           'data-annotation-id': ann.id,
                         }),
                       )
+                    }
+                    if (onReferenceClickRef.current) {
+                      state.doc.descendants((node, pos) => {
+                        if (!node.isText || !node.text) return
+                        const groupRe = /\[[^\]]*\bref-\d+[a-z]*\b[^\]]*\]/g
+                        let group: RegExpExecArray | null
+                        while ((group = groupRe.exec(node.text))) {
+                          const tokenRe = /\bref-\d+[a-z]*\b/g
+                          let token: RegExpExecArray | null
+                          while ((token = tokenRe.exec(group[0]))) {
+                            const from = pos + group.index + token.index
+                            decos.push(
+                              Decoration.inline(from, from + token[0].length, {
+                                class: 'reader-ref-citation',
+                                'data-ref-id': token[0],
+                              }),
+                            )
+                          }
+                        }
+                      })
                     }
                     const focused = focusedBlockRef.current
                     if (focused != null && focused >= 0 && focused < state.doc.childCount) {
@@ -374,6 +399,11 @@ export const ReadOnlyTiptapReader = forwardRef<ReadOnlyTiptapReaderHandle, ReadO
 
     function handleClick(e: React.MouseEvent<HTMLDivElement>) {
       const target = e.target as HTMLElement
+      const citation = target.closest<HTMLElement>('[data-ref-id]')
+      if (citation?.dataset.refId && onReferenceClickRef.current) {
+        onReferenceClickRef.current(citation.dataset.refId)
+        return
+      }
       const annotated = target.closest<HTMLElement>('[data-annotation-id]')
       if (annotated) {
         const id = annotated.dataset.annotationId

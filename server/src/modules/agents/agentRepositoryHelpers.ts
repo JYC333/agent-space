@@ -2,9 +2,24 @@ import {
   BUILTIN_RUNTIME_ADAPTER_SPECS,
   type RuntimeAdapterType,
 } from "../runtimeAdapters/specs";
+import { recommendedMaxOutputTokens } from "../providers/modelOutputLimits";
 import type { AgentOut, AgentRecord } from "./repository";
 
 export const DEFAULT_MODEL_CONFIG = { model: "claude-sonnet-4-6", max_tokens: 8192 };
+
+/**
+ * Default model config for a version that names a model but supplies no
+ * explicit config. Known models get their recommended output budget instead
+ * of the generic default — stamping 8192 onto a reasoning model starves its
+ * structured outputs (thinking and completion share the same budget).
+ */
+export function defaultModelConfigFor(modelName: string | null | undefined): { model: string; max_tokens: number } {
+  if (!modelName) return { ...DEFAULT_MODEL_CONFIG };
+  return {
+    model: modelName,
+    max_tokens: recommendedMaxOutputTokens(modelName) ?? DEFAULT_MODEL_CONFIG.max_tokens,
+  };
+}
 export const DEFAULT_MEMORY_POLICY = {
   readable_scopes: ["system", "space", "user", "workspace", "capability", "agent"],
   writable_scopes: ["agent"],

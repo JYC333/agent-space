@@ -306,19 +306,16 @@ describe("capabilities routes", () => {
       url: "/api/v1/projects/project-1/workflow-profiles/profile-1/run-draft",
       payload: {
         runtime_profile_id: "runtime-profile-1",
-        config_json: { output_artifact_types: ["research_source_table.v1"] },
+        config_json: { output_artifact_types: ["research_report.archive.v1"] },
       },
     });
 
     expect(narrowedOutputs.statusCode).toBe(200);
     expect(narrowedOutputs.json().output_artifact_types).toEqual([
-      "research_source_table.v1",
+      "research_report.archive.v1",
     ]);
     expect(narrowedOutputs.json().run_create_body.prompt).toContain(
-      "- research_source_table.v1",
-    );
-    expect(narrowedOutputs.json().run_create_body.prompt).not.toContain(
-      "- research_brief.v1",
+      "- research_report.archive.v1",
     );
   });
 
@@ -337,7 +334,7 @@ describe("capabilities routes", () => {
         config_json: {
           source_mode: "project_sources",
           query: "LLM eval harnesses",
-          output_artifact_types: ["research_brief.v1"],
+          output_artifact_types: ["research_report.archive.v1"],
         },
       },
     });

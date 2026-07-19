@@ -18,11 +18,16 @@ adapter → materialize outputs → collect code patch → verify → terminal w
                                               RunEvaluation / TaskEvaluation
 ```
 
-Each result is keyed by `(run_id, verifier_type, verifier_version)` and stores
-status (`passed`, `failed`, `skipped`, or `error`), a bounded summary, safe
-evidence references, verifier details, and timestamps. Re-running the same
-engine version upserts the result for idempotent execution. Raw stdout/stderr,
-full patches, credentials, and file contents are not persisted.
+Each result is keyed by `(run_id, attempt_number, verifier_type,
+verifier_version)` and stores status (`passed`, `failed`, `skipped`, or
+`error`), a bounded summary, safe evidence references, verifier details, and
+timestamps. Re-running the same engine version within one attempt upserts that
+attempt's result for idempotent execution; a Supervisor retry writes new rows
+for the next attempt and never overwrites a prior attempt's results. Reads
+(evaluation and the run detail API) return the current attempt's rows, so a
+retry that failed before verification yields an incomplete set instead of
+borrowing the previous attempt's evidence. Raw stdout/stderr, full patches,
+credentials, and file contents are not persisted.
 
 ## Deterministic verifier catalog
 

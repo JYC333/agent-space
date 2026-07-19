@@ -4,6 +4,7 @@ import { SpaceLink as Link } from '../../core/spaceNav'
 import { FileCheck, FolderKanban, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { proposalsApi } from '../../api/client'
+import { notifyReviewAttentionChanged } from '../../core/reviewAttention'
 import { useSpace } from '../../contexts/SpaceContext'
 import { cn, errMsg } from '../../lib/utils'
 import type { Proposal, ProposalAcceptOut } from '../../types/api'
@@ -126,6 +127,7 @@ export default function ProposalsPage() {
         await proposalsApi.reject(id)
         toast.success('Proposal rejected.')
       }
+      notifyReviewAttentionChanged()
       await load()
     } catch (e) {
       const message = errMsg(e)
@@ -149,6 +151,7 @@ export default function ProposalsPage() {
     try {
       await proposalsApi.approveEgressGrantingUserProposal(p.id, { grant_id: p.grant_id ?? undefined })
       toast.success('Egress review approval recorded')
+      notifyReviewAttentionChanged()
       await load()
     } catch (e) {
       toast.error(errMsg(e))

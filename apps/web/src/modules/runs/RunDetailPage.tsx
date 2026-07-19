@@ -541,6 +541,21 @@ export default function RunDetailPage() {
         {r.status === 'failed' && r.error_message && (
           <Card className="p-3 border-destructive/30 bg-destructive/5 text-sm text-destructive">
             {r.error_message}
+            {r.error_json && (
+              <details className="mt-2 text-xs text-foreground">
+                <summary className="cursor-pointer select-none hover:underline">Show diagnostic error data</summary>
+                <JsonBlock value={r.error_json} />
+              </details>
+            )}
+          </Card>
+        )}
+        {r.status === 'degraded' && r.error_json && (
+          <Card className="p-3 border-warning/30 bg-warning/5 text-sm">
+            <p className="font-medium">Run diagnostics</p>
+            <details className="mt-2 text-xs text-muted-foreground">
+              <summary className="cursor-pointer select-none hover:text-foreground">Show diagnostic error data</summary>
+              <JsonBlock value={r.error_json} />
+            </details>
           </Card>
         )}
         {r.task_id && (

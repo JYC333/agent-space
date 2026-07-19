@@ -176,6 +176,9 @@ export class RunWorkflowService {
         id: `step_${index + 1}`,
         title: sanitizedText(source.prompt) ?? `Workflow step ${index + 1}`,
         depends_on: index === 0 ? [] : [`step_${index}`],
+        input_bindings: index === 0
+          ? []
+          : [{ name: "previous_step_output", from_node: `step_${index}`, source: "output_text", required: true }],
         capability_id: capabilityId,
         prompt_asset_key: capabilityId ? null : "workflow.generated.step",
         agent_id: null,

@@ -80,7 +80,7 @@ export class RunMaterializationService {
       new PgUsageRepository(db),
       {
         reconcileForRun: async (spaceId: string, runId: string, userId: string) => {
-          await new PlanExecutionService(db).reconcileForRun(spaceId, runId);
+          await new PlanExecutionService(db).reconcileForRun(spaceId, runId, userId);
           await new WorkflowExecutionService().reconcileForRun(db, spaceId, runId, userId);
         },
       },
@@ -259,7 +259,7 @@ export class RunMaterializationService {
   }): Promise<RunMaterializationItemSummary> {
     try {
       const spec = recordValue(input.artifact);
-      const content = stringValue(spec.content);
+      const content = artifactContentValue(spec.content);
       if (content === null) throw new Error("output artifact content is required");
       const artifactId = await this.insertArtifact({
         run: input.run,
@@ -317,7 +317,6 @@ export class RunMaterializationService {
       await assertProjectInSpace(this.db, input.run.space_id, projectId);
       if (projectId) payload.project_id = projectId;
       else delete payload.project_id;
-
       const policy = await this.policyEnforcer({
         action: "proposal.create",
         actor_type: "run",
@@ -341,7 +340,6 @@ export class RunMaterializationService {
       if (policy.status !== "allow") {
         throw new Error(policy.message ?? policy.error_code ?? "proposal.create denied by policy");
       }
-
       const proposalId = await this.insertProposal({
         run: input.run,
         proposalType,
@@ -530,6 +528,23 @@ function recordValue(value: unknown): Record<string, unknown> {
 
 function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
+}
+
+/**
+ * Structured-output artifacts historically used a JSON-encoded string for
+ * `content`. Newer contracts can provide the JSON object directly; persist it
+ * as text so the artifact API and existing renderers remain compatible.
+ */
+function artifactContentValue(value: unknown): string | null {
+  const text = stringValue(value);
+  if (text !== null) return text;
+  if (value === null || typeof value !== "object") return null;
+  try {
+    const serialized = JSON.stringify(value);
+    return typeof serialized === "string" && serialized.length > 0 ? serialized : null;
+  } catch {
+    return null;
+  }
 }
 
 function booleanValue(value: unknown): boolean | null {

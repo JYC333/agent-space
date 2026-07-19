@@ -40,6 +40,7 @@ function verification(status: VerificationResultRecord["status"]): VerificationR
     id: "verification-1",
     space_id: "space-1",
     run_id: "run-1",
+    attempt_number: 1,
     verifier_type: "output_schema",
     verifier_version: "verification_engine.v1",
     status,

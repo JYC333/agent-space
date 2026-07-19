@@ -1,8 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { FastifyInstance } from "fastify";
 import { loadConfig } from "../src/config";
-import { buildServer } from "../src/server";
-import { __setAuthIdentityForTests } from "../src/modules/auth";
 import {
   buildArxivQueryUrl,
   parseArxivFeed,
@@ -12,11 +9,6 @@ import {
   __setArxivThrottleForTests,
   acquireArxivRequestSlot,
 } from "../src/modules/sources/connectors/arxivThrottle";
-import {
-  normalizeArxivQueryConfig,
-  listSourcePresets,
-  SourcePresetService,
-} from "../src/modules/sources/sourcePresets/service";
 import { SourceExtractionWorker } from "../src/modules/sources/extractionWorker";
 import type { Queryable } from "../src/modules/routeUtils/common";
 import { HttpError } from "../src/modules/routeUtils/common";
@@ -30,12 +22,9 @@ function config() {
   });
 }
 
-const identity = { spaceId: "space-1", userId: "user-1" };
-
 afterEach(() => {
   vi.restoreAllMocks();
   __setArxivThrottleForTests(null);
-  __setAuthIdentityForTests(null);
 });
 
 // ── arXiv id / URL parsing ────────────────────────────────────────────────────
@@ -158,229 +147,8 @@ describe("arXiv polite throttle", () => {
   });
 });
 
-// ── Source preset service ─────────────────────────────────────────────────────
-
-describe("normalizeArxivQueryConfig", () => {
-  it("applies defaults and trims the search query", () => {
-    expect(normalizeArxivQueryConfig({ search_query: "  all:agents  " }, { maxResults: 50 })).toEqual({
-      mode: "search",
-      categories: [],
-      search_query: "all:agents",
-      max_results: 50,
-      sort_by: "lastUpdatedDate",
-      sort_order: "descending",
-    });
-  });
-
-  it("builds a recent-by-category query without requiring keywords", () => {
-    expect(normalizeArxivQueryConfig({ mode: "recent_by_category", categories: ["cs.ai"] }, { maxResults: 50 })).toEqual({
-      mode: "recent_by_category",
-      categories: ["cs.AI"],
-      search_query: "cat:cs.AI",
-      max_results: 50,
-      sort_by: "submittedDate",
-      sort_order: "descending",
-    });
-  });
-
-  it("builds a recent query from multiple categories", () => {
-    expect(normalizeArxivQueryConfig(
-      { mode: "recent_by_category", categories: ["cs.ai", "cs.LG", "physics.SOC-PH", "q-fin.tr", "cs.AI"] },
-      { maxResults: 50 },
-    )).toEqual({
-      mode: "recent_by_category",
-      categories: ["cs.AI", "cs.LG", "physics.soc-ph", "q-fin.TR"],
-      search_query: "cat:cs.AI OR cat:cs.LG OR cat:physics.soc-ph OR cat:q-fin.TR",
-      max_results: 50,
-      sort_by: "submittedDate",
-      sort_order: "descending",
-    });
-  });
-
-  it.each([
-    [{}, /search_query is required/],
-    [{ search_query: "   " }, /search_query is required/],
-    [{ mode: "latest" }, /mode/],
-    [{ mode: "recent_by_category" }, /at least one category is required/],
-    [{ mode: "recent_by_category", categories: ["not a category"] }, /category/],
-    [{ mode: "recent_by_category", categories: ["cs.ZZ"] }, /official arXiv taxonomy/],
-    [{ mode: "recent_by_category", categories: "cs.AI" }, /categories must be an array/],
-    [{ mode: "recent_by_category", categories: ["cs.AI", 12] }, /categories must be an array/],
-    [{ search_query: "x".repeat(501) }, /at most 500/],
-    [{ search_query: "all:agents", max_results: 0 }, /max_results/],
-    [{ search_query: "all:agents", max_results: 101 }, /max_results/],
-    [{ search_query: "all:agents", max_results: 2.5 }, /max_results/],
-    [{ search_query: "all:agents", sort_by: "newest" }, /sort_by/],
-    [{ search_query: "all:agents", sort_order: "up" }, /sort_order/],
-  ])("rejects invalid input %j", (body, message) => {
-    expect(() => normalizeArxivQueryConfig(body as Record<string, unknown>, { maxResults: 50 }))
-      .toThrow(message);
-  });
-});
-
-describe("SourcePresetService", () => {
-  it("lists the arXiv preset in the academic category", () => {
-    expect(listSourcePresets().items).toEqual([
-      expect.objectContaining({ id: "arxiv", category: "academic", connector_key: "arxiv" }),
-    ]);
-  });
-
-  it("previewArxiv fetches the arXiv API and returns parsed papers without writing rows", async () => {
-    __setArxivThrottleForTests({ sleep: async () => {} });
-    const db = new PresetDb();
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(arxivFeed(), { status: 200 }));
-
-    const result = await new SourcePresetService(db, config()).previewArxiv(identity, {
-      search_query: 'cat:cs.AI AND all:"agent"',
-    });
-
-    expect(result.preset_id).toBe("arxiv");
-    expect(result.query_url).toContain("export.arxiv.org/api/query");
-    expect(result.items).toHaveLength(1);
-    expect(result.items[0]?.arxiv_id).toBe("2402.08954");
-    expect(result.warnings).toEqual([]);
-    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(result.query_url);
-    expect(new URL(result.query_url).searchParams.get("max_results")).toBe("50");
-    expect(db.calls.some((call) => call.sql.trimStart().toUpperCase().startsWith("INSERT"))).toBe(false);
-    expect(db.calls.some((call) => call.sql.trimStart().toUpperCase().startsWith("UPDATE"))).toBe(false);
-  });
-
-  it("createArxiv creates a built-in arxiv source connection with defaults", async () => {
-    const db = new PresetDb();
-
-    const result = await new SourcePresetService(db, config()).createArxiv(identity, {
-      search_query: 'cat:cs.AI AND all:"agent"',
-      schedule_rule: { frequency: "weekly", weekday: 1, hour: 9, minute: 0 },
-    });
-
-    const connectorLookup = db.calls.find((call) => call.sql.includes("FROM source_connectors"));
-    expect(connectorLookup?.params[0]).toBe("arxiv");
-    expect(result.name).toBe('arXiv: cat:cs.AI AND all:"agent"');
-    expect(result.endpoint_url).toContain("https://export.arxiv.org/api/query?");
-    expect(result.fetch_frequency).toBe("weekly");
-    expect(result.capture_policy).toBe("extract_text");
-    expect(result.consent_json).toMatchObject({
-      allow_external_model_egress: true,
-    });
-    expect(result.policy_json).toMatchObject({
-      source_egress_class: "external_provider_allowed",
-    });
-    expect(result.config_json).toEqual({
-      preset_id: "arxiv",
-      mode: "search",
-      categories: [],
-      search_query: 'cat:cs.AI AND all:"agent"',
-      max_results: 50,
-      sort_by: "lastUpdatedDate",
-      sort_order: "descending",
-    });
-    expect(result.schedule_rule_json).toEqual({ frequency: "weekly", weekday: 1, hour: 9, minute: 0 });
-  });
-
-  it("createArxiv creates a recent category source without a search keyword", async () => {
-    const db = new PresetDb();
-
-    const result = await new SourcePresetService(db, config()).createArxiv(identity, {
-      mode: "recent_by_category",
-      categories: ["cs.LG"],
-      schedule_rule: { frequency: "weekly", weekday: 1, hour: 9, minute: 0 },
-    });
-
-    expect(result.name).toBe("arXiv new: cs.LG");
-    expect(new URL(String(result.endpoint_url)).searchParams.get("search_query")).toBe("cat:cs.LG");
-    expect(new URL(String(result.endpoint_url)).searchParams.get("sortBy")).toBe("submittedDate");
-    expect(result.config_json).toEqual({
-      preset_id: "arxiv",
-      mode: "recent_by_category",
-      categories: ["cs.LG"],
-      search_query: "cat:cs.LG",
-      max_results: 50,
-      sort_by: "submittedDate",
-      sort_order: "descending",
-    });
-  });
-
-  it("createArxiv creates one recent source for multiple categories", async () => {
-    const db = new PresetDb();
-
-    const result = await new SourcePresetService(db, config()).createArxiv(identity, {
-      mode: "recent_by_category",
-      categories: ["cs.LG", "stat.ml"],
-      schedule_rule: { frequency: "weekly", weekday: 1, hour: 9, minute: 0 },
-    });
-
-    expect(result.name).toBe("arXiv new: cs.LG + stat.ML");
-    expect(new URL(String(result.endpoint_url)).searchParams.get("search_query")).toBe("cat:cs.LG OR cat:stat.ML");
-    expect(result.config_json).toEqual({
-      preset_id: "arxiv",
-      mode: "recent_by_category",
-      categories: ["cs.LG", "stat.ML"],
-      search_query: "cat:cs.LG OR cat:stat.ML",
-      max_results: 50,
-      sort_by: "submittedDate",
-      sort_order: "descending",
-    });
-  });
-
-  it("createArxiv rejects unsupported fetch frequencies", async () => {
-    const db = new PresetDb();
-    await expect(
-      new SourcePresetService(db, config()).createArxiv(identity, {
-        search_query: "all:agents",
-        fetch_frequency: "yearly",
-      }),
-    ).rejects.toThrow(/fetch_frequency/);
-  });
-});
-
-// ── Preset routes ─────────────────────────────────────────────────────────────
-
-describe("source preset routes", () => {
-  let app: FastifyInstance | undefined;
-
-  afterEach(async () => {
-    await app?.close();
-    app = undefined;
-  });
-
-  it("returns 401 to unauthenticated preset requests", async () => {
-    app = buildServer(config(), { logger: false });
-    for (const request of [
-      { method: "GET" as const, url: "/api/v1/sources/source-presets" },
-      { method: "POST" as const, url: "/api/v1/sources/source-presets/arxiv/preview" },
-      { method: "POST" as const, url: "/api/v1/sources/source-presets/arxiv" },
-    ]) {
-      const res = await app.inject(request);
-      expect(res.statusCode).toBe(401);
-    }
-  });
-
-  it("lists the arXiv preset for authenticated users", async () => {
-    __setAuthIdentityForTests({ spaceId: "space-1", userId: "user-1" });
-    app = buildServer(config(), { logger: false });
-
-    const res = await app.inject({ method: "GET", url: "/api/v1/sources/source-presets" });
-
-    expect(res.statusCode).toBe(200);
-    expect(res.json().items).toEqual([
-      expect.objectContaining({
-        id: "arxiv",
-        category: "academic",
-        display_name: "arXiv",
-        connector_key: "arxiv",
-        fields: expect.arrayContaining(["mode", "search_query", "categories", "max_results", "sort_by", "sort_order"]),
-        category_options: expect.arrayContaining([
-          expect.objectContaining({
-            group: "Computer Science",
-            options: expect.arrayContaining([
-              expect.objectContaining({ value: "cs.AI", label: "Artificial Intelligence" }),
-            ]),
-          }),
-        ]),
-      }),
-    ]);
-  });
-});
+// Source creation is owned by SourceChannelService; this fixture covers the
+// arXiv protocol and extraction boundaries only.
 
 // ── HTML-first extraction ─────────────────────────────────────────────────────
 
@@ -511,103 +279,6 @@ describe("SourceExtractionWorker arXiv HTML-first extraction", () => {
   });
 });
 
-// ── Fakes and fixtures ────────────────────────────────────────────────────────
-
-/** Fake Queryable for preset service tests (settings + createConnection path). */
-class PresetDb implements Queryable {
-  readonly calls: Array<{ sql: string; params: readonly unknown[] }> = [];
-  private lastConnection: Record<string, unknown> | undefined;
-
-  async query<Row = Record<string, unknown>>(sql: string, params: readonly unknown[] = []) {
-    this.calls.push({ sql, params });
-    if (sql.includes("AS effective_access_level")) {
-      return this.lastConnection
-        ? { rows: [{ effective_access_level: "full" }] as Row[], rowCount: 1 }
-        : { rows: [] as Row[], rowCount: 0 };
-    }
-    if (sql.includes("FROM settings")) {
-      return { rows: [] as Row[], rowCount: 0 };
-    }
-    if (sql.includes("JOIN source_connectors")) {
-      // getConnectionRow's re-fetch after createConnection inserts + subscribes.
-      return { rows: [{ ...this.lastConnection, subscription_status: "subscribed" }] as Row[], rowCount: 1 };
-    }
-    if (sql.includes("FROM source_connectors")) {
-      return { rows: [{ id: "connector-arxiv" }] as Row[], rowCount: 1 };
-    }
-    if (sql.includes("INSERT INTO source_connections")) {
-      this.lastConnection = connectionRow(params);
-      return { rows: [this.lastConnection] as Row[], rowCount: 1 };
-    }
-    if (sql.includes("INSERT INTO source_connection_user_subscriptions")) {
-      return { rows: [{ status: params[4] }] as Row[], rowCount: 1 };
-    }
-    if (sql.includes("SELECT type FROM spaces")) {
-      // Personal space: createDefaultPendingSubscriptions short-circuits
-      // before fanning pending subscriptions out to other space members.
-      return { rows: [{ type: "personal" }] as Row[], rowCount: 1 };
-    }
-    if (sql.includes("FROM scheduler_tasks")) {
-      return { rows: [] as Row[], rowCount: 0 };
-    }
-    if (sql.includes("INSERT INTO scheduler_tasks")) {
-      return { rows: [schedulerTaskRow(params)] as Row[], rowCount: 1 };
-    }
-    throw new Error(`unexpected SQL: ${sql}`);
-  }
-}
-
-function connectionRow(params: readonly unknown[]): Record<string, unknown> {
-  return {
-    id: params[0],
-    space_id: params[1],
-    connector_id: params[2],
-    owner_user_id: params[3],
-    credential_id: params[4],
-    visibility: params[5],
-    access_level: "full",
-    name: params[6],
-    endpoint_url: params[7],
-    status: params[8],
-    fetch_frequency: params[9],
-    capture_policy: params[10],
-    trust_level: params[11],
-    topic_hints_json: JSON.parse(String(params[12])),
-    consent_json: JSON.parse(String(params[13])),
-    policy_json: JSON.parse(String(params[14])),
-    config_json: JSON.parse(String(params[15])),
-    schedule_rule_json: JSON.parse(String(params[16])),
-    handler_kind: "built_in",
-    active_handler_version_id: null,
-    active_recipe_version_id: null,
-    repair_status: "ok",
-    last_handler_run_id: null,
-    last_checked_at: null,
-    next_check_at: null,
-    created_at: "2026-07-03T00:00:00.000Z",
-    updated_at: "2026-07-03T00:00:00.000Z",
-    deleted_at: null,
-  };
-}
-
-function schedulerTaskRow(params: readonly unknown[]): Record<string, unknown> {
-  return {
-    id: params[0],
-    task_type: params[1],
-    task_key: params[2],
-    scope_type: params[3],
-    scope_id: params[4],
-    space_id: params[5] ?? null,
-    user_id: params[6] ?? null,
-    status: params[7],
-    next_run_at: params[8] ?? null,
-    last_run_at: params[9] ?? null,
-    state_json: {},
-    created_at: "2026-07-03T00:00:00.000Z",
-    updated_at: "2026-07-03T00:00:00.000Z",
-  };
-}
-
 /** Fake Queryable for extraction jobs against a configurable item source_uri. */
 class ExtractionDb implements Queryable {
   readonly calls: Array<{ sql: string; params: readonly unknown[] }> = [];
@@ -638,6 +309,25 @@ class ExtractionDb implements Queryable {
         }] as Row[],
         rowCount: 1,
       };
+    }
+    if (sql.includes("FROM source_items si") && sql.includes("COALESCE(")) {
+      return {
+        rows: [{
+          id: "item-1",
+          space_id: "space-1",
+          connection_id: "conn-1",
+          source_uri: this.sourceUri,
+          title: "arXiv paper",
+          content_state: "content_queued",
+        }] as Row[],
+        rowCount: 1,
+      };
+    }
+    if (sql.includes("FROM project_source_bindings psb")) {
+      return { rows: [] as Row[], rowCount: 0 };
+    }
+    if (sql.includes("UPDATE project_corpus_items")) {
+      return { rows: [] as Row[], rowCount: 0 };
     }
     if (sql.includes("FROM source_connections")) {
       return {

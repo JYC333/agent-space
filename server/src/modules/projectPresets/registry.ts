@@ -3,10 +3,6 @@ import type { ProjectPresetDescriptor } from "./types";
 // Built-in Project presets. Static/code-owned, matching the capabilities
 // module's packRegistry.ts pattern: presets are not DB-seeded.
 //
-// `source_preset_ids: ["arxiv"]` reflects the source presets that actually
-// exist in core today (server/src/modules/sources/sourcePresets/). Crossref
-// and OpenAlex do not have core connectors yet, so they are deliberately left
-// out here rather than referencing a preset id that doesn't resolve to anything.
 const ACADEMIC_RESEARCH_PRESET: ProjectPresetDescriptor = {
   key: "academic_research",
   name: "Academic Research",
@@ -15,7 +11,6 @@ const ACADEMIC_RESEARCH_PRESET: ProjectPresetDescriptor = {
   // Corpus foundation. Paper/citation data uses the academic object extension
   // but remains reachable through the normal Project surface.
   sections: ["source_monitoring", "corpus", "project_graph"],
-  source_preset_ids: ["arxiv"],
   extraction_profile_key: "academic_paper_v1",
   graph_lens_id: "academic_citation_v1",
 };

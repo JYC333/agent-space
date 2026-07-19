@@ -178,30 +178,6 @@ export async function executeVendorCliAdapter(
     );
   }
 
-  let rendered: RenderedCliCommand;
-  try {
-    rendered = await renderCliCommand(spec, {
-      executable: tool.executable_path,
-      prompt: input.prompt ?? input.run.prompt ?? "",
-      mode: input.mode ?? input.run.mode,
-      model: spec.adapter_type === "codex_cli" ? null : input.model ?? null,
-      permission_bypass: Boolean(input.adapter_config?.permission_bypass),
-      runtime_policy_json: recordValue(input.adapter_config?.runtime_policy_json),
-      risk_level: input.risk_level ?? "low",
-      workspace_id: input.run.workspace_id,
-      sandbox_cwd: input.sandbox_cwd ?? null,
-    });
-  } catch (error) {
-    await cleanupCredential(input, credentialBroker);
-    return cliFailure(
-      input,
-      error instanceof CliRenderError ? error.code : "cli_command_render_failed",
-      error instanceof Error ? error.message : "CLI command render failed.",
-      startedAt,
-      spec,
-    );
-  }
-
   const timeout = timeoutSeconds(input.adapter_config, spec, input.run);
   let runtimeBinding: RuntimeProviderBinding;
   try {
@@ -210,6 +186,7 @@ export async function executeVendorCliAdapter(
       {
         run: input.run,
         model: input.model ?? null,
+        sandbox_cwd: input.sandbox_cwd ?? null,
       },
       spec,
       {
@@ -226,6 +203,33 @@ export async function executeVendorCliAdapter(
       input,
       error instanceof RuntimeProviderBindingError ? error.code : "cli_runtime_provider_config_failed",
       error instanceof Error ? error.message : "CLI runtime provider configuration failed.",
+      startedAt,
+      spec,
+    );
+  }
+
+  let rendered: RenderedCliCommand;
+  try {
+    rendered = await renderCliCommand(spec, {
+      executable: tool.executable_path,
+      prompt: input.prompt ?? input.run.prompt ?? "",
+      mode: input.mode ?? input.run.mode,
+      // Codex receives the selected model through its run-scoped provider
+      // config; it intentionally has no CLI model override flag.
+      model: spec.adapter_type === "codex_cli" ? null : runtimeBinding.model ?? input.model ?? null,
+      permission_bypass: Boolean(input.adapter_config?.permission_bypass),
+      runtime_policy_json: recordValue(input.adapter_config?.runtime_policy_json),
+      risk_level: input.risk_level ?? "low",
+      workspace_id: input.run.workspace_id,
+      sandbox_cwd: input.sandbox_cwd ?? null,
+    });
+  } catch (error) {
+    await cleanupRuntimeProviderBinding(runtimeBinding);
+    await cleanupCredential(input, credentialBroker);
+    return cliFailure(
+      input,
+      error instanceof CliRenderError ? error.code : "cli_command_render_failed",
+      error instanceof Error ? error.message : "CLI command render failed.",
       startedAt,
       spec,
     );
@@ -259,7 +263,7 @@ export async function executeVendorCliAdapter(
         : undefined,
     });
   } finally {
-    cleanupRuntimeProviderBinding(runtimeBinding);
+    await cleanupRuntimeProviderBinding(runtimeBinding);
     await cleanupCredential(input, credentialBroker);
   }
 
@@ -352,6 +356,21 @@ async function grantCredential(
   broker: CliCredentialBrokerPort,
   executorMode: ExecutorMode,
 ): Promise<CredentialGrant> {
+  if (spec.adapter_type === "opencode" && input.run.model_provider_id) {
+    return {
+      granted: true,
+      profile_id: null,
+      runtime: spec.credentials.credential_runtime_name,
+      executor_mode: executorMode,
+      readonly: true,
+      temp_home: null,
+      host_source_path: null,
+      target_path: null,
+      env: {},
+      network_profile_id: null,
+      fallback_reason: "model_provider_binding",
+    };
+  }
   try {
     return await broker.grantForRun(
       input.run.id,

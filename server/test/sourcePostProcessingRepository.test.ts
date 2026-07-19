@@ -11,6 +11,7 @@ import {
   normalizeInputConfig,
   normalizeTriggerConfig,
 } from "../src/modules/sources/postProcessing/repository";
+import { withQueryableTransaction } from "../src/modules/routeUtils/common";
 import type { SourceConnectionRow } from "../src/modules/sources/sourceRepositoryRows";
 
 const MIGRATIONS_DIR = join(process.cwd(), "migrations");
@@ -51,8 +52,8 @@ beforeEach(async () => {
   await pool.query(
     `TRUNCATE activity_records, artifacts, source_post_processing_item_decisions, source_post_processing_runs, source_post_processing_rules,
        jobs, retrieval_edges, retrieval_chunks, retrieval_aliases, retrieval_objects,
-       extracted_evidence, source_items, scheduler_tasks, source_connections,
-       source_connectors, agent_runtime_profiles, agent_versions, agents,
+       extracted_evidence, source_channel_item_links, source_channel_user_subscriptions, source_channels, source_items, scheduler_tasks, source_connections,
+       source_provider_connectors, source_providers, source_connectors, agent_runtime_profiles, agent_versions, agents,
        projects, space_memberships, users, spaces CASCADE`,
   );
   const now = new Date().toISOString();
@@ -105,17 +106,34 @@ beforeEach(async () => {
     [CONNECTOR, now],
   );
   await pool.query(
+    `INSERT INTO source_providers (id, provider_key, display_name, provider_kind, category, status, capabilities_json, created_at, updated_at)
+     VALUES ($1,'generic_rss','RSS','generic','feed','active','{}'::jsonb,$2,$2)`,
+    [randomUUID(), now],
+  );
+  const provider = await pool.query<{ id: string }>(`SELECT id FROM source_providers WHERE provider_key='generic_rss'`);
+  await pool.query(
+    `INSERT INTO source_provider_connectors (id, provider_id, connector_id, status, priority, capabilities_json, created_at, updated_at)
+     VALUES ($1,$2,$3,'active',0,'{}'::jsonb,$4,$4)`,
+    [randomUUID(), provider.rows[0]!.id, CONNECTOR, now],
+  );
+  const mapping = await pool.query<{ id: string }>(`SELECT id FROM source_provider_connectors WHERE connector_id=$1`, [CONNECTOR]);
+  await pool.query(
     `INSERT INTO source_connections (
-       id, space_id, connector_id, owner_user_id, name, endpoint_url, status,
-       fetch_frequency, capture_policy, trust_level, consent_json, policy_json,
-       config_json, created_at, updated_at
-     ) VALUES ($1,$2,$3,$4,'arXiv','https://example.org/rss','active',
-       'daily','reference_only','normal','{}'::jsonb,'{}'::jsonb,'{}'::jsonb,$5,$5)`,
-    [CONNECTION, SPACE, CONNECTOR, OWNER, now],
+       id, space_id, provider_connector_id, owner_user_id, name, status,
+       capture_policy, trust_level, consent_json, policy_json, config_json, created_at, updated_at
+     ) VALUES ($1,$2,$3,$4,'arXiv','active','reference_only','normal','{}'::jsonb,'{}'::jsonb,'{}'::jsonb,$5,$5)`,
+    [CONNECTION, SPACE, mapping.rows[0]!.id, OWNER, now],
   );
   await pool.query(
-    `INSERT INTO source_connection_user_subscriptions (
-       id, space_id, source_connection_id, user_id, status,
+    `INSERT INTO source_channels (
+       id, space_id, source_connection_id, created_by_user_id, name, channel_type, endpoint_url,
+       query_json, provider_query_json, query_fingerprint, status, fetch_frequency, schedule_rule_json, created_at, updated_at
+     ) VALUES ($1,$2,$1,$3,'arXiv Channel','feed','https://example.org/rss','{}'::jsonb,'{}'::jsonb,$1,'active','daily','{"frequency":"daily","hour":0,"minute":0}'::jsonb,$4,$4)`,
+    [CONNECTION, SPACE, OWNER, now],
+  );
+  await pool.query(
+    `INSERT INTO source_channel_user_subscriptions (
+       id, space_id, source_channel_id, user_id, status,
        library_enabled, digest_enabled, created_at, updated_at
      ) VALUES ($1,$2,$3,$4,'subscribed',true,true,$5,$5)`,
     [randomUUID(), SPACE, CONNECTION, OWNER, now],
@@ -140,24 +158,18 @@ function sourceConnection(overrides: Partial<SourceConnectionRow> = {}): SourceC
   return {
     id: CONNECTION,
     space_id: SPACE,
-    connector_id: CONNECTOR,
     owner_user_id: OWNER,
     credential_id: null,
     visibility: "space_shared",
     access_level: "full",
     name: "arXiv",
-    endpoint_url: "https://example.org/rss",
     status: "active",
-    fetch_frequency: "daily",
     capture_policy: "extract_text",
     trust_level: "normal",
     topic_hints_json: [],
     consent_json: {},
     policy_json: {},
     config_json: {},
-    last_checked_at: null,
-    next_check_at: null,
-    schedule_rule_json: {},
     handler_kind: "rss",
     active_handler_version_id: null,
     active_recipe_version_id: null,
@@ -179,6 +191,12 @@ async function seedItem(title: string, createdAt: string): Promise<string> {
      ) VALUES ($1,$2,$3,'space_shared',$4,'external_url','source_item',$1,$5,$7,'Paper abstract',
        $6,$6,'excerpt_saved','summary_only',$6,$6)`,
     [id, SPACE, OWNER, CONNECTION, title, createdAt, `https://example.org/paper/${id}`],
+  );
+  await pool!.query(
+    `INSERT INTO source_channel_item_links (
+       id, space_id, source_channel_id, source_item_id, status, matched_at, created_at, updated_at
+     ) VALUES ($1,$2,$3,$4,'active',$5,$5,$5)`,
+    [randomUUID(), SPACE, CONNECTION, id, createdAt],
   );
   return id;
 }
@@ -251,11 +269,36 @@ describe("source post-processing repository queue helpers", () => {
 });
 
 describe("source post-processing repository (real Postgres)", () => {
+  it("joins a caller-owned transaction when creating a rule", async () => {
+    if (!available || !pool) return;
+    const created = await withQueryableTransaction(pool, (db) =>
+      new PgSourcePostProcessingRepository(db).createRule({
+        spaceId: SPACE,
+        sourceChannelId: CONNECTION,
+        agentId: AGENT,
+        projectId: PROJECT,
+        name: "Transactional digest",
+        triggerType: "items_materialized",
+        triggerConfig: normalizeTriggerConfig({ min_new_items: 1 }, "items_materialized"),
+        inputConfig: normalizeInputConfig({ item_limit: 10 }),
+        actions: normalizeActions({ batch_digest: true }),
+        createdByUserId: OWNER,
+      }),
+    );
+
+    expect(created).toMatchObject({
+      source_channel_id: CONNECTION,
+      project_id: PROJECT,
+      name: "Transactional digest",
+      status: "active",
+    });
+  });
+
   it("creates, lists, updates, and archives source-level rules", async () => {
     if (!available) return;
     const created = await repo().createRule({
       spaceId: SPACE,
-      sourceConnectionId: CONNECTION,
+      sourceChannelId: CONNECTION,
       agentId: AGENT,
       projectId: PROJECT,
       name: "Daily digest",
@@ -267,7 +310,7 @@ describe("source post-processing repository (real Postgres)", () => {
     });
 
     expect(created).toMatchObject({
-      source_connection_id: CONNECTION,
+      source_channel_id: CONNECTION,
       agent_id: AGENT,
       project_id: PROJECT,
       status: "active",
@@ -297,7 +340,7 @@ describe("source post-processing repository (real Postgres)", () => {
     const inputConfig = normalizeInputConfig({ item_limit: 10, include_evidence: true });
     const initial = await repo().collectInputBatch({
       spaceId: SPACE,
-      sourceConnectionId: CONNECTION,
+      sourceChannelId: CONNECTION,
       viewerUserId: OWNER,
       inputConfig,
       cursor: null,
@@ -308,7 +351,7 @@ describe("source post-processing repository (real Postgres)", () => {
 
     const next = await repo().collectInputBatch({
       spaceId: SPACE,
-      sourceConnectionId: CONNECTION,
+      sourceChannelId: CONNECTION,
       viewerUserId: OWNER,
       inputConfig,
       cursor: { id: first, created_at: "2026-07-01T00:00:00.000Z" },
@@ -322,7 +365,7 @@ describe("source post-processing repository (real Postgres)", () => {
     const itemId = await seedItem("Paper A", "2026-07-01T00:00:00.000Z");
     const rule = await repo().createRule({
       spaceId: SPACE,
-      sourceConnectionId: CONNECTION,
+      sourceChannelId: CONNECTION,
       agentId: AGENT,
       projectId: null,
       name: "Digest",
@@ -336,7 +379,7 @@ describe("source post-processing repository (real Postgres)", () => {
     const run = await repo().createRun({
       spaceId: SPACE,
       ruleId: rule.id,
-      sourceConnectionId: CONNECTION,
+      sourceChannelId: CONNECTION,
       agentId: AGENT,
       projectId: null,
       triggeredByUserId: OWNER,
@@ -371,7 +414,7 @@ describe("source post-processing repository (real Postgres)", () => {
     const ignored = await seedItem("Skipped paper", "2026-07-02T00:00:00.000Z");
     const rule = await repo().createRule({
       spaceId: SPACE,
-      sourceConnectionId: CONNECTION,
+      sourceChannelId: CONNECTION,
       agentId: AGENT,
       projectId: null,
       name: "Screening",
@@ -384,7 +427,7 @@ describe("source post-processing repository (real Postgres)", () => {
     const run = await repo().createRun({
       spaceId: SPACE,
       ruleId: rule.id,
-      sourceConnectionId: CONNECTION,
+      sourceChannelId: CONNECTION,
       agentId: AGENT,
       projectId: null,
       triggeredByUserId: OWNER,
@@ -397,7 +440,7 @@ describe("source post-processing repository (real Postgres)", () => {
 
     await repo().persistItemDecisions({
       spaceId: SPACE,
-      sourceConnectionId: CONNECTION,
+      sourceChannelId: CONNECTION,
       ruleId: rule.id,
       runId: run.id,
       projectId: null,
@@ -445,7 +488,7 @@ describe("source post-processing repository (real Postgres)", () => {
     const second = await seedItem("Paper B", "2026-07-02T00:00:00.000Z");
     const rule = await repo().createRule({
       spaceId: SPACE,
-      sourceConnectionId: CONNECTION,
+      sourceChannelId: CONNECTION,
       agentId: AGENT,
       projectId: null,
       name: "Backlog digest",
@@ -484,7 +527,7 @@ describe("source post-processing repository (real Postgres)", () => {
     const itemId = await seedItem("Relevant paper", "2026-07-01T00:00:00.000Z");
     const rule = await repo().createRule({
       spaceId: SPACE,
-      sourceConnectionId: CONNECTION,
+      sourceChannelId: CONNECTION,
       agentId: AGENT,
       projectId: PROJECT,
       name: "Screening",
@@ -499,7 +542,7 @@ describe("source post-processing repository (real Postgres)", () => {
     const run = await repo().createRun({
       spaceId: SPACE,
       ruleId: rule.id,
-      sourceConnectionId: CONNECTION,
+      sourceChannelId: CONNECTION,
       agentId: AGENT,
       projectId: PROJECT,
       triggeredByUserId: OWNER,
@@ -511,7 +554,7 @@ describe("source post-processing repository (real Postgres)", () => {
     });
     await repo().persistItemDecisions({
       spaceId: SPACE,
-      sourceConnectionId: CONNECTION,
+      sourceChannelId: CONNECTION,
       ruleId: rule.id,
       runId: run.id,
       projectId: PROJECT,
@@ -533,7 +576,7 @@ describe("source post-processing repository (real Postgres)", () => {
     });
     expect(listed.items).toHaveLength(1);
     expect(listed.items[0]).toMatchObject({
-      source_connection_id: CONNECTION,
+      source_channel_id: CONNECTION,
       project_id: PROJECT,
       source_item_id: itemId,
       relevance: "relevant",
@@ -557,7 +600,7 @@ describe("source post-processing repository (real Postgres)", () => {
     const itemB = await seedItem("Maybe paper", "2026-07-01T00:00:00.000Z");
     const rule = await repo().createRule({
       spaceId: SPACE,
-      sourceConnectionId: CONNECTION,
+      sourceChannelId: CONNECTION,
       agentId: AGENT,
       projectId: null,
       name: "Briefing digest",
@@ -571,7 +614,7 @@ describe("source post-processing repository (real Postgres)", () => {
     const run = await repo().createRun({
       spaceId: SPACE,
       ruleId: rule.id,
-      sourceConnectionId: CONNECTION,
+      sourceChannelId: CONNECTION,
       agentId: AGENT,
       projectId: null,
       triggeredByUserId: OWNER,
@@ -610,7 +653,7 @@ describe("source post-processing repository (real Postgres)", () => {
     });
     await repo().persistItemDecisions({
       spaceId: SPACE,
-      sourceConnectionId: CONNECTION,
+      sourceChannelId: CONNECTION,
       ruleId: rule.id,
       runId: run.id,
       projectId: null,
@@ -631,7 +674,7 @@ describe("source post-processing repository (real Postgres)", () => {
     expect(list.total).toBe(1);
     const summary = list.items[0]!;
     expect(summary).toMatchObject({
-      source_connection_id: CONNECTION,
+      source_channel_id: CONNECTION,
       connection_name: "arXiv",
       date: "2026-07-08",
       run_ids: [run.id],
@@ -643,7 +686,7 @@ describe("source post-processing repository (real Postgres)", () => {
 
     const detail = await repo().getBriefing({ spaceId: SPACE, userId: OWNER, connectionId: CONNECTION, date: "2026-07-08" });
     expect(detail).toMatchObject({
-      source_connection_id: CONNECTION,
+      source_channel_id: CONNECTION,
       connection_name: "arXiv",
       date: "2026-07-08",
       runs: [{ run_id: run.id, status: "succeeded" }],
@@ -661,7 +704,7 @@ describe("source post-processing repository (real Postgres)", () => {
     const itemB = await seedItem("Maybe paper", "2026-07-01T00:00:00.000Z");
     const rule = await repo().createRule({
       spaceId: SPACE,
-      sourceConnectionId: CONNECTION,
+      sourceChannelId: CONNECTION,
       agentId: AGENT,
       projectId: PROJECT,
       name: "Daily briefing",
@@ -674,7 +717,7 @@ describe("source post-processing repository (real Postgres)", () => {
     const run = await repo().createRun({
       spaceId: SPACE,
       ruleId: rule.id,
-      sourceConnectionId: CONNECTION,
+      sourceChannelId: CONNECTION,
       agentId: AGENT,
       projectId: PROJECT,
       triggeredByUserId: OWNER,
@@ -700,7 +743,7 @@ describe("source post-processing repository (real Postgres)", () => {
     });
     await repo().persistItemDecisions({
       spaceId: SPACE,
-      sourceConnectionId: CONNECTION,
+      sourceChannelId: CONNECTION,
       ruleId: rule.id,
       runId: run.id,
       projectId: PROJECT,
@@ -724,7 +767,7 @@ describe("source post-processing repository (real Postgres)", () => {
       content: string;
       payload_json: {
         briefing_date: string;
-        source_connection_id: string;
+        source_channel_id: string;
         post_processing_run_ids: string[];
         artifact_ids: string[];
         decision_counts: { relevant: number; maybe: number; not_relevant: number };
@@ -751,7 +794,7 @@ describe("source post-processing repository (real Postgres)", () => {
     expect(firstRow.content).toContain("First digest");
     expect(firstRow.payload_json).toMatchObject({
       briefing_date: "2026-07-08",
-      source_connection_id: CONNECTION,
+      source_channel_id: CONNECTION,
       post_processing_run_ids: [run.id],
       artifact_ids: [digestArtifactId],
       decision_counts: { relevant: 1, maybe: 1, not_relevant: 0 },
@@ -767,7 +810,7 @@ describe("source post-processing repository (real Postgres)", () => {
     const secondRun = await repo().createRun({
       spaceId: SPACE,
       ruleId: rule.id,
-      sourceConnectionId: CONNECTION,
+      sourceChannelId: CONNECTION,
       agentId: AGENT,
       projectId: PROJECT,
       triggeredByUserId: OWNER,
@@ -783,7 +826,7 @@ describe("source post-processing repository (real Postgres)", () => {
     );
     await repo().persistItemDecisions({
       spaceId: SPACE,
-      sourceConnectionId: CONNECTION,
+      sourceChannelId: CONNECTION,
       ruleId: rule.id,
       runId: secondRun.id,
       projectId: PROJECT,
@@ -839,7 +882,7 @@ describe("source post-processing repository (real Postgres)", () => {
     const itemId = await seedItem("Muted paper", "2026-07-01T00:00:00.000Z");
     const rule = await repo().createRule({
       spaceId: SPACE,
-      sourceConnectionId: CONNECTION,
+      sourceChannelId: CONNECTION,
       agentId: AGENT,
       projectId: null,
       name: "Muted briefing",
@@ -852,7 +895,7 @@ describe("source post-processing repository (real Postgres)", () => {
     const run = await repo().createRun({
       spaceId: SPACE,
       ruleId: rule.id,
-      sourceConnectionId: CONNECTION,
+      sourceChannelId: CONNECTION,
       agentId: AGENT,
       projectId: null,
       triggeredByUserId: OWNER,
@@ -868,7 +911,7 @@ describe("source post-processing repository (real Postgres)", () => {
     );
     await repo().persistItemDecisions({
       spaceId: SPACE,
-      sourceConnectionId: CONNECTION,
+      sourceChannelId: CONNECTION,
       ruleId: rule.id,
       runId: run.id,
       projectId: null,
@@ -895,7 +938,7 @@ describe("source post-processing repository (real Postgres)", () => {
     if (!available) return;
     const rule = await repo().createRule({
       spaceId: SPACE,
-      sourceConnectionId: CONNECTION,
+      sourceChannelId: CONNECTION,
       agentId: AGENT,
       projectId: null,
       name: "Scheduled digest",

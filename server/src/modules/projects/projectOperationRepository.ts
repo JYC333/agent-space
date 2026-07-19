@@ -24,6 +24,7 @@ const LINK_TARGET_SPECS: Record<string, TargetSpec> = {
   proposal: { table: "proposals", column: "status", done: ["accepted", "superseded"], failed: ["rejected", "expired"] },
   project_source_binding: { table: "project_source_bindings", column: "status", done: ["active", "archived"], failed: [] },
   source_backfill_plan: { table: "source_backfill_plans", column: "status", done: ["completed", "cancelled"], failed: ["failed"] },
+  research_workflow: { table: "project_research_workflows", column: "status", done: ["completed", "archived"], failed: [] },
 };
 
 const LINK_TARGET_PROJECT_SCOPE: Record<string, boolean> = {
@@ -33,6 +34,7 @@ const LINK_TARGET_PROJECT_SCOPE: Record<string, boolean> = {
   artifact: true,
   project_source_binding: true,
   source_backfill_plan: false,
+  research_workflow: true,
 };
 
 export class ProjectOperationRepository {
@@ -92,6 +94,53 @@ export class ProjectOperationRepository {
        ON CONFLICT (operation_id, target_type, target_id) DO NOTHING`,
       [randomUUID(), operationId, spaceId, targetType, targetId, role, new Date().toISOString()],
     );
+  }
+
+  /**
+   * Updates an operation owned by a higher-level orchestrator.
+   *
+   * Linked target projection is intentionally not used for these operations:
+   * a research operation has human checkpoints and several asynchronous
+   * stages, so its lifecycle is richer than the status of any one linked job.
+   * `projection_mode=managed` makes that ownership explicit while retaining
+   * the normal operation tables and read API.
+   */
+  async setManagedState(
+    spaceId: string,
+    projectId: string,
+    operationId: string,
+    input: {
+      status: "draft" | "active" | "waiting_review" | "completed" | "failed" | "cancelled";
+      progress: Record<string, unknown>;
+      stepStates?: Array<{ seq: number; status: "pending" | "active" | "blocked" | "done" | "skipped"; detail?: Record<string, unknown> }>;
+      /**
+       * Replace the managed progress document instead of shallow-merging it,
+       * so keys the orchestrator removed from its state actually disappear.
+       * The `links` projection (maintained by refreshProjection) is preserved.
+       */
+      replaceProgress?: boolean;
+    },
+  ): Promise<void> {
+    await this.assertOperationInProject(operationId, spaceId, projectId);
+    const progressSql = input.replaceProgress
+      ? `(CASE WHEN progress_json ? 'links' THEN jsonb_build_object('links', progress_json->'links') ELSE '{}'::jsonb END) || $5::jsonb`
+      : `COALESCE(progress_json,'{}'::jsonb) || $5::jsonb`;
+    await this.db.query(
+      `UPDATE project_operations
+          SET status=$4,
+              progress_json=${progressSql},
+              updated_at=$6
+        WHERE id=$1 AND space_id=$2 AND project_id=$3`,
+      [operationId, spaceId, projectId, input.status, JSON.stringify({ projection_mode: "managed", ...input.progress }), new Date().toISOString()],
+    );
+    for (const step of input.stepStates ?? []) {
+      await this.db.query(
+        `UPDATE project_operation_steps
+            SET status=$4, detail_json=COALESCE(detail_json,'{}'::jsonb) || $5::jsonb
+          WHERE operation_id=$1 AND space_id=$2 AND seq=$3`,
+        [operationId, spaceId, step.seq, step.status, JSON.stringify(step.detail ?? {})],
+      );
+    }
   }
 
   private async createLocked(identity: SpaceUserIdentity, projectId: string, body: Record<string, unknown>) {
@@ -156,8 +205,22 @@ export class ProjectOperationRepository {
       else pending++;
     }
 
-    const current = await this.db.query<{ status: string }>(`SELECT status FROM project_operations WHERE id=$1 AND space_id=$2`, [operationId, spaceId]);
+    const current = await this.db.query<{ status: string; progress_json: unknown }>(`SELECT status, progress_json FROM project_operations WHERE id=$1 AND space_id=$2`, [operationId, spaceId]);
     if (current.rows[0]?.status === "cancelled") return;
+
+    // Research and other workflow-owned operations still expose link counts,
+    // but their status is advanced by the owning orchestrator and checkpoint
+    // decisions rather than inferred from a heterogeneous link set.
+    const managed = objectValue(current.rows[0]?.progress_json).projection_mode === "managed";
+    if (managed) {
+      await this.db.query(
+        `UPDATE project_operations
+            SET progress_json=COALESCE(progress_json,'{}'::jsonb) || $3::jsonb
+          WHERE id=$1 AND space_id=$2`,
+        [operationId, spaceId, JSON.stringify({ links: { total: links.rows.length, completed: done, failed, pending } })],
+      );
+      return;
+    }
 
     const status = failed ? "failed" : links.rows.length && pending === 0 ? "completed" : links.rows.length ? "active" : "draft";
     await this.db.query(

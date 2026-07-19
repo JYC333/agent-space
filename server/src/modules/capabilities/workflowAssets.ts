@@ -61,6 +61,9 @@ export async function workflowDefinitionFromTemplate(template: WorkflowTemplate)
       id: nodeId,
       title: capabilityId,
       depends_on: previousNodeId ? [previousNodeId] : [],
+      input_bindings: previousNodeId
+        ? [{ name: "previous_step_output", from_node: previousNodeId, source: "output_text" as const, required: true }]
+        : [],
       capability_id: capabilityId,
       prompt_asset_key: `workflow.${template.id}.run`,
       agent_id: null,

@@ -15,7 +15,7 @@ import {
 } from "../../routeUtils/common";
 import { loadProtocol } from "../../providers/protocolRuntime";
 import { insertProposalRow } from "../../proposals/reviewPackets";
-import { SourceConnectionService } from "../sourceConnectionService";
+import { SourceChannelService } from "../channels/sourceChannelService";
 import { PgCustomSourceHandlerRepository } from "../customSources/customSourceHandlerRepository";
 import { CustomSourceCredentialService } from "../customSources/customSourceCredentialService";
 import {
@@ -27,7 +27,6 @@ import {
 import { evaluateCustomSourceActivation } from "../customSources/customSourceCreateFlowService";
 import { fetchAllowedOriginResponse, truncateToByteLimit } from "../customSources/customSourceEndpointFetch";
 import { cleanupSandbox } from "../customSources/customSourceRunner";
-import { upsertSourceConnectionScanTask } from "../sourceConnectionScheduler";
 import { analyzeSourceRecipe } from "./primitiveRegistry";
 import { buildRecipeForSourceType, detectPlannedSourceType, type PlannedSourceType } from "./recipePlanner";
 import { runSourceRecipe } from "./recipeInterpreter";
@@ -156,12 +155,13 @@ export class SourceRecipeCreateService {
     }
 
     return withDbTransaction(this.pool, async (client) => {
-      const connections = new SourceConnectionService(client, this.config);
-      const connection = await connections.createConnection(
+      const channels = new SourceChannelService(client, this.config);
+      const channel = await channels.create(
         identity,
         {
-          connector_key: "custom_source",
+          provider_key: "custom_source",
           name,
+          source_name: name,
           endpoint_url: endpointUrl,
           credential_id: optionalString(body.credential_id) ?? null,
           fetch_frequency: optionalString(body.fetch_frequency) ?? "daily",
@@ -174,41 +174,35 @@ export class SourceRecipeCreateService {
             source_type: sourceType,
             list_selector: listSelector ?? null,
           },
+          status: "paused",
+          _initial_status: "paused",
+          query: {},
         },
-        { allowCustomSourceConnector: true },
       );
       const now = new Date().toISOString();
-      const updated = await client.query<{
-        id: string;
-        space_id: string;
-        owner_user_id: string;
-        status: string;
-        fetch_frequency: string;
-      }>(
+      await client.query(
         `UPDATE source_connections
             SET handler_kind = 'recipe', status = 'paused', updated_at = $3
           WHERE id = $1 AND space_id = $2
-          RETURNING id, space_id, owner_user_id, status, fetch_frequency`,
-        [connection.id, identity.spaceId, now],
+          RETURNING id`,
+        [channel.source_connection_id, identity.spaceId, now],
       );
-      const schedulerConnection = updated.rows[0];
-      if (schedulerConnection) {
-        await upsertSourceConnectionScanTask(client, {
-          connection: schedulerConnection,
-          nextRunAt: connection.next_check_at,
-          updatedAt: now,
-        });
-      }
       const version = await insertSourceRecipeVersion(client, {
         spaceId: identity.spaceId,
-        connectionId: connection.id,
+        connectionId: channel.source_connection_id,
         recipe,
         policyEnvelope: envelope,
         primitiveVersions: analysis.primitive_versions,
         createdByUserId: identity.userId,
       });
       return {
-        connection: { ...connection, handler_kind: "recipe", status: "paused" },
+        connection: {
+          ...channel,
+          id: channel.source_connection_id,
+          source_channel_id: channel.id,
+          handler_kind: "recipe",
+          status: "paused",
+        },
         recipe_version: recipeVersionOut(version),
       };
     });
@@ -382,8 +376,11 @@ export class SourceRecipeCreateService {
       active_recipe_version_id: string | null;
       handler_kind: string;
     }>(
-      `SELECT id, endpoint_url, active_recipe_version_id, handler_kind
-         FROM source_connections WHERE space_id = $1 AND id = $2 AND deleted_at IS NULL`,
+      `SELECT sc.id, ch.endpoint_url, sc.active_recipe_version_id, sc.handler_kind
+         FROM source_connections sc
+         JOIN source_channels ch ON ch.source_connection_id = sc.id AND ch.status <> 'archived'
+        WHERE sc.space_id = $1 AND sc.id = $2 AND sc.deleted_at IS NULL
+        ORDER BY ch.updated_at DESC LIMIT 1`,
       [identity.spaceId, connectionId],
     );
     const row = result.rows[0];

@@ -23,6 +23,7 @@ import {
   UnknownPolicyActionError,
   type PolicyActionDefinition,
 } from "./actionRegistry";
+import { allowsManagedCredentialUse } from "./managedExecutionPolicy";
 
 type Ctx = Record<string, unknown>;
 
@@ -351,6 +352,17 @@ const ruleUseCredential: Rule = (ctx) => {
       reason_code: "credential_cross_space",
       policy_rule_id: "credential_cross_space_deny",
       audit_code: "credential_cross_space",
+    });
+  }
+
+  if (allowsManagedCredentialUse(triggerOrigin, ctx)) {
+    return makeDecision({
+      decision: "allow",
+      message: "Managed source/research execution is covered by the user's setup authorization.",
+      risk_level: "high",
+      reason_code: "credential_managed_preauthorized",
+      policy_rule_id: "credential_managed_preauthorized_allow",
+      audit_code: "credential_managed_preauthorized",
     });
   }
 

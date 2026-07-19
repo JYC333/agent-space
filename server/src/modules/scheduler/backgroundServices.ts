@@ -5,7 +5,7 @@ import { scanDailyReportsAndEnqueue } from "../dailyReports/scheduler";
 import { scanAutomationsAndFire } from "../automations/scheduler";
 import { runScheduledBackup } from "../backups/service";
 import { SourceExtractionWorker } from "../sources/extractionWorker";
-import { enqueueDueSourceConnectionScans as enqueueDueSourceConnectionScansForPool } from "../sources/scanSchedule";
+import { enqueueDueSourceChannelScans } from "../sources/scanSchedule";
 import { enqueueDueSourcePostProcessingRules } from "../sources/postProcessing/scheduler";
 import {
   enqueueDueCustomSourceHandlerRuns,
@@ -24,6 +24,9 @@ import { startJobsWorker, type JobsWorkerHandle } from "../jobs/workerRuntime";
 import type { PluginHost } from "../plugins/host";
 import { SourceBackfillExecutionService } from "../sources/sourceBackfillExecutionService";
 import { OperationalAlertService } from "../notifications/operationalAlerts";
+import { ExecutionGraphRecoveryService } from "../execution/executionGraphRecoveryService";
+import { ProjectResearchOrchestrator } from "../projectResearch";
+import { enqueueDueResearchIntegrityChecks } from "../projectResearch/integrityMonitorService";
 
 export interface BackgroundServicesHandle {
   worker: JobsWorkerHandle | null;
@@ -44,6 +47,44 @@ export function startBackgroundServices(
     // Plugin-contributed scheduler tasks (fan out to enabled users internally).
     ...(pluginHost?.getSchedulerTasks() ?? []),
   ];
+
+  if (config.databaseUrl) {
+    tasks.push({
+      name: "execution_graph_recovery",
+      intervalSeconds: 60,
+      runOnStart: true,
+      awaitRunOnStart: false,
+      run: async () => {
+        const result = await new ExecutionGraphRecoveryService(
+          getDbPool(config.databaseUrl!),
+          OperationalAlertService.fromConfig(config),
+          log,
+        ).reconcileActive();
+        if (result.plans + result.workflows > 0 || result.failures > 0) {
+          log?.info(`[scheduler] execution graph recovery plans=${result.plans} workflows=${result.workflows} failures=${result.failures}`);
+        }
+      },
+    });
+
+    tasks.push({
+      name: "project_research_reconciler",
+      intervalSeconds: Math.max(5, Math.min(15, config.sourceExtractionSchedulerIntervalSeconds)),
+      runOnStart: true,
+      run: async () => {
+        await reconcileProjectResearch(getDbPool(config.databaseUrl!));
+      },
+    });
+
+    tasks.push({
+      name: "project_research_integrity_scheduler",
+      intervalSeconds: 3600,
+      runOnStart: false,
+      run: async () => {
+        const enqueued = await enqueueDueResearchIntegrityChecks(getDbPool(config.databaseUrl!));
+        if (enqueued > 0) log?.info(`[scheduler] project research integrity enqueued ${enqueued} job(s)`);
+      },
+    });
+  }
 
   if (config.dailyReportSchedulerEnabled && worker) {
     tasks.push({
@@ -99,7 +140,7 @@ export function startBackgroundServices(
       name: "source_extraction_scheduler",
       intervalSeconds: config.sourceExtractionSchedulerIntervalSeconds,
       run: async () => {
-        const enqueued = await enqueueDueSourceConnectionScans(config);
+        const enqueued = await enqueueDueSourceChannelScansForConfig(config);
         if (enqueued > 0) log?.info(`[scheduler] source enqueued ${enqueued} source scan job(s)`);
         const processed = await processPendingSourceJobs(config, log);
         if (processed > 0) log?.info(`[scheduler] source processed ${processed} extraction job(s)`);
@@ -169,7 +210,36 @@ export function startBackgroundServices(
 
 async function reconcileSourceBackfills(db: ReturnType<typeof getDbPool>):Promise<void>{
   const plans=await db.query<{id:string;space_id:string}>(`SELECT id,space_id FROM source_backfill_plans WHERE status IN ('approved','running') OR (status='paused' AND next_eligible_at<=now()) ORDER BY updated_at LIMIT 25`);
-  for(const plan of plans.rows){await db.query(`UPDATE source_backfill_plans SET status='approved',next_eligible_at=NULL,updated_at=now() WHERE id=$1 AND space_id=$2 AND status='paused' AND next_eligible_at<=now()`,[plan.id,plan.space_id]);await new SourceBackfillExecutionService(db).reconcile(plan.space_id,plan.id);}
+  for(const plan of plans.rows){
+    await db.query(`UPDATE source_backfill_plans SET status='approved',next_eligible_at=NULL,updated_at=now() WHERE id=$1 AND space_id=$2 AND status='paused' AND next_eligible_at<=now()`,[plan.id,plan.space_id]);
+    await new SourceBackfillExecutionService(db).reconcile(plan.space_id,plan.id);
+  }
+}
+
+export async function reconcileProjectResearch(db: ReturnType<typeof getDbPool>): Promise<void> {
+  const orchestrator = new ProjectResearchOrchestrator(db);
+  const unreconciledRuns = await db.query<{ id: string; space_id: string }>(
+    `SELECT id, space_id
+       FROM source_post_processing_runs
+      WHERE status='succeeded'
+        AND project_id IS NOT NULL
+        AND research_reconciled_at IS NULL
+        AND jsonb_typeof(input_item_ids_json)='array'
+        AND jsonb_array_length(input_item_ids_json)>0
+      ORDER BY COALESCE(completed_at, created_at) ASC, id ASC
+      LIMIT 100`,
+  );
+  for (const run of unreconciledRuns.rows) {
+    await orchestrator.reconcilePostProcessingRun(run.space_id, run.id);
+  }
+
+  const spaces = await db.query<{ space_id: string }>(
+    `SELECT DISTINCT space_id
+       FROM project_operations
+      WHERE kind='research' AND status IN ('active','waiting_review')
+      ORDER BY space_id`,
+  );
+  for (const row of spaces.rows) await orchestrator.reconcileAll(row.space_id);
 }
 
 export async function pruneMemoryAccessLogs(config: ServerConfig): Promise<number> {
@@ -185,9 +255,9 @@ export async function pruneMemoryAccessLogs(config: ServerConfig): Promise<numbe
   return result.rowCount ?? 0;
 }
 
-export async function enqueueDueSourceConnectionScans(config: ServerConfig): Promise<number> {
+export async function enqueueDueSourceChannelScansForConfig(config: ServerConfig): Promise<number> {
   if (!config.databaseUrl) return 0;
-  return enqueueDueSourceConnectionScansForPool(getDbPool(config.databaseUrl), 25);
+  return enqueueDueSourceChannelScans(getDbPool(config.databaseUrl), 25);
 }
 
 async function processPendingSourceJobs(

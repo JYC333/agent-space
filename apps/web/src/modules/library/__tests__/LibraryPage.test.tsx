@@ -4,7 +4,7 @@ import type { ReactNode } from 'react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import LibraryModule from '../LibraryModule'
 import { sourcesApi } from '../../../api/client'
-import type { ExtractionJob, SourceConnection, SourceItem } from '../../../types/api'
+import type { ExtractionJob, SourceChannel, SourceItem } from '../../../types/api'
 
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn() },
@@ -22,7 +22,7 @@ vi.mock('../../../core/spaceNav', () => ({
 
 vi.mock('../../../api/client', () => ({
   sourcesApi: {
-    connections: vi.fn(),
+    channels: vi.fn(),
     items: vi.fn(),
     briefings: vi.fn(),
     itemAction: vi.fn(),
@@ -35,27 +35,25 @@ function page<T>(items: T[], limit = 20) {
   return { items, total: items.length, limit, offset: 0 }
 }
 
-function connection(): SourceConnection {
+function channel(): SourceChannel {
   return {
-    id: 'conn-1',
+    id: 'channel-1',
     space_id: 'space-1',
-    connector_id: 'connector-1',
-    owner_user_id: 'user-1',
-    credential_id: null,
-    visibility: 'space_shared',
-    access_level: 'full',
+    source_connection_id: 'conn-1',
+    source_name: 'arXiv',
     name: 'arXiv: 3dgs',
+    channel_type: 'search',
     endpoint_url: 'https://export.arxiv.org/api/query',
+    query: { search_query: 'all:3dgs' },
+    provider_query: { search_query: 'all:3dgs' },
+    query_fingerprint: 'fingerprint-1',
     status: 'active',
     fetch_frequency: 'daily',
+    schedule_rule: null,
+    provider: { key: 'arxiv', display_name: 'arXiv' },
+    connection_status: 'active',
     capture_policy: 'extract_text',
-    trust_level: 'normal',
-    topic_hints_json: null,
-    consent_json: {},
-    policy_json: {},
-    config_json: {},
-    last_checked_at: null,
-    next_check_at: null,
+    scan_state: { status: 'active', cursor: {}, watermark: {}, next_run_at: null, last_run_at: null },
     created_at: '2026-07-01T00:00:00.000Z',
     updated_at: '2026-07-01T00:00:00.000Z',
   }
@@ -136,7 +134,7 @@ function renderLibrary(path = '/library/items') {
 describe('LibraryPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.mocked(sourcesApi.connections).mockResolvedValue(page([connection()], 100))
+    vi.mocked(sourcesApi.channels).mockResolvedValue([channel()])
     vi.mocked(sourcesApi.items).mockResolvedValue(page([sourceItem()], 30))
     vi.mocked(sourcesApi.briefings).mockResolvedValue({ items: [], total: 0, limit: 10, offset: 0 })
   })
@@ -145,6 +143,7 @@ describe('LibraryPage', () => {
     renderLibrary('/library')
 
     expect(await screen.findByText('Gaussian Splatting Paper')).toBeInTheDocument()
+    expect(sourcesApi.channels).toHaveBeenCalledTimes(1)
     expect(sourcesApi.items).toHaveBeenCalledWith(expect.objectContaining({ limit: 30, offset: 0 }))
     expect(sourcesApi.briefings).not.toHaveBeenCalled()
   })
@@ -190,7 +189,7 @@ describe('LibraryPage', () => {
     vi.mocked(sourcesApi.briefings).mockResolvedValue({
       items: [
         {
-          source_connection_id: 'conn-1',
+          source_channel_id: 'channel-1',
           connection_name: 'arXiv: 3dgs',
           project_id: null,
           date: '2026-07-07',
@@ -214,7 +213,7 @@ describe('LibraryPage', () => {
     expect(screen.getByText('1 relevant')).toBeInTheDocument()
     expect(screen.getByText('2 maybe')).toBeInTheDocument()
     expect(screen.getByText('2 not relevant')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: /arXiv: 3dgs/ })).toHaveAttribute('href', '/library/digests/conn-1/2026-07-07')
+    expect(screen.getByRole('link', { name: /arXiv: 3dgs/ })).toHaveAttribute('href', '/library/digests/channel-1/2026-07-07')
     expect(sourcesApi.items).not.toHaveBeenCalled()
   })
 

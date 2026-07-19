@@ -277,6 +277,44 @@ describe("engine + registry default", () => {
     });
     expect(d.decision).toBe("require_approval");
   });
+  it("runtime.use_credential allows a user-configured source post-processing job", () => {
+    const d = engineCheck(registry, {
+      action: "runtime.use_credential",
+      space_id: "s1",
+      resource_space_id: "s1",
+      trigger_origin: "job",
+      managed_execution: "source_post_processing",
+      credential_pre_authorized: true,
+      failure_policy: "fail_fast",
+    });
+    expect(d.decision).toBe("allow");
+    expect(d.policy_rule_id).toBe("credential_managed_preauthorized_allow");
+  });
+  it("runtime.use_credential allows the post-screening project research run", () => {
+    const d = engineCheck(registry, {
+      action: "runtime.use_credential",
+      space_id: "s1",
+      resource_space_id: "s1",
+      trigger_origin: "system",
+      managed_execution: "project_research",
+      credential_pre_authorized: true,
+      failure_policy: "fail_fast",
+    });
+    expect(d.decision).toBe("allow");
+    expect(d.policy_rule_id).toBe("credential_managed_preauthorized_allow");
+  });
+  it("managed pre-authorization does not bypass an Automation-origin run", () => {
+    const d = engineCheck(registry, {
+      action: "runtime.use_credential",
+      space_id: "s1",
+      resource_space_id: "s1",
+      trigger_origin: "automation",
+      managed_execution: "source_post_processing",
+      credential_pre_authorized: true,
+      failure_policy: "fail_fast",
+    });
+    expect(d.decision).toBe("require_approval");
+  });
   it("runtime.use_credential cross-space denies via space_boundary (runs before the credential rule)", () => {
     // rule_space_boundary precedes rule_use_credential, so a cross-space
     // credential request denies as space_boundary, not credential_cross_space.

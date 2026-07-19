@@ -9,64 +9,7 @@ import type {
   ExtractionJobRow,
   ProjectSourceBindingRow,
   SourceItemRow,
-  SourceConnectionRow,
-  SourceConnectorRow,
 } from "./sourceRepositoryRows";
-import { normalizeSourceConnectionReadGovernance } from "./sourceConsent";
-
-export function connectorOut(row: SourceConnectorRow) {
-  return {
-    id: row.id,
-    connector_key: row.connector_key,
-    display_name: row.display_name,
-    connector_type: row.connector_type,
-    ingestion_mode: row.ingestion_mode,
-    status: row.status,
-    capabilities_json: row.capabilities_json ?? {},
-    config_schema_json: row.config_schema_json ?? null,
-    created_at: dateIso(row.created_at),
-    updated_at: dateIso(row.updated_at),
-  };
-}
-
-export function connectionOut(row: SourceConnectionRow) {
-  const governance = normalizeSourceConnectionReadGovernance(row);
-  return {
-    id: row.id,
-    space_id: row.space_id,
-    connector_id: row.connector_id,
-    connector_key:row.connector_key??null,
-    owner_user_id: row.owner_user_id,
-    credential_id: row.credential_id,
-    visibility: row.visibility,
-    name: row.name,
-    endpoint_url: row.endpoint_url,
-    status: row.status,
-    fetch_frequency: row.fetch_frequency,
-    capture_policy: row.capture_policy,
-    trust_level: row.trust_level,
-    topic_hints_json: row.topic_hints_json ?? null,
-    consent_json: governance.consent,
-    policy_json: governance.policy,
-    config_json: row.config_json ?? {},
-    last_checked_at: dateIso(row.last_checked_at),
-    next_check_at: dateIso(row.next_check_at),
-    schedule_rule_json: row.schedule_rule_json ?? null,
-    handler_kind: row.handler_kind,
-    active_handler_version_id: row.active_handler_version_id,
-    active_recipe_version_id: row.active_recipe_version_id,
-    repair_status: row.repair_status,
-    last_handler_run_id: row.last_handler_run_id,
-    subscription_status: row.subscription_status ?? null,
-    library_enabled: row.library_enabled ?? null,
-    digest_enabled: row.digest_enabled ?? null,
-    recommended_by_user_id: row.recommended_by_user_id ?? null,
-    recommendation_message: row.recommendation_message ?? null,
-    last_notified_at: dateIso(row.last_notified_at),
-    created_at: dateIso(row.created_at),
-    updated_at: dateIso(row.updated_at),
-  };
-}
 
 export function itemOut(row: SourceItemRow) {
   return {
@@ -186,7 +129,7 @@ export function projectSourceBindingOut(row: ProjectSourceBindingRow) {
     id: row.id,
     space_id: row.space_id,
     project_id: row.project_id,
-    source_connection_id: row.source_connection_id,
+    source_channel_id: row.source_channel_id,
     binding_key: row.binding_key,
     status: row.status,
     priority: row.priority,
@@ -206,6 +149,7 @@ export type ProjectSourceItemOutRow = SourceItemRow & {
   project_link_space_id: string;
   project_link_project_id: string;
   project_link_project_source_binding_id: string;
+  project_link_source_channel_id: string | null;
   project_link_source_connection_id: string | null;
   project_link_source_item_id: string;
   project_link_status: string;
@@ -221,6 +165,7 @@ export function projectSourceItemOut(row: ProjectSourceItemOutRow) {
     space_id: row.project_link_space_id,
     project_id: row.project_link_project_id,
     project_source_binding_id: row.project_link_project_source_binding_id,
+    source_channel_id: row.project_link_source_channel_id,
     source_connection_id: row.project_link_source_connection_id,
     source_item_id: row.project_link_source_item_id,
     status: row.project_link_status,

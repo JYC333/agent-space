@@ -162,11 +162,11 @@ export class DailyCaptureReportService {
       `INSERT INTO runs (
          id, space_id, agent_id, agent_version_id, run_type, trigger_origin, source,
          mode, status, instructed_by_user_id, prompt, started_at, created_at, updated_at,
-         owner_user_id, visibility, access_level, required_sandbox_level, usage_accuracy
+         owner_user_id, visibility, access_level, required_sandbox_level
        ) VALUES (
          $1, $2, $3, $4, 'reflection', $5, 'managed',
          'live', 'running', $6, $7, $8, $8, $8,
-         $6, 'space_shared', 'full', 'none', 'estimated'
+         $6, 'space_shared', 'full', 'none'
        )`,
       [
         runId,

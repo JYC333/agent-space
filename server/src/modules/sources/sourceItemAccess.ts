@@ -12,9 +12,10 @@ export function sourceItemConnectionGateClause(itemAlias: string, userParam: str
     ${itemAlias}.connection_id IS NULL
     OR EXISTS (
       SELECT 1
-        FROM source_connection_user_subscriptions scus_read
+        FROM source_channel_user_subscriptions scus_read
+        JOIN source_channels sch_read ON sch_read.id = scus_read.source_channel_id
        WHERE scus_read.space_id = ${itemAlias}.space_id
-         AND scus_read.source_connection_id = ${itemAlias}.connection_id
+         AND sch_read.source_connection_id = ${itemAlias}.connection_id
          AND scus_read.user_id = ${userParam}
          AND scus_read.status = 'subscribed'
          ${libraryOnly ? "AND scus_read.library_enabled = true" : ""}

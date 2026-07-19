@@ -19,8 +19,8 @@ describe("runtime adapter catalog", () => {
     ]);
 
     for (const spec of specs.filter((item) => item.runtime_kind === "local_cli")) {
-      expect(spec.model.model_provider_mode).toBe("none");
-      expect(spec.credentials.credential_mode).toBe("cli_profile");
+      if (spec.adapter_type !== "opencode") expect(spec.model.model_provider_mode).toBe("none");
+      expect(["cli_profile", "cli_profile_or_model_provider"]).toContain(spec.credentials.credential_mode);
       expect(spec.credentials.credential_runtime_name).toBe(spec.adapter_type);
     }
   });
@@ -51,7 +51,7 @@ describe("runtime adapter catalog", () => {
       expect(spec.observability_level).toBeDefined();
       expect(spec.side_effect_level).toBeDefined();
       expect(spec.data_exposure).toBeDefined();
-      expect(spec.trust_level).toBeDefined();
+      expect(spec.baseline_trust_level).toBeDefined();
     }
     expect(getRuntimeAdapterSpec("claude_code")).toMatchObject({
       executor_family: "local_cli",

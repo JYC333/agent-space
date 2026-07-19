@@ -27,7 +27,7 @@ import { enforceRetrievalToolCallPolicy, type RetrievalToolPolicyAction } from "
 import { loadActionRegistry } from "../policy/actionRegistry";
 import { enforce } from "../policy/service";
 import { readSpaceRetrievalSettings } from "../retrieval/settings";
-import { SourceConnectionService } from "../sources/sourceConnectionService";
+import { SourceChannelService } from "../sources/channels/sourceChannelService";
 import { ProjectSourceProposalService } from "../projects/projectSourceProposalService";
 import { SourceBackfillPlanningService } from "../sources/sourceBackfillService";
 import { PgPlanRepository } from "../plans/repository";
@@ -37,7 +37,7 @@ export interface AgentToolGatewayDeps extends ManagedApiRetrievalToolDeps {
   actionEventSink?: (eventType: "action_invoked" | "action_completed", call: CanonicalToolCall, metadata?: Record<string, unknown>) => Promise<void>;
 }
 
-const GENERIC_PROPOSAL_ACTION_IDS = ["source.connection.propose_create", "project.source.propose_bind", "source.backfill.propose_start", "task.plan.propose"];
+const GENERIC_PROPOSAL_ACTION_IDS = ["source.channel.propose_activation", "project.source.propose_bind", "source.backfill.propose_start", "task.plan.propose"];
 
 /** Managed-run adapter over the registry-driven action surface. */
 export class AgentToolGateway {
@@ -259,8 +259,8 @@ export class AgentToolGateway {
     const db = getDbPool(this.config.databaseUrl!);
     const identity = { spaceId: run.space_id, userId: run.instructed_by_user_id! };
 
-    executors.set("source.connection.propose_create" as SystemActionId, async (input, context) => {
-      const result = await new SourceConnectionService(db, this.config).proposeCreate(identity, input as Record<string, unknown>, {
+    executors.set("source.channel.propose_activation" as SystemActionId, async (input, context) => {
+      const result = await new SourceChannelService(db, this.config).proposeActivation(identity, input as Record<string, unknown>, {
         agentId: run.agent_id,
         runId: run.id,
         idempotencyKey: context.idempotency_key,
@@ -268,7 +268,7 @@ export class AgentToolGateway {
       });
       return {
         modelResult: { ok: true, proposal: result.proposal },
-        summary: { tool_name: "source.connection.propose_create", ok: true, proposal_id: (result.proposal as { id?: string }).id, auto_applied: result.auto_applied },
+        summary: { tool_name: "source.channel.propose_activation", ok: true, proposal_id: (result.proposal as { id?: string }).id, auto_applied: result.auto_applied },
       };
     });
 
@@ -287,9 +287,9 @@ export class AgentToolGateway {
 
     executors.set("source.backfill.propose_start" as SystemActionId, async (input, context) => {
       const body = input as Record<string, unknown>;
-      const connectionId = String(body.source_connection_id ?? "");
+      const channelId = String(body.source_channel_id ?? "");
       const planId = String(body.source_backfill_plan_id ?? "");
-      const result = await new SourceBackfillPlanningService(db, this.config).proposeStart(identity, connectionId, planId, {
+      const result = await new SourceBackfillPlanningService(db, this.config).proposeStart(identity, channelId, planId, {
         agentId: run.agent_id,
         runId: run.id,
         idempotencyKey: context.idempotency_key,
@@ -471,10 +471,10 @@ export function proposalActionJsonSchema(actionId: string): Record<string, unkno
             budget_sources: { type: "array" },
             planner_metadata: { type: ["object", "null"] },
           }
-        : actionId === "source.connection.propose_create"
-      ? { connector_key: { type: "string" }, name: { type: "string" }, endpoint_url: { type: "string" } }
+        : actionId === "source.channel.propose_activation"
+      ? { provider_key: { type: "string" }, name: { type: "string" }, query: { type: "object" }, endpoint_url: { type: "string" } }
       : actionId === "project.source.propose_bind"
-        ? { source_connection_id: { type: "string" } }
-        : { source_connection_id: { type: "string" }, source_backfill_plan_id: { type: "string" } };
+        ? { source_channel_id: { type: "string" } }
+        : { source_channel_id: { type: "string" }, source_backfill_plan_id: { type: "string" } };
   return { type: "object", properties, required: Object.keys(properties), additionalProperties: true };
 }

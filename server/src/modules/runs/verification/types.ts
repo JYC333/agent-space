@@ -26,6 +26,7 @@ export interface VerificationResultRecord {
   id: string;
   space_id: string;
   run_id: string;
+  attempt_number: number;
   verifier_type: string;
   verifier_version: string;
   status: VerificationStatus;

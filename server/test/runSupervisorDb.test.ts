@@ -3,6 +3,7 @@ import { Pool } from "pg";
 import { randomUUID } from "node:crypto";
 import { getTestPostgres, type TestPostgresDatabase } from "./support/sharedPostgres";
 import { PgRunRepository } from "../src/modules/runs/repository";
+import { PgVerificationRepository } from "../src/modules/runs/verification/repository";
 import { PgRunSupervisor } from "../src/modules/runs/supervisor";
 import { PostRunFinalizationService } from "../src/modules/runs/finalizationService";
 import { PgRouteDecisionRepository } from "../src/modules/routing/repository";
@@ -75,7 +76,7 @@ beforeEach(async () => {
        runtime_policy_json, created_at
      ) VALUES ($1, $2, $3, 'v1', 'You are a test agent.',
                '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb,
-               '[]'::jsonb, '{}'::jsonb, '{}'::jsonb, $4)`,
+               '["research.brief_synthesize"]'::jsonb, '{}'::jsonb, '{}'::jsonb, $4)`,
     [VERSION, AGENT, SPACE, now],
   );
   await pool.query(
@@ -227,6 +228,43 @@ describe("run attempts and supervisor against shared PostgreSQL", () => {
     expect(attempt?.cancel_confirmed_at).toBeTruthy();
   });
 
+  it("leaves managed fail-fast runs failed for their owning operation", async (ctx) => {
+    if (!available || !pool) return ctx.skip();
+    const runId = await seedRun({
+      trigger_origin: "job",
+      policy_context_json: {
+        managed_execution: "source_post_processing",
+        credential_pre_authorized: true,
+        failure_policy: "fail_fast",
+      },
+    });
+    const repository = new PgRunRepository(pool);
+    const finalizer = new PostRunFinalizationService(
+      repository,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      new PgRunSupervisor(pool),
+    );
+
+    await repository.markRunRunning({ run_id: runId, space_id: SPACE, started_at: new Date().toISOString() });
+    await repository.markRunTerminal({
+      run_id: runId,
+      space_id: SPACE,
+      status: "failed",
+      error_json: { error_code: "cli_adapter_nonzero_exit", error_text: "provider rejected the request" },
+      completed_at: new Date().toISOString(),
+    });
+    await finalizer.finalize(runId, SPACE);
+
+    expect((await repository.getRun(SPACE, runId))?.status).toBe("failed");
+    expect((await pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM run_supervisor_decisions WHERE space_id = $1 AND run_id = $2`,
+      [SPACE, runId],
+    )).rows[0]?.count).toBe("0");
+  });
+
   it("reroutes a retry through the persisted C2 fallback chain", async (ctx) => {
     if (!available || !pool) return ctx.skip();
     const runId = await seedRun({ max_attempts: 2 });
@@ -271,6 +309,15 @@ describe("run attempts and supervisor against shared PostgreSQL", () => {
          FROM run_supervisor_decisions WHERE space_id = $1 AND run_id = $2`,
       [SPACE, runId],
     )).rows[0]).toEqual({ decision: "retry_fallback_route", next_attempt_number: 2 });
+  });
+
+  it("loads routing capabilities from the agent's current version when profiles do not duplicate them", async (ctx) => {
+    if (!available || !pool) return ctx.skip();
+    const routing = new PgRouteDecisionRepository(pool);
+    const candidates = await routing.listCandidates(SPACE, AGENT, USER);
+    expect(candidates).toHaveLength(2);
+    expect(candidates[0]?.capabilities).toContain("research.brief_synthesize");
+    expect(candidates[1]?.capabilities).toContain("research.brief_synthesize");
   });
 
   it("keeps the current route when the persisted fallback chain has no remainder", async (ctx) => {
@@ -331,12 +378,95 @@ describe("run attempts and supervisor against shared PostgreSQL", () => {
       granted_by_user_id: USER,
       granted_at: new Date().toISOString(),
     });
+    const requeuedAttempt = await repository.getLatestRunAttempt(SPACE, runId);
+    expect(requeuedAttempt?.status).toBe("queued");
+    expect(requeuedAttempt?.error_code).toBe("policy_requires_approval_runtime_execute");
+    expect(requeuedAttempt?.error_json).toMatchObject({
+      error_code: "policy_requires_approval_runtime_execute",
+      approval_granted_by_user_id: USER,
+    });
     await repository.markRunRunning({ run_id: runId, space_id: SPACE, started_at: new Date().toISOString() });
     const attempts = await pool.query<{ count: string }>(
       `SELECT count(*)::text AS count FROM run_attempts WHERE space_id = $1 AND run_id = $2`,
       [SPACE, runId],
     );
     expect(attempts.rows[0]?.count).toBe("1");
+  });
+
+  it("keeps each attempt's verification results and stamps evidence with the producing attempt", async (ctx) => {
+    if (!available || !pool) return ctx.skip();
+    const runId = await seedRun({ max_attempts: 2 });
+    const repository = new PgRunRepository(pool);
+    const verifications = new PgVerificationRepository(pool);
+    const check = (status: "passed" | "failed") => [{
+      verifier_type: "output_schema",
+      verifier_version: "verification_engine.v1",
+      status: status as "passed" | "failed",
+      summary: `schema ${status}`,
+      evidence_refs_json: {},
+      details_json: {},
+      started_at: new Date().toISOString(),
+      completed_at: new Date().toISOString(),
+    }];
+
+    await repository.markRunRunning({ run_id: runId, space_id: SPACE, started_at: new Date().toISOString() });
+    const backfilled = await repository.getLatestRunAttempt(SPACE, runId);
+    expect(backfilled?.attempt_number).toBe(1);
+    expect(backfilled?.error_json).toMatchObject({ error_code: "attempt_backfilled_on_dispatch" });
+    await verifications.upsertResults(SPACE, runId, check("failed"));
+    await repository.appendRunEvent({
+      run_id: runId,
+      space_id: SPACE,
+      event_type: "validation_completed",
+      status: "failed",
+    });
+    await repository.markRunTerminal({
+      run_id: runId,
+      space_id: SPACE,
+      status: "failed",
+      error_json: { error_code: "cli_stall_timeout" },
+      completed_at: new Date().toISOString(),
+    });
+
+    await repository.requeueRunForRetry({
+      run_id: runId,
+      space_id: SPACE,
+      updated_at: new Date().toISOString(),
+      reason_code: "cli_stall_timeout",
+      attempt_number: 2,
+    });
+    await repository.markRunRunning({ run_id: runId, space_id: SPACE, started_at: new Date().toISOString() });
+    await verifications.upsertResults(SPACE, runId, check("passed"));
+
+    const rows = await pool.query<{ attempt_number: number; status: string }>(
+      `SELECT attempt_number, status FROM verification_results
+        WHERE space_id = $1 AND run_id = $2 ORDER BY attempt_number`,
+      [SPACE, runId],
+    );
+    expect(rows.rows).toEqual([
+      { attempt_number: 1, status: "failed" },
+      { attempt_number: 2, status: "passed" },
+    ]);
+    const current = await repository.listVerificationResults(SPACE, runId);
+    expect(current.map((row) => [row.attempt_number, row.status])).toEqual([[2, "passed"]]);
+
+    const events = await pool.query<{ attempt_number: number | null; event_type: string }>(
+      `SELECT attempt_number, event_type FROM run_events
+        WHERE space_id = $1 AND run_id = $2 ORDER BY event_index`,
+      [SPACE, runId],
+    );
+    expect(events.rows).toEqual([{ attempt_number: 1, event_type: "validation_completed" }]);
+    await repository.appendRunEvent({
+      run_id: runId,
+      space_id: SPACE,
+      event_type: "validation_completed",
+      status: "succeeded",
+    });
+    expect((await pool.query<{ attempt_number: number | null }>(
+      `SELECT attempt_number FROM run_events
+        WHERE space_id = $1 AND run_id = $2 ORDER BY event_index DESC LIMIT 1`,
+      [SPACE, runId],
+    )).rows[0]?.attempt_number).toBe(2);
   });
 
   it("allows a human to abandon a supervisor-held run and finalize it", async (ctx) => {
@@ -365,7 +495,6 @@ describe("run attempts and supervisor against shared PostgreSQL", () => {
       output_json: {},
       error_json: { error_code: "run_abandoned", abandoned_by_user_id: USER },
       completed_at: new Date().toISOString(),
-      usage_json: {},
     });
     expect(abandoned?.status).toBe("cancelled");
     expect((await repository.getLatestRunAttempt(SPACE, runId))?.status).toBe("cancelled");
@@ -486,17 +615,23 @@ describe("run attempts and supervisor against shared PostgreSQL", () => {
   });
 });
 
-async function seedRun(contract: { max_runs?: number; max_attempts?: number; max_cost?: number } = {}): Promise<string> {
+async function seedRun(contract: {
+  max_runs?: number;
+  max_attempts?: number;
+  max_cost?: number;
+  trigger_origin?: "manual" | "job" | "system";
+  policy_context_json?: Record<string, unknown>;
+} = {}): Promise<string> {
   const runId = randomUUID();
   const now = new Date().toISOString();
   await pool!.query(
     `INSERT INTO runs (
        id, space_id, agent_id, agent_version_id, runtime_profile_id,
-       run_type, trigger_origin, status, mode, usage_accuracy,
+       run_type, trigger_origin, status, mode,
        adapter_type, instructed_by_user_id, owner_user_id,
        required_sandbox_level, contract_snapshot_json, created_at, updated_at
-     ) VALUES ($1, $2, $3, $4, $5, 'agent', 'manual', 'queued', 'live',
-       'estimated', 'model_api', $6, $6, 'none', $7::jsonb, $8, $8)`,
+     ) VALUES ($1, $2, $3, $4, $5, 'agent', $7, 'queued', 'live',
+       'model_api', $6, $6, 'none', $8::jsonb, $9, $9)`,
     [
       runId,
       SPACE,
@@ -504,12 +639,16 @@ async function seedRun(contract: { max_runs?: number; max_attempts?: number; max
       VERSION,
       PROFILE,
       USER,
+      contract.trigger_origin ?? "manual",
       JSON.stringify({
         contract_version: "run_contract.v1",
-        source: { kind: "direct", id: null },
+        // Supervisor signals are targeted only for runs with an evolvable
+        // source.  Use a task source here so the test exercises that path.
+        source: { kind: "task", id: "supervisor-test-task" },
         max_runs: contract.max_runs ?? null,
         max_attempts: contract.max_attempts ?? null,
         max_cost: contract.max_cost ?? null,
+        policy_context_json: contract.policy_context_json ?? null,
       }),
       now,
     ],

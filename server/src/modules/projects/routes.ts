@@ -103,7 +103,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     try {
       const p = params(request);
       const q = query(request);
-      return reply.send(await sourceBindings().listBindings(identity, { projectId: requiredString(p.projectId, "project_id"), sourceConnectionId: optionalString(q.source_connection_id) }));
+      return reply.send(await sourceBindings().listBindings(identity, { projectId: requiredString(p.projectId, "project_id"), sourceChannelId: optionalString(q.source_channel_id) }));
     } catch (error) {
       return sendRouteError(reply, error);
     }

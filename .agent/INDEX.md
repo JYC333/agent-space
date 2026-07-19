@@ -79,6 +79,7 @@ reports in `.agent/reports/` are not source of truth and should be deleted after
 | [architecture/PROPOSALS.md](architecture/PROPOSALS.md) | Proposal types, lifecycle, apply flow |
 | [architecture/TASK_BOARD_MODEL.md](architecture/TASK_BOARD_MODEL.md) | Task, Board, TaskRun, TaskArtifact, TaskProposal ORM |
 | [architecture/ARTIFACTS.md](architecture/ARTIFACTS.md) | Artifact lifecycle, storage paths, export |
+| [architecture/READER.md](architecture/READER.md) | Shared document resolution, annotations, and Reader workspace ownership |
 | [architecture/OPERATIONS_AND_SAFETY.md](architecture/OPERATIONS_AND_SAFETY.md) | Backup, restore, lifecycle states, deployment boundary, stop conditions |
 
 ### Runtime / Agents / Runs

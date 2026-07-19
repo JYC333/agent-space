@@ -11,11 +11,17 @@ source of truth; active enforcement points are
 
 ## Model Choice
 
-The first pass does not add a new `context_sources` table. agent-space already
-has the source layer needed for current ingestion work:
+The source catalog is split into independent provider, connector, mapping,
+connection, and channel layers. New executable providers/connectors are shipped
+as code and seed changes; there is no runtime connector upload surface:
 
-- `source_connectors` describes connector types and capabilities.
-- `source_connections` owns per-space connector instances.
+- `source_providers` describes external source identity and query semantics.
+- `source_connectors` describes system-owned protocol/parser implementations.
+- `source_provider_connectors` is the many-to-many capability mapping.
+- `source_connections` owns per-space credentials, consent, policy, trust, and
+  transport configuration.
+- `source_channels` owns query, endpoint, fingerprint, and schedule. A single
+  connection may back multiple channels.
 - `source_items`, `source_snapshots`, and `extracted_evidence` carry imported
   objects and derived evidence.
 
@@ -23,6 +29,10 @@ has the source layer needed for current ingestion work:
 normalized into versioned JSON documents on create/update. Retrieval projections
 carry explicit source connection ids and reload current source policy snapshots
 at read/egress time.
+
+Ordinary users select a Provider and configure a Channel. Instance Admins may
+enable/disable catalog entries and change mapping priority, but cannot upload or
+define executable connectors.
 
 ## Consent JSON
 

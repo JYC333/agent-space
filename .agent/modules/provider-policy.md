@@ -59,6 +59,26 @@ Managed API runtimes resolve credentials through `server/src/modules/providers/`
 after the `runtime.use_credential` policy gate passes. CLI runtimes use the CLI
 CredentialBroker profile channel instead.
 
+For managed API chat calls, an explicitly configured
+`openai_compatible_base_url` is the preferred transport, including when the
+vendor catalogues the provider as `anthropic`. The native Anthropic Messages
+transport is used only when no OpenAI-compatible endpoint is configured. This
+keeps structured-output Research runs on the OpenAI JSON Schema contract by
+default while retaining native Anthropic support for providers that do not
+offer an OpenAI-compatible endpoint.
+
+Source post-processing and Project Research synthesis are server-managed runs;
+Project Research uses only the managed `model_api` provider path and never a CLI
+credential profile. They are not user Automations. When their rule/setup was explicitly configured by the
+user, the trusted internal run creator records that scope in the immutable run
+contract through the typed managed-execution policy. The credential policy can
+then allow the corresponding `job` or `system` run without a second approval
+prompt, and the run failure policy keeps provider/CLI failures on the owning
+Source or Research operation instead of converting them into a generic
+Supervisor review. This does not grant the same exception to
+`trigger_origin='automation'`; ordinary unattended Automations still require
+their own pre-authorization.
+
 Claude Code can optionally bind to a configured ModelProvider for
 Claude-compatible endpoints. The Provider row remains the source of truth:
 `config_json.claude_compatible_base_url` stores the Anthropic-compatible base

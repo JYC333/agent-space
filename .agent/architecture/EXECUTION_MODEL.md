@@ -4,6 +4,13 @@
 
 **Run** — the central execution object. Every formal agent execution has a durable Run. A run is created by user request, task, automation trigger, API call, or scheduled job. Run produces RunSteps, RunEvents, artifacts, and proposals. A Run also stores an immutable-at-creation `contract_snapshot_json` containing the source, project/workspace, acceptance and required-output declarations, risk, budget caps, and route hints used for that execution.
 
+`runs.run_role` separates executable Runs from orchestration aggregates. An
+`execution` Run owns physical `run_attempts` and may enter routing, adapter,
+verification, and supervision. A `coordinator` Run is the root identity and
+budget scope for one Plan or Workflow Execution; it never has an Attempt and
+cannot be dispatched or supervised. Run lists and execution statistics exclude
+coordinators by default, while graph detail surfaces expose them explicitly.
+
 Workflow-backed Runs additionally carry nullable `workflow_version_id`, which
 points to the approved evolvable workflow definition used at launch. Fixed
 Workflow Automation materializes that version into a `WorkflowExecution` and
@@ -19,11 +26,49 @@ source.
 **RunFinalization** — canonical post-run record created by `PostRunFinalizationService` after a Run reaches a terminal state. Idempotent per `(run_id, attempt_number, finalizer_version)`, so a successful retry receives a fresh evaluation and downstream projection. Records run evaluation outcome, task evaluation bridge result, and skipped reasons. Append-only.
 
 **RunAttempt** — one physical runtime execution under a logical Run. A queued
-Run claims the existing queued attempt 1 when present; legacy runs are lazily
-backfilled, and supervisor retries create the next attempt while preserving the
-logical Run id. Attempt rows retain start/end/activity timestamps, exit and
-error evidence, usage, cancellation request/confirmation, and `orphaned`
-recovery state.
+execution Run creates queued attempt 1 atomically; Supervisor retries create
+the next attempt while preserving the logical Run id. Coordinator Runs never
+create attempts. Attempt rows retain start/end/activity timestamps, exit and
+error evidence, cancellation request/confirmation, and `orphaned` recovery
+state. Usage is retained separately in `token_usage_events` and is keyed to
+the logical Run.
+
+Attempt evidence is append-per-attempt: `verification_results` rows are keyed
+by `(run_id, attempt_number, verifier_type, verifier_version)` (re-verifying
+the same attempt upserts; a retry never overwrites a prior attempt's rows),
+`run_steps`/`run_events` are stamped with the attempt that produced them, and
+evaluation classifies only the finalized attempt's stamped evidence plus
+unstamped rows. `runs.output_json/error_json/exit_code` mirror the latest
+attempt only. Usage is read from the canonical token ledger. A policy-pause
+resume reuses the same attempt and merges
+the approval grant into the attempt's `error_json` instead of clearing the
+pause evidence; a dispatch that finds no reusable attempt backfills one marked
+`attempt_backfilled_on_dispatch`.
+
+### Task / Run / Attempt lifecycle invariants
+
+1. One Attempt belongs to exactly one Run; `(space_id, run_id, attempt_number)`
+   is unique and `attempt_number > 0`.
+2. An execution Run has at least one Attempt from creation (same transaction);
+   coordinator Runs never own Attempts.
+3. `runs.status` and the max-attempt `run_attempts.status` move in the same
+   transaction (single CTE dual-write path).
+4. Retries only add Attempts; a terminal Attempt's error/exit evidence is never
+   cleared or rewritten, and usage remains append-only in the token ledger.
+5. A Run returns from a terminal status to `queued` only through a persisted
+   `RunSupervisorDecision` for that attempt or an explicit human resume.
+6. Crash recovery first terminalizes the orphaned Attempt, then the Supervisor
+   creates a new Attempt; an Attempt is never moved from `orphaned` back to
+   `running` in place.
+7. Manually executing the same Task again creates a new Run and a new
+   `task_runs` row through `max_runs` admission; terminal Runs are not reused.
+8. `contract_snapshot_json` is immutable; routing/fallback replace `selected_*`
+   state but never `requested_*` state.
+9. A terminal Attempt (succeeded/failed/degraded/cancelled/orphaned) never
+   returns to a non-terminal status; only a `waiting_for_review` policy pause
+   resumes the same Attempt, and it must retain the pause evidence.
+10. Finalization/evaluation/verification records are append-only per
+    `(run_id, attempt_number)`.
 
 **RunSupervisorDecision** — an idempotent durable policy decision for a terminal
 attempt. The MVP aggregates `token_usage_events` across the logical Run,
@@ -33,6 +78,22 @@ no eligible retry remains it moves the Run to `waiting_for_review`; explicit
 runtime-profile selections remain hard pins and therefore cannot be rerouted.
 
 **Job** — background system task (import, consolidation, backup, agent-run dispatch). Separate from Run. Job handlers create or dispatch Runs; jobs themselves are not product execution records.
+
+Project Research is a workflow-level consumer of these execution primitives.
+Its `baseline`, `historical_backfill`, and `incremental` run kinds are persisted
+as `project_operations` progress, not as a second execution table. Source
+backfill and post-processing jobs remain owned by Sources; the research
+orchestrator only advances operation stages, links materialized artifacts, and
+creates screening/idea checkpoints. A historical operation serializes workflow
+state changes while allowing Source ingestion to continue through a persisted
+pending-incremental queue.
+
+Auto Research uses only the managed `model_api` path. Setup selects a
+ModelProvider and optional model; the server provisions the system research
+Agent/profile. Research source post-processing and synthesis Runs snapshot a
+JSON Schema output contract in the Run contract, and plain-text output is a
+terminal structured-output failure. OpenCode, Claude Code, and Codex remain
+generic local CLI runtimes and are not part of the Research execution API.
 
 **AgentRunGroup** — manager-owned multi-agent room for grouped runs. A group has
 members, messages, delegations, one root run, and optional child runs. Human
@@ -60,6 +121,14 @@ never refreshed from mutable Task, Automation, or Workflow configuration. The
 snapshot is versioned as `run_contract.v1` and carries the source kind/id so a
 later evaluation can distinguish a Task, Automation, Workflow, delegation, or
 direct run.
+
+Runtime request and routing outcome are separate. The immutable
+`requested_runtime_profile_id` plus `runtime_profile_selection_source` record
+the caller's intent. The current `runtime_profile_id`, `adapter_type`,
+`model_provider_id`, runtime snapshot, and `route_decision_id` are selected
+execution state. Public DTOs expose them with `selected_*` and
+`active_route_decision_id` names. Routing and fallback retries may replace
+selected state but never requested state; an explicit request remains a hard pin.
 
 TaskRun creation copies the Task contract and project binding. Automation fire
 copies the automation's validated contract configuration. Workflow run drafts
@@ -206,6 +275,10 @@ Existing Run and Proposal rows use separate nullable `*_user_id` and `*_agent_id
   prepares the server sandbox/worktree, invokes the local CLI process, parses
   output, and materializes produced artifacts/proposals. Runtime instruction
   files are rendered by server context preparation into the sandbox only.
+  OpenCode may instead use a ModelProvider: the server writes a run-scoped
+  OpenAI-compatible provider entry to the sandbox `opencode.json` and routes
+  requests through the expiring provider proxy lease; provider API keys are
+  not ambient subprocess environment variables.
 - **Sandbox execution status:** `one_shot_docker` is the executor mode for
   critical local-CLI runs. `DockerCliCommandExecutor` mounts only the
   server-owned run sandbox, the read-only runtime-tools root, and at most one
@@ -363,8 +436,10 @@ run reaches a hard terminal state.
 **Finalized** means `PostRunFinalizationService` has performed deterministic post-run evaluation and, when applicable, task-level evaluation bridging.
 
 Before finalization, the A2 Verification Engine evaluates declared
-deterministic checks in the live run sandbox and persists run-scoped
-`verification_results`. The execution path emits `validation_started` and
+deterministic checks in the live run sandbox and persists attempt-scoped
+`verification_results` (keyed by run, attempt number, verifier type, and
+verifier version; reads return the current attempt's rows). The execution
+path emits `validation_started` and
 `validation_completed` RunEvents. The verifier is server-owned and uses
 `ValidationRecipe`/workspace profile command declarations plus Run contract
 checks; it executes argv without a shell and bounds command time. The result
@@ -548,7 +623,7 @@ recording cannot forge a passed engine evaluation.
 ### Design principles
 
 - **Append-only.** Each task evaluation bridge call creates a new row. Old rows are never overwritten or deleted.
-- **Task ↔ Run source of truth is `TaskRun`.** `Run.task_id` is a denormalized shortcut only. All task-run linkage checks use `TaskRun` rows.
+- **Task ↔ Run source of truth is `TaskRun`.** There is no `runs.task_id` column; all task-run linkage checks use `TaskRun` rows.
 - **RunEvaluation bridge.** The task evaluation bridge maps an existing `RunEvaluation` to a new `TaskEvaluation` row during finalization when `TaskRun` linkage exists — do not call it directly from API routes.
 - **Does not mutate Task.status.**
 - **Does not write MemoryEntry, Policy, Proposal, RunReflection, or any learning object.**

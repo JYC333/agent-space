@@ -17,6 +17,12 @@ const EXPECTED_ASSET_KEYS = [
   "agent_template.knowledge_curator.system",
   "agent_template.personal_assistant.system",
   "agent_template.memory_reflector.system",
+  "project_research.paper_card",
+  "project_research.monitor_compare",
+  "project_research.question_refine",
+  "project_research.synthesis",
+  "project_research.synthesis_critique",
+  "research_engine.query_plan",
   "retrieval.query_rewrite",
   "retrieval.rerank",
   "retrieval.synthesis",
@@ -37,7 +43,7 @@ async function writeManifest(catalogRoot: string, fileName: string, yaml: string
 }
 
 describe("loadPromptManifests (real catalog/prompts)", () => {
-  it("loads exactly the M0 inventory's canonical asset keys with valid prompt_asset.v1 content", async () => {
+  it("loads exactly the built-in inventory's canonical asset keys with valid prompt_asset.v1 content", async () => {
     const manifests = await loadPromptManifests(REAL_CATALOG_ROOT);
     expect(manifests.map((m) => m.assetKey).sort()).toEqual([...EXPECTED_ASSET_KEYS].sort());
     for (const manifest of manifests) {

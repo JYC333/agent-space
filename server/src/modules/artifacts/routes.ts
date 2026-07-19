@@ -127,6 +127,7 @@ function parseListFilters(request: FastifyRequest):
         runId: string | null;
         projectId: string | null;
         workspaceId: string | null;
+        includeSystemArchives: boolean;
         limit: number;
         offset: number;
       };
@@ -145,6 +146,7 @@ function parseListFilters(request: FastifyRequest):
       runId: q.run_id ?? null,
       projectId: q.project_id ?? null,
       workspaceId: q.workspace_id ?? null,
+      includeSystemArchives: q.include_system_archives === "true",
       limit,
       offset,
     },

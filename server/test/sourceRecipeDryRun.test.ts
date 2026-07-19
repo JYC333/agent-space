@@ -52,7 +52,8 @@ beforeEach(async () => {
   await pool.query(
     `TRUNCATE jobs, retrieval_edges, retrieval_chunks, retrieval_aliases, retrieval_objects,
               policy_decision_records, proposal_approvals, proposals, runs, space_memberships,
-              source_handler_runs, source_handler_versions, source_recipe_versions, source_connections,
+              source_handler_runs, source_handler_versions, source_recipe_versions, source_channel_item_links,
+              source_channel_user_subscriptions, source_channels, source_connections,
               source_connectors, scheduler_tasks, settings, artifacts, extraction_jobs, source_items,
               source_snapshots, extracted_evidence, credentials`,
   );
@@ -107,13 +108,21 @@ async function seedRecipeConnection(handlerKind = "recipe"): Promise<string> {
   const connectionId = randomUUID();
   await pool!.query(
     `INSERT INTO source_connections (
-       id, space_id, connector_id, owner_user_id, name, endpoint_url, status,
-       fetch_frequency, capture_policy, trust_level, consent_json, policy_json,
+       id, space_id, provider_connector_id, owner_user_id, name, status,
+       capture_policy, trust_level, consent_json, policy_json,
        config_json, handler_kind, created_at, updated_at
-     ) VALUES ($1, $2, 'connector-custom-source', $3, 'Feed Source', $4, 'paused',
-       'manual', 'extract_text', 'normal', '{}'::jsonb, '{}'::jsonb,
-       '{}'::jsonb, $5, now(), now())`,
-    [connectionId, SPACE_A, IDENTITY.userId, `${ORIGIN}/feed.xml`, handlerKind],
+     ) VALUES ($1, $2, 'mapping-custom-source', $3, $5, 'paused',
+       'extract_text', 'normal', '{}'::jsonb, '{}'::jsonb,
+       '{}'::jsonb, $4, now(), now())`,
+    [connectionId, SPACE_A, IDENTITY.userId, handlerKind, `Feed Source ${connectionId}`],
+  );
+  await pool!.query(
+    `INSERT INTO source_channels (
+       id, space_id, source_connection_id, created_by_user_id, name, channel_type,
+       endpoint_url, query_json, provider_query_json, query_fingerprint, status,
+       fetch_frequency, schedule_rule_json, created_at, updated_at
+     ) VALUES ($1,$2,$1,$3,'Feed Channel','feed',$4,'{}'::jsonb,'{}'::jsonb,$1,'paused','manual',NULL,now(),now())`,
+    [connectionId, SPACE_A, IDENTITY.userId, `${ORIGIN}/feed.xml`],
   );
   return connectionId;
 }

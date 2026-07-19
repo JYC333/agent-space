@@ -14,9 +14,12 @@ interface SourceItemForMaterialization {
   access_level: string;
 }
 
-interface ArxivItemMetadata {
-  arxivId: string;
+interface AcademicItemMetadata {
+  provider: "arxiv" | "openalex" | "semantic_scholar";
+  arxivId: string | null;
   doi: string | null;
+  openalexId: string | null;
+  semanticScholarId: string | null;
   authors: string[];
   categories: string[];
   primaryCategory: string | null;
@@ -27,7 +30,13 @@ interface ArxivItemMetadata {
   pdfUrl: string | null;
   journalRef: string | null;
   comment: string | null;
+  venue: string | null;
+  paperType: string;
+  citedByCount: number | null;
+  referenceCount: number | null;
 }
+
+const PAPER_TYPES = new Set(["article", "preprint", "conference_paper", "book_chapter", "thesis", "report", "other"]);
 
 export interface MaterializeAcademicPaperResult {
   objectId: string;
@@ -48,38 +57,46 @@ function stringArray(value: unknown): string[] {
     : [];
 }
 
-/**
- * arXiv metadata is only present when the item was scanned via the arXiv
- * connector (`SourceExtractionWorker.scanArxiv`), which stores these exact
- * keys on `source_items.metadata_json`. Items without `arxiv_id` are not
- * arXiv papers and are left untouched (not every source item run through
- * this path is academic literature).
- */
-function arxivMetadataFromItem(item: SourceItemForMaterialization): ArxivItemMetadata | null {
+/** Reads the normalized metadata emitted by supported academic connectors. */
+function academicMetadataFromItem(item: SourceItemForMaterialization): AcademicItemMetadata | null {
   const meta = record(item.metadata_json);
   const arxivId = stringOrNull(meta.arxiv_id);
-  if (!arxivId) return null;
+  const openalexId = stringOrNull(meta.openalex_id);
+  const semanticScholarId = stringOrNull(meta.semantic_scholar_id);
+  const provider = stringOrNull(meta.academic_provider) ?? (arxivId ? "arxiv" : null);
+  if (!provider || !["arxiv", "openalex", "semantic_scholar"].includes(provider)) return null;
+  if (!arxivId && !openalexId && !semanticScholarId && !stringOrNull(meta.doi)) return null;
   return {
+    provider: provider as AcademicItemMetadata["provider"],
     arxivId,
     doi: stringOrNull(meta.doi),
+    openalexId,
+    semanticScholarId,
     authors: stringArray(meta.authors),
     categories: stringArray(meta.categories),
     primaryCategory: stringOrNull(meta.primary_category),
     publishedAt: stringOrNull(meta.published_at),
     updatedAt: stringOrNull(meta.updated_at),
-    absUrl: stringOrNull(meta.abs_url),
+    absUrl: stringOrNull(meta.abs_url) ?? stringOrNull(meta.source_url),
     htmlUrl: stringOrNull(meta.html_url),
     pdfUrl: stringOrNull(meta.pdf_url),
     journalRef: stringOrNull(meta.journal_ref),
     comment: stringOrNull(meta.comment),
+    venue: stringOrNull(meta.venue),
+    paperType: PAPER_TYPES.has(stringOrNull(meta.paper_type) ?? "")
+      ? stringOrNull(meta.paper_type)!
+      : provider === "arxiv" ? "preprint" : "other",
+    citedByCount: Number.isInteger(meta.cited_by_count) ? Number(meta.cited_by_count) : null,
+    referenceCount: Number.isInteger(meta.reference_count) ? Number(meta.reference_count) : null,
   };
 }
 
 /**
- * Materializes an arXiv-derived `source_item` into an `academic_paper_v1`
+ * Materializes an academic-provider `source_item` into an `academic_paper_v1`
  * object: `space_objects` (object_type='source') + `sources`
  * (source_type='paper') + `academic_papers`, deduped per space by
- * arxiv_id/doi (matches the partial unique indexes on `academic_papers`).
+ * DOI and provider-native ids (matches the partial unique indexes on
+ * `academic_papers`).
  * Idempotent — a source_item whose `source_object_id` is already set is
  * treated as already materialized, and re-running against an existing
  * arxiv_id/doi links the item to that paper instead of creating a duplicate.
@@ -88,7 +105,7 @@ function arxivMetadataFromItem(item: SourceItemForMaterialization): ArxivItemMet
  * Canonical `person` objects are not auto-created from author strings
  * without a disambiguation/review path.
  *
- * Returns null when the item does not exist or is not an arXiv item.
+ * Returns null when the item does not exist or has no supported academic id.
  */
 export async function materializeAcademicPaperFromSourceItem(
   db: Queryable,
@@ -106,8 +123,8 @@ export async function materializeAcademicPaperFromSourceItem(
   if (!item) return null;
   if (item.source_object_id) return { objectId: item.source_object_id, created: false };
 
-  const arxiv = arxivMetadataFromItem(item);
-  if (!arxiv) return null;
+  const academic = academicMetadataFromItem(item);
+  if (!academic) return null;
 
   const existing = await db.query<{ object_id: string }>(
     `SELECT ap.object_id
@@ -115,13 +132,28 @@ export async function materializeAcademicPaperFromSourceItem(
        JOIN space_objects so ON so.id = ap.object_id AND so.space_id = ap.space_id
       WHERE ap.space_id = $1
         AND so.deleted_at IS NULL
-        AND (ap.arxiv_id = $2 OR ($3::varchar IS NOT NULL AND ap.doi = $3))
+        AND (($2::varchar IS NOT NULL AND ap.arxiv_id = $2)
+          OR ($3::varchar IS NOT NULL AND ap.doi = $3)
+          OR ($4::varchar IS NOT NULL AND ap.openalex_id = $4)
+          OR ($5::varchar IS NOT NULL AND ap.semantic_scholar_id = $5))
       LIMIT 1`,
-    [input.spaceId, arxiv.arxivId, arxiv.doi],
+    [input.spaceId, academic.arxivId, academic.doi, academic.openalexId, academic.semanticScholarId],
   );
   const now = new Date().toISOString();
   const existingObjectId = existing.rows[0]?.object_id;
   if (existingObjectId) {
+    await db.query(
+      `UPDATE academic_papers
+          SET doi=COALESCE(doi,$3), arxiv_id=COALESCE(arxiv_id,$4),
+              openalex_id=COALESCE(openalex_id,$5), semantic_scholar_id=COALESCE(semantic_scholar_id,$6),
+              publication_date=COALESCE(publication_date,$7::timestamptz), venue=COALESCE(venue,$8),
+              cited_by_count=CASE WHEN $9::integer IS NULL THEN cited_by_count ELSE GREATEST(COALESCE(cited_by_count,$9),$9) END,
+              reference_count=CASE WHEN $10::integer IS NULL THEN reference_count ELSE GREATEST(COALESCE(reference_count,$10),$10) END, updated_at=$11
+        WHERE space_id=$1 AND object_id=$2`,
+      [input.spaceId, existingObjectId, academic.doi, academic.arxivId, academic.openalexId,
+        academic.semanticScholarId, academic.publishedAt ?? academic.updatedAt, academic.venue,
+        academic.citedByCount, academic.referenceCount, now],
+    );
     await db.query(
       `UPDATE source_items
           SET source_object_id = $3, source_object_type = 'source', updated_at = $4
@@ -132,7 +164,7 @@ export async function materializeAcademicPaperFromSourceItem(
   }
 
   const objectId = randomUUID();
-  const title = (item.title?.trim() || arxiv.arxivId).slice(0, 1024);
+  const title = (item.title?.trim() || academic.arxivId || academic.openalexId || academic.semanticScholarId || academic.doi || "Academic paper").slice(0, 1024);
   await db.query(
     `INSERT INTO space_objects (
        id, space_id, object_type, title, summary, status, visibility, access_level,
@@ -165,25 +197,27 @@ export async function materializeAcademicPaperFromSourceItem(
     [
       objectId,
       input.spaceId,
-      arxiv.absUrl,
+      academic.absUrl,
       JSON.stringify({
-        authors: arxiv.authors,
-        categories: arxiv.categories,
-        primary_category: arxiv.primaryCategory,
-        abs_url: arxiv.absUrl,
-        html_url: arxiv.htmlUrl,
-        pdf_url: arxiv.pdfUrl,
-        journal_ref: arxiv.journalRef,
-        comment: arxiv.comment,
+        academic_provider: academic.provider,
+        authors: academic.authors,
+        categories: academic.categories,
+        primary_category: academic.primaryCategory,
+        abs_url: academic.absUrl,
+        html_url: academic.htmlUrl,
+        pdf_url: academic.pdfUrl,
+        journal_ref: academic.journalRef,
+        comment: academic.comment,
       }),
     ],
   );
   await db.query(
     `INSERT INTO academic_papers (
-       object_id, space_id, doi, arxiv_id, pmid, openalex_id, publication_date,
-       venue, paper_type, created_at, updated_at
-     ) VALUES ($1, $2, $3, $4, NULL, NULL, $5::timestamptz, NULL, 'preprint', $6, $6)`,
-    [objectId, input.spaceId, arxiv.doi, arxiv.arxivId, arxiv.publishedAt ?? arxiv.updatedAt, now],
+       object_id, space_id, doi, arxiv_id, pmid, openalex_id, semantic_scholar_id, publication_date,
+       venue, paper_type, cited_by_count, reference_count, created_at, updated_at
+     ) VALUES ($1, $2, $3, $4, NULL, $5, $6, $7::timestamptz, $8, $9, $10, $11, $12, $12)`,
+    [objectId, input.spaceId, academic.doi, academic.arxivId, academic.openalexId, academic.semanticScholarId,
+      academic.publishedAt ?? academic.updatedAt, academic.venue, academic.paperType, academic.citedByCount, academic.referenceCount, now],
   );
   await db.query(
     `UPDATE source_items

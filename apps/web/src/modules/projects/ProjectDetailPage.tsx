@@ -1,23 +1,23 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams } from 'react-router-dom'
 import { useSpaceNavigate as useNavigate, SpaceLink as Link } from '../../core/spaceNav'
 import {
   FolderKanban, Target, Edit2, Archive, Plus, Trash2, ChevronLeft,
   Activity, Package, CheckCircle, Folder, Cpu, Database, Rss, Link2, FileText, RefreshCw,
-  BookOpen, MessageSquareText,
+  BookOpen, MessageSquareText, Settings as SettingsIcon,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { projectsApi, workspacesApi, activityApi, artifactsApi, proposalsApi, runsApi, memoryApi, sourcesApi, sourceReaderApi, automationsApi, projectPresetsApi, projectResearchApi } from '../../api/client'
+import { projectsApi, workspacesApi, activityApi, artifactsApi, proposalsApi, runsApi, memoryApi, sourcesApi, readerApi, automationsApi, projectPresetsApi, projectResearchApi, providersApi } from '../../api/client'
 import { useSpace } from '../../contexts/SpaceContext'
 import { errMsg, isNotFoundError } from '../../lib/utils'
 import type {
   Project, ProjectSummary, ProjectWorkspaceLinkOut, Workspace,
   ActivityInboxRecord, Artifact, Proposal, Run, Memory,
-  SourceConnection, ProjectSourceBinding, SourceItem, ExtractedEvidence,
+  SourceChannel, ProjectSourceBinding, SourceItem, ExtractedEvidence,
   ReaderAnnotation, AutomationOut, SourcePostProcessingItemDecision,
-  ProjectResearchArtifactLink, ProjectResearchCheckpoint, ProjectResearchLiteratureMatrixItem,
-  ProjectResearchProfile, ProjectResearchScreeningCriteria, ProjectResearchWorkflow,
-  ProjectOperation,
+  ProjectResearchReport, ProjectResearchInitialIntakeInput, ProjectResearchCheckpoint, ProjectResearchLiteratureMatrixItem,
+  ProjectResearchScreeningCriteria, ProjectResearchQuestionRefinement, ProjectResearchWorkflow,
+  ProjectOperation, ProjectResearchScanSummary,
 } from '../../types/api'
 import { Card } from '../../components/ui/card'
 import { Button } from '../../components/ui/button'
@@ -29,7 +29,11 @@ import { Select } from '../../components/ui/select'
 import { Skeleton } from '../../components/ui/skeleton'
 import { EmptyState } from '../../components/ui/empty-state'
 import { ResearchWorkflowPanel } from '../capabilities/ResearchWorkflowPanel'
-import { AcademicResearchWorkbench, activeResearchWorkflowFrom } from './AcademicResearchWorkbench'
+import { AcademicResearchWorkbench, activeResearchWorkflowFrom, researchOperationStage, objectValue, numberValue } from './AcademicResearchWorkbench'
+import { isResearchHumanReviewCheckpoint, researchCheckpointLabel } from './researchReviewAttention'
+import { researchSetupDraftFromWorkflow } from './researchSetupDraft'
+import { researchWorkflowForDisplayFrom } from './researchWorkflowView'
+import { ProjectSourceLinkDialog } from './ProjectSourceLinkDialog'
 import {
   Dialog,
   DialogContent,
@@ -37,6 +41,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogFooter,
+  ConfirmDialog,
 } from '../../components/ui/dialog'
 
 function fmt(dt: string | null | undefined) {
@@ -53,10 +58,35 @@ const WORKSPACE_ROLES = [
 ]
 
 const ACADEMIC_PRESET_KEY = 'academic_research'
+const TERMINAL_RUN_STATUSES = new Set(['succeeded', 'failed', 'degraded', 'cancelled', 'waiting_for_review', 'waiting_for_dependency'])
 
 function presetKeyFromProject(project: Project): string | null {
   const value = project.settings_json?.preset
   return typeof value === 'string' ? value : null
+}
+
+function upsertById<T extends { id: string }>(current: T[], next: T): T[] {
+  const index = current.findIndex(item => item.id === next.id)
+  if (index === -1) return [next, ...current]
+  return current.map(item => item.id === next.id ? next : item)
+}
+
+function mergeById<T extends { id: string }>(current: T[], incoming: T[]): T[] {
+  return incoming.reduce((result, item) => upsertById(result, item), current)
+}
+
+function researchLifecycleSignature(operations: ProjectOperation[]): string {
+  return operations
+    .filter(operation => operation.kind === 'research')
+    .sort((left, right) => left.id.localeCompare(right.id))
+    .map(operation => [
+      operation.id,
+      operation.status,
+      String(operation.progress_json.current_stage ?? ''),
+      String(operation.progress_json.failed_stage ?? ''),
+      String(operation.progress_json.partial ?? ''),
+    ].join(':'))
+    .join('|')
 }
 
 /* ── Summary card ─────────────────────────────────────────────────────────── */
@@ -80,25 +110,50 @@ function SummaryCard({ icon, label, count }: SummaryCardProps) {
   )
 }
 
-/* ── Edit project dialog ──────────────────────────────────────────────────── */
+/* ── Project settings dialog ──────────────────────────────────────────────── */
+interface ResearchSettingsProps {
+  currentItemLimit: number | null
+  // Whether an intake operation already exists: once it does, a lower value
+  // can't be applied (already-spent budget can't be un-spent), only raised.
+  // Before that, the setting is just a draft value and any 1-10000 value is fine.
+  hasLiveOperation: boolean
+  hasStartedWorkflow: boolean
+  busy: boolean
+  onUpdateItemLimit: (newLimit: number) => void
+  snapshot: {
+    question: string
+    monitors: string[]
+    history: string
+    maxItems: number | null
+    monitoringField: string
+  }
+}
+
 interface EditDialogProps {
   project: Project
   open: boolean
   onOpenChange: (v: boolean) => void
   onSaved: (updated: Project) => void
+  research: ResearchSettingsProps | null
 }
 
-function EditProjectDialog({ project, open, onOpenChange, onSaved }: EditDialogProps) {
+// Project settings is one dialog with a "General" section every project has,
+// plus preset-specific sections (only "Research", for academic_research
+// projects, today). New project presets add their own section here rather
+// than a bespoke settings entry point elsewhere on the page.
+function EditProjectDialog({ project, open, onOpenChange, onSaved, research }: EditDialogProps) {
   const [name, setName] = useState(project.name)
   const [description, setDescription] = useState(project.description ?? '')
   const [focus, setFocus] = useState(project.current_focus ?? '')
   const [saving, setSaving] = useState(false)
+  const [itemLimitInput, setItemLimitInput] = useState('')
 
   useEffect(() => {
     if (open) {
       setName(project.name)
       setDescription(project.description ?? '')
       setFocus(project.current_focus ?? '')
+      setItemLimitInput('')
     }
   }, [open, project])
 
@@ -128,32 +183,94 @@ function EditProjectDialog({ project, open, onOpenChange, onSaved }: EditDialogP
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Edit project</DialogTitle>
+          <DialogTitle>Project settings</DialogTitle>
           <DialogDescription className="sr-only">
-            Update this project's name, description, and current focus.
+            Update this project's name, description, current focus, and preset-specific settings.
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-4 py-2">
-          <div className="space-y-1.5">
-            <Label>Name <span className="text-destructive">*</span></Label>
-            <Input value={name} onChange={e => setName(e.target.value)} />
+        <div className="space-y-5 py-2">
+          <div className="space-y-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">General</p>
+            <div className="space-y-1.5">
+              <Label>Name <span className="text-destructive">*</span></Label>
+              <Input value={name} onChange={e => setName(e.target.value)} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Description</Label>
+              <Textarea
+                value={description}
+                onChange={e => setDescription(e.target.value)}
+                rows={3}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="project-current-focus">{research ? 'Research question' : 'Current focus'}</Label>
+              <Input
+                id="project-current-focus"
+                value={focus}
+                onChange={e => setFocus(e.target.value)}
+                placeholder={research ? 'What question should this research answer?' : 'What are you actively working on right now?'}
+              />
+              {research?.hasStartedWorkflow && (
+                <p className="text-xs text-muted-foreground">
+                  Saving a new question does not rewrite existing screening decisions or reports. After saving, you will choose how to apply the change.
+                </p>
+              )}
+            </div>
           </div>
-          <div className="space-y-1.5">
-            <Label>Description</Label>
-            <Textarea
-              value={description}
-              onChange={e => setDescription(e.target.value)}
-              rows={3}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label>Current focus</Label>
-            <Input
-              value={focus}
-              onChange={e => setFocus(e.target.value)}
-              placeholder="What are you actively working on right now?"
-            />
-          </div>
+          {research && (
+            <div className="space-y-2 border-t border-border pt-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Research</p>
+              <div className="rounded-md border border-border bg-muted/20 p-3 text-xs">
+                <p className="font-medium text-foreground">Saved intake configuration</p>
+                <dl className="mt-2 space-y-1.5 text-muted-foreground">
+                  <div><dt className="inline font-medium text-foreground">Question: </dt><dd className="inline">{research.snapshot.question || 'Not set'}</dd></div>
+                  <div><dt className="inline font-medium text-foreground">Monitors: </dt><dd className="inline">{research.snapshot.monitors.length ? research.snapshot.monitors.join(' · ') : 'None selected'}</dd></div>
+                  <div><dt className="inline font-medium text-foreground">Initial import: </dt><dd className="inline">{research.snapshot.history}</dd></div>
+                  <div><dt className="inline font-medium text-foreground">Import limit: </dt><dd className="inline">{research.snapshot.maxItems?.toLocaleString() ?? 'Not set'} items shared across monitors (initial import only)</dd></div>
+                  <div><dt className="inline font-medium text-foreground">Monitoring: </dt><dd className="inline">{research.snapshot.monitoringField}</dd></div>
+                </dl>
+              </div>
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <Label>Item limit</Label>
+                  <span className="text-sm font-medium">{research.currentItemLimit !== null ? research.currentItemLimit.toLocaleString() : '—'}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="number"
+                    min={1}
+                    max={10000}
+                    placeholder={research.currentItemLimit !== null ? String(research.currentItemLimit) : 'e.g. 10000'}
+                    value={itemLimitInput}
+                    onChange={event => setItemLimitInput(event.target.value)}
+                    aria-label="New item limit"
+                  />
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      research.onUpdateItemLimit(Number(itemLimitInput))
+                      setItemLimitInput('')
+                    }}
+                    disabled={
+                      research.busy
+                      || !itemLimitInput
+                      || Number(itemLimitInput) < 1
+                      || Number(itemLimitInput) > 10000
+                      || (research.hasLiveOperation && Number(itemLimitInput) <= (research.currentItemLimit ?? 0))
+                    }
+                  >
+                    Update
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {research.hasLiveOperation
+                    ? 'Intake is already running; this can only be raised, not lowered.'
+                    : 'Applies once the literature intake starts. Saved to the intake setup draft now.'}
+                </p>
+              </div>
+            </div>
+          )}
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
@@ -244,122 +361,6 @@ function LinkWorkspaceDialog({ projectId, existingIds, open, onOpenChange, onLin
   )
 }
 
-/* ── Link source dialog ───────────────────────────────────────────────────── */
-interface LinkSourceConnectionDialogProps {
-  projectId: string
-  open: boolean
-  onOpenChange: (v: boolean) => void
-  connections: SourceConnection[]
-  bindings: ProjectSourceBinding[]
-  onLinked: () => void
-}
-
-function LinkSourceConnectionDialog({
-  projectId,
-  open,
-  onOpenChange,
-  connections,
-  bindings,
-  onLinked,
-}: LinkSourceConnectionDialogProps) {
-  const [connectionId, setConnectionId] = useState('')
-  const [backfillHistory, setBackfillHistory] = useState(true)
-  const [linking, setLinking] = useState(false)
-
-  function sourceOptionsForProject() {
-    return connections
-      .filter(connection => !bindings.some(binding =>
-        binding.source_connection_id === connection.id &&
-        binding.binding_key === 'default'
-      ))
-      .map(connection => ({
-        value: connection.id,
-        label: connection.name,
-      }))
-  }
-
-  useEffect(() => {
-    if (!open) return
-    setConnectionId(sourceOptionsForProject()[0]?.value ?? '')
-    setBackfillHistory(true)
-  }, [open, connections, bindings])
-
-  const sourceOptions = sourceOptionsForProject()
-
-  async function submit() {
-    if (!connectionId) {
-      toast.error('Select a source')
-      return
-    }
-    setLinking(true)
-    try {
-      const binding = await sourcesApi.createProjectSourceBinding({
-        project_id: projectId,
-        source_connection_id: connectionId,
-        backfill_history: backfillHistory,
-      })
-      if (binding.backfill_result) {
-        toast.success(`Source linked; ${binding.backfill_result.created_links} project items added`)
-      } else {
-        toast.success('Source linked')
-      }
-      onLinked()
-      onOpenChange(false)
-    } catch (e) {
-      toast.error(errMsg(e))
-    } finally {
-      setLinking(false)
-    }
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Link source</DialogTitle>
-          <DialogDescription>
-            Bind an existing source directly to this project.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-4 py-2">
-          <div className="space-y-1.5">
-            <Label>Source</Label>
-            {connections.length === 0 ? (
-              <p className="text-xs text-muted-foreground">No sources are configured yet.</p>
-            ) : sourceOptions.length === 0 ? (
-              <p className="text-xs text-muted-foreground">All available sources are already linked to this project.</p>
-            ) : (
-              <Select
-                value={connectionId}
-                options={sourceOptions}
-                onChange={setConnectionId}
-              />
-            )}
-          </div>
-          <label className="flex items-start gap-2 rounded-md border border-border px-3 py-2 text-xs">
-            <input
-              type="checkbox"
-              className="mt-0.5 accent-primary"
-              checked={backfillHistory}
-              onChange={event => setBackfillHistory(event.target.checked)}
-            />
-            <span>
-              <span className="block font-medium text-foreground">Include historical evidence</span>
-              <span className="text-muted-foreground">Link already extracted source evidence into this project.</span>
-            </span>
-          </label>
-        </div>
-        <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={submit} disabled={linking || !connectionId}>
-            {linking ? 'Linking…' : 'Link source'}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
 function isManualUrlItem(item: SourceItem) {
   return item.item_type === 'external_url' && item.metadata_json?.created_by === 'manual_url'
 }
@@ -367,6 +368,7 @@ function isManualUrlItem(item: SourceItem) {
 interface ProjectSourceOption {
   value: string
   label: string
+  connectionId: string
 }
 
 interface SaveProjectUrlDialogProps {
@@ -402,14 +404,19 @@ function SaveProjectUrlDialog({ open, onOpenChange, sourceOptions, onSaved }: Sa
     }
     setSaving(true)
     try {
+      const selectedSource = sourceOptions.find(option => option.value === connectionId)
+      if (!selectedSource) {
+        toast.error('Select a project channel before saving URLs')
+        return
+      }
       const row = await sourcesApi.createManualUrl({
         url: url.trim(),
         title: title.trim() || undefined,
-        connection_id: connectionId,
+        connection_id: selectedSource.connectionId,
         queue_content: queueContent,
       })
-      if (row.connection_id !== connectionId) {
-        await sourcesApi.updateItem(row.id, { connection_id: connectionId })
+      if (row.connection_id !== selectedSource.connectionId) {
+        await sourcesApi.updateItem(row.id, { connection_id: selectedSource.connectionId })
       }
       toast.success('URL saved')
       onSaved()
@@ -496,7 +503,7 @@ export default function ProjectDetailPage() {
   const [pendingProposals, setPendingProposals] = useState<Proposal[]>([])
   const [recentRuns, setRecentRuns] = useState<Run[]>([])
   const [projectMemory, setProjectMemory] = useState<Memory[]>([])
-  const [sourceConnections, setSourceConnections] = useState<SourceConnection[]>([])
+  const [sourceChannels, setSourceChannels] = useState<SourceChannel[]>([])
   const [sourceBindings, setSourceBindings] = useState<ProjectSourceBinding[]>([])
   const [recentSourceItems, setRecentSourceItems] = useState<SourceItem[]>([])
   const [recentEvidence, setRecentEvidence] = useState<ExtractedEvidence[]>([])
@@ -505,30 +512,37 @@ export default function ProjectDetailPage() {
   const [automations, setAutomations] = useState<AutomationOut[]>([])
   const [operations, setOperations] = useState<ProjectOperation[]>([])
   const [projectPresetKey, setProjectPresetKey] = useState<string | null>(null)
-  const [researchProfile, setResearchProfile] = useState<ProjectResearchProfile | null>(null)
   const [researchWorkflows, setResearchWorkflows] = useState<ProjectResearchWorkflow[]>([])
+  const [researchScanSummaries, setResearchScanSummaries] = useState<ProjectResearchScanSummary[]>([])
   const [researchCheckpoints, setResearchCheckpoints] = useState<ProjectResearchCheckpoint[]>([])
   const [literatureMatrix, setLiteratureMatrix] = useState<ProjectResearchLiteratureMatrixItem[]>([])
-  const [synthesisArtifacts, setSynthesisArtifacts] = useState<ProjectResearchArtifactLink[]>([])
+  const [researchReports, setResearchReports] = useState<ProjectResearchReport[]>([])
+  const [modelProviders, setModelProviders] = useState<Awaited<ReturnType<typeof providersApi.list>>>([])
   const [screeningCriteria, setScreeningCriteria] = useState<ProjectResearchScreeningCriteria | null>(null)
   const [researchActionBusy, setResearchActionBusy] = useState<string | null>(null)
+  const [researchDataLoading, setResearchDataLoading] = useState(true)
   const [loading, setLoading] = useState(true)
   const [detailsLoading, setDetailsLoading] = useState(false)
   const [notFound, setNotFound] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
+  const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false)
   const [linkOpen, setLinkOpen] = useState(false)
   const [sourceLinkOpen, setSourceLinkOpen] = useState(false)
   const [saveUrlOpen, setSaveUrlOpen] = useState(false)
+  const [bindingToRemove, setBindingToRemove] = useState<ProjectSourceBinding | null>(null)
   const [updatingItemSourceId, setUpdatingItemSourceId] = useState<string | null>(null)
   const [backfillingBindingId, setBackfillingBindingId] = useState<string | null>(null)
+  const [removingBindingId, setRemovingBindingId] = useState<string | null>(null)
   const [archiving, setArchiving] = useState(false)
 
   const loadAll = useCallback(async () => {
     if (!projectId || !activeSpaceId) {
+      setResearchDataLoading(false)
       setLoading(false)
       return
     }
     setLoading(true)
+    setResearchDataLoading(true)
     setNotFound(false)
     let resolvedPresetKey: string | null = null
     try {
@@ -546,6 +560,7 @@ export default function ProjectDetailPage() {
       setLoading(false)
     } catch (e) {
       setDetailsLoading(false)
+      setResearchDataLoading(false)
       if (isNotFoundError(e)) {
         setNotFound(true)
       } else {
@@ -557,19 +572,19 @@ export default function ProjectDetailPage() {
 
     setDetailsLoading(true)
     try {
-      const [allWs, acts, arts, props, runs, mems, sourceConnections, sourceBindings, sourceItems, evidenceItems, recommendations, readerAnns, allAutomations, operationRows] = await Promise.all([
+      const [allWs, acts, arts, props, runs, mems, sourceChannels, sourceBindings, sourceItems, evidenceItems, recommendations, readerAnns, allAutomations, operationRows] = await Promise.all([
         workspacesApi.list({ limit: '200' }),
         activityApi.list({ project_id: projectId, limit: 5 }),
         artifactsApi.list({ project_id: projectId, limit: 5 }),
         proposalsApi.list({ project_id: projectId, status: 'pending', limit: 5 }),
         runsApi.list({ project_id: projectId, limit: 5 }),
         memoryApi.list({ project_id: projectId, limit: 5 }),
-        sourcesApi.connections({ limit: 100 }),
+        sourcesApi.channels(),
         sourcesApi.projectSourceBindings({ project_id: projectId }),
         sourcesApi.projectItems({ project_id: projectId, limit: 5 }),
         sourcesApi.evidence({ project_id: projectId, status: 'active', limit: 5 }),
         sourcesApi.postProcessingDecisions({ project_id: projectId, limit: 20 }).catch(() => ({ items: [] as SourcePostProcessingItemDecision[], total: 0, limit: 20, offset: 0 })),
-        sourceReaderApi.listByProject(projectId, 5).catch(() => ({ items: [] as ReaderAnnotation[] })),
+        readerApi.listByProject(projectId, 5).catch(() => ({ items: [] as ReaderAnnotation[] })),
         automationsApi.list({ project_id: projectId }).catch(() => [] as AutomationOut[]),
         projectsApi.operations ? projectsApi.operations(projectId).catch(() => [] as ProjectOperation[]) : Promise.resolve([] as ProjectOperation[]),
       ])
@@ -581,7 +596,7 @@ export default function ProjectDetailPage() {
       setPendingProposals(props.items)
       setRecentRuns(runs)
       setProjectMemory(mems.items)
-      setSourceConnections(sourceConnections.items)
+      setSourceChannels(sourceChannels)
       setSourceBindings(sourceBindings)
       setRecentSourceItems(sourceItems.items.map(projectItem => projectItem.item))
       setRecentEvidence(evidenceItems.items)
@@ -592,55 +607,238 @@ export default function ProjectDetailPage() {
 
       if (resolvedPresetKey === ACADEMIC_PRESET_KEY) {
         try {
-          const [profile, workflows, criteria, matrix, synthesis] = await Promise.all([
-            projectResearchApi.profile(projectId).catch(error => {
-              if (isNotFoundError(error)) return null
-              throw error
-            }),
+          const [workflows, criteria, matrix, reports, scanSummaries, providers] = await Promise.all([
             projectResearchApi.workflows(projectId),
             projectResearchApi.screeningCriteria(projectId),
             projectResearchApi.literatureMatrix(projectId),
-            projectResearchApi.synthesis(projectId),
+            projectResearchApi.reports(projectId),
+            projectResearchApi.scanSummaries(projectId),
+            providersApi.list().catch(() => []),
           ])
           const activeWorkflow = activeResearchWorkflowFrom(workflows)
           const checkpoints = activeWorkflow
             ? await projectResearchApi.checkpoints(projectId, activeWorkflow.id)
             : []
-          setResearchProfile(profile)
           setResearchWorkflows(workflows)
+          setResearchScanSummaries(scanSummaries)
           setResearchCheckpoints(checkpoints)
           setScreeningCriteria(criteria)
           setLiteratureMatrix(matrix)
-          setSynthesisArtifacts(synthesis)
+          setResearchReports(reports)
+          setModelProviders(providers)
         } catch (researchError) {
-          setResearchProfile(null)
           setResearchWorkflows([])
+          setResearchScanSummaries([])
           setResearchCheckpoints([])
           setScreeningCriteria(null)
           setLiteratureMatrix([])
-          setSynthesisArtifacts([])
+          setResearchReports([])
+          setModelProviders([])
           throw researchError
         }
       } else {
-        setResearchProfile(null)
         setResearchWorkflows([])
+        setResearchScanSummaries([])
         setResearchCheckpoints([])
         setScreeningCriteria(null)
         setLiteratureMatrix([])
-        setSynthesisArtifacts([])
+        setResearchReports([])
+        setModelProviders([])
       }
     } catch (e) {
       toast.error(errMsg(e))
     } finally {
       setDetailsLoading(false)
+      setResearchDataLoading(false)
     }
   }, [projectId, activeSpaceId])
 
+  const refreshOperations = useCallback(async (): Promise<ProjectOperation[] | null> => {
+    if (!projectId) return null
+    try {
+      const nextOperations = await projectsApi.operations(projectId)
+      setOperations(nextOperations)
+      try {
+        setRecentRuns(await runsApi.list({ project_id: projectId, limit: 5 }))
+      } catch {
+        // Run status is supplementary to the operation read model.
+      }
+      return nextOperations
+    } catch {
+      // Keep the last known operation state visible on a transient refresh failure.
+      return null
+    }
+  }, [projectId])
+
+  const refreshResearchState = useCallback(async () => {
+    if (!projectId || !activeSpaceId) return
+    try {
+      const [operationRows, workflows] = await Promise.all([
+        projectsApi.operations(projectId),
+        projectResearchApi.workflows(projectId),
+      ])
+      const activeWorkflow = activeResearchWorkflowFrom(workflows)
+      setOperations(operationRows)
+      setResearchWorkflows(workflows)
+      const [checkpoints, matrix, reports, scanSummaries] = await Promise.all([
+        activeWorkflow
+          ? projectResearchApi.checkpoints(projectId, activeWorkflow.id).catch(() => [] as ProjectResearchCheckpoint[])
+          : Promise.resolve([] as ProjectResearchCheckpoint[]),
+        projectResearchApi.literatureMatrix(projectId).catch(() => [] as ProjectResearchLiteratureMatrixItem[]),
+        projectResearchApi.reports(projectId).catch(() => [] as ProjectResearchReport[]),
+        projectResearchApi.scanSummaries(projectId).catch(() => [] as ProjectResearchScanSummary[]),
+      ])
+      setResearchCheckpoints(checkpoints)
+      setLiteratureMatrix(matrix)
+      setResearchReports(reports)
+      setResearchScanSummaries(scanSummaries)
+    } catch {
+      // Keep the last known research state visible on a transient refresh failure.
+    }
+  }, [projectId, activeSpaceId])
+
+  const refreshSourceSelection = useCallback(async () => {
+    if (!projectId) return
+    try {
+      const [channels, bindings] = await Promise.all([
+        sourcesApi.channels(),
+        sourcesApi.projectSourceBindings({ project_id: projectId }),
+      ])
+      setSourceChannels(channels)
+      setSourceBindings(bindings)
+    } catch {
+      // Keep the current source selection visible on a transient refresh failure.
+    }
+  }, [projectId])
+
+  const refreshProjectSources = useCallback(async () => {
+    if (!projectId) return
+    try {
+      const [bindings, sourceItems, evidenceItems, recommendations] = await Promise.all([
+        sourcesApi.projectSourceBindings({ project_id: projectId }),
+        sourcesApi.projectItems({ project_id: projectId, limit: 5 }),
+        sourcesApi.evidence({ project_id: projectId, status: 'active', limit: 5 }),
+        sourcesApi.postProcessingDecisions({ project_id: projectId, limit: 20 }).catch(() => ({ items: [] as SourcePostProcessingItemDecision[], total: 0, limit: 20, offset: 0 })),
+      ])
+      setSourceBindings(bindings)
+      setRecentSourceItems(sourceItems.items.map(projectItem => projectItem.item))
+      setRecentEvidence(evidenceItems.items)
+      setSourceRecommendations(recommendations.items.filter(item => item.relevance !== 'not_relevant').slice(0, 5))
+    } catch {
+      // Keep the current source module visible on a transient refresh failure.
+    }
+  }, [projectId])
+
+  const refreshWorkspaceData = useCallback(async () => {
+    if (!projectId) return
+    try {
+      const [linkedWorkspaces, nextSummary] = await Promise.all([
+        projectsApi.listWorkspaces(projectId),
+        projectsApi.getSummary(projectId),
+      ])
+      setLinks(linkedWorkspaces)
+      setSummary(nextSummary)
+    } catch {
+      // Keep the current workspace module visible on a transient refresh failure.
+    }
+  }, [projectId])
+
   useEffect(() => { loadAll() }, [loadAll])
+
+  const researchProgressPollBusy = useRef(false)
+  const researchLifecycleSignatureRef = useRef<string | null>(null)
+  const researchReviewToastIdsRef = useRef(new Map<string, string>())
+  const hasActiveResearchOperation = operations.some(
+    operation => operation.kind === 'research' && ['active', 'waiting_review'].includes(operation.status),
+  )
+  const hasActiveProjectRun = recentRuns.some(run => !TERMINAL_RUN_STATUSES.has(run.status))
+
+  const refreshRecentRuns = useCallback(async () => {
+    if (!projectId) return
+    try {
+      setRecentRuns(await runsApi.list({ project_id: projectId, limit: 5 }))
+    } catch {
+      // Keep the last known run state visible on a transient refresh failure.
+    }
+  }, [projectId])
+
+  useEffect(() => {
+    if (!projectId || (!hasActiveProjectRun && !hasActiveResearchOperation)) return
+    void refreshRecentRuns()
+    const timer = window.setInterval(() => { void refreshRecentRuns() }, 5_000)
+    return () => window.clearInterval(timer)
+  }, [projectId, hasActiveProjectRun, hasActiveResearchOperation, refreshRecentRuns])
+
+  useEffect(() => {
+    if (!projectId) return
+    const pendingIds = new Set(
+      researchCheckpoints
+        .filter(checkpoint => checkpoint.status === 'pending' && isResearchHumanReviewCheckpoint(checkpoint))
+        .map(checkpoint => checkpoint.id),
+    )
+
+    for (const checkpoint of researchCheckpoints) {
+      if (
+        checkpoint.status !== 'pending'
+        || !isResearchHumanReviewCheckpoint(checkpoint)
+        || researchReviewToastIdsRef.current.has(checkpoint.id)
+      ) continue
+      const toastId = `research-review:${projectId}:${checkpoint.id}`
+      researchReviewToastIdsRef.current.set(checkpoint.id, toastId)
+      toast.warning('Research review required', {
+        id: toastId,
+        duration: Infinity,
+        description: `${researchCheckpointLabel(checkpoint)} is ready for your review. The workflow is paused until you decide.`,
+        action: {
+          label: 'Review now',
+          onClick: () => {
+            const section = document.getElementById('research-checkpoints')
+            if (section) {
+              section.scrollIntoView({ behavior: 'smooth', block: 'center' })
+            } else {
+              navigate(`/projects/${projectId}`)
+            }
+          },
+        },
+      })
+    }
+
+    for (const [checkpointId, toastId] of researchReviewToastIdsRef.current) {
+      if (pendingIds.has(checkpointId)) continue
+      toast.dismiss(toastId)
+      researchReviewToastIdsRef.current.delete(checkpointId)
+    }
+  }, [navigate, projectId, researchCheckpoints])
+
+  const refreshResearchProgress = useCallback(async () => {
+    const nextOperations = await refreshOperations()
+    if (!nextOperations) return
+    const nextSignature = researchLifecycleSignature(nextOperations)
+    const previousSignature = researchLifecycleSignatureRef.current
+    researchLifecycleSignatureRef.current = nextSignature
+    if (previousSignature !== null && previousSignature !== nextSignature) {
+      await refreshResearchState()
+    }
+  }, [refreshOperations, refreshResearchState])
+
+  useEffect(() => {
+    if (!hasActiveResearchOperation) return
+    const refresh = async () => {
+      if (researchProgressPollBusy.current) return
+      researchProgressPollBusy.current = true
+      try {
+        await refreshResearchProgress()
+      } finally {
+        researchProgressPollBusy.current = false
+      }
+    }
+    void refresh()
+    const timer = window.setInterval(() => { void refresh() }, 5_000)
+    return () => window.clearInterval(timer)
+  }, [hasActiveResearchOperation, refreshResearchProgress])
 
   async function archive() {
     if (!project) return
-    if (!confirm(`Archive "${project.name}"? Archived projects are hidden from the active list but all their records remain preserved.`)) return
     setArchiving(true)
     try {
       const updated = await projectsApi.archive(project.id)
@@ -667,9 +865,9 @@ export default function ProjectDetailPage() {
     if (item.connection_id === connectionId) return
     setUpdatingItemSourceId(item.id)
     try {
-      await sourcesApi.updateItem(item.id, { connection_id: connectionId })
+      const updatedItem = await sourcesApi.updateItem(item.id, { connection_id: connectionId })
       toast.success('Item source updated')
-      await loadAll()
+      setRecentSourceItems(current => current.map(currentItem => currentItem.id === updatedItem.id ? updatedItem : currentItem))
     } catch (e) {
       toast.error(errMsg(e))
     } finally {
@@ -683,7 +881,7 @@ export default function ProjectDetailPage() {
     try {
       const result = await sourcesApi.backfillProjectSourceBinding(projectId, binding.id)
       toast.success(`Backfilled ${result.created_links} project items`)
-      await loadAll()
+      await Promise.all([refreshProjectSources(), refreshOperations()])
     } catch (e) {
       toast.error(errMsg(e))
     } finally {
@@ -691,40 +889,42 @@ export default function ProjectDetailPage() {
     }
   }
 
-  async function ensureApprovedResearchProfile(): Promise<ProjectResearchProfile | null> {
-    if (!project) return null
-    const researchQuestion = project.current_focus?.trim()
-    if (!researchQuestion) {
-      toast.error('Set a research question before starting auto research')
-      setEditOpen(true)
-      return null
+  async function removeSourceBinding(binding: ProjectSourceBinding) {
+    if (!projectId) return
+    setRemovingBindingId(binding.id)
+    try {
+      await (projectsApi.deleteSourceBinding ?? sourcesApi.deleteProjectSourceBinding)(projectId, binding.id)
+      toast.success('Source removed from project')
+      setBindingToRemove(null)
+      await refreshProjectSources()
+    } catch (e) {
+      toast.error(errMsg(e))
+    } finally {
+      setRemovingBindingId(null)
     }
-
-    let nextProfile = researchProfile
-    if (!nextProfile || nextProfile.research_question?.trim() !== researchQuestion) {
-      nextProfile = await projectResearchApi.upsertProfile(project.id, {
-        research_question: researchQuestion,
-        working_title: project.name,
-        output_type: 'paper',
-        paper_type: 'survey',
-        language: 'en',
-        experiment_intake_declaration: 'undecided',
-      })
-    }
-    if (nextProfile.status !== 'approved') {
-      nextProfile = await projectResearchApi.approveProfile(project.id)
-    }
-    return nextProfile
   }
 
-  async function prepareResearchProfile() {
-    setResearchActionBusy('prepare-profile')
+  async function linkResearchSourceToProject(channel: SourceChannel) {
+    if (!projectId) return
+    const binding = await projectsApi.createSourceBinding(projectId, {
+      source_channel_id: channel.id,
+      backfill_history: false,
+    })
+    setSourceChannels(current => upsertById(current, channel))
+    setSourceBindings(current => upsertById(current, binding))
+  }
+
+  async function startInitialResearch(config: ProjectResearchInitialIntakeInput) {
+    if (!project) return
+    setResearchActionBusy('start-initial-intake')
     try {
-      const profile = await ensureApprovedResearchProfile()
-      if (!profile) return
-      setResearchProfile(profile)
-      toast.success('Research profile approved')
-      await loadAll()
+      const response = await projectResearchApi.startInitialIntake(project.id, config)
+      setProject(current => current ? { ...current, current_focus: config.research_question } : current)
+      if (response.workflow) setResearchWorkflows(current => upsertById(current, response.workflow!))
+      setOperations(current => upsertById(current, response.operation))
+      setSourceChannels(current => mergeById(current, response.source_channels))
+      setSourceBindings(current => mergeById(current, response.source_bindings))
+      toast.success('Initial literature research started')
     } catch (e) {
       toast.error(errMsg(e))
     } finally {
@@ -732,23 +932,172 @@ export default function ProjectDetailPage() {
     }
   }
 
-  async function startAutoResearchWorkflow() {
-    if (!project) return
-    setResearchActionBusy('start-workflow')
+  async function saveInitialIntake(config: ProjectResearchInitialIntakeInput): Promise<boolean> {
+    if (!project) return false
+    setResearchActionBusy('save-initial-intake')
     try {
-      const profile = await ensureApprovedResearchProfile()
-      if (!profile) return
-      const existingWorkflow = activeResearchWorkflowFrom(researchWorkflows)
-      const workflow = existingWorkflow ?? await projectResearchApi.startWorkflow(project.id, {
-        workflow_type: 'literature_review',
-        mode: 'agent_assisted',
+      const workflow = await projectResearchApi.saveInitialIntakeDraft(project.id, config)
+      setProject(current => current ? { ...current, current_focus: config.research_question } : current)
+      setResearchWorkflows((current) => {
+        const existing = current.findIndex((item) => item.id === workflow.id)
+        if (existing === -1) return [workflow, ...current]
+        return current.map((item) => item.id === workflow.id ? workflow : item)
       })
-      await projectResearchApi.runStage(project.id, workflow.id, 'research_profile')
-      if (sourceBindings.length > 0) {
-        await projectResearchApi.runStage(project.id, workflow.id, 'literature_monitoring')
-      }
-      toast.success(existingWorkflow ? 'Research workflow refreshed' : 'Auto research workflow started')
+      toast.success('Initial literature intake setup saved')
+      return true
+    } catch (e) {
+      toast.error(errMsg(e))
+      return false
+    } finally {
+      setResearchActionBusy(null)
+    }
+  }
+
+  async function refineResearchQuestion(input: { research_question: string; history: Array<{ role: 'user' | 'assistant'; content: string }>; execution: { model_provider_id?: string; model_name?: string } }): Promise<ProjectResearchQuestionRefinement> {
+    if (!project) throw new Error('Project is not loaded')
+    return projectResearchApi.refineQuestion(project.id, input)
+  }
+
+  async function loadResearchQuestionImpact() {
+    if (!project) throw new Error('Project is not loaded')
+    return projectResearchApi.questionChangeImpact(project.id)
+  }
+
+  async function resolveResearchQuestion(strategy: import('../../types/api').ProjectResearchQuestionResolutionStrategy): Promise<boolean> {
+    if (!project) return false
+    setResearchActionBusy('apply-question')
+    try {
+      await projectResearchApi.resolveQuestionChange(project.id, strategy)
+      toast.success(strategy === 'rescreen' ? 'Corpus re-screening started' : strategy === 'synthesis_only' ? 'New synthesis started' : 'Research question applied to future runs')
       await loadAll()
+      return true
+    } catch (e) {
+      toast.error(errMsg(e))
+      return false
+    } finally {
+      setResearchActionBusy(null)
+    }
+  }
+
+  async function extendResearchHistory(config: { from: string; to?: string; max_items: number }) {
+    if (!project) return
+    const workflow = activeResearchWorkflowFrom(researchWorkflows)
+    if (!workflow) {
+      toast.error('Start and complete the initial literature intake before extending history')
+      return
+    }
+    setResearchActionBusy('extend-history')
+    try {
+      await projectResearchApi.historyBackfill(project.id, workflow.id, config)
+      toast.success('Historical backfill started')
+      await refreshOperations()
+    } catch (e) {
+      toast.error(errMsg(e))
+    } finally {
+      setResearchActionBusy(null)
+    }
+  }
+
+  async function triggerIncrementalResearch() {
+    if (!project) return
+    const workflow = activeResearchWorkflowFrom(researchWorkflows)
+    if (!workflow) {
+      toast.error('Start the initial literature intake before running an incremental scan')
+      return
+    }
+    setResearchActionBusy('incremental')
+    try {
+      await projectResearchApi.triggerIncremental(project.id, workflow.id)
+      toast.success('Incremental research scan started')
+      await refreshOperations()
+    } catch (e) {
+      toast.error(errMsg(e))
+    } finally {
+      setResearchActionBusy(null)
+    }
+  }
+
+  async function retryResearchOperation(operationId: string) {
+    if (!project) return
+    const operation = operations.find(item => item.id === operationId && item.kind === 'research' && item.status === 'failed')
+    if (!operation) return
+    setResearchActionBusy('retry-operation')
+    try {
+      await projectResearchApi.retryOperation(project.id, operation.id)
+      toast.success('Research operation retry queued')
+      await Promise.all([
+        refreshOperations(),
+        operation.progress_json.failed_stage === 'monitor_setup' ? refreshSourceSelection() : Promise.resolve(),
+      ])
+    } catch (e) {
+      toast.error(errMsg(e))
+    } finally {
+      setResearchActionBusy(null)
+    }
+  }
+
+  async function reconcileResearchOperation(operationId: string) {
+    if (!project) return
+    const operation = operations.find(item => item.id === operationId)
+    if (!operation) {
+      toast.error('The research operation is no longer in the page state. Refresh the project and try again.')
+      return
+    }
+    setResearchActionBusy('reconcile-operation')
+    try {
+      const reconciled = await projectResearchApi.reconcileOperation(project.id, operation.id)
+      await Promise.all([refreshOperations(), refreshResearchState()])
+      const stillInSynthesis = reconciled.status === 'active'
+        && reconciled.progress_json.current_stage === 'synthesis'
+      if (stillInSynthesis) {
+        const boundRunStatus = reconciled.reconcile_diagnostic?.bound_run_status
+        toast.error(boundRunStatus
+          ? `The operation is still in synthesis because its bound run is ${boundRunStatus}. Open that run to inspect it.`
+          : 'The operation is still in synthesis and has no readable bound run. Check the server reconciliation log.')
+      } else {
+        toast.success('Research operation status synchronized')
+      }
+    } catch (e) {
+      toast.error(errMsg(e))
+    } finally {
+      setResearchActionBusy(null)
+    }
+  }
+
+  async function rescanResearchBackfill() {
+    if (!project) return
+    const operation = operations.find(item => item.kind === 'research'
+      && ['baseline', 'historical_backfill'].includes(String(item.progress_json.run_kind))
+      && researchOperationStage(item) !== 'monitor_setup'
+      && item.progress_json.partial !== true)
+    if (!operation) return
+    setResearchActionBusy('rescan-backfill')
+    try {
+      await projectResearchApi.rescanBackfill(project.id, operation.id)
+      toast.success('Rescan queued using the current monitor query')
+      await refreshOperations()
+    } catch (e) {
+      toast.error(errMsg(e))
+    } finally {
+      setResearchActionBusy(null)
+    }
+  }
+
+  async function decideResearchCheckpoint(checkpoint: ProjectResearchCheckpoint, decision: 'approved' | 'rejected') {
+    if (!project) return
+    setResearchActionBusy(`checkpoint-${checkpoint.id}`)
+    try {
+      await projectResearchApi.decideCheckpoint(project.id, checkpoint.workflow_id, checkpoint.id, { decision })
+      const toastId = researchReviewToastIdsRef.current.get(checkpoint.id)
+      if (toastId) {
+        toast.dismiss(toastId)
+        researchReviewToastIdsRef.current.delete(checkpoint.id)
+      }
+      toast.success(decision === 'approved' ? 'Checkpoint approved' : 'Checkpoint rejected')
+      await Promise.all([
+        refreshResearchState(),
+        checkpoint.checkpoint_type === 'idea_review' && decision === 'approved' ? refreshSourceSelection() : Promise.resolve(),
+      ])
     } catch (e) {
       toast.error(errMsg(e))
     } finally {
@@ -764,10 +1113,10 @@ export default function ProjectDetailPage() {
       setLiteratureMatrix(rows)
       const workflow = activeResearchWorkflowFrom(researchWorkflows)
       if (workflow?.status === 'active') {
-        await projectResearchApi.runStage(project.id, workflow.id, 'screening_matrix')
+        const updatedWorkflow = await projectResearchApi.runStage(project.id, workflow.id, 'screening_matrix')
+        setResearchWorkflows(current => upsertById(current, updatedWorkflow))
       }
       toast.success(`Literature matrix rebuilt with ${rows.length} papers`)
-      await loadAll()
     } catch (e) {
       toast.error(errMsg(e))
     } finally {
@@ -777,23 +1126,30 @@ export default function ProjectDetailPage() {
 
   async function runIntegrityGate() {
     if (!project) return
-    const workflow = activeResearchWorkflowFrom(researchWorkflows)
-    if (!workflow || workflow.status !== 'active') {
-      toast.error('Start an active research workflow before running integrity')
+    const report = researchReports.find(item => item.status !== 'rejected') ?? researchReports[0]
+    if (!report) {
+      toast.error('Generate a research report before running integrity')
       return
     }
     setResearchActionBusy('run-integrity')
     try {
-      await projectResearchApi.runIntegrity(project.id, {
-        workflow_id: workflow.id,
-        stage_key: 'integrity_gate',
-      })
-      toast.success('Integrity checkpoint created')
-      await loadAll()
+      await projectResearchApi.runReportIntegrity(project.id, report.id)
+      await refreshResearchState()
+      toast.success('Integrity report created')
     } catch (e) {
       toast.error(errMsg(e))
     } finally {
       setResearchActionBusy(null)
+    }
+  }
+
+  async function handleWorkflowRunCreated(run: Run) {
+    setRecentRuns(current => [run, ...current.filter(item => item.id !== run.id)].slice(0, 5))
+    if (!projectId) return
+    try {
+      setSummary(await projectsApi.getSummary(projectId))
+    } catch {
+      // The newly created run is already visible; summary refresh is best-effort.
     }
   }
 
@@ -829,19 +1185,67 @@ export default function ProjectDetailPage() {
       root_path: ws?.root_path ?? null,
     }
   })
-  const sourceConnectionById = Object.fromEntries(sourceConnections.map(connection => [connection.id, connection])) as Record<string, SourceConnection>
-  const linkedSourceConnections = sourceBindings
-    .map(binding => sourceConnectionById[binding.source_connection_id])
-    .filter((connection): connection is SourceConnection => Boolean(connection))
+  const sourceChannelById = Object.fromEntries(sourceChannels.map(channel => [channel.id, channel])) as Record<string, SourceChannel>
+  const linkedSourceChannels = sourceBindings
+    .map(binding => sourceChannelById[binding.source_channel_id])
+    .filter((channel): channel is SourceChannel => Boolean(channel))
   const projectSourceOptions = Array.from(
     new Map(
-      linkedSourceConnections.map(connection => [
-        connection.id,
-        { value: connection.id, label: connection.name },
+      linkedSourceChannels.map(channel => [
+        channel.source_connection_id,
+        {
+          value: channel.source_connection_id,
+          label: `${channel.name} · ${channel.provider.display_name ?? channel.provider.key ?? 'Provider'}`,
+          connectionId: channel.source_connection_id,
+        },
       ]),
     ).values(),
   )
   const isAcademicProject = projectPresetKey === ACADEMIC_PRESET_KEY
+  // Item limit is a Research setting: it is independent of the question and
+  // monitor setup. Once a backfill operation has plans, editing raises the
+  // live plans' budget; before that, it updates only the saved limit draft.
+  const researchOperationForSettings = operations.find(item => item.kind === 'research'
+    && ['baseline', 'historical_backfill'].includes(String(item.progress_json.run_kind))
+    && numberValue(objectValue(item.progress_json.history).max_items) > 0)
+  const researchSetupDraft = researchSetupDraftFromWorkflow(
+    researchWorkflowForDisplayFrom(researchWorkflows),
+    project.current_focus?.trim() ?? '',
+    sourceBindings.filter(binding => binding.status === 'active').map(binding => binding.source_channel_id),
+  )
+  const currentItemLimit = researchOperationForSettings
+    ? numberValue(objectValue(researchOperationForSettings.progress_json.history).max_items) || null
+    : Number(researchSetupDraft.max_items) || null
+  async function updateResearchItemLimit(newLimit: number) {
+    if (!project) return
+    if (researchOperationForSettings) {
+      setResearchActionBusy('update-item-limit')
+      try {
+        await projectResearchApi.updateItemLimit(project.id, researchOperationForSettings.id, newLimit)
+        toast.success('Research item limit updated')
+        await refreshResearchState()
+      } catch (e) {
+        toast.error(errMsg(e))
+      } finally {
+        setResearchActionBusy(null)
+      }
+      return
+    }
+    setResearchActionBusy('update-item-limit')
+    try {
+      const workflow = await projectResearchApi.updateInitialItemLimit(project.id, newLimit)
+      setResearchWorkflows(current => upsertById(current, workflow))
+      toast.success('Research item limit updated')
+    } catch (e) {
+      toast.error(errMsg(e))
+    } finally {
+      setResearchActionBusy(null)
+    }
+  }
+  const visibleOperations = operations.filter(operation =>
+    ['draft', 'active', 'waiting_review'].includes(operation.status)
+    && !(isAcademicProject && operation.kind === 'research'),
+  )
 
   return (
     <div className="p-6 space-y-6">
@@ -880,11 +1284,11 @@ export default function ProjectDetailPage() {
         <div className="flex gap-2 shrink-0">
           <Button asChild size="sm" className="gap-1.5"><Link to={`/projects/${project.id}/chat`}><MessageSquareText className="size-3.5" />Chat</Link></Button>
           <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setEditOpen(true)}>
-            <Edit2 className="size-3.5" />
-            Edit
+            <SettingsIcon className="size-3.5" />
+            Settings
           </Button>
           {project.status === 'active' && (
-            <Button variant="outline" size="sm" className="gap-1.5" onClick={archive} disabled={archiving}>
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setArchiveConfirmOpen(true)} disabled={archiving}>
               <Archive className="size-3.5" />
               {archiving ? 'Archiving…' : 'Archive'}
             </Button>
@@ -893,7 +1297,7 @@ export default function ProjectDetailPage() {
       </div>
 
       {/* Summary cards */}
-      {summary && (
+      {summary && !isAcademicProject && (
         <section className="space-y-2">
           <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Overview</h2>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
@@ -907,10 +1311,10 @@ export default function ProjectDetailPage() {
         </section>
       )}
 
-      {operations.some(operation => ['draft', 'active', 'waiting_review'].includes(operation.status)) && <section className="space-y-2">
+      {!isAcademicProject && visibleOperations.length > 0 && <section className="space-y-2">
         <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Operations</h2>
         <div className="grid gap-3 md:grid-cols-2">
-          {operations.filter(operation => ['draft', 'active', 'waiting_review'].includes(operation.status)).map(operation => {
+          {visibleOperations.map(operation => {
             const total=Number(operation.progress_json.total ?? 0),completed=Number(operation.progress_json.completed ?? 0),failed=Number(operation.progress_json.failed ?? 0)
             return <Card key={operation.id} className="p-4 space-y-2"><div className="flex items-center justify-between gap-2"><p className="text-sm font-medium truncate">{operation.title}</p><StatusBadge status={operation.status} /></div><p className="text-xs text-muted-foreground">{operation.kind.replace(/_/g,' ')} · {total ? `${completed}/${total} complete` : 'Preparing'}{failed ? ` · ${failed} failed` : ''}</p><div className="h-1.5 rounded bg-muted overflow-hidden"><div className="h-full bg-primary" style={{width:total?`${Math.min(100,completed/total*100)}%`:'5%'}} /></div>{operation.links&&operation.links.length>0&&<div className="flex flex-wrap gap-2">{operation.links.map(link=>{const to=link.target_type==='run'?`/runs/${link.target_id}`:link.target_type==='proposal'?`/proposals/${link.target_id}`:link.target_type==='source_backfill_plan'?`/projects/${project.id}/sources`:null;return to?<Link key={`${link.target_type}:${link.target_id}`} to={to} className="text-xs text-accent-foreground hover:underline">{link.role.replace(/_/g,' ')}</Link>:<span key={`${link.target_type}:${link.target_id}`} className="text-xs text-muted-foreground">{link.role.replace(/_/g,' ')}</span>})}</div>}</Card>
           })}
@@ -924,9 +1328,15 @@ export default function ProjectDetailPage() {
         </h2>
         {project.current_focus ? (
           <Card className="p-4">
-            <div className="flex items-start gap-2">
-              <Target className="size-4 text-accent-foreground mt-0.5 shrink-0" />
-              <p className="text-sm">{project.current_focus}</p>
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex min-w-0 items-start gap-2">
+                <Target className="size-4 text-accent-foreground mt-0.5 shrink-0" />
+                <p className="text-sm">{project.current_focus}</p>
+              </div>
+              <Button variant="outline" size="sm" className="shrink-0 gap-1.5" onClick={() => setEditOpen(true)}>
+                <Edit2 className="size-3.5" />
+                {isAcademicProject ? 'Edit question' : 'Edit focus'}
+              </Button>
             </div>
           </Card>
         ) : (
@@ -948,23 +1358,53 @@ export default function ProjectDetailPage() {
         <AcademicResearchWorkbench
           project={project}
           sourceBindings={sourceBindings}
+          sourceChannels={sourceChannels}
           recentSourceItems={recentSourceItems}
           recentEvidence={recentEvidence}
-          sourceRecommendations={sourceRecommendations}
           readerAnnotations={readerAnnotations}
-          researchProfile={researchProfile}
           researchWorkflows={researchWorkflows}
+          researchScanSummaries={researchScanSummaries}
           researchCheckpoints={researchCheckpoints}
           literatureMatrix={literatureMatrix}
-          synthesisArtifacts={synthesisArtifacts}
+          researchReports={researchReports}
+          researchOperations={operations}
+          researchRunStatuses={Object.fromEntries(recentRuns.map(run => [run.id, run.status]))}
+          researchDataLoading={researchDataLoading}
+          modelProviders={modelProviders}
           screeningCriteria={screeningCriteria}
           researchActionBusy={researchActionBusy}
-          onPrepareProfile={prepareResearchProfile}
-          onStartWorkflow={startAutoResearchWorkflow}
+          onSaveInitialIntake={saveInitialIntake}
+          onRefineQuestion={refineResearchQuestion}
+          onStartInitialIntake={startInitialResearch}
+          onExtendHistory={extendResearchHistory}
+          onTriggerIncremental={triggerIncrementalResearch}
+          onLoadQuestionImpact={loadResearchQuestionImpact}
+          onResolveQuestion={resolveResearchQuestion}
+          onRetryOperation={retryResearchOperation}
+          onReconcileOperation={reconcileResearchOperation}
+          onOpenSettings={() => setEditOpen(true)}
+          onRescanBackfill={rescanResearchBackfill}
+          onDecideCheckpoint={decideResearchCheckpoint}
           onRebuildMatrix={rebuildLiteratureMatrix}
           onRunIntegrity={runIntegrityGate}
           onEditQuestion={() => setEditOpen(true)}
+          onSourceCreated={linkResearchSourceToProject}
         />
+      )}
+
+      {isAcademicProject && (
+        <details className="rounded-lg border border-border bg-card p-4">
+          <summary className="cursor-pointer select-none text-sm font-medium">Project details</summary>
+          <p className="mt-2 text-xs text-muted-foreground">General project records are available here when needed; research results and the next action stay primary above.</p>
+          <div className="mt-3 flex flex-wrap gap-x-3 gap-y-2 text-xs">
+            <Link className="text-accent-foreground hover:underline" to={`/activity?project_id=${project.id}`}>{summary?.activity_count ?? recentActivities.length} activities</Link>
+            <Link className="text-accent-foreground hover:underline" to={`/runs?project_id=${project.id}`}>{recentRuns.length} recent runs</Link>
+            <Link className="text-accent-foreground hover:underline" to={`/proposals?project_id=${project.id}`}>{summary?.pending_proposal_count ?? pendingProposals.length} pending proposals</Link>
+            <Link className="text-accent-foreground hover:underline" to={`/artifacts?project_id=${project.id}`}>{summary?.artifact_count ?? recentArtifacts.length} artifacts</Link>
+            <Link className="text-accent-foreground hover:underline" to="/automations">{automations.length} automations</Link>
+            <button type="button" className="text-accent-foreground hover:underline" onClick={() => setLinkOpen(true)}>{links.length} linked workspaces</button>
+          </div>
+        </details>
       )}
 
       {!isAcademicProject && (
@@ -974,13 +1414,13 @@ export default function ProjectDetailPage() {
             projectId={project.id}
             projectName={project.name}
             workspaceOptions={workflowWorkspaceOptions}
-            onRunCreated={loadAll}
+            onRunCreated={handleWorkflowRunCreated}
           />
         </section>
       )}
 
       {/* Sources consumption */}
-      <section className="space-y-2">
+      {!isAcademicProject && <section className="space-y-2">
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
@@ -1026,23 +1466,34 @@ export default function ProjectDetailPage() {
             ) : (
               <div className="space-y-2">
                 {sourceBindings.slice(0, 4).map(binding => {
-                  const connection = sourceConnectionById[binding.source_connection_id]
+                  const channel = sourceChannelById[binding.source_channel_id]
                   return (
                     <div key={binding.id} className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
-                        <p className="text-sm font-medium truncate">{connection?.name ?? binding.source_connection_id}</p>
-                        <p className="text-xs text-muted-foreground truncate">{connection?.endpoint_url ?? binding.binding_key}</p>
+                        <p className="text-sm font-medium truncate">{channel?.name ?? binding.source_channel_id}</p>
+                        <p className="text-xs text-muted-foreground truncate">{channel?.provider.display_name ?? channel?.provider.key ?? binding.binding_key} · {String(channel?.query.search_query ?? channel?.endpoint_url ?? 'Configured channel')}</p>
                       </div>
                       <Button
                         type="button"
                         size="sm"
                         variant="outline"
                         className="shrink-0 gap-1.5"
-                        disabled={project.status !== 'active' || binding.status !== 'active' || backfillingBindingId === binding.id}
+                        disabled={project.status !== 'active' || binding.status !== 'active' || backfillingBindingId === binding.id || removingBindingId === binding.id}
                         onClick={() => backfillSourceBinding(binding)}
                       >
                         <RefreshCw className="size-3.5" />
                         {backfillingBindingId === binding.id ? 'Backfilling…' : 'Backfill history'}
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="shrink-0 gap-1.5 text-destructive hover:text-destructive"
+                        disabled={project.status !== 'active' || binding.status === 'archived' || removingBindingId === binding.id}
+                        onClick={() => setBindingToRemove(binding)}
+                      >
+                        <Trash2 className="size-3.5" />
+                        {removingBindingId === binding.id ? 'Removing…' : 'Remove'}
                       </Button>
                     </div>
                   )
@@ -1052,7 +1503,7 @@ export default function ProjectDetailPage() {
             )}
             <div className="flex gap-1.5 flex-wrap mt-3">
               <Badge variant="outline">{sourceBindings.length} bindings</Badge>
-              <Badge variant="muted">{linkedSourceConnections.length} connections</Badge>
+              <Badge variant="muted">{linkedSourceChannels.length} channels</Badge>
             </div>
           </Card>
           <Card className="p-4">
@@ -1123,7 +1574,7 @@ export default function ProjectDetailPage() {
             ) : (
               <div className="space-y-2">
                 {sourceRecommendations.map(decision => {
-                  const connection = sourceConnectionById[decision.source_connection_id]
+                  const channel = sourceChannels.find(item => item.id === decision.source_channel_id)
                   return (
                     <div key={decision.id} className="min-w-0">
                       <div className="flex items-center gap-1.5">
@@ -1134,9 +1585,9 @@ export default function ProjectDetailPage() {
                       </div>
                       <p className="mt-1 text-sm font-medium truncate">{decision.item.title ?? decision.source_item_id}</p>
                       <p className="text-xs text-muted-foreground line-clamp-2">{decision.reason ?? decision.item.source_domain ?? decision.review_status}</p>
-                      {connection && (
-                        <Link to={`/sources/sources/${connection.id}`} className="mt-1 block text-xs text-accent-foreground hover:underline">
-                          {connection.name}
+                      {channel && (
+                        <Link to={`/sources/${channel.source_connection_id}`} className="mt-1 block text-xs text-accent-foreground hover:underline">
+                          {channel.source_name}
                         </Link>
                       )}
                     </div>
@@ -1156,10 +1607,10 @@ export default function ProjectDetailPage() {
             ) : (
               <div className="space-y-2">
                 {readerAnnotations.map(ann => (
-                  ann.source_item_id ? (
+                  ann.document_type === 'source_item' ? (
                     <Link
                       key={ann.id}
-                      to={`/library/items/${ann.source_item_id}`}
+                      to={`/library/items/${ann.document_id}`}
                       className="block min-w-0 rounded hover:bg-muted/50 -mx-1 px-1 py-0.5 transition-colors"
                     >
                       <p className="text-xs text-muted-foreground capitalize">{ann.annotation_type}</p>
@@ -1176,10 +1627,10 @@ export default function ProjectDetailPage() {
             )}
           </Card>
         </div>
-      </section>
+      </section>}
 
       {/* Linked workspaces */}
-      <section className="space-y-2">
+      {!isAcademicProject && <section className="space-y-2">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Linked workspaces</h2>
           {project.status === 'active' && (
@@ -1226,17 +1677,17 @@ export default function ProjectDetailPage() {
             })}
           </div>
         )}
-      </section>
+      </section>}
 
       {/* Project activity — scoped to this project */}
       <section className="space-y-4">
         <div className="flex items-center gap-2">
-          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Project activity</h2>
+          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">{isAcademicProject ? 'Project Memory' : 'Project activity'}</h2>
           {detailsLoading && <Badge variant="muted">Loading</Badge>}
         </div>
 
         {/* Recent activities */}
-        <div className="space-y-1.5">
+        {!isAcademicProject && <div className="space-y-1.5">
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-muted-foreground">Recent Activities</span>
             <Link to={`/activity?project_id=${project.id}`} className="text-xs text-accent-foreground hover:underline">View all →</Link>
@@ -1256,10 +1707,10 @@ export default function ProjectDetailPage() {
               ))}
             </div>
           )}
-        </div>
+        </div>}
 
         {/* Recent artifacts */}
-        <div className="space-y-1.5">
+        {!isAcademicProject && <div className="space-y-1.5">
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-muted-foreground">Recent Artifacts</span>
             <Link to={`/artifacts?project_id=${project.id}`} className="text-xs text-accent-foreground hover:underline">View all →</Link>
@@ -1276,10 +1727,10 @@ export default function ProjectDetailPage() {
               ))}
             </div>
           )}
-        </div>
+        </div>}
 
         {/* Pending proposals */}
-        <div className="space-y-1.5">
+        {!isAcademicProject && <div className="space-y-1.5">
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-muted-foreground">Pending Proposals</span>
             <Link to={`/proposals?project_id=${project.id}`} className="text-xs text-accent-foreground hover:underline">View all →</Link>
@@ -1299,10 +1750,10 @@ export default function ProjectDetailPage() {
               ))}
             </div>
           )}
-        </div>
+        </div>}
 
         {/* Recent runs */}
-        <div className="space-y-1.5">
+        {!isAcademicProject && <div className="space-y-1.5">
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-muted-foreground">Recent Runs</span>
             <Link to={`/runs?project_id=${project.id}`} className="text-xs text-accent-foreground hover:underline">View all →</Link>
@@ -1322,10 +1773,10 @@ export default function ProjectDetailPage() {
               ))}
             </div>
           )}
-        </div>
+        </div>}
 
         {/* Automations bound to this project */}
-        <div className="space-y-1.5">
+        {!isAcademicProject && <div className="space-y-1.5">
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-muted-foreground">Automations</span>
             <Link to="/automations" className="text-xs text-accent-foreground hover:underline">View all →</Link>
@@ -1345,19 +1796,19 @@ export default function ProjectDetailPage() {
               ))}
             </div>
           )}
-        </div>
+        </div>}
 
         {/* Project memory */}
         <div className="space-y-1.5">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-muted-foreground">Project Memory</span>
+            {!isAcademicProject && <span className="text-xs font-medium text-muted-foreground">Project Memory</span>}
             <Link to={`/memory?project_id=${project.id}`} className="text-xs text-accent-foreground hover:underline">View all →</Link>
           </div>
           {projectMemory.length === 0 ? (
             <Card className="p-3"><p className="text-xs text-muted-foreground">No memory entries for this project.</p></Card>
           ) : (
             <div className="space-y-1.5">
-              {projectMemory.map(m => (
+              {projectMemory.slice(0, isAcademicProject ? 3 : projectMemory.length).map(m => (
                 <Card key={m.id} className="px-3 py-2 flex items-center justify-between gap-2">
                   <div className="min-w-0">
                     <p className="text-xs font-medium truncate">{m.title || m.content?.slice(0, 60) || '—'}</p>
@@ -1372,11 +1823,43 @@ export default function ProjectDetailPage() {
       </section>
 
       {/* Dialogs */}
+      <ConfirmDialog
+        open={archiveConfirmOpen}
+        onOpenChange={setArchiveConfirmOpen}
+        title={`Archive “${project.name}”?`}
+        description="The project will be hidden from active project lists, while its research records and artifacts remain preserved."
+        confirmLabel="Archive project"
+        onConfirm={() => { void archive() }}
+      />
+
+      <ConfirmDialog
+        open={Boolean(bindingToRemove)}
+        onOpenChange={open => { if (!open && !removingBindingId) setBindingToRemove(null) }}
+        title="Remove source from project?"
+        description="This stops the project from consuming the source. The Source and its monitors remain available for other projects."
+        confirmLabel="Remove source"
+        onConfirm={() => { if (bindingToRemove) void removeSourceBinding(bindingToRemove) }}
+      />
+
       <EditProjectDialog
         project={project}
         open={editOpen}
         onOpenChange={setEditOpen}
         onSaved={updated => setProject(updated)}
+        research={isAcademicProject ? {
+          currentItemLimit,
+          hasLiveOperation: researchOperationForSettings !== undefined,
+          hasStartedWorkflow: researchWorkflows.some(workflow => workflow.status !== 'not_started'),
+          busy: researchActionBusy !== null,
+          onUpdateItemLimit: updateResearchItemLimit,
+          snapshot: {
+            question: project.current_focus ?? '',
+            monitors: researchSetupDraft.source_channel_ids.map(id => sourceChannels.find(channel => channel.id === id)?.name ?? id),
+            history: researchSetupDraft.history_mode === 'all_available' ? 'All available history' : `${researchSetupDraft.from || '—'} to ${researchSetupDraft.to || '—'}`,
+            maxItems: Number(researchSetupDraft.max_items) || null,
+            monitoringField: researchSetupDraft.monitoring_field === 'lastUpdatedDate' ? 'Last update date' : 'Submission date',
+          },
+        } : null}
       />
 
       <LinkWorkspaceDialog
@@ -1384,23 +1867,23 @@ export default function ProjectDetailPage() {
         existingIds={existingIds}
         open={linkOpen}
         onOpenChange={setLinkOpen}
-        onLinked={loadAll}
+        onLinked={refreshWorkspaceData}
       />
 
-      <LinkSourceConnectionDialog
+      <ProjectSourceLinkDialog
         projectId={project.id}
         open={sourceLinkOpen}
         onOpenChange={setSourceLinkOpen}
-        connections={sourceConnections}
+        channels={sourceChannels}
         bindings={sourceBindings}
-        onLinked={loadAll}
+        onLinked={refreshProjectSources}
       />
 
       <SaveProjectUrlDialog
         open={saveUrlOpen}
         onOpenChange={setSaveUrlOpen}
         sourceOptions={projectSourceOptions}
-        onSaved={loadAll}
+        onSaved={refreshProjectSources}
       />
     </div>
   )

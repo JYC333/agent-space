@@ -22,6 +22,7 @@ const MIGRATIONS_DIR = join(process.cwd(), "migrations");
 const REAL_CATALOG_ROOT = resolve(process.cwd(), "..", "catalog");
 const SPACE = "33333333-1111-4111-8111-111111111111";
 const OWNER = "3baaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const PROJECT = "55555555-1111-4111-8111-555555555555";
 
 let container: TestPostgresDatabase | undefined;
 let pool: Pool | undefined;
@@ -356,12 +357,24 @@ describe("resolvePrompt (real Postgres)", () => {
         research_question_section: "\nResearch question:\nLLM eval harnesses\n\n",
         source_mode_section: "Source mode: project_sources\n\n",
         capabilities: "- research.source_collect",
-        expected_outputs: "- research_brief.v1",
+        expected_outputs: "- research_report.archive.v1",
       },
     });
     expect(workflow.validation_errors).toEqual([]);
     expect(workflow.rendered_text).toContain("Workflow: Technical Survey");
     expect(workflow.rendered_text).toContain("LLM eval harnesses");
+
+    const synthesis = await resolvePrompt(pool!, {
+      spaceId: SPACE,
+      userId: OWNER,
+      projectId: PROJECT,
+      assetKey: "project_research.synthesis",
+      variables: { project_id: PROJECT, research_question: "test", report_depth: "full", critique_context: "none" },
+    });
+    expect(synthesis.validation_errors).toEqual([]);
+    expect(synthesis.rendered_text).toContain("Research question: test");
+    expect(synthesis.rendered_text).toContain('"status":"rejected"');
+    expect(synthesis.content_hash).toBeTruthy();
   });
 
   it("reports a missing required variable as a validation error and leaves the placeholder unrendered", async () => {

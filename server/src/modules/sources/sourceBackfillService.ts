@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ServerConfig } from "../../config";
 import type { Queryable, SpaceUserIdentity } from "../routeUtils/common";
-import { HttpError, requiredString, withQueryableTransaction } from "../routeUtils/common";
+import { HttpError, objectValue, requiredString, withQueryableTransaction } from "../routeUtils/common";
 import { insertProposalRow } from "../proposals/reviewPackets";
 import type { ProposalRow } from "../proposals/repository";
 import { contentDecisionFromDb } from "../access/contentAccessQuery";
@@ -12,6 +12,7 @@ import {
   normalizeQuota,
   normalizeStrategy,
   planSegments,
+  resolveStrategyBounds,
   type BackfillQuotaPolicy,
   type BackfillSegmentWindow,
   type BackfillStrategy,
@@ -38,17 +39,17 @@ export class SourceBackfillPlanningService {
 
   async preview(identity: SpaceUserIdentity, connectionId: string, body: Record<string, unknown>): Promise<BackfillPreview> {
     const connectorKey = await this.assertReadable(identity, connectionId);
-    const strategy = normalizeStrategy(body);
+    const strategy = resolveStrategyBounds(normalizeStrategy(body));
     assertSupportedStrategy(connectorKey, strategy);
     return { strategy, segments: planSegments(strategy), quota_policy: normalizeQuota(body.quota_policy) };
   }
 
   async create(identity: SpaceUserIdentity, connectionId: string, body: Record<string, unknown>) {
     const connectorKey = await this.assertManage(identity, connectionId);
-    const strategy = normalizeStrategy(body);
+    const strategy = resolveStrategyBounds(normalizeStrategy(body));
     const quotaPolicy = normalizeQuota(body.quota_policy);
-    const plannedSegments = planSegments(strategy);
     assertSupportedStrategy(connectorKey, strategy);
+    const plannedSegments = planSegments(strategy);
     const key = requiredString(body.idempotency_key, "idempotency_key");
     return withQueryableTransaction(this.db, (db) =>
       new SourceBackfillPlanningService(db, this.config).createLocked(identity, connectionId, body, key, {
@@ -84,7 +85,7 @@ export class SourceBackfillPlanningService {
   async list(identity: SpaceUserIdentity, connectionId: string) {
     await this.assertReadable(identity, connectionId);
     const rows = await this.db.query(
-      `SELECT * FROM source_backfill_plans WHERE space_id=$1 AND source_connection_id=$2 ORDER BY created_at DESC`,
+      `SELECT * FROM source_backfill_plans WHERE space_id=$1 AND source_channel_id=$2 ORDER BY created_at DESC`,
       [identity.spaceId, connectionId],
     );
     return rows.rows;
@@ -102,7 +103,7 @@ export class SourceBackfillPlanningService {
     const row = await this.db.query(
       `UPDATE source_backfill_plans
           SET status=$4, next_eligible_at=NULL, updated_at=$5
-        WHERE id=$1 AND space_id=$2 AND source_connection_id=$3 AND status IN ('approved','running','paused')
+        WHERE id=$1 AND space_id=$2 AND source_channel_id=$3 AND status IN ('approved','running','paused')
         RETURNING *`,
       [planId, identity.spaceId, connectionId, status, new Date().toISOString()],
     );
@@ -110,42 +111,48 @@ export class SourceBackfillPlanningService {
     return row.rows[0];
   }
 
-  private async connection(spaceId: string, id: string): Promise<string> {
-    const r = await this.db.query<{ connector_key: string }>(
-      `SELECT c.connector_key FROM source_connections sc JOIN source_connectors c ON c.id=sc.connector_id WHERE sc.id=$1 AND sc.space_id=$2 AND sc.deleted_at IS NULL`,
+  private async connection(spaceId: string, id: string): Promise<{ connector_key: string; source_connection_id: string }> {
+    const r = await this.db.query<{ connector_key: string; source_connection_id: string }>(
+      `SELECT c.connector_key, sc.id AS source_connection_id
+         FROM source_channels ch
+         JOIN source_connections sc ON sc.id=ch.source_connection_id
+         JOIN source_provider_connectors spc ON spc.id=sc.provider_connector_id
+         JOIN source_connectors c ON c.id=spc.connector_id
+        WHERE ch.id=$1 AND ch.space_id=$2 AND ch.status <> 'archived' AND sc.deleted_at IS NULL`,
       [id, spaceId],
     );
     if (!r.rows[0]) throw new HttpError(404, "Source connection not found");
-    return r.rows[0].connector_key;
+    return r.rows[0];
   }
 
   private async assertReadable(identity: SpaceUserIdentity, id: string): Promise<string> {
-    const connectorKey = await this.connection(identity.spaceId, id);
-    if ((await contentDecisionFromDb(this.db, identity, "source_connection", id)) === "deny") {
+    const channel = await this.connection(identity.spaceId, id);
+    if ((await contentDecisionFromDb(this.db, identity, "source_connection", channel.source_connection_id)) === "deny") {
       throw new HttpError(404, "Source connection not found");
     }
-    return connectorKey;
+    return channel.connector_key;
   }
 
   private async assertManage(identity: SpaceUserIdentity, id: string): Promise<string> {
-    const connectorKey = await this.connection(identity.spaceId, id);
-    if ((await contentDecisionFromDb(this.db, identity, "source_connection", id)) === "deny") {
+    const channel = await this.connection(identity.spaceId, id);
+    if ((await contentDecisionFromDb(this.db, identity, "source_connection", channel.source_connection_id)) === "deny") {
       throw new HttpError(404, "Source connection not found");
     }
     const r = await this.db.query(
-      `SELECT 1 FROM source_connections sc
-        WHERE sc.id=$1 AND sc.space_id=$2
+      `SELECT 1 FROM source_channels ch
+        JOIN source_connections sc ON sc.id=ch.source_connection_id
+        WHERE ch.id=$1 AND ch.space_id=$2 AND ch.status <> 'archived'
           AND (sc.owner_user_id=$3
                OR EXISTS(SELECT 1 FROM space_memberships sm WHERE sm.space_id=$2 AND sm.user_id=$3 AND sm.status='active' AND sm.role IN ('owner','admin')))`,
       [id, identity.spaceId, identity.userId],
     );
     if (!r.rows[0]) throw new HttpError(403, "Source owner or space admin access required");
-    return connectorKey;
+    return channel.connector_key;
   }
 
   private async plan(spaceId: string, connectionId: string, id: string): Promise<Record<string, unknown>> {
     const r = await this.db.query(
-      `SELECT * FROM source_backfill_plans WHERE id=$1 AND space_id=$2 AND source_connection_id=$3`,
+      `SELECT * FROM source_backfill_plans WHERE id=$1 AND space_id=$2 AND source_channel_id=$3`,
       [id, spaceId, connectionId],
     );
     if (!r.rows[0]) throw new HttpError(404, "Backfill plan not found");
@@ -166,7 +173,7 @@ export class SourceBackfillPlanningService {
       `SELECT 1
          FROM source_backfill_plans p LEFT JOIN project_source_bindings b ON b.id=p.project_source_binding_id AND b.space_id=p.space_id
          LEFT JOIN project_operations o ON o.id=p.project_operation_id AND o.space_id=p.space_id
-        WHERE p.id=$1 AND p.space_id=$2 AND p.source_connection_id=$3
+        WHERE p.id=$1 AND p.space_id=$2 AND p.source_channel_id=$3
           AND (b.project_id=$4 OR o.project_id=$4)
           AND (b.project_id IS NULL OR b.project_id=$4)
           AND (o.project_id IS NULL OR o.project_id=$4)`,
@@ -193,7 +200,7 @@ export class SourceBackfillPlanningService {
     actor: BackfillActor,
   ) {
     const planRow = await db.query<{ status: string; proposal_id: string | null; strategy_json: unknown; quota_policy_json: unknown }>(
-      `SELECT * FROM source_backfill_plans WHERE id=$1 AND space_id=$2 AND source_connection_id=$3 FOR UPDATE`,
+      `SELECT * FROM source_backfill_plans WHERE id=$1 AND space_id=$2 AND source_channel_id=$3 FOR UPDATE`,
       [planId, identity.spaceId, connectionId],
     );
     const plan = planRow.rows[0];
@@ -211,14 +218,16 @@ export class SourceBackfillPlanningService {
       payload: {
         proposal_type: "source_backfill_start",
         action_id: "source.backfill.propose_start",
-        source_connection_id: connectionId,
+        source_channel_id: connectionId,
         source_backfill_plan_id: planId,
         ...(actor.projectId ? { project_id: actor.projectId } : {}),
         strategy_json: plan.strategy_json,
         quota_policy_json: plan.quota_policy_json,
         ...(actor.idempotencyKey ? { idempotency_key: actor.idempotencyKey } : {}),
       },
-      rationale: "Run a bounded, quota-controlled history import.",
+      rationale: objectValue(plan.strategy_json).history_mode === "all_available"
+        ? "Run a quota-controlled import across all available arXiv history."
+        : "Run a bounded, quota-controlled history import.",
       createdByUserId: actor.agentId ? null : identity.userId,
       createdByAgentId: actor.agentId ?? null,
       createdByRunId: actor.runId ?? null,
@@ -229,7 +238,7 @@ export class SourceBackfillPlanningService {
       requiredApproverRole: "owner",
     });
     await db.query(
-      `UPDATE source_backfill_plans SET status='proposed', proposal_id=$4, origin=$5, updated_at=$6 WHERE id=$1 AND space_id=$2 AND source_connection_id=$3`,
+      `UPDATE source_backfill_plans SET status='proposed', proposal_id=$4, origin=$5, updated_at=$6 WHERE id=$1 AND space_id=$2 AND source_channel_id=$3`,
       [planId, identity.spaceId, connectionId, created.id, actor.agentId ? "agent_proposal" : "user", new Date().toISOString()],
     );
     return created;
@@ -242,13 +251,21 @@ export class SourceBackfillPlanningService {
     key: string,
     preview: BackfillPreview,
   ) {
-    const { bindingId, operationId, operationProjectId } = await this.resolveProjectScope(identity, connectionId, body);
+    const { bindingId, operationId, operationProjectId, operationKind, operationMaxItems } = await this.resolveProjectScope(identity, connectionId, body);
+    const researchOperation = operationKind === "research";
+    const strategy = researchOperation
+      ? { ...preview.strategy, max_items: operationMaxItems! }
+      : preview.strategy;
+    const segments = researchOperation ? planSegments(strategy) : preview.segments;
+    const persistedStrategy = researchOperation
+      ? Object.fromEntries(Object.entries(strategy).filter(([key]) => key !== "max_items"))
+      : strategy;
 
     const id = randomUUID();
     const now = new Date().toISOString();
     const inserted = await this.db.query<{ id: string }>(
       `INSERT INTO source_backfill_plans (
-         id, space_id, source_connection_id, project_source_binding_id, project_operation_id,
+         id, space_id, source_channel_id, project_source_binding_id, project_operation_id,
          requested_by_user_id, origin, strategy_json, quota_policy_json, status,
          segments_total, segments_completed, segments_failed, items_ingested,
          idempotency_key, created_at, updated_at
@@ -262,20 +279,20 @@ export class SourceBackfillPlanningService {
         bindingId,
         operationId,
         identity.userId,
-        JSON.stringify(preview.strategy),
+        JSON.stringify(persistedStrategy),
         JSON.stringify(preview.quota_policy),
-        preview.segments.length,
+        segments.length,
         key,
         now,
       ],
     );
     if (!inserted.rows[0]) return this.reuseIdempotentPlan(identity.spaceId, connectionId, key);
 
-    for (let i = 0; i < preview.segments.length; i++) {
+    for (let i = 0; i < segments.length; i++) {
       await this.db.query(
         `INSERT INTO source_backfill_segments (id, plan_id, space_id, seq, window_json, status, attempt_count, items_ingested)
          VALUES ($1,$2,$3,$4,$5::jsonb,'pending',0,0)`,
-        [randomUUID(), id, identity.spaceId, i, JSON.stringify(preview.segments[i])],
+        [randomUUID(), id, identity.spaceId, i, JSON.stringify(segments[i])],
       );
     }
     if (operationId && operationProjectId) {
@@ -291,7 +308,7 @@ export class SourceBackfillPlanningService {
     let bindingProjectId: string | null = null;
     if (bindingId) {
       const binding = await this.db.query<{ project_id: string }>(
-        `SELECT project_id FROM project_source_bindings WHERE id=$1 AND space_id=$2 AND source_connection_id=$3`,
+        `SELECT project_id FROM project_source_bindings WHERE id=$1 AND space_id=$2 AND source_channel_id=$3`,
         [bindingId, identity.spaceId, connectionId],
       );
       if (!binding.rows[0]) throw new HttpError(404, "Project source binding not found");
@@ -299,35 +316,45 @@ export class SourceBackfillPlanningService {
     }
 
     let operationProjectId: string | null = null;
+    let operationKind: string | null = null;
+    let operationMaxItems: number | null = null;
     if (operationId) {
-      const operation = await this.db.query<{ project_id: string }>(
-        `SELECT project_id FROM project_operations WHERE id=$1 AND space_id=$2`,
+      const operation = await this.db.query<{ project_id: string; kind: string; max_items: number | null }>(
+        `SELECT project_id, kind, (progress_json->'history'->>'max_items')::int AS max_items
+           FROM project_operations
+          WHERE id=$1 AND space_id=$2
+          FOR UPDATE`,
         [operationId, identity.spaceId],
       );
       if (!operation.rows[0]) throw new HttpError(404, "Project operation not found");
       operationProjectId = operation.rows[0].project_id;
+      operationKind = operation.rows[0].kind;
+      operationMaxItems = operation.rows[0].max_items;
       if (bindingProjectId && bindingProjectId !== operationProjectId) {
         throw new HttpError(422, "Project operation and source binding must belong to the same project");
       }
       if (!bindingId) {
         const projectBinding = await this.db.query(
-          `SELECT 1 FROM project_source_bindings WHERE project_id=$1 AND space_id=$2 AND source_connection_id=$3 AND status='active'`,
+          `SELECT 1 FROM project_source_bindings WHERE project_id=$1 AND space_id=$2 AND source_channel_id=$3 AND status='active'`,
           [operationProjectId, identity.spaceId, connectionId],
         );
         if (!projectBinding.rows[0]) throw new HttpError(422, "Project operation requires an active binding to this source connection");
       }
+      if (operationKind === "research" && (!operationMaxItems || operationMaxItems < 1)) {
+        throw new HttpError(409, "Project Research operation has no valid item budget");
+      }
     }
 
-    return { bindingId, operationId, bindingProjectId, operationProjectId };
+    return { bindingId, operationId, bindingProjectId, operationProjectId, operationKind, operationMaxItems };
   }
 
   private async reuseIdempotentPlan(spaceId: string, connectionId: string, key: string) {
-    const existing = await this.db.query<{ id: string; source_connection_id: string }>(
-      `SELECT id, source_connection_id FROM source_backfill_plans WHERE space_id=$1 AND idempotency_key=$2`,
+    const existing = await this.db.query<{ id: string; source_channel_id: string }>(
+      `SELECT id, source_channel_id FROM source_backfill_plans WHERE space_id=$1 AND idempotency_key=$2`,
       [spaceId, key],
     );
     if (!existing.rows[0]) throw new Error("Backfill plan idempotency conflict could not be resolved");
-    if (existing.rows[0].source_connection_id !== connectionId) {
+    if (existing.rows[0].source_channel_id !== connectionId) {
       throw new HttpError(409, "idempotency_key is already used by another source connection");
     }
     return this.details(spaceId, connectionId, existing.rows[0].id);

@@ -44,6 +44,7 @@ const briefArtifact: Artifact = {
   run_id: null,
   proposal_id: null,
   artifact_type: 'retrieval_brief',
+  surface_role: 'user_output',
   title: 'Brief artifact',
   mime_type: 'application/json',
   exportable: true,

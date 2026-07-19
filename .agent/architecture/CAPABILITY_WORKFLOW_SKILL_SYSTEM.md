@@ -149,7 +149,7 @@ APIs do not grant approval directly.
 preset. Product UI should call it a **Saved preset** rather than forcing users
 to learn another profile concept. For example, a project can save a
 `research.technical_survey` preset with project-source collection and
-`research_brief.v1` output.
+`research_report.archive.v1` output.
 
 Saved presets are scoped by `space_id` and `project_id`. They store reusable
 workflow defaults such as source mode and output artifact types. They do not
@@ -241,10 +241,9 @@ plugin boundary:
 - The Context Workspace page consumes the Skill Library Index as a lighter
   directory view. It can show active local overlays but does not collapse Open
   Skill, Capability, runtime skill, or official optional module boundaries.
-- Artifact detail pages render `research_brief.v1`,
-  `research_source_table.v1`, and `research_idea_candidates.v1` as structured
-  JSON-aware views when possible, with inline text fallback when the content is
-  unstructured.
+- Project Research materializes `research_report.v1` into its domain Reader.
+  Its `research_report.archive.v1` Artifact is a hidden audit/export backup;
+  Artifact Detail does not render it as the report.
 
 The frontend does not bypass proposal or run boundaries. Skill review,
 conversion, and capability enablement remain proposal-governed; Research
@@ -270,11 +269,8 @@ It also includes workflow templates:
 - `research.market_research`
 - `research.technical_survey`
 
-Output artifact types are:
-
-- `research_brief.v1`
-- `research_source_table.v1`
-- `research_idea_candidates.v1`
+The synthesis output artifact type is `research_report.archive.v1`; the
+user-facing report is the corresponding `project_research_reports` row.
 
 This model allows future Research Lab product surfaces to consume the same
 capabilities and profiles without making Research a plugin boundary from day

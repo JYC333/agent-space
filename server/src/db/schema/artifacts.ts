@@ -1,4 +1,4 @@
-import { pgTable, index, check, foreignKey, varchar, text, boolean, jsonb, timestamp, type PgTableExtraConfigValue } from "drizzle-orm/pg-core";
+import { pgTable, index, unique, check, foreignKey, varchar, text, boolean, jsonb, timestamp, type PgTableExtraConfigValue } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { users } from "./auth";
 import { runs } from "./runs";
@@ -13,6 +13,7 @@ export const artifacts = pgTable("artifacts", {
 	runId: varchar("run_id", { length: 36 }),
 	proposalId: varchar("proposal_id", { length: 36 }),
 	artifactType: varchar("artifact_type", { length: 64 }).notNull(),
+	surfaceRole: varchar("surface_role", { length: 32 }).default('user_output').notNull(),
 	title: varchar({ length: 512 }).notNull(),
 	content: text(),
 	storageRef: varchar("storage_ref", { length: 1024 }),
@@ -35,12 +36,14 @@ export const artifacts = pgTable("artifacts", {
 	workspaceId: varchar("workspace_id", { length: 36 }),
 }, (table): PgTableExtraConfigValue[] => [
 	index("ix_artifacts_artifact_type").using("btree", table.artifactType.asc().nullsLast()),
+	index("ix_artifacts_space_surface_role").using("btree", table.spaceId.asc().nullsLast(), table.surfaceRole.asc().nullsLast()),
 	index("ix_artifacts_owner_user_id").using("btree", table.ownerUserId.asc().nullsLast()),
 	index("ix_artifacts_project_id").using("btree", table.projectId.asc().nullsLast()),
 	index("ix_artifacts_proposal_id").using("btree", table.proposalId.asc().nullsLast()),
 	index("ix_artifacts_run_id").using("btree", table.runId.asc().nullsLast()),
 	index("ix_artifacts_space_id").using("btree", table.spaceId.asc().nullsLast()),
 	index("ix_artifacts_workspace_id").using("btree", table.workspaceId.asc().nullsLast()),
+	unique("artifacts_id_space_id_key").on(table.id, table.spaceId),
 	foreignKey({
 			columns: [table.ownerUserId],
 			foreignColumns: [users.id],
@@ -75,5 +78,6 @@ export const artifacts = pgTable("artifacts", {
 	check("ck_artifacts_trust_level", sql`(trust_level IS NULL) OR ((trust_level)::text = ANY (ARRAY[('high'::character varying)::text, ('medium'::character varying)::text, ('low'::character varying)::text, ('unknown'::character varying)::text]))`),
 	check("ck_artifacts_visibility", sql`visibility IN ('private', 'space_shared', 'selected_users')`),
 	check("ck_artifacts_access_level", sql`access_level IN ('full', 'summary')`),
+	check("ck_artifacts_surface_role", sql`surface_role IN ('user_output', 'operational', 'system_archive')`),
 	check("ck_artifacts_private_owner", sql`visibility = 'space_shared' OR owner_user_id IS NOT NULL`),
 ]);

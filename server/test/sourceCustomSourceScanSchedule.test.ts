@@ -8,7 +8,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { Pool } from "pg";
 import { getTestPostgres, type TestPostgresDatabase } from "./support/sharedPostgres";
 import { loadConfig, type ServerConfig } from "../src/config";
-import { enqueueDueSourceConnectionScans } from "../src/modules/sources/scanSchedule";
+import { enqueueDueSourceChannelScans } from "../src/modules/sources/scanSchedule";
 import {
   enqueueDueCustomSourceHandlerRuns,
   reclaimStuckCustomSourceHandlerRuns,
@@ -71,7 +71,8 @@ beforeEach(async () => {
   if (!available || !pool) return;
   await pool.query(
     `TRUNCATE jobs, retrieval_edges, retrieval_chunks, retrieval_aliases, retrieval_objects,
-              source_handler_runs, source_handler_versions, source_recipe_versions, source_connections, source_connectors,
+              source_handler_runs, source_handler_versions, source_recipe_versions, source_channel_item_links,
+              source_channel_user_subscriptions, source_channels, source_connections, source_connectors,
               scheduler_tasks, settings, artifacts, extraction_jobs, source_items,
               source_snapshots, extracted_evidence, space_memberships`,
   );
@@ -133,20 +134,18 @@ async function insertConnection(input: {
 }): Promise<void> {
   await pool!.query(
     `INSERT INTO source_connections (
-       id, space_id, connector_id, owner_user_id, name, endpoint_url, status, fetch_frequency,
+       id, space_id, provider_connector_id, owner_user_id, name, status,
        capture_policy, trust_level, consent_json, policy_json, config_json,
        handler_kind, active_handler_version_id, repair_status,
        created_at, updated_at
-     ) VALUES ($1, $2, $3, 'user-1', 'Test source', $4, $5, $6,
+     ) VALUES ($1, $2, $3, 'user-1', 'Test source', $4,
        'extract_text', 'normal', '{}'::jsonb, '{}'::jsonb, '{}'::jsonb,
-       $7, $8, $9, now(), now())`,
+       $5, $6, $7, now(), now())`,
     [
       input.id,
       SPACE_A,
-      input.handlerKind === "built_in" ? "connector-rss" : "connector-custom-source",
-      input.endpointUrl ?? `http://127.0.0.1:${serverPort}/feed`,
+      input.handlerKind === "built_in" ? "mapping-rss" : "mapping-custom-source",
       input.status ?? "active",
-      input.fetchFrequency ?? "hourly",
       input.handlerKind,
       input.activeHandlerVersionId ?? null,
       input.repairStatus ?? "ok",
@@ -154,6 +153,27 @@ async function insertConnection(input: {
   );
   const status = input.status ?? "active";
   const fetchFrequency = input.fetchFrequency ?? "hourly";
+  await pool!.query(
+    `INSERT INTO source_channels (
+       id, space_id, source_connection_id, created_by_user_id, name, channel_type,
+       endpoint_url, query_json, provider_query_json, query_fingerprint, status,
+       fetch_frequency, schedule_rule_json, created_at, updated_at
+     ) VALUES ($1,$2,$1,'user-1','Test channel',$3,$4,'{}'::jsonb,'{}'::jsonb,$1,$5,$6,$7::jsonb,now(),now())`,
+    [
+      input.id,
+      SPACE_A,
+      input.handlerKind === "built_in" ? "feed" : "custom_source",
+      input.endpointUrl ?? `http://127.0.0.1:${serverPort}/feed`,
+      status === "archived" ? "archived" : status,
+      fetchFrequency,
+      JSON.stringify(fetchFrequency === "manual" ? null : { frequency: fetchFrequency, ...(fetchFrequency === "hourly" ? { minute: 0 } : { hour: 0, minute: 0 }) }),
+    ],
+  );
+  await pool!.query(
+    `INSERT INTO source_channel_user_subscriptions (id, space_id, source_channel_id, user_id, status, created_at, updated_at)
+     VALUES ($1,$2,$3,'user-1','subscribed',now(),now())`,
+    [randomUUID(), SPACE_A, input.id],
+  );
   const nextRunAt =
     status === "active" && fetchFrequency !== "manual"
       ? input.nextCheckAt ?? new Date(0).toISOString()
@@ -161,10 +181,10 @@ async function insertConnection(input: {
   await pool!.query(
     `INSERT INTO scheduler_tasks (
        id, task_type, task_key, scope_type, scope_id, space_id, user_id, status,
-       next_run_at, last_run_at, state_json, created_at, updated_at
+       next_run_at, last_run_at, state_json, metadata_json, created_at, updated_at
      ) VALUES (
-       $1, 'source_connection_scan', $2, 'space', $3, $3, 'user-1', $4,
-       $5, NULL, '{}'::jsonb, now(), now()
+       $1, 'source_channel_scan', $2, 'space', $3, $3, 'user-1', $4,
+       $5, NULL, '{}'::jsonb, $6::jsonb, now(), now()
      )`,
     [
       randomUUID(),
@@ -172,6 +192,7 @@ async function insertConnection(input: {
       SPACE_A,
       status === "archived" ? "archived" : status === "active" ? "active" : "paused",
       nextRunAt,
+      JSON.stringify({ source_channel_id: input.id }),
     ],
   );
 }
@@ -216,7 +237,7 @@ describe("enqueueDueSourceConnectionScans (built_in only)", () => {
     if (!available) return;
     const connId = randomUUID();
     await insertConnection({ id: connId, handlerKind: "generated_custom" });
-    const count = await enqueueDueSourceConnectionScans(pool!, 25);
+    const count = await enqueueDueSourceChannelScans(pool!, 25);
     expect(count).toBe(0);
     const jobs = await pool!.query(`SELECT * FROM extraction_jobs WHERE connection_id = $1`, [connId]);
     expect(jobs.rows).toHaveLength(0);
@@ -226,7 +247,7 @@ describe("enqueueDueSourceConnectionScans (built_in only)", () => {
     if (!available) return;
     const connId = randomUUID();
     await insertConnection({ id: connId, handlerKind: "built_in" });
-    const count = await enqueueDueSourceConnectionScans(pool!, 25);
+    const count = await enqueueDueSourceChannelScans(pool!, 25);
     expect(count).toBe(1);
   });
 });
@@ -326,7 +347,7 @@ describe("enqueueDueCustomSourceHandlerRuns", () => {
     const versionId = await insertActiveHandlerVersion(connId);
     const repo = new PgSourcesRepository(pool!, config);
 
-    const job = await repo.scanConnection(
+    const job = await repo.scanChannel(
       { spaceId: SPACE_A, userId: "user-1" },
       connId,
     );
@@ -385,7 +406,7 @@ describe("runPendingCustomSourceHandlerRuns", () => {
     const scheduleTask = await pool!.query<{ next_run_at: string | null; last_run_at: string | null }>(
       `SELECT next_run_at, last_run_at
          FROM scheduler_tasks
-        WHERE task_type = 'source_connection_scan' AND task_key = $1`,
+        WHERE task_type = 'source_channel_scan' AND task_key = $1`,
       [connId],
     );
     expect(scheduleTask.rows[0]?.last_run_at).not.toBeNull();
@@ -417,7 +438,7 @@ describe("runPendingCustomSourceHandlerRuns", () => {
     const scheduleTask = await pool!.query<{ next_run_at: string | null }>(
       `SELECT next_run_at
          FROM scheduler_tasks
-        WHERE task_type = 'source_connection_scan' AND task_key = $1`,
+        WHERE task_type = 'source_channel_scan' AND task_key = $1`,
       [connId],
     );
     expect(new Date(scheduleTask.rows[0]!.next_run_at!).getTime()).toBeGreaterThan(Date.now());
@@ -541,7 +562,7 @@ describe("runPendingCustomSourceHandlerRuns", () => {
 describe("Phase 9 automatic repair_status transitions", () => {
   async function resetForNextRun(connId: string): Promise<void> {
     await pool!.query(
-      `UPDATE scheduler_tasks SET next_run_at = $2 WHERE task_type = 'source_connection_scan' AND task_key = $1`,
+      `UPDATE scheduler_tasks SET next_run_at = $2 WHERE task_type = 'source_channel_scan' AND task_key = $1`,
       [connId, new Date(0).toISOString()],
     );
   }
@@ -571,7 +592,7 @@ describe("Phase 9 automatic repair_status transitions", () => {
     expect(afterThreeFailures.rows[0]?.repair_status).toBe("repair_required");
 
     // Point the connection at the working local HTTP server and run once more.
-    await pool!.query(`UPDATE source_connections SET endpoint_url = $2 WHERE id = $1`, [
+    await pool!.query(`UPDATE source_channels SET endpoint_url = $2 WHERE id = $1`, [
       connId,
       `http://127.0.0.1:${serverPort}/feed`,
     ]);

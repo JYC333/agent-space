@@ -98,6 +98,7 @@ export const planNodes = pgTable("plan_nodes", {
   acceptanceCriteriaJson: jsonb("acceptance_criteria_json"),
   definitionOfDone: text("definition_of_done"),
   requiredOutputsJson: jsonb("required_outputs_json"),
+  inputBindingsJson: jsonb("input_bindings_json").default([]).notNull(),
   maxRuns: integer("max_runs"),
   maxCost: doublePrecision("max_cost"),
   maxDurationSeconds: integer("max_duration_seconds"),
@@ -144,6 +145,7 @@ export const planNodeRuns = pgTable("plan_node_runs", {
   planNodeId: varchar("plan_node_id", { length: 36 }).notNull(),
   runId: varchar("run_id", { length: 36 }).notNull(),
   role: varchar("role", { length: 32 }).default("primary").notNull(),
+  resolvedInputsJson: jsonb("resolved_inputs_json").default({}).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
 }, (table): PgTableExtraConfigValue[] => [
   index("ix_plan_node_runs_node").using("btree", table.spaceId.asc().nullsLast(), table.planNodeId.asc().nullsLast()),

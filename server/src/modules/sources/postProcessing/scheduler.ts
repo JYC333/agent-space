@@ -26,7 +26,7 @@ export async function enqueueDueSourcePostProcessingRules(
         payload: {
           trigger_type: "schedule",
           rule_id: rule.id,
-          source_connection_id: rule.source_connection_id,
+          source_channel_id: rule.source_channel_id,
         },
       });
       await repo.recordRuleFire(rule.space_id, rule.id);

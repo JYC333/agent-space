@@ -4,21 +4,13 @@ import { join } from "node:path";
 import type { ServerConfig } from "../../config";
 import type { Queryable } from "../routeUtils/common";
 import { HttpError } from "../routeUtils/common";
+import { type SourceConnectionRow } from "./sourceRepositoryRows";
 import {
-  CONNECTION_COLUMNS,
-  connectionColumnsForAlias,
-  type SourceConnectionRow,
-} from "./sourceRepositoryRows";
-import {
-  excerpt,
   extractStructuredReaderContent,
-  htmlTitle,
-  stripHtml,
   type StructuredReaderContent,
 } from "./contentParsing";
 import { extractPdfReaderContent } from "./pdfExtract";
-import { parseFeed } from "./feedParser";
-import { arxivHtmlUrl, arxivPdfUrl, parseArxivFeed, parseArxivReference } from "./connectors/arxiv";
+import { arxivHtmlUrl, arxivPdfUrl, parseArxivReference } from "./connectors/arxiv";
 import { acquireArxivRequestSlot } from "./connectors/arxivThrottle";
 import { fetchSource, type SourceFetchResult } from "./sourceFetch";
 import { normalizeUrl, sourceDomain } from "./sourceRepositoryMappers";
@@ -33,9 +25,8 @@ import {
 } from "./retrievalIndexing";
 import { computeNextCheckAt } from "./scanSchedule";
 import {
-  getSourceConnectionScanTask,
-  sourceConnectionWithSchedule,
-  upsertSourceConnectionScanTask,
+  getSourceChannelScanTask,
+  upsertSourceChannelScanTask,
 } from "./sourceConnectionScheduler";
 import {
   enforceSourceRetentionPolicy,
@@ -44,6 +35,9 @@ import {
 import { PgCustomSourceHandlerRepository } from "./customSources/customSourceHandlerRepository";
 import { capturePolicyScanState } from "./capturePolicy";
 import { inheritContentAccessGrants } from "../access/contentAccessInheritance";
+import { sourceConnectorRegistry, type SourceConnectorHandler } from "./catalog/sourceConnectorRegistry";
+import { ProjectResearchOrchestrator } from "../projectResearch/orchestrator";
+import { CustomSourceCredentialService } from "./customSources/customSourceCredentialService";
 
 interface ExtractionJobRow {
   id: string;
@@ -81,6 +75,11 @@ const CONNECTION_SCAN_CHILD_JOB_LIMIT = 25;
 
 interface ConnectionWithConnectorRow extends SourceConnectionRow {
   connector_key: string;
+  endpoint_url: string | null;
+  fetch_frequency: string;
+  schedule_rule_json: unknown;
+  provider_query_json: unknown;
+  channel_id: string | null;
 }
 
 interface ScanCursor {
@@ -88,6 +87,8 @@ interface ScanCursor {
   last_modified?: string;
   last_guid?: string;
   last_published_at?: string;
+  cursor?: string;
+  offset?: number;
 }
 
 export class SourceExtractionWorker {
@@ -118,14 +119,15 @@ export class SourceExtractionWorker {
     }
 
     let runChildrenAfterSuccess = false;
+    let connectionScanResult: { seen: number; page_size: number } | null = null;
     try {
       if (job.job_type === "connection_scan") {
-        await this.executeConnectionScan(job);
+        connectionScanResult = await this.executeConnectionScan(job);
       } else if (job.job_type === "manual_url" || job.job_type === "extract_text") {
         await this.executeTextExtraction(job);
         await emitSourcePostProcessingDeepAnalysisEvent(this.db, {
           spaceId: job.space_id,
-          sourceConnectionId: job.connection_id,
+          sourceChannelId: stringValue(record(job.metadata_json).source_channel_id),
           sourceItemId: job.source_item_id,
           metadata: job.metadata_json,
         });
@@ -156,6 +158,7 @@ export class SourceExtractionWorker {
       }
     }
     if (runChildrenAfterSuccess) {
+      if (connectionScanResult) await this.queueBackfillContinuationIfNeeded(job, connectionScanResult);
       await this.runPendingConnectionScanChildren(job);
     }
 
@@ -269,27 +272,41 @@ export class SourceExtractionWorker {
     );
   }
 
-  private async executeConnectionScan(job: ExtractionJobRow): Promise<void> {
+  private async executeConnectionScan(job: ExtractionJobRow): Promise<{ seen: number; page_size: number }> {
     if (!job.connection_id) throw new HttpError(422, "connection_scan requires connection_id");
-    const connection = await this.getConnection(job.space_id, job.connection_id);
+    const channelId = stringValue(record(job.metadata_json).source_channel_id);
+    const connection = await this.getConnection(job.space_id, job.connection_id, channelId);
     if (!connection.endpoint_url) throw new HttpError(422, "Source connection is missing endpoint_url");
-    const cursor = scanCursor(connection.config_json);
+    const schedulerTask = connection.channel_id
+      ? await getSourceChannelScanTask(this.db, connection.channel_id)
+      : null;
+    const cursor = scanCursor(schedulerTask?.metadata_json);
     const headers: Record<string, string> = {};
     if (cursor.etag) headers["If-None-Match"] = cursor.etag;
     if (cursor.last_modified) headers["If-Modified-Since"] = cursor.last_modified;
 
-    const endpointUrl = backfillEndpointUrl(connection.endpoint_url, connection.connector_key, job.metadata_json);
-    if (connection.connector_key === "arxiv") await acquireArxivRequestSlot();
-    const response = await fetchSource(endpointUrl, {
-      headers,
+    const handler = sourceConnectorRegistry.get(connection.connector_key);
+    const request = isBackfillJob(job)
+      ? handler.buildBackfillRequest(connection, record(record(job.metadata_json).window), cursor as unknown as Record<string, unknown>)
+      : handler.buildScanRequest(connection, cursor as unknown as Record<string, unknown>);
+    await handler.prepareRequest?.();
+    const credential = await new CustomSourceCredentialService(this.db, this.config)
+      .resolveCredentialHeader(job.space_id, connection.credential_id);
+    const requestHeaders = { ...headers, ...(request.headers ?? {}) };
+    if (credential) requestHeaders[credential.header_name] = credential.header_value;
+    const response = await fetchSource(request.url, {
+      headers: requestHeaders,
       maxDownloadBytes: await this.maxDownloadBytes(job.space_id),
     });
     const completedAt = new Date().toISOString();
     if (response.notModified) {
       await this.queueFailedFollowUpsForConnection(job, connection, completedAt);
-      await this.updateConnectionAfterScan(connection, cursor, completedAt, this.isManualScan(job));
+      if (!isBackfillJob(job)) await this.updateConnectionAfterScan(connection, cursor, completedAt, this.isManualScan(job));
       await this.updateJobStats(job, { seen: 0, created: 0, updated: 0, metadata: { not_modified: true } });
-      return;
+      if (!isBackfillJob(job)) {
+        await this.notifyResearchScanCompleted(job, connection.channel_id, completedAt, cursor.last_published_at ?? null, 0);
+      }
+      return { seen: 0, page_size: backfillMaxItems(job.metadata_json) };
     }
     if (!response.ok) {
       throw new HttpError(502, `Failed to fetch source connection (${response.status})`);
@@ -304,64 +321,150 @@ export class SourceExtractionWorker {
       etag: response.headers.get("etag") ?? cursor.etag,
       last_modified: response.headers.get("last-modified") ?? cursor.last_modified,
     };
-    const result = connection.connector_key === "web_page"
-      ? await this.scanWebPage(job, connection, raw, completedAt)
-      : connection.connector_key === "arxiv"
-        ? await this.scanArxiv(job, connection, raw, completedAt)
-        : await this.scanFeed(job, connection, raw, completedAt);
-    await this.updateConnectionAfterScan(connection, {
-      ...nextCursor,
-      ...result.cursor,
-    }, completedAt, this.isManualScan(job));
+    const result = await this.scanWithConnector(job, connection, handler, raw, completedAt);
+    if (!isBackfillJob(job)) {
+      await this.updateConnectionAfterScan(connection, {
+        ...nextCursor,
+        ...result.cursor,
+      }, completedAt, this.isManualScan(job));
+    }
     await this.updateJobStats(job, {
       seen: result.seen,
       created: result.created,
       updated: result.updated,
       metadata: {
         connector_key: connection.connector_key,
-        endpoint_url: connection.endpoint_url,
+        endpoint_url: request.url,
       },
     });
     await emitSourcePostProcessingEvent(this.db, {
       spaceId: job.space_id,
-      sourceConnectionId: job.connection_id,
+      sourceChannelId: connection.channel_id,
       newItemCount: result.created,
+    });
+    if (!isBackfillJob(job)) {
+      await this.notifyResearchScanCompleted(job, connection.channel_id, completedAt, cursor.last_published_at ?? null, result.created);
+    }
+    return { seen: result.seen, page_size: backfillMaxItems(job.metadata_json) };
+  }
+
+  /** Best-effort research timeline projection; a failure here must never fail the scan itself. */
+  private async notifyResearchScanCompleted(
+    job: ExtractionJobRow,
+    sourceChannelId: string | null,
+    scannedAt: string,
+    scanWindowStart: string | null,
+    newItemCount: number,
+  ): Promise<void> {
+    await new ProjectResearchOrchestrator(this.db, this.config).onSourceScanCompleted({
+      spaceId: job.space_id,
+      sourceChannelId,
+      scanJobId: job.id,
+      scannedAt,
+      scanWindowStart,
+      newItemCount,
+    }).catch((error) => {
+      process.stderr.write(
+        `[research.scan-summary] scan projection failed (job ${job.id}): ${String((error as Error)?.message ?? error)}\n`,
+      );
     });
   }
 
-  private async scanFeed(
+  /**
+   * A date range is a logical window, not a single arXiv API page. Keep the
+   * segment running and advance its saved page cursor until the API returns a
+   * short page or the segment's max_items budget is exhausted.
+   */
+  private async queueBackfillContinuationIfNeeded(
+    job: ExtractionJobRow,
+    result: { seen: number; page_size: number },
+  ): Promise<void> {
+    const metadata = record(job.metadata_json);
+    const segmentId = stringValue(metadata.source_backfill_segment_id);
+    const planId = stringValue(metadata.source_backfill_plan_id);
+    if (!segmentId || !planId) return;
+    const segment = await this.db.query<{ window_json: unknown; status: string }>(
+      `SELECT window_json,status FROM source_backfill_segments WHERE id=$1 AND space_id=$2 LIMIT 1`,
+      [segmentId, job.space_id],
+    );
+    const current = segment.rows[0];
+    if (!current || current.status !== "running") return;
+    const window = record(current.window_json);
+    const consumedItems = (integerValue(window.consumed_items) ?? 0) + result.seen;
+    const budget = integerValue(window.max_items);
+    const remaining = integerValue(window.remaining_items ?? window.max_items);
+    if (result.seen < result.page_size) {
+      await this.db.query(
+        `UPDATE source_backfill_segments SET window_json=$3::jsonb WHERE id=$1 AND space_id=$2 AND status='running'`,
+        [segmentId, job.space_id, JSON.stringify({ ...window, consumed_items: consumedItems, next_cursor: null, has_more: false, exhausted: true })],
+      );
+      return;
+    }
+    if (budget === null || remaining === null || remaining <= result.seen) {
+      await this.db.query(
+        `UPDATE source_backfill_segments SET window_json=$3::jsonb WHERE id=$1 AND space_id=$2 AND status='running'`,
+        [segmentId, job.space_id, JSON.stringify({ ...window, consumed_items: consumedItems, next_cursor: (integerValue(window.cursor) ?? 0) + 1, has_more: true, exhausted: false, partial: true })],
+      );
+      return;
+    }
+    const nextRemaining = remaining - result.seen;
+    const nextWindow = {
+      ...window,
+      cursor: (integerValue(window.cursor) ?? 0) + 1,
+      remaining_items: nextRemaining,
+      page_size: Math.min(100, nextRemaining),
+      consumed_items: consumedItems,
+    };
+    const nextJobId = randomUUID();
+    const now = new Date().toISOString();
+    await this.db.query(
+      `INSERT INTO extraction_jobs (id,space_id,connection_id,job_type,status,metadata_json,created_at)
+       VALUES ($1,$2,$3,'connection_scan','pending',$4::jsonb,$5)`,
+      [nextJobId, job.space_id, job.connection_id, JSON.stringify({ ...metadata, source_backfill_plan_id: planId, source_backfill_segment_id: segmentId, window: nextWindow }), now],
+    );
+    await this.db.query(
+      `UPDATE source_backfill_segments SET extraction_job_id=$3, window_json=$4::jsonb, next_eligible_at=NULL WHERE id=$1 AND space_id=$2 AND status='running'`,
+      [segmentId, job.space_id, nextJobId, JSON.stringify({ ...nextWindow, next_cursor: nextWindow.cursor, has_more: true, exhausted: false })],
+    );
+  }
+
+  private async scanWithConnector(
     job: ExtractionJobRow,
     connection: ConnectionWithConnectorRow,
+    handler: SourceConnectorHandler,
     raw: string,
     capturedAt: string,
   ): Promise<{ seen: number; created: number; updated: number; cursor: ScanCursor }> {
-    if (!["rss", "atom"].includes(connection.connector_key)) {
-      throw new HttpError(422, `Unsupported connection_scan connector: ${connection.connector_key}`);
-    }
-    const items = parseFeed(raw, connection.connector_key).slice(0, 100);
+    const items = handler.parseResponse(raw).slice(0, backfillMaxItems(job.metadata_json));
     let created = 0;
     let updated = 0;
     let lastGuid: string | undefined;
     let lastPublishedAt: string | undefined;
+    const providerQuery = record(connection.provider_query_json);
+    const monitoringField = providerQuery.monitoring_field === "lastUpdatedDate" ? "lastUpdatedDate" : "submittedDate";
     for (const item of items) {
       if (!lastGuid && item.externalId) lastGuid = item.externalId;
-      if (!lastPublishedAt && item.occurredAt) lastPublishedAt = item.occurredAt;
+      const occurredAt = monitoringField === "lastUpdatedDate"
+        ? stringValue(item.metadata.updated_at) ?? item.occurredAt
+        : item.occurredAt;
+      if (!lastPublishedAt && occurredAt) lastPublishedAt = occurredAt;
+      const sourceUri = item.itemType === "external_url" ? connection.endpoint_url : item.sourceUri;
       const outcome = await this.upsertScannedItem({
         job,
         connection,
-        itemType: "feed_entry",
+        itemType: item.itemType ?? "feed_entry",
         title: item.title,
-        sourceUri: item.url,
-        canonicalUri: safeNormalizeUrl(item.url),
-        sourceExternalId: item.externalId,
+        sourceUri,
+        canonicalUri: safeNormalizeUrl(item.canonicalUri ?? sourceUri),
+        sourceExternalId: item.sourceExternalId ?? item.externalId,
         author: item.author,
-        occurredAt: item.occurredAt,
+        occurredAt,
         contentHash: sha256([
           item.externalId ?? "",
-          item.url ?? "",
+          sourceUri ?? "",
           item.title,
           item.excerpt ?? "",
-          item.occurredAt ?? "",
+          occurredAt ?? "",
         ].join("\n")),
         excerpt: item.excerpt,
         metadata: item.metadata,
@@ -377,101 +480,7 @@ export class SourceExtractionWorker {
       cursor: {
         last_guid: lastGuid,
         last_published_at: lastPublishedAt,
-      },
-    };
-  }
-
-  private async scanWebPage(
-    job: ExtractionJobRow,
-    connection: ConnectionWithConnectorRow,
-    raw: string,
-    capturedAt: string,
-  ): Promise<{ seen: number; created: number; updated: number; cursor: ScanCursor }> {
-    const canonical = safeNormalizeUrl(connection.endpoint_url);
-    const text = stripHtml(raw).trim();
-    const contentHash = sha256(raw);
-    const outcome = await this.upsertScannedItem({
-      job,
-      connection,
-      itemType: "external_url",
-      title: htmlTitle(raw) ?? canonical ?? connection.endpoint_url ?? connection.name,
-      sourceUri: connection.endpoint_url,
-      canonicalUri: canonical,
-      sourceExternalId: canonical ?? connection.endpoint_url,
-      author: null,
-      occurredAt: null,
-      contentHash,
-      excerpt: text ? text.slice(0, 2048) : null,
-      metadata: { page_title: htmlTitle(raw), content_length: raw.length },
-      capturedAt,
-    });
-    return {
-      seen: 1,
-      created: outcome.created ? 1 : 0,
-      updated: outcome.created ? 0 : 1,
-      cursor: { last_guid: canonical ?? connection.endpoint_url ?? undefined },
-    };
-  }
-
-  private async scanArxiv(
-    job: ExtractionJobRow,
-    connection: ConnectionWithConnectorRow,
-    raw: string,
-    capturedAt: string,
-  ): Promise<{ seen: number; created: number; updated: number; cursor: ScanCursor }> {
-    const papers = parseArxivFeed(raw).slice(0, backfillMaxItems(job.metadata_json));
-    let created = 0;
-    let updated = 0;
-    let lastGuid: string | undefined;
-    let lastPublishedAt: string | undefined;
-    for (const paper of papers) {
-      if (!lastGuid) lastGuid = paper.arxiv_id;
-      if (!lastPublishedAt) lastPublishedAt = paper.published_at ?? paper.updated_at ?? undefined;
-      const outcome = await this.upsertScannedItem({
-        job,
-        connection,
-        itemType: "feed_entry",
-        title: paper.title,
-        sourceUri: paper.abs_url,
-        canonicalUri: safeNormalizeUrl(paper.abs_url),
-        sourceExternalId: paper.arxiv_id,
-        author: paper.authors.length ? paper.authors.join(", ").slice(0, 512) : null,
-        occurredAt: paper.published_at ?? paper.updated_at,
-        contentHash: sha256([
-          paper.arxiv_id,
-          paper.arxiv_version ?? "",
-          paper.title,
-          paper.summary ?? "",
-          paper.updated_at ?? "",
-        ].join("\n")),
-        excerpt: paper.summary ? excerpt(paper.summary) : null,
-        metadata: {
-          arxiv_id: paper.arxiv_id,
-          arxiv_version: paper.arxiv_version,
-          authors: paper.authors,
-          categories: paper.categories,
-          primary_category: paper.primary_category,
-          published_at: paper.published_at,
-          updated_at: paper.updated_at,
-          abs_url: paper.abs_url,
-          html_url: paper.html_url,
-          pdf_url: paper.pdf_url,
-          doi: paper.doi,
-          journal_ref: paper.journal_ref,
-          comment: paper.comment,
-        },
-        capturedAt,
-      });
-      if (outcome.created) created += 1;
-      else updated += 1;
-    }
-    return {
-      seen: papers.length,
-      created,
-      updated,
-      cursor: {
-        last_guid: lastGuid,
-        last_published_at: lastPublishedAt,
+        ...handler.parseCursor?.(raw),
       },
     };
   }
@@ -492,6 +501,10 @@ export class SourceExtractionWorker {
     capturedAt: string;
   }): Promise<{ itemId: string; created: boolean }> {
     const now = input.capturedAt;
+    const author = input.author?.slice(0, 512) ?? null;
+    const excerpt = input.excerpt?.slice(0, 2048) ?? null;
+    const arxivId = stringValue(input.metadata.arxiv_id);
+    const doi = normalizeDoi(stringValue(input.metadata.doi));
     const existing = await this.db.query<{ id: string; content_state: string | null }>(
       `SELECT id, content_state
          FROM source_items
@@ -499,14 +512,18 @@ export class SourceExtractionWorker {
           AND deleted_at IS NULL
           AND (
             ($2::text IS NOT NULL AND canonical_uri = $3::text)
-            OR ($4::varchar IS NOT NULL AND connection_id = $5::varchar AND source_external_id = $6::varchar)
-            OR ($7::varchar IS NOT NULL AND connection_id = $8::varchar AND content_hash = $9::varchar)
+            OR ($4::text IS NOT NULL AND metadata_json->>'arxiv_id' = $4::text)
+            OR ($5::text IS NOT NULL AND lower(metadata_json->>'doi') = $5::text)
+            OR ($6::varchar IS NOT NULL AND connection_id = $7::varchar AND source_external_id = $8::varchar)
+            OR ($9::varchar IS NOT NULL AND connection_id = $10::varchar AND content_hash = $11::varchar)
           )
         LIMIT 1`,
       [
         input.job.space_id,
         input.canonicalUri,
         input.canonicalUri,
+        arxivId,
+        doi,
         input.sourceExternalId,
         input.connection.id,
         input.sourceExternalId,
@@ -524,10 +541,16 @@ export class SourceExtractionWorker {
     }
     const metadata = {
       ...input.metadata,
+      ...(arxivId ? { arxiv_id: arxivId } : {}),
+      ...(doi ? { doi } : {}),
       capture_method: "connection_scan",
       job_id: input.job.id,
       connector_key: input.connection.connector_key,
       connection_id: input.connection.id,
+      ...(input.connection.channel_id ? { source_channel_id: input.connection.channel_id } : {}),
+      ...(stringValue(record(input.job.metadata_json).source_backfill_plan_id)
+        ? { source_backfill_plan_id: stringValue(record(input.job.metadata_json).source_backfill_plan_id) }
+        : {}),
     };
     const existingItem = existing.rows[0];
     let itemId = existingItem?.id;
@@ -558,14 +581,19 @@ export class SourceExtractionWorker {
           input.canonicalUri,
           sourceDomain(input.canonicalUri ?? input.sourceUri ?? ""),
           input.sourceExternalId,
-          input.author,
+          author,
           input.occurredAt,
           now,
           input.contentHash,
-          input.excerpt,
+          excerpt,
           policy.contentState,
           policy.retention,
-          JSON.stringify(metadata),
+          JSON.stringify({
+            ...metadata,
+            ...(stringValue(record(input.job.metadata_json).source_backfill_plan_id)
+              ? { source_backfill_created_plan_id: stringValue(record(input.job.metadata_json).source_backfill_plan_id) }
+              : {}),
+          }),
           input.connection.owner_user_id,
           input.connection.visibility,
           input.connection.access_level,
@@ -612,11 +640,11 @@ export class SourceExtractionWorker {
           input.canonicalUri,
           sourceDomain(input.canonicalUri ?? input.sourceUri ?? ""),
           input.sourceExternalId,
-          input.author,
+          author,
           input.occurredAt,
           now,
           input.contentHash,
-          input.excerpt,
+          excerpt,
           policy.contentState,
           policy.retention,
           JSON.stringify(metadata),
@@ -638,6 +666,15 @@ export class SourceExtractionWorker {
       metadata,
       capturedAt: now,
     });
+    const channelId = input.connection.channel_id ?? stringValue(record(input.job.metadata_json).source_channel_id);
+    if (channelId) {
+      await this.db.query(
+        `INSERT INTO source_channel_item_links (id, space_id, source_channel_id, source_item_id, status, matched_at, match_reason, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,'active',$5,$6,$5,$5)
+         ON CONFLICT (source_channel_id, source_item_id) DO UPDATE SET status='active', matched_at=EXCLUDED.matched_at, match_reason=EXCLUDED.match_reason, updated_at=EXCLUDED.updated_at`,
+        [randomUUID(), input.job.space_id, channelId, itemId, now, input.sourceExternalId ? `external_id:${input.sourceExternalId}` : "canonical_uri"],
+      );
+    }
     await projectSourceRoutingHook().routeMaterializedItem(this.db, {
       spaceId: input.job.space_id,
       sourceItemId: itemId,
@@ -659,13 +696,19 @@ export class SourceExtractionWorker {
       ? await this.hasActiveFollowUpJob(input.job.space_id, itemId, policy.followUpJobType)
       : false;
     if (needsFollowUp && policy.followUpJobType && !hasActiveFollowUp) {
+      const backfillMetadata = isBackfillJob(input.job)
+        ? {
+            source_backfill_plan_id: stringValue(record(input.job.metadata_json).source_backfill_plan_id),
+            source_backfill_segment_id: stringValue(record(input.job.metadata_json).source_backfill_segment_id),
+          }
+        : {};
       await this.createExtractionJob({
         spaceId: input.job.space_id,
         connectionId: input.connection.id,
         sourceItemId: itemId,
         sourceSnapshotId,
         jobType: policy.followUpJobType,
-        metadata: { created_by: "connection_scan", parent_job_id: input.job.id },
+        metadata: { created_by: "connection_scan", parent_job_id: input.job.id, ...backfillMetadata },
         createdAt: now,
       });
     }
@@ -1164,35 +1207,41 @@ export class SourceExtractionWorker {
   ): Promise<void> {
     if (!item.connection_id) return;
     const result = await this.db.query<SourceConnectionRow>(
-      `SELECT ${CONNECTION_COLUMNS} FROM source_connections WHERE space_id = $1 AND id = $2 AND deleted_at IS NULL`,
+          `SELECT sc.*, c.connector_key
+             FROM source_connections sc
+             JOIN source_provider_connectors spc ON spc.id=sc.provider_connector_id
+             JOIN source_connectors c ON c.id=spc.connector_id
+            WHERE sc.space_id = $1 AND sc.id = $2 AND sc.deleted_at IS NULL`,
       [spaceId, item.connection_id],
     );
     const connection = result.rows[0]
-      ? sourceConnectionWithSchedule(
-          result.rows[0],
-          await getSourceConnectionScanTask(this.db, result.rows[0].id),
-        )
+      ? result.rows[0]
       : null;
     if (!connection) throw new HttpError(404, "Source connection not found");
     enforceSourceRetentionPolicy(normalizeSourceConnectionReadGovernance(connection).policy, retention);
   }
 
-  private async getConnection(spaceId: string, connectionId: string): Promise<ConnectionWithConnectorRow> {
+  private async getConnection(spaceId: string, connectionId: string, channelId: string | null = null): Promise<ConnectionWithConnectorRow> {
     const result = await this.db.query<ConnectionWithConnectorRow>(
-      `SELECT ${connectionColumnsForAlias("sc")}, c.connector_key
+      `SELECT sc.*, c.connector_key,
+              ch.id AS channel_id, ch.endpoint_url, ch.fetch_frequency,
+              ch.schedule_rule_json, ch.provider_query_json
          FROM source_connections sc
-         JOIN source_connectors c
-           ON c.id = sc.connector_id
+         JOIN source_provider_connectors spc ON spc.id = sc.provider_connector_id
+         JOIN source_connectors c ON c.id = spc.connector_id
+         LEFT JOIN source_channels ch
+           ON ch.source_connection_id = sc.id
+          AND ch.status <> 'archived'
+          AND ($3::varchar IS NULL OR ch.id = $3)
         WHERE sc.space_id = $1
           AND sc.id = $2
           AND sc.deleted_at IS NULL
           AND c.status = 'active'`,
-      [spaceId, connectionId],
+      [spaceId, connectionId, channelId],
     );
     const row = result.rows[0];
     if (!row) throw new HttpError(404, "Source connection not found");
-    const task = await getSourceConnectionScanTask(this.db, row.id);
-    return sourceConnectionWithSchedule(row, task) as ConnectionWithConnectorRow;
+    return row;
   }
 
   private async updateConnectionAfterScan(
@@ -1201,29 +1250,19 @@ export class SourceExtractionWorker {
     completedAt: string,
     manualRun: boolean,
   ): Promise<void> {
-    const config = record(connection.config_json);
-    config.scan_cursor = compactCursor(cursor);
+    if (!connection.channel_id) return;
+    const scheduleTask = await getSourceChannelScanTask(this.db, connection.channel_id);
     const nextCheckAt = computeNextCheckAt(connection.fetch_frequency, completedAt, {
       manualRun,
-      existingNextCheckAt: connection.next_check_at,
+      existingNextCheckAt: scheduleTask?.next_run_at,
       scheduleRule: connection.schedule_rule_json,
     });
-    await this.db.query(
-      `UPDATE source_connections
-          SET config_json = $3::jsonb,
-              updated_at = $4
-        WHERE space_id = $1 AND id = $2`,
-      [
-        connection.space_id,
-        connection.id,
-        JSON.stringify(config),
-        completedAt,
-      ],
-    );
-    await upsertSourceConnectionScanTask(this.db, {
-      connection,
+    await upsertSourceChannelScanTask(this.db, {
+      channel: { id: connection.channel_id, space_id: connection.space_id, owner_user_id: connection.owner_user_id, status: connection.status, fetch_frequency: connection.fetch_frequency },
       nextRunAt: nextCheckAt,
       lastRunAt: completedAt,
+      cursor: compactCursor(cursor) as Record<string, unknown>,
+      ...(cursor.last_published_at ? { watermark: { value: cursor.last_published_at } } : {}),
       updatedAt: completedAt,
     });
   }
@@ -1231,10 +1270,10 @@ export class SourceExtractionWorker {
   private async recordFailedConnectionScan(job: ExtractionJobRow): Promise<void> {
     if (!job.connection_id) return;
     try {
-      const connection = await this.getConnection(job.space_id, job.connection_id);
+      const connection = await this.getConnection(job.space_id, job.connection_id, stringValue(record(job.metadata_json).source_channel_id));
       await this.updateConnectionAfterScan(
         connection,
-        scanCursor(connection.config_json),
+        scanCursor((await getSourceChannelScanTask(this.db, connection.channel_id ?? ""))?.metadata_json),
         new Date().toISOString(),
         this.isManualScan(job),
       );
@@ -1566,18 +1605,21 @@ export class SourceExtractionWorker {
   }
 }
 
-export function backfillEndpointUrl(endpoint:string,connectorKey:string,metadata:unknown):string{
-  const record=metadata&&typeof metadata==="object"&&!Array.isArray(metadata)?metadata as Record<string,unknown>:{};
-  const window=record.window&&typeof record.window==="object"&&!Array.isArray(record.window)?record.window as Record<string,unknown>:null;
-  if(!window)return endpoint;const url=new URL(endpoint);
-  if(connectorKey==="arxiv"&&typeof window.from==="string"&&typeof window.to==="string"){
-    const fmt=(value:string)=>new Date(value).toISOString().replace(/\D/g,"").slice(0,12);
-    const range=`submittedDate:[${fmt(window.from)} TO ${fmt(window.to)}]`;const current=url.searchParams.get("search_query");url.searchParams.set("search_query",current?`(${current}) AND ${range}`:range);url.searchParams.set("max_results",String(Math.min(100,Math.max(1,Number(window.max_items??100)))));
-  }else if(typeof window.cursor==="number"){url.searchParams.set("start",String(window.cursor*100));url.searchParams.set("max_results",String(window.max_items??100));}
-  return url.toString();
+function backfillMaxItems(metadata: unknown): number {
+  const window = record(record(metadata).window);
+  const value = Number(window.page_size ?? window.remaining_items ?? window.max_items ?? 100);
+  return Number.isInteger(value) ? Math.min(100, Math.max(1, value)) : 100;
 }
 
-function backfillMaxItems(metadata:unknown):number{const record=metadata&&typeof metadata==="object"&&!Array.isArray(metadata)?metadata as Record<string,unknown>:{};const window=record.window&&typeof record.window==="object"&&!Array.isArray(record.window)?record.window as Record<string,unknown>:{};const value=Number(window.max_items??100);return Number.isInteger(value)?Math.min(100,Math.max(1,value)):100;}
+function isBackfillJob(job: ExtractionJobRow): boolean {
+  const metadata = record(job.metadata_json);
+  return Boolean(stringValue(metadata.source_backfill_plan_id));
+}
+
+function integerValue(value: unknown): number | null {
+  const number = Number(value);
+  return Number.isInteger(number) && number >= 0 ? number : null;
+}
 
 function sha256(value: string | Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
@@ -1594,7 +1636,8 @@ function exportFormatForMime(mimeType: string): string {
 }
 
 function scanCursor(configJson: unknown): ScanCursor {
-  const cursor = record(record(configJson).scan_cursor);
+  const metadata = record(configJson);
+  const cursor = record(metadata.cursor ?? metadata.scan_cursor);
   return {
     etag: stringValue(cursor.etag),
     last_modified: stringValue(cursor.last_modified),
@@ -1619,6 +1662,15 @@ function safeNormalizeUrl(value: string | null): string | null {
   } catch {
     return null;
   }
+}
+
+function normalizeDoi(value: string | undefined): string | null {
+  const normalized = value
+    ?.trim()
+    .toLowerCase()
+    .replace(/^https?:\/\/(?:dx\.)?doi\.org\//, "")
+    .replace(/^doi:/, "");
+  return normalized || null;
 }
 
 function record(value: unknown): Record<string, unknown> {

@@ -34,6 +34,7 @@ function artifact(overrides: Partial<ArtifactOut> = {}): ArtifactOut {
     run_id: "run-1",
     proposal_id: null,
     artifact_type: "summary",
+    surface_role: "user_output",
     title: "Summary",
     mime_type: "text/plain",
     exportable: true,
@@ -57,10 +58,10 @@ function artifact(overrides: Partial<ArtifactOut> = {}): ArtifactOut {
 describe("artifact routes", () => {
   it("lists and reads artifacts with public response shapes", async () => {
     __setArtifactIdentityForTests({ spaceId: "space-1", userId: "user-1" });
-    const calls: Array<{ kind: "list" | "get"; workspaceId: string | null | undefined }> = [];
+    const calls: Array<{ kind: "list" | "get"; workspaceId: string | null | undefined; includeSystemArchives?: boolean }> = [];
     __setArtifactRepositoryFactoryForTests(() => ({
       async listVisible(spaceId, userId, filters) {
-        calls.push({ kind: "list", workspaceId: filters.workspaceId });
+        calls.push({ kind: "list", workspaceId: filters.workspaceId, includeSystemArchives: filters.includeSystemArchives });
         return {
           items: [
             artifact({
@@ -98,9 +99,27 @@ describe("artifact routes", () => {
     expect(get.statusCode).toBe(200);
     expect(get.json()).toMatchObject({ id: "artifact-1", content: "inline" });
     expect(calls).toEqual([
-      { kind: "list", workspaceId: "ws-1" },
+      { kind: "list", workspaceId: "ws-1", includeSystemArchives: false },
       { kind: "get", workspaceId: "ws-1" },
     ]);
+  });
+
+  it("excludes system archives from ordinary lists and allows an explicit audit list", async () => {
+    const calls: string[] = [];
+    const fakeDb = {
+      async query(sql: string) {
+        calls.push(sql);
+        if (sql.includes("count(a.id)")) return { rows: [{ total: "0" }], rowCount: 1 };
+        return { rows: [], rowCount: 0 };
+      },
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const repo = new PgArtifactRepository(fakeDb as any, { artifactStorageRoot: "/tmp/artifacts", sandboxRoot: "/tmp/artifacts/sandbox" });
+    await repo.listVisible("space-1", "user-1", { limit: 10, offset: 0 });
+    expect(calls.every(sql => sql.includes("a.surface_role <> 'system_archive'"))).toBe(true);
+    calls.length = 0;
+    await repo.listVisible("space-1", "user-1", { limit: 10, offset: 0, includeSystemArchives: true });
+    expect(calls.every(sql => !sql.includes("a.surface_role <> 'system_archive'"))).toBe(true);
   });
 
   it("exports inline artifact content with an attachment disposition", async () => {
@@ -175,6 +194,7 @@ describe("artifact routes", () => {
       run_id: null,
       proposal_id: null,
       artifact_type: "file",
+      surface_role: "user_output",
       title: "Export Me",
       content: null,
       storage_ref: null,

@@ -16,6 +16,7 @@ export interface SchedulerTaskRow {
   next_run_at: unknown;
   last_run_at: unknown;
   state_json: Record<string, unknown>;
+  metadata_json: Record<string, unknown>;
   created_at: unknown;
   updated_at: unknown;
 }
@@ -31,12 +32,13 @@ export interface SchedulerTaskUpsertInput {
   nextRunAt?: string | null;
   lastRunAt?: string | null;
   stateJson?: Record<string, unknown>;
+  metadataJson?: Record<string, unknown>;
   updatedAt?: string;
 }
 
 const SCHEDULER_TASK_COLUMNS = `
   id, task_type, task_key, scope_type, scope_id, space_id, user_id, status,
-  next_run_at, last_run_at, state_json, created_at, updated_at
+  next_run_at, last_run_at, state_json, metadata_json, created_at, updated_at
 `;
 
 export class PgSchedulerTaskStore {
@@ -79,10 +81,10 @@ export class PgSchedulerTaskStore {
     const result = await this.db.query<SchedulerTaskRow>(
       `INSERT INTO scheduler_tasks (
          id, task_type, task_key, scope_type, scope_id, space_id, user_id, status,
-         next_run_at, last_run_at, state_json, created_at, updated_at
+         next_run_at, last_run_at, state_json, metadata_json, created_at, updated_at
        ) VALUES (
          $1, $2, $3, $4, $5, $6, $7, $8,
-         $9, $10, $11::jsonb, $12, $12
+         $9, $10, $11::jsonb, $12::jsonb, $13, $13
        )
        ON CONFLICT (task_type, task_key)
        DO UPDATE SET
@@ -94,6 +96,7 @@ export class PgSchedulerTaskStore {
          next_run_at = EXCLUDED.next_run_at,
          last_run_at = COALESCE(EXCLUDED.last_run_at, scheduler_tasks.last_run_at),
          state_json = EXCLUDED.state_json,
+         metadata_json = EXCLUDED.metadata_json,
          updated_at = EXCLUDED.updated_at
        RETURNING ${SCHEDULER_TASK_COLUMNS}`,
       [
@@ -108,6 +111,7 @@ export class PgSchedulerTaskStore {
         input.nextRunAt ?? null,
         input.lastRunAt ?? null,
         JSON.stringify(jsonObject(input.stateJson ?? {})),
+        JSON.stringify(jsonObject(input.metadataJson ?? {})),
         now,
       ],
     );
@@ -119,6 +123,7 @@ function normalizeSchedulerTaskRow(row: SchedulerTaskRow): SchedulerTaskRow {
   return {
     ...row,
     state_json: jsonObject(row.state_json),
+    metadata_json: jsonObject(row.metadata_json),
   };
 }
 

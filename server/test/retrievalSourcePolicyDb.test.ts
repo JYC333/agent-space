@@ -55,7 +55,7 @@ beforeEach(async () => {
   await pool.query(
     `TRUNCATE retrieval_objects, retrieval_aliases, retrieval_chunks, retrieval_edges,
               knowledge_items, space_object_kinds, space_objects, provenance_links, source_items,
-              source_connections, source_connectors, users, spaces CASCADE`,
+              source_connections, source_provider_connectors, source_providers, source_connectors, users, spaces CASCADE`,
   );
   await pool.query(`INSERT INTO spaces (id, name, type, created_at, updated_at) VALUES ($1, 'SP', 'personal', now(), now())`, [SPACE]);
   for (const id of [OWNER, READER]) {
@@ -79,11 +79,21 @@ async function seedRestrictedAndOpen(): Promise<void> {
     [CONNECTOR],
   );
   await pool!.query(
+    `INSERT INTO source_providers (id, provider_key, display_name, provider_kind, category, status, capabilities_json, created_at, updated_at)
+     VALUES ($1, 'test-rss', 'RSS', 'generic', 'test', 'active', '{}'::jsonb, now(), now())`,
+    [CONNECTOR],
+  );
+  await pool!.query(
+    `INSERT INTO source_provider_connectors (id, provider_id, connector_id, status, priority, capabilities_json, created_at, updated_at)
+     VALUES ($1,$1,$1,'active',0,'{}'::jsonb,now(),now())`,
+    [CONNECTOR],
+  );
+  await pool!.query(
     `INSERT INTO source_connections (
-       id, space_id, connector_id, owner_user_id, name, status, fetch_frequency,
+       id, space_id, provider_connector_id, owner_user_id, name, status,
        capture_policy, trust_level, consent_json, policy_json, config_json, created_at, updated_at
      ) VALUES (
-       $1, $2, $3, $4, 'Private feed', 'active', 'manual',
+       $1, $2, $3, $4, 'Private feed', 'active',
        'extract_text', 'normal', $5::jsonb, $6::jsonb, '{}'::jsonb, now(), now()
      )`,
     [

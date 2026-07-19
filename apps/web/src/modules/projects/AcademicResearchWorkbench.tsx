@@ -1,199 +1,524 @@
-import {
-  Activity, BookOpen, CheckCircle, Edit2, FileText, Network, Plus, RefreshCw, Rss, Search, Target,
-} from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { BookOpen, Edit2, RefreshCw } from 'lucide-react'
 import { SpaceLink as Link } from '../../core/spaceNav'
 import type {
-  ExtractedEvidence, Project, ProjectResearchArtifactLink, ProjectResearchCheckpoint,
-  ProjectResearchLiteratureMatrixItem, ProjectResearchProfile, ProjectResearchScreeningCriteria,
+  ExtractedEvidence, Project, ProjectResearchReport, ProjectResearchInitialIntakeInput, ProjectResearchCheckpoint,
+  ProjectResearchLiteratureMatrixItem, ProjectResearchScreeningCriteria,
   ProjectResearchWorkflow, ProjectSourceBinding, ReaderAnnotation, SourceItem,
-  SourcePostProcessingItemDecision,
+  SourceChannel,
+  ProjectOperation,
+  ProjectResearchQuestionImpact, ProjectResearchQuestionRefinement, ProjectResearchQuestionResolutionStrategy,
+  ProjectResearchScanSummary,
 } from '../../types/api'
-import { Badge, StatusBadge } from '../../components/ui/badge'
+import type { ModelProviderOut } from '../../api/client'
+import { Badge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'
+import { DatePicker } from '../../components/ui/date-picker'
+import { Input } from '../../components/ui/input'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../../components/ui/dialog'
+import { researchWorkflowForDisplayFrom } from './researchWorkflowView'
+import { researchSetupDraftFromWorkflow, serializeResearchSetupDraft } from './researchSetupDraft'
+import { ResearchSetupDialog } from './ResearchSetupDialog'
+import { ResearchSetupSummary } from './ResearchSetupSummary'
+import { defaultResearchSetupGuideSteps, ResearchSetupGuide } from './ResearchSetupGuide'
+import { isResearchHumanReviewCheckpoint } from './researchReviewAttention'
+import { ResearchCheckpointReview } from './ResearchCheckpointReview'
+import { ResearchResultCard } from './ResearchResultCard'
+import { researchResultState, savedSetupDiffersFromOperation, type ResearchResultAction } from './researchResultState'
+import { ResearchScanTimeline } from './ResearchScanTimeline'
 
 export function activeResearchWorkflowFrom(workflows: ProjectResearchWorkflow[]): ProjectResearchWorkflow | null {
   return workflows.find(workflow => workflow.status === 'active') ?? null
 }
 
-function academicGraphHref(projectId: string): string {
-  return `/graph?${new URLSearchParams({ project_id: projectId, lens_id: 'academic_citation_v1' })}`
-}
-
-function arxivSourcePresetHref(projectId: string): string {
-  return `/sources/source-presets?${new URLSearchParams({ project_id: projectId, preset: 'arxiv' })}`
-}
-
-function stageState(workflow: ProjectResearchWorkflow | null, stageKey: string): Record<string, unknown> | null {
-  if (!workflow) return null
-  const stages = workflow.state_json.stages
-  if (!stages || typeof stages !== 'object' || Array.isArray(stages)) return null
-  const value = (stages as Record<string, unknown>)[stageKey]
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
-}
-
-function stageToneClass(status: string): string {
-  switch (status) {
-    case 'complete':
-      return 'border-success/35 bg-success/5'
-    case 'active':
-      return 'border-warning/40 bg-warning/5'
-    case 'warning':
-      return 'border-destructive/35 bg-destructive/5'
-    default:
-      return 'border-border bg-muted/20'
-  }
-}
-
-function stageBadgeVariant(status: string): 'success' | 'warning' | 'destructive' | 'muted' {
-  switch (status) {
-    case 'complete':
-      return 'success'
-    case 'active':
-      return 'warning'
-    case 'warning':
-      return 'destructive'
-    default:
-      return 'muted'
-  }
-}
-
-function hasScreeningCriteria(criteria: ProjectResearchScreeningCriteria | null): boolean {
-  if (!criteria) return false
-  return [
-    criteria.include_keywords,
-    criteria.exclude_keywords,
-    criteria.methods,
-    criteria.venues,
-    criteria.required_evidence_fields,
-  ].some(values => values.length > 0) || Boolean(criteria.date_range_start || criteria.date_range_end)
-}
-
-function profileNeedsSync(project: Project, profile: ProjectResearchProfile | null): boolean {
+export function workflowQuestionNeedsSync(project: Project, workflow: ProjectResearchWorkflow | null): boolean {
   const focus = project.current_focus?.trim()
-  if (!focus || !profile?.research_question) return false
-  return focus !== profile.research_question.trim()
+  const workflowQuestion = typeof workflow?.state_json.research_question === 'string'
+    ? workflow.state_json.research_question.trim()
+    : ''
+  return Boolean(focus && workflowQuestion && focus !== workflowQuestion)
+}
+
+function historyCoverageRanges(workflow: ProjectResearchWorkflow | null): Array<{ from: string; to: string; operation_id: string; status: string }> {
+  const value = workflow?.state_json.coverage_ranges
+  if (!Array.isArray(value)) return []
+  return value.flatMap(item => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return []
+    const row = item as Record<string, unknown>
+    return typeof row.from === 'string' && typeof row.to === 'string' && typeof row.operation_id === 'string' && typeof row.status === 'string'
+      ? [{ from: row.from, to: row.to, operation_id: row.operation_id, status: row.status }]
+      : []
+  })
+}
+
+export function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+function researchStageLabel(value: unknown): string {
+  switch (value) {
+    case 'monitor_setup': return 'Preparing literature monitors'
+    case 'backfill': return 'Importing literature history'
+    case 'screening': return 'Screening papers'
+    case 'synthesis': return 'Generating synthesis'
+    case 'idea_review': return 'Waiting for idea review'
+    case 'complete': return 'Research complete'
+    case 'failed': return 'Research failed'
+    default: return 'Preparing research'
+  }
+}
+
+function isEmptySearchOperation(operation: ProjectOperation | null): boolean {
+  if (!operation) return false
+  const emptyResult = objectValue(operation.progress_json.empty_result)
+  return emptyResult.kind === 'no_source_items'
+}
+
+function researchStageIndex(value: unknown): number {
+  switch (value) {
+    case 'monitor_setup': return 0
+    case 'backfill': return 1
+    case 'screening': return 2
+    case 'synthesis': return 3
+    case 'idea_review': return 4
+    default: return 0
+  }
+}
+
+export function numberValue(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+export function researchOperationStage(operation: ProjectOperation): unknown {
+  if (operation.status === 'failed' && typeof operation.progress_json.failed_stage === 'string') {
+    return operation.progress_json.failed_stage
+  }
+  return operation.progress_json.current_stage
+}
+
+export function researchOperationPercent(operation: ProjectOperation): number {
+  if (isEmptySearchOperation(operation)) return 40
+  if (operation.status === 'completed') return 100
+  const stage = researchOperationStage(operation)
+  const index = researchStageIndex(stage)
+  const backfill = objectValue(operation.progress_json.backfill_progress)
+  const totalSegments = numberValue(backfill.total_segments)
+  const completedSegments = numberValue(backfill.completed_segments)
+  const runningSegments = numberValue(backfill.running_segments)
+  const screening = objectValue(operation.progress_json.screening_progress)
+  const totalScreeningItems = numberValue(screening.total_items)
+  const classifiedScreeningItems = numberValue(screening.classified_items)
+  const totalBatches = numberValue(screening.total_batches)
+  const completedBatches = numberValue(screening.completed_batches)
+  const screeningFraction = screening.phase === 'ready_for_review'
+    ? 0.98
+    : totalScreeningItems > 0
+      ? Math.min(0.94, 0.08 + (classifiedScreeningItems / totalScreeningItems) * 0.86)
+      : totalBatches > 0
+        ? Math.min(0.94, 0.08 + (completedBatches / totalBatches) * 0.86)
+        : 0.08
+  const stageFraction = stage === 'backfill'
+    ? totalSegments > 0 ? Math.min(0.98, (completedSegments + runningSegments * 0.35) / totalSegments) : 0.08
+    : stage === 'screening'
+      ? screeningFraction
+    : operation.status === 'waiting_review' ? 0.9 : 0.15
+  return Math.min(99, Math.max(3, Math.round(((index + stageFraction) / 5) * 100)))
+}
+
+export function researchOperationDetail(operation: ProjectOperation): string {
+  if (isEmptySearchOperation(operation)) return 'Search returned 0 papers · setup required'
+  const stage = researchOperationStage(operation)
+  const backfill = objectValue(operation.progress_json.backfill_progress)
+  const total = numberValue(backfill.total_segments)
+  const completed = numberValue(backfill.completed_segments)
+  const ingestionRecords = numberValue(backfill.items_ingested)
+  const sourceItemIds = Array.isArray(operation.progress_json.source_item_ids)
+    ? operation.progress_json.source_item_ids.filter((value): value is string => typeof value === 'string' && value.length > 0)
+    : []
+  const uniquePapers = new Set(sourceItemIds).size
+  const screening = objectValue(operation.progress_json.screening_progress)
+  const screeningTotal = numberValue(screening.total_items)
+  if (stage === 'screening' && screeningTotal === 0 && operation.status === 'waiting_review') {
+    return 'No papers matched this search window · rescan required'
+  }
+  if (stage === 'screening' && screeningTotal > 0) {
+    const classified = numberValue(screening.classified_items)
+    const totalBatches = numberValue(screening.total_batches)
+    const completedBatches = numberValue(screening.completed_batches)
+    const batchDetail = totalBatches > 0
+      ? `${completedBatches}/${totalBatches} screening batches`
+      : screening.phase === 'ready_for_review' ? 'Screening complete' : 'Preparing screening batches'
+    return `${batchDetail} · ${classified}/${screeningTotal} papers classified`
+  }
+  const synthesis = objectValue(operation.progress_json.synthesis_progress)
+  if (stage === 'synthesis' && typeof synthesis.run_status === 'string') {
+    const since = typeof synthesis.started_at === 'string'
+      ? ` · started ${relativeTime(synthesis.started_at)}`
+      : typeof synthesis.queued_at === 'string' ? ` · queued ${relativeTime(synthesis.queued_at)}` : ''
+    return `Synthesis run ${synthesis.run_status}${since}`
+  }
+  return stage === 'backfill' && total > 0
+    ? `${completed}/${total} history windows · ${uniquePapers > 0 ? `${uniquePapers.toLocaleString()} unique papers · ` : ''}${ingestionRecords.toLocaleString()} ingestion records`
+    : `Stage ${researchStageIndex(stage) + 1} of 5`
+}
+
+function researchOperationNextStep(operation: ProjectOperation): string {
+  if (isEmptySearchOperation(operation)) return 'Next: adjust the saved setup, then start the initial literature search again. Screening and synthesis were skipped.'
+  const stage = researchOperationStage(operation)
+  const screening = objectValue(operation.progress_json.screening_progress)
+  if (operation.status === 'failed') {
+    return `Failed during ${researchStageLabel(stage).toLowerCase()}. Retry is available for this stage.`
+  }
+  if (stage === 'backfill') return 'Next: finish the history import, then screen the collected papers in batches.'
+  if (stage === 'screening' && numberValue(screening.total_items) === 0) return 'Next: revise the search query or date range, then rescan the empty windows. Synthesis is paused until papers are found.'
+  if (stage === 'screening' && screening.phase === 'ready_for_review') return 'Next: review the screening summary; approval will build the matrix and queue synthesis.'
+  if (stage === 'screening') return 'Next: finish all screening batches; the screening review opens automatically when every paper is classified.'
+  if (stage === 'synthesis') return 'Next: read the generated research report; its idea candidates will then enter review.'
+  if (stage === 'idea_review') return 'Next: review the idea batch; approval completes this run and activates monitoring.'
+  if (stage === 'monitor_setup') return 'Next: finish monitor setup, then import the selected history range.'
+  return 'The research workflow is progressing automatically.'
+}
+
+function researchOperationSteps(operation: ProjectOperation): Array<{ title: string; status: string }> {
+  const fallback = ['Resolve literature monitors', 'Import history or scan delta', 'Review screening', 'Synthesize approved corpus', 'Review idea candidates']
+  const stage = researchOperationStage(operation)
+  const currentIndex = researchStageIndex(stage)
+  return fallback.map((title, index) => ({
+    title: operation.steps?.find(step => step.seq === index)?.title ?? title,
+    status: operation.status === 'failed' && index === currentIndex
+      ? 'failed'
+      : operation.steps?.find(step => step.seq === index)?.status ?? (
+        index < currentIndex ? 'done'
+          : index === currentIndex ? operation.status === 'waiting_review' ? 'blocked' : 'active'
+            : 'pending'
+      ),
+  }))
+}
+
+function relativeTime(value: string): string {
+  const timestamp = Date.parse(value)
+  if (!Number.isFinite(timestamp)) return '—'
+  const seconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000))
+  if (seconds < 60) return `${seconds}s ago`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.floor(minutes / 60)
+  return `${hours}h ago`
+}
+
+function timestampValue(value: unknown): string | null {
+  if (typeof value !== 'string' || !Number.isFinite(Date.parse(value))) return null
+  return value
+}
+
+export function synthesisHealth(progress: Record<string, unknown>): {
+  label: string
+  detail: string
+  variant: 'success' | 'warning' | 'destructive' | 'muted'
+} {
+  const runStatus = typeof progress.run_status === 'string' ? progress.run_status : 'unknown'
+  const jobStatus = typeof progress.job_status === 'string' ? progress.job_status : null
+  const heartbeatAt = timestampValue(progress.job_heartbeat_at)
+  const jobUpdatedAt = timestampValue(progress.job_updated_at)
+  const lastActivityAt = heartbeatAt ?? jobUpdatedAt
+  const ageSeconds = lastActivityAt ? Math.max(0, (Date.now() - Date.parse(lastActivityAt)) / 1_000) : null
+
+  if (runStatus === 'queued' || runStatus === 'pending') {
+    if (jobStatus === 'pending' && ageSeconds !== null && ageSeconds > 120) {
+      return { label: 'Worker has not picked it up', detail: `queue has been waiting ${relativeTime(lastActivityAt ?? '')}`, variant: 'warning' }
+    }
+    if (jobStatus === 'claimed') {
+      return { label: 'Worker claimed the job', detail: 'starting the synthesis run', variant: 'warning' }
+    }
+    return { label: 'Waiting for a worker', detail: jobStatus ? `job is ${jobStatus}` : 'worker status is not available', variant: 'muted' }
+  }
+
+  if (runStatus === 'running') {
+    if (jobStatus === 'failed') {
+      return { label: 'Agent job failed', detail: 'the run has not reported a terminal result yet', variant: 'destructive' }
+    }
+    if (jobStatus === 'completed') {
+      return { label: 'Worker finished', detail: 'waiting for synthesis results to be reconciled', variant: 'warning' }
+    }
+    if (jobStatus === 'running' && ageSeconds !== null && ageSeconds > 120) {
+      return { label: 'No recent worker heartbeat', detail: `last heartbeat ${relativeTime(lastActivityAt ?? '')}`, variant: 'destructive' }
+    }
+    if (jobStatus === 'running') {
+      return { label: 'Worker is active', detail: heartbeatAt ? `last heartbeat ${relativeTime(heartbeatAt)}` : 'heartbeat not received yet', variant: 'success' }
+    }
+    return { label: 'Run is active', detail: 'worker status is not available', variant: 'warning' }
+  }
+
+  return { label: `Run ${runStatus}`, detail: jobStatus ? `job is ${jobStatus}` : 'checking run details', variant: runStatus === 'failed' ? 'destructive' : 'muted' }
 }
 
 export interface AcademicResearchWorkbenchProps {
   project: Project
   sourceBindings: ProjectSourceBinding[]
+  sourceChannels: SourceChannel[]
   recentSourceItems: SourceItem[]
   recentEvidence: ExtractedEvidence[]
-  sourceRecommendations: SourcePostProcessingItemDecision[]
   readerAnnotations: ReaderAnnotation[]
-  researchProfile: ProjectResearchProfile | null
   researchWorkflows: ProjectResearchWorkflow[]
+  researchScanSummaries: ProjectResearchScanSummary[]
   researchCheckpoints: ProjectResearchCheckpoint[]
   literatureMatrix: ProjectResearchLiteratureMatrixItem[]
-  synthesisArtifacts: ProjectResearchArtifactLink[]
+  researchReports: ProjectResearchReport[]
+  researchOperations: ProjectOperation[]
+  researchRunStatuses: Record<string, string>
+  researchDataLoading: boolean
+  modelProviders: ModelProviderOut[]
   screeningCriteria: ProjectResearchScreeningCriteria | null
   researchActionBusy: string | null
-  onPrepareProfile: () => void
-  onStartWorkflow: () => void
+  onSaveInitialIntake: (config: ProjectResearchInitialIntakeInput) => Promise<boolean>
+  onRefineQuestion: (input: { research_question: string; history: Array<{ role: 'user' | 'assistant'; content: string }>; execution: { model_provider_id?: string; model_name?: string } }) => Promise<ProjectResearchQuestionRefinement>
+  onStartInitialIntake: (config: ProjectResearchInitialIntakeInput) => void
+  onExtendHistory: (config: { from: string; to?: string; max_items: number }) => void
+  onTriggerIncremental: () => void
+  onLoadQuestionImpact: () => Promise<ProjectResearchQuestionImpact>
+  onResolveQuestion: (strategy: ProjectResearchQuestionResolutionStrategy) => Promise<boolean>
+  onRetryOperation: (operationId: string) => void
+  onReconcileOperation: (operationId: string) => void
+  onOpenSettings: () => void
+  onRescanBackfill: () => void
+  onDecideCheckpoint: (checkpoint: ProjectResearchCheckpoint, decision: 'approved' | 'rejected') => void
   onRebuildMatrix: () => void
   onRunIntegrity: () => void
   onEditQuestion: () => void
+  onSourceCreated: (channel: SourceChannel) => Promise<void> | void
 }
 
 export function AcademicResearchWorkbench({
   project,
   sourceBindings,
+  sourceChannels,
   recentSourceItems,
   recentEvidence,
-  sourceRecommendations,
   readerAnnotations,
-  researchProfile,
   researchWorkflows,
+  researchScanSummaries,
   researchCheckpoints,
   literatureMatrix,
-  synthesisArtifacts,
+  researchReports,
+  researchOperations,
+  researchRunStatuses,
+  researchDataLoading,
+  modelProviders,
   screeningCriteria,
   researchActionBusy,
-  onPrepareProfile,
-  onStartWorkflow,
+  onSaveInitialIntake,
+  onRefineQuestion,
+  onStartInitialIntake,
+  onExtendHistory,
+  onTriggerIncremental,
+  onLoadQuestionImpact,
+  onResolveQuestion,
+  onRetryOperation,
+  onReconcileOperation,
+  onOpenSettings,
+  onRescanBackfill,
+  onDecideCheckpoint,
   onRebuildMatrix,
   onRunIntegrity,
   onEditQuestion,
+  onSourceCreated,
 }: AcademicResearchWorkbenchProps) {
+  const [researchSetupOpen, setResearchSetupOpen] = useState(false)
+  const [extendHistoryOpen, setExtendHistoryOpen] = useState(false)
+  const [extendFrom, setExtendFrom] = useState('')
+  const [extendTo, setExtendTo] = useState('')
+  const [extendMaxItems, setExtendMaxItems] = useState('10000')
+  const [questionResolutionOpen, setQuestionResolutionOpen] = useState(false)
+  const [questionImpact, setQuestionImpact] = useState<ProjectResearchQuestionImpact | null>(null)
+  const [questionImpactError, setQuestionImpactError] = useState<string | null>(null)
+  const checkpointsRef = useRef<HTMLDivElement>(null)
   const sourceHref = `/projects/${project.id}/sources`
   const activeWorkflow = activeResearchWorkflowFrom(researchWorkflows)
-  const setupRecorded = Boolean(stageState(activeWorkflow, 'research_profile'))
-  const matrixRecorded = Boolean(stageState(activeWorkflow, 'screening_matrix'))
-  const profileApproved = researchProfile?.status === 'approved'
-  const syncNeeded = profileNeedsSync(project, researchProfile)
+  const displayWorkflow = researchWorkflowForDisplayFrom(researchWorkflows)
+  const activeScanSummaries = activeWorkflow
+    ? researchScanSummaries.filter(summary => summary.workflow_id === activeWorkflow.id)
+    : []
+  const currentResearchOperation = researchOperations.find(operation => operation.kind === 'research' && ['active', 'waiting_review'].includes(operation.status))
+    ?? researchOperations.find(operation => operation.kind === 'research')
+    ?? null
+  // Relative timestamps ("Last update 12s ago", "running since 3m ago") are
+  // computed at render time; without a clock tick they would only move when a
+  // poll response happens to re-render the card. A 1s tick keeps second-level
+  // values counting every second and flips minute-level values exactly on the
+  // minute boundary.
+  const [, setClockTick] = useState(0)
+  const showOperationCard = currentResearchOperation !== null
+  useEffect(() => {
+    if (!showOperationCard) return
+    const timer = window.setInterval(() => setClockTick(tick => tick + 1), 1_000)
+    return () => window.clearInterval(timer)
+  }, [showOperationCard])
+  const initialLiteratureOperations = researchOperations
+    .filter(operation => operation.kind === 'research' && operation.progress_json.run_kind === 'baseline')
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+  const initialLiteratureOperation = initialLiteratureOperations[0] ?? null
+  const emptyInitialLiteratureOperation = isEmptySearchOperation(initialLiteratureOperation) ? initialLiteratureOperation : null
+  const initialIntakeStarted = initialLiteratureOperation !== null
+  const coverageRanges = historyCoverageRanges(activeWorkflow)
+  const earliestCoverage = coverageRanges.filter(range => range.status === 'completed').sort((a, b) => a.from.localeCompare(b.from))[0] ?? null
+  const historicalBackfillActive = researchOperations.some(operation => operation.kind === 'research' && operation.progress_json.run_kind === 'historical_backfill' && ['active', 'waiting_review'].includes(operation.status))
+  const monitoring = objectValue(activeWorkflow?.state_json.monitoring)
+  const projectBindingChannelIds = useMemo(
+    () => new Set(sourceBindings.filter(binding => binding.status === 'active').map(binding => binding.source_channel_id)),
+    [sourceBindings],
+  )
+  const initialIntakeConfig = objectValue(activeWorkflow?.state_json.initial_intake)
+  const initialIntakeDraft = objectValue(displayWorkflow?.state_json.draft)
+  const initialIntakeSaved = initialIntakeDraft.status === 'saved' || emptyInitialLiteratureOperation !== null
+  const canExtendHistory = Boolean(activeWorkflow && !historicalBackfillActive && initialLiteratureOperation?.status === 'completed' && monitoring.active === true && initialIntakeConfig.history_mode !== 'all_available' && earliestCoverage)
+  const syncNeeded = workflowQuestionNeedsSync(project, activeWorkflow)
   const projectQuestion = project.current_focus?.trim() ?? ''
-  const criteriaReady = hasScreeningCriteria(screeningCriteria)
-  const pendingCheckpoints = researchCheckpoints.filter(checkpoint => checkpoint.status === 'pending')
-  const integrityCheckpoint = researchCheckpoints.find(checkpoint => checkpoint.checkpoint_type === 'integrity_gate')
-  const evidenceSignalCount = recentEvidence.length + readerAnnotations.length
-  const matrixEvidenceCount = literatureMatrix.reduce((total, row) => total + row.evidence_count + row.annotation_count, 0)
+  const researchSetupDraft = useMemo(
+    () => researchSetupDraftFromWorkflow(displayWorkflow, projectQuestion, [...projectBindingChannelIds], literatureMatrix.length),
+    [displayWorkflow, projectBindingChannelIds, projectQuestion, literatureMatrix.length],
+  )
+  const pendingCheckpoints = researchCheckpoints.filter(checkpoint => {
+    if (checkpoint.status !== 'pending' || !isResearchHumanReviewCheckpoint(checkpoint)) return false
+    const operationId = typeof checkpoint.machine_result_json?.operation_id === 'string'
+      ? checkpoint.machine_result_json.operation_id
+      : null
+    if (!operationId) return true
+    const operation = researchOperations.find(item => item.id === operationId)
+    return !operation || ['active', 'waiting_review'].includes(operation.status)
+  })
   const canAct = project.status === 'active'
-  const stageRows = [
-    {
-      key: 'research_profile',
-      label: 'Research profile',
-      icon: <Target className="size-4" />,
-      status: profileApproved && !syncNeeded ? 'complete' : projectQuestion ? 'active' : 'waiting',
-      badge: profileApproved && !syncNeeded ? 'Approved' : projectQuestion ? 'Review' : 'Missing',
-      meta: projectQuestion || 'Set a research question to unlock the workflow.',
-    },
-    {
-      key: 'literature_monitoring',
-      label: 'Literature intake',
-      icon: <Rss className="size-4" />,
-      status: sourceBindings.length > 0 ? 'complete' : 'waiting',
-      badge: `${sourceBindings.length} sources`,
-      meta: sourceBindings.length > 0
-        ? `${recentSourceItems.length} recent papers or source items collected.`
-        : 'Connect arXiv, RSS, PDFs, or manual URLs to feed the corpus.',
-    },
-    {
-      key: 'screening_matrix',
-      label: 'Screening matrix',
-      icon: <Search className="size-4" />,
-      status: literatureMatrix.length > 0 || matrixRecorded ? 'complete' : recentSourceItems.length > 0 || sourceRecommendations.length > 0 ? 'active' : 'waiting',
-      badge: `${literatureMatrix.length} rows`,
-      meta: criteriaReady
-        ? 'Screening criteria are configured for triage.'
-        : `${sourceRecommendations.length} source recommendations ready for review.`,
-    },
-    {
-      key: 'synthesis',
-      label: 'Synthesis',
-      icon: <FileText className="size-4" />,
-      status: synthesisArtifacts.length > 0 ? 'complete' : activeWorkflow?.current_stage === 'synthesis' ? 'active' : 'waiting',
-      badge: `${synthesisArtifacts.length} reports`,
-      meta: synthesisArtifacts[0]?.artifact.title ?? 'Build synthesis after the matrix has included papers.',
-    },
-    {
-      key: 'integrity_gate',
-      label: 'Integrity gate',
-      icon: <CheckCircle className="size-4" />,
-      status: integrityCheckpoint?.status === 'approved' || integrityCheckpoint?.status === 'waived'
-        ? 'complete'
-        : integrityCheckpoint?.status === 'rejected'
-          ? 'warning'
-          : integrityCheckpoint?.status === 'pending'
-            ? 'active'
-            : 'waiting',
-      badge: integrityCheckpoint?.status ?? 'Not run',
-      meta: pendingCheckpoints.length > 0
-        ? `${pendingCheckpoints.length} checkpoint${pendingCheckpoints.length === 1 ? '' : 's'} waiting for review.`
-        : `${matrixEvidenceCount || evidenceSignalCount} evidence and annotation signals in scope.`,
-    },
-  ]
+  const includedPaperCount = literatureMatrix.filter(row => row.triage_status === 'included').length
+  // Before the matrix is built, the papers actually in scope live on the
+  // current operation; the capped recent-items list is not a paper count.
+  const operationPaperCount = new Set(
+    Array.isArray(currentResearchOperation?.progress_json.source_item_ids)
+      ? currentResearchOperation.progress_json.source_item_ids.filter((value): value is string => typeof value === 'string')
+      : [],
+  ).size
+  const resultState = researchResultState({
+    projectQuestion,
+    workflow: activeWorkflow,
+    checkpoints: pendingCheckpoints,
+    operations: researchOperations,
+    reports: researchReports,
+    scanSummaries: activeScanSummaries,
+    paperCount: Math.max(literatureMatrix.length, operationPaperCount),
+    includedCount: includedPaperCount,
+    savedSetupDiffers: emptyInitialLiteratureOperation !== null
+      && savedSetupDiffersFromOperation(serializeResearchSetupDraft(researchSetupDraft), emptyInitialLiteratureOperation),
+  })
+  function handleResultAction(action: ResearchResultAction) {
+    if (action === 'configure') {
+      if (!projectQuestion) onEditQuestion()
+      else setResearchSetupOpen(true)
+    } else if (action === 'resolve_question') void openQuestionResolution()
+    else if (action === 'review_results') checkpointsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    else if (action === 'retry' && resultState.operation) onRetryOperation(resultState.operation.id)
+    else if (action === 'rescan') onRescanBackfill()
+    else if (action === 'start_search') startSavedResearch()
+  }
+  async function openQuestionResolution() {
+    setQuestionResolutionOpen(true)
+    setQuestionImpact(null)
+    setQuestionImpactError(null)
+    try {
+      setQuestionImpact(await onLoadQuestionImpact())
+    } catch (error) {
+      setQuestionImpactError(error instanceof Error ? error.message : 'Could not load question-change impact')
+    }
+  }
+  async function resolveQuestion(strategy: ProjectResearchQuestionResolutionStrategy) {
+    if (await onResolveQuestion(strategy)) setQuestionResolutionOpen(false)
+  }
+  function startSavedResearch() {
+    if (!initialIntakeSaved) {
+      setResearchSetupOpen(true)
+      return
+    }
+    onStartInitialIntake(serializeResearchSetupDraft(researchSetupDraft))
+  }
+  const setupGuideSteps = defaultResearchSetupGuideSteps({
+    hasResearchQuestion: Boolean(projectQuestion),
+    hasInitialIntake: initialIntakeSaved,
+    onEditQuestion,
+    onConfigureInitialIntake: () => setResearchSetupOpen(true),
+  })
   const nextAction = !projectQuestion
     ? 'Set the research question before starting auto research.'
-    : !profileApproved || syncNeeded
-      ? 'Approve the project research profile.'
-      : !activeWorkflow
-        ? 'Start the literature review workflow.'
-        : literatureMatrix.length === 0 && recentSourceItems.length > 0
-          ? 'Rebuild the literature matrix from the project corpus.'
-          : 'Run the integrity gate before using synthesis or draft outputs.'
+    : emptyInitialLiteratureOperation
+      ? 'Adjust the saved intake setup and start the initial literature search again.'
+    : !activeWorkflow
+      ? 'Start the literature review workflow.'
+      : literatureMatrix.length === 0 && recentSourceItems.length > 0
+        ? 'Rebuild the literature matrix from the project corpus.'
+        : 'Run the integrity gate before relying on the report or draft outputs.'
+
+  if (researchDataLoading) {
+    return (
+      <section aria-label="Loading academic research" className="rounded-lg border border-border bg-card p-4 lg:p-5">
+        <div className="flex items-center gap-2">
+          <div className="size-4 animate-pulse rounded bg-muted" />
+          <div className="h-4 w-48 animate-pulse rounded bg-muted" />
+        </div>
+        <div className="mt-3 h-3 w-3/4 animate-pulse rounded bg-muted" />
+        <div className="mt-4 h-24 animate-pulse rounded-md bg-muted/60" />
+      </section>
+    )
+  }
 
   return (
-    <section className="rounded-lg border border-border bg-card overflow-hidden">
+    <>
+      <ResearchResultCard
+        state={resultState}
+        projectId={project.id}
+        busy={researchActionBusy !== null}
+        running={resultState.kind === 'running' && resultState.operation ? {
+          percent: researchOperationPercent(resultState.operation),
+          detail: `${researchOperationDetail(resultState.operation)} · ${researchOperationNextStep(resultState.operation)}`,
+          steps: researchOperationSteps(resultState.operation),
+        } : null}
+        onAction={handleResultAction}
+      />
+      <ResearchScanTimeline
+        projectId={project.id}
+        summaries={activeScanSummaries}
+        monitoringActive={monitoring.active === true}
+      />
+      <nav aria-label="Academic research links" className="flex flex-wrap items-center gap-x-2 gap-y-1 px-1 text-sm text-muted-foreground">
+        <Link className="hover:text-foreground hover:underline" to={sourceHref}>Manage sources</Link>
+        <span aria-hidden="true">·</span>
+        <Link className="hover:text-foreground hover:underline" to={`/projects/${project.id}/research`}>Open reading list, notebook, checklist, and reports</Link>
+      </nav>
+      {!initialIntakeStarted && (
+        <ResearchSetupGuide steps={setupGuideSteps} />
+      )}
+      {!initialIntakeStarted && (
+        <ResearchSetupSummary
+          draft={researchSetupDraft}
+          sourceChannels={sourceChannels}
+          saved={initialIntakeSaved}
+          busyAction={researchActionBusy}
+          canAct={canAct}
+          onEdit={() => setResearchSetupOpen(true)}
+          onStart={startSavedResearch}
+        />
+      )}
+      <ResearchSetupDialog
+        projectId={project.id}
+        open={researchSetupOpen}
+        draft={researchSetupDraft}
+        sourceChannels={sourceChannels}
+        busyAction={researchActionBusy}
+        modelProviders={modelProviders}
+        canAct={canAct}
+        onOpenChange={setResearchSetupOpen}
+        onSave={onSaveInitialIntake}
+        onRefineQuestion={onRefineQuestion}
+        onStart={onStartInitialIntake}
+        onSourceCreated={onSourceCreated}
+        onEditQuestion={onEditQuestion}
+      />
+      <section className="rounded-lg border border-border bg-card overflow-hidden">
       <div className="border-b border-border p-4 lg:p-5 flex items-start justify-between gap-4 flex-wrap">
         <div className="space-y-1.5 min-w-0">
           <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -201,205 +526,148 @@ export function AcademicResearchWorkbench({
             Academic research
             <Badge variant="secondary">Auto research</Badge>
           </div>
-          <h2 className="text-lg font-semibold tracking-tight">Auto research workflow</h2>
-          <p className="text-sm text-muted-foreground max-w-3xl">
-            Research question to literature intake to screening matrix to synthesis to integrity gate.
+          <h2 className="text-lg font-semibold tracking-tight">Research status</h2>
+          <p className={`text-sm max-w-3xl line-clamp-2 ${projectQuestion ? '' : 'text-muted-foreground'}`}>
+            {projectQuestion || 'Set the research question that screening and synthesis should answer.'}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          {!projectQuestion && (
-            <Button size="sm" variant="secondary" onClick={onEditQuestion}>
-              <Edit2 className="size-3.5" />
-              Set research question
-            </Button>
-          )}
-          <Button
-            size="sm"
-            onClick={onStartWorkflow}
-            disabled={!canAct || !projectQuestion || researchActionBusy !== null}
-          >
-            <Activity className="size-3.5" />
-            {researchActionBusy === 'start-workflow' ? 'Starting...' : 'Start auto research'}
+          <Link to={`/projects/${project.id}/research`}><Button size="sm"><BookOpen className="size-3.5" />Open research workspace</Button></Link>
+          <Button size="sm" variant={projectQuestion ? 'ghost' : 'secondary'} onClick={onEditQuestion}>
+            <Edit2 className="size-3.5" />
+            {projectQuestion ? 'Edit question' : 'Set research question'}
           </Button>
-          <Button size="sm" variant="outline" asChild>
-            <Link to={arxivSourcePresetHref(project.id)}>
-              <Plus className="size-3.5" />
-              Add arXiv source
-            </Link>
-          </Button>
+          {!initialIntakeStarted && <Button size="sm" variant="outline" onClick={() => setResearchSetupOpen(true)}>
+            Set up intake
+          </Button>}
         </div>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1.6fr)_minmax(280px,0.85fr)] p-4 lg:p-5">
-        <div className="space-y-4 min-w-0">
-          <div className="grid gap-3 md:grid-cols-5">
-            {stageRows.map(stage => (
-              <div key={stage.key} className={`rounded-md border p-3 min-h-[148px] ${stageToneClass(stage.status)}`}>
-                <div className="flex items-start justify-between gap-2">
-                  <div className="h-8 w-8 rounded-md bg-background border border-border flex items-center justify-center text-accent-foreground">
-                    {stage.icon}
-                  </div>
-                  <Badge variant={stageBadgeVariant(stage.status)}>{stage.badge}</Badge>
-                </div>
-                <p className="mt-3 text-sm font-semibold">{stage.label}</p>
-                <p className="mt-1 text-xs text-muted-foreground line-clamp-3">{stage.meta}</p>
-              </div>
-            ))}
-          </div>
 
+      <div className="p-4 lg:p-5">
+        <div className="space-y-4 min-w-0">
           <div className="rounded-md border border-border p-4">
             <div className="flex items-start justify-between gap-3 flex-wrap">
               <div className="space-y-1">
-                <h3 className="text-sm font-semibold">Next research action</h3>
-                <p className="text-sm text-muted-foreground">{nextAction}</p>
+                <h3 className="text-sm font-semibold">Research controls</h3>
+                <p className="text-sm text-muted-foreground">{activeWorkflow ? 'Run monitoring or extend historical coverage. Living documents and report review are in the research workspace.' : nextAction}</p>
               </div>
-              {activeWorkflow ? (
-                <StatusBadge status={activeWorkflow.status} />
+              {displayWorkflow ? (
+                <Badge variant={displayWorkflow.status === 'not_started' ? 'outline' : 'muted'}>
+                  {displayWorkflow.status === 'not_started' ? 'Draft' : displayWorkflow.status}
+                </Badge>
               ) : (
                 <Badge variant="muted">No workflow</Badge>
               )}
             </div>
             <div className="mt-4 flex flex-wrap gap-2">
-              <Button
-                size="sm"
-                variant={profileApproved && !syncNeeded ? 'outline' : 'secondary'}
-                onClick={onPrepareProfile}
-                disabled={!canAct || !projectQuestion || researchActionBusy !== null}
-              >
-                <CheckCircle className="size-3.5" />
-                {researchActionBusy === 'prepare-profile'
-                  ? 'Approving...'
-                  : profileApproved && !syncNeeded
-                    ? 'Profile approved'
-                    : 'Approve profile'}
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={onRebuildMatrix}
-                disabled={!canAct || researchActionBusy !== null}
-              >
-                <RefreshCw className="size-3.5" />
-                {researchActionBusy === 'rebuild-matrix' ? 'Rebuilding...' : 'Rebuild matrix'}
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={onRunIntegrity}
-                disabled={!canAct || !activeWorkflow || researchActionBusy !== null}
-              >
-                <CheckCircle className="size-3.5" />
-                {researchActionBusy === 'run-integrity' ? 'Checking...' : 'Run integrity'}
-              </Button>
-              <Button size="sm" variant="outline" asChild>
-                <Link to={academicGraphHref(project.id)}>
-                  <Network className="size-3.5" />
-                  Citation graph
-                </Link>
-              </Button>
-              <Button size="sm" variant="outline" asChild>
-                <Link to={sourceHref}>
-                  <Search className="size-3.5" />
-                  Review corpus
-                </Link>
-              </Button>
-            </div>
-          </div>
-
-          <div className="rounded-md border border-border p-4">
-            <div className="flex items-center justify-between gap-3 mb-3">
-              <h3 className="text-sm font-semibold">Literature matrix preview</h3>
-              <Badge variant="muted">{literatureMatrix.length} papers</Badge>
-            </div>
-            {literatureMatrix.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                No included or maybe papers are in the matrix yet. Review source recommendations or rebuild after adding sources.
-              </p>
-            ) : (
-              <div className="space-y-2">
-                {literatureMatrix.slice(0, 4).map(row => (
-                  <div key={row.corpus_item_id} className="flex items-start justify-between gap-3 min-w-0">
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium truncate">{row.title ?? row.object_id ?? row.corpus_item_id}</p>
-                      <p className="text-xs text-muted-foreground truncate">
-                        {row.academic?.venue ?? row.academic?.arxiv_id ?? row.summary ?? 'Project corpus item'}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <Badge variant={row.triage_status === 'included' ? 'success' : 'outline'}>{row.triage_status}</Badge>
-                      <Badge variant="muted">{row.evidence_count + row.annotation_count} signals</Badge>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="space-y-3 min-w-0">
-          <div className="rounded-md border border-border p-4">
-            <div className="flex items-center justify-between gap-2 mb-3">
-              <h3 className="text-sm font-semibold">Research profile</h3>
-              <StatusBadge status={researchProfile?.status ?? 'not_started'} />
-            </div>
-            <dl className="space-y-2 text-sm">
-              <div>
-                <dt className="text-xs text-muted-foreground uppercase tracking-wide">Question</dt>
-                <dd className="mt-1 line-clamp-3">{researchProfile?.research_question ?? project.current_focus ?? 'Not set'}</dd>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <dt className="text-xs text-muted-foreground uppercase tracking-wide">Output</dt>
-                  <dd className="mt-1">{researchProfile?.output_type ?? 'paper'}</dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-muted-foreground uppercase tracking-wide">Mode</dt>
-                  <dd className="mt-1">{activeWorkflow?.mode ?? 'agent_assisted'}</dd>
-                </div>
-              </div>
-              {syncNeeded && (
-                <div className="rounded-md border border-warning/35 bg-warning/5 p-2 text-xs text-warning">
-                  Project question changed after profile approval.
-                </div>
+              {activeWorkflow && (
+                <Button size="sm" variant="outline" onClick={onTriggerIncremental} disabled={!canAct || researchActionBusy !== null || syncNeeded}>
+                  <RefreshCw className="size-3.5" />
+                  {researchActionBusy === 'incremental' ? 'Scanning...' : 'Run incremental now'}
+                </Button>
               )}
-            </dl>
-          </div>
-
-          <div className="rounded-md border border-border p-4">
-            <div className="flex items-center justify-between gap-2 mb-3">
-              <h3 className="text-sm font-semibold">Workflow state</h3>
-              <Badge variant="outline">{researchWorkflows.length} total</Badge>
-            </div>
-            <div className="grid grid-cols-2 gap-2 text-sm">
-              <div className="rounded-md bg-muted/30 p-2">
-                <p className="text-xs text-muted-foreground uppercase tracking-wide">Current stage</p>
-                <p className="mt-1 font-medium truncate">{activeWorkflow?.current_stage ?? (setupRecorded ? 'research_profile' : 'Not started')}</p>
-              </div>
-              <div className="rounded-md bg-muted/30 p-2">
-                <p className="text-xs text-muted-foreground uppercase tracking-wide">Checkpoints</p>
-                <p className="mt-1 font-medium">{pendingCheckpoints.length} pending</p>
-              </div>
-              <div className="rounded-md bg-muted/30 p-2">
-                <p className="text-xs text-muted-foreground uppercase tracking-wide">Evidence</p>
-                <p className="mt-1 font-medium">{evidenceSignalCount} signals</p>
-              </div>
-              <div className="rounded-md bg-muted/30 p-2">
-                <p className="text-xs text-muted-foreground uppercase tracking-wide">Criteria</p>
-                <p className="mt-1 font-medium">{criteriaReady ? 'Set' : 'Open'}</p>
-              </div>
+              {canExtendHistory && earliestCoverage && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setExtendTo(earliestCoverage.from.slice(0, 10))
+                    setExtendFrom('')
+                    setExtendMaxItems('10000')
+                    setExtendHistoryOpen(true)
+                  }}
+                  disabled={!canAct || researchActionBusy !== null || syncNeeded}
+                >
+                  <BookOpen className="size-3.5" />
+                  Extend history
+                </Button>
+              )}
             </div>
           </div>
 
-          <div className="rounded-md border border-border p-4">
-            <h3 className="text-sm font-semibold mb-3">Permission boundary</h3>
-            <div className="space-y-2 text-xs text-muted-foreground">
-              <p>Uses this project's research profile, source bindings, corpus, workflow artifacts, and checkpoints.</p>
-              <p>Reader annotations link back to Library; this page does not create or delete annotations.</p>
-              <p>Integrity checks read visible project claims and evidence, then write a project artifact and checkpoint.</p>
+
+          {pendingCheckpoints.length > 0 && (
+            <div ref={checkpointsRef} id="research-checkpoints" className="rounded-md border border-warning/35 bg-warning/5 p-4 space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold">Review required</h3>
+                  <p className="text-xs text-muted-foreground">These are the two deliberate human gates in auto research. The decisions below control what enters the formal outputs.</p>
+                </div>
+                <Badge variant="warning">{pendingCheckpoints.length} pending</Badge>
+              </div>
+              {pendingCheckpoints.map(checkpoint => (
+                <ResearchCheckpointReview
+                  key={checkpoint.id}
+                  checkpoint={checkpoint}
+                  onDecide={decision => onDecideCheckpoint(checkpoint, decision)}
+                />
+              ))}
             </div>
-          </div>
+          )}
+
         </div>
       </div>
-    </section>
+      <Dialog open={questionResolutionOpen} onOpenChange={setQuestionResolutionOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Resolve research question change</DialogTitle>
+            <DialogDescription>
+              The corpus and monitor queries stay intact. Choose which judgement stages should run again for the revised question.
+            </DialogDescription>
+          </DialogHeader>
+          {questionImpactError ? (
+            <p role="alert" className="text-sm text-destructive">{questionImpactError}</p>
+          ) : questionImpact ? (
+            <div className="space-y-4">
+              <div className="rounded-md border border-border bg-muted/20 p-3 text-sm">
+                <p className="font-medium">{questionImpact.screened_papers.toLocaleString()} papers screened against the previous question · {questionImpact.reports.toLocaleString()} reports</p>
+                <p className="mt-1 text-xs text-muted-foreground">Question version {questionImpact.previous_version} → {questionImpact.previous_version + 1}</p>
+              </div>
+              <div className="grid gap-2">
+                <Button className="h-auto justify-start px-4 py-3 text-left" disabled={researchActionBusy !== null} onClick={() => void resolveQuestion('rescreen')}>
+                  <span><span className="block">Re-screen against the new question</span><span className="block text-xs font-normal opacity-80">Refresh criteria, preserve human-confirmed triage, re-screen AI decisions, then run the normal review and synthesis gates.</span></span>
+                </Button>
+                <Button variant="outline" className="h-auto justify-start px-4 py-3 text-left" disabled={researchActionBusy !== null} onClick={() => void resolveQuestion('synthesis_only')}>
+                  <span><span className="block">Re-run synthesis only</span><span className="block text-xs font-normal text-muted-foreground">Reuse the current corpus and screening projection, then generate a new report for the revised question.</span></span>
+                </Button>
+                <Button variant="ghost" className="h-auto justify-start px-4 py-3 text-left" disabled={researchActionBusy !== null} onClick={() => void resolveQuestion('apply_forward')}>
+                  <span><span className="block">Apply to future runs only</span><span className="block text-xs font-normal text-muted-foreground">Keep existing decisions and reports unchanged; use the revised question only for future monitoring.</span></span>
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">Calculating affected papers and reports…</p>
+          )}
+          <DialogFooter><Button variant="outline" onClick={() => setQuestionResolutionOpen(false)}>Cancel</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={extendHistoryOpen} onOpenChange={setExtendHistoryOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Extend research history</DialogTitle>
+            <DialogDescription>Import papers earlier than the current historical coverage. Existing source items and confirmed triage are preserved.</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3 md:grid-cols-2">
+              <label className="space-y-1 text-xs"><span className="text-muted-foreground">Earlier from</span><DatePicker value={extendFrom} onChange={setExtendFrom} ariaLabel="Earlier from" /></label>
+              <label className="space-y-1 text-xs"><span className="text-muted-foreground">To (current earliest)</span><DatePicker value={extendTo} onChange={setExtendTo} ariaLabel="To current earliest" /></label>
+            <label className="space-y-1 text-xs md:col-span-2"><span className="text-muted-foreground">Max items</span><Input type="number" min={1} max={10000} value={extendMaxItems} onChange={event => setExtendMaxItems(event.target.value)} /></label>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setExtendHistoryOpen(false)}>Cancel</Button>
+            <Button
+              disabled={!extendFrom || !extendTo || Number(extendMaxItems) < 1 || Number(extendMaxItems) > 10000 || researchActionBusy !== null}
+              onClick={() => {
+                onExtendHistory({ from: extendFrom, to: extendTo, max_items: Number(extendMaxItems) })
+                setExtendHistoryOpen(false)
+              }}
+            >
+              {researchActionBusy === 'extend-history' ? 'Starting...' : 'Start historical backfill'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      </section>
+    </>
   )
 }

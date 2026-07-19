@@ -32,9 +32,9 @@ export async function consumeConnectionQuota(
   const now = new Date();
   const resetAt = new Date(now.getTime() + windowMs).toISOString();
   await db.query(
-    `INSERT INTO source_quota_buckets (id, space_id, scope_kind, scope_key, window, limit_count, used_count, window_started_at, reset_at)
-     VALUES ($1,$2,'source_connection',$3,$4,$5,0,$6,$7)
-     ON CONFLICT (space_id, scope_kind, scope_key, window) DO UPDATE SET
+    `INSERT INTO source_quota_buckets (id, space_id, scope_kind, scope_key, "window", limit_count, used_count, window_started_at, reset_at)
+      VALUES ($1,$2,'source_connection',$3,$4,$5,0,$6,$7)
+      ON CONFLICT (space_id, scope_kind, scope_key, "window") DO UPDATE SET
        limit_count = LEAST(source_quota_buckets.limit_count, EXCLUDED.limit_count),
        used_count = CASE WHEN source_quota_buckets.reset_at <= now() THEN 0 ELSE source_quota_buckets.used_count END,
        window_started_at = CASE WHEN source_quota_buckets.reset_at <= now() THEN $6 ELSE source_quota_buckets.window_started_at END,
@@ -44,14 +44,14 @@ export async function consumeConnectionQuota(
 
   const consumed = await db.query<{ reset_at: string }>(
     `UPDATE source_quota_buckets SET used_count = used_count + 1
-      WHERE space_id=$1 AND scope_kind='source_connection' AND scope_key=$2 AND window=$3 AND used_count < limit_count
+      WHERE space_id=$1 AND scope_kind='source_connection' AND scope_key=$2 AND "window"=$3 AND used_count < limit_count
       RETURNING reset_at`,
     [spaceId, connectionId, window],
   );
   if (consumed.rows[0]) return { allowed: true };
 
   const bucket = await db.query<{ reset_at: string }>(
-    `SELECT reset_at FROM source_quota_buckets WHERE space_id=$1 AND scope_kind='source_connection' AND scope_key=$2 AND window=$3 FOR UPDATE`,
+    `SELECT reset_at FROM source_quota_buckets WHERE space_id=$1 AND scope_kind='source_connection' AND scope_key=$2 AND "window"=$3 FOR UPDATE`,
     [spaceId, connectionId, window],
   );
   return { allowed: false, resetAt: bucket.rows[0]?.reset_at ?? resetAt };

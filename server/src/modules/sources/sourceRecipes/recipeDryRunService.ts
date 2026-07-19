@@ -155,8 +155,11 @@ export class SourceRecipeDryRunService {
       endpoint_url: string | null;
       handler_kind: string;
     }>(
-      `SELECT id, name, endpoint_url, handler_kind
-         FROM source_connections WHERE space_id = $1 AND id = $2 AND deleted_at IS NULL`,
+      `SELECT sc.id, sc.name, ch.endpoint_url, sc.handler_kind
+         FROM source_connections sc
+         JOIN source_channels ch ON ch.source_connection_id = sc.id AND ch.status <> 'archived'
+        WHERE sc.space_id = $1 AND sc.id = $2 AND sc.deleted_at IS NULL
+        ORDER BY ch.updated_at DESC LIMIT 1`,
       [identity.spaceId, connectionId],
     );
     const row = result.rows[0];

@@ -15,6 +15,7 @@ import { PreviewBadge, UrgencyBadge } from '../../components/PreviewBadge'
 import { EgressReviewNotice, isGrantDerivedProposal } from './EgressReviewNotice'
 import { codePatchAcceptOptions } from './codePatchConfirm'
 import { ContentAccessControl } from '../../components/ContentAccessControl'
+import { notifyReviewAttentionChanged } from '../../core/reviewAttention'
 
 function fmt(dt: string | null | undefined) {
   return dt ? new Date(dt).toLocaleString() : '—'
@@ -99,6 +100,7 @@ export default function ProposalDetailPage() {
         await proposalsApi.reject(p.id)
         toast.success('Proposal rejected.')
       }
+      notifyReviewAttentionChanged()
       const r = await proposalsApi.get(p.id)
       setP(r)
     } catch (e) {
@@ -126,6 +128,7 @@ export default function ProposalDetailPage() {
     try {
       await proposalsApi.approveEgressGrantingUserProposal(p.id, { grant_id: p.grant_id ?? undefined })
       toast.success('Egress review approval recorded')
+      notifyReviewAttentionChanged()
       setP(await proposalsApi.get(p.id))
     } catch (e) {
       toast.error(errMsg(e))

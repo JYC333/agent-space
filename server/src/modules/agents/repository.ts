@@ -35,6 +35,7 @@ import { contentOwnerFromDb } from "../access/contentAccessQuery";
 import {
   DEFAULT_MEMORY_POLICY,
   DEFAULT_MODEL_CONFIG,
+  defaultModelConfigFor,
   DEFAULT_RUNTIME_CONFIG,
   agentOut,
   buildRuntimePolicy,
@@ -620,6 +621,8 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
     outputPolicyJson?: Record<string, unknown> | null;
     scheduleConfigJson?: Record<string, unknown> | null;
     outputSchemaJson?: Record<string, unknown> | null;
+    agentKind?: string | null;
+    ownerUserId?: string | null;
   }): Promise<AgentOut> {
     if (input.visibility && !isContentVisibility(input.visibility)) {
       throw new HttpError(422, "Invalid visibility");
@@ -636,21 +639,18 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
     return withTransaction(this.pool, async (client) =>
       this.createAgentWithVersion(client, {
         spaceId: input.spaceId,
-        ownerUserId: input.userId,
+        ownerUserId: input.ownerUserId === undefined ? input.userId : input.ownerUserId,
         name: input.name,
         description: input.description ?? null,
         visibility: input.visibility ?? "private",
         roleInstruction: input.roleInstruction ?? null,
         status: "active",
-        agentKind: "standard",
+        agentKind: input.agentKind ?? "standard",
         systemPrompt: input.systemPrompt ?? null,
         promptProvenanceJson: input.promptProvenanceJson ?? null,
         modelProviderId: providerId,
         modelName,
-        modelConfigJson: input.modelConfigJson ?? {
-          ...DEFAULT_MODEL_CONFIG,
-          ...(modelName ? { model: modelName } : {}),
-        },
+        modelConfigJson: input.modelConfigJson ?? defaultModelConfigFor(modelName),
         runtimeConfigJson,
         contextPolicyJson: input.contextPolicyJson ?? {},
         memoryPolicyJson: input.memoryPolicyJson ?? DEFAULT_MEMORY_POLICY,
@@ -793,7 +793,7 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
         modelName: versionPatch.model_name ?? null,
         systemPrompt: versionPatch.system_prompt ?? null,
         promptProvenanceJson: versionPatch.prompt_provenance_json ?? null,
-        modelConfigJson: versionPatch.model_config_json ?? DEFAULT_MODEL_CONFIG,
+        modelConfigJson: versionPatch.model_config_json ?? defaultModelConfigFor(versionPatch.model_name),
         runtimeConfigJson,
         contextPolicyJson: versionPatch.context_policy_json ?? {},
         memoryPolicyJson: versionPatch.memory_policy_json ?? DEFAULT_MEMORY_POLICY,

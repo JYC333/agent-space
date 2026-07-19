@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { Sun, Moon, LogOut, Menu, Globe } from 'lucide-react'
 import { Toaster } from 'sonner'
@@ -14,6 +14,8 @@ import { FloatingQuickCapture } from '../components/FloatingQuickCapture'
 import { routeScopeForPath, sceneForPath, stripSpacePrefix } from './navigation'
 import { moduleForPath } from '../modules/registry'
 import { useEffectiveModules } from '../modules/plugins/useEffectivePlugins'
+import { proposalsApi } from '../api/client'
+import { REVIEW_ATTENTION_CHANGED_EVENT } from './reviewAttention'
 
 const RAIL_KEY = 'agent-space:rail-expanded'
 const SCENE_COLLAPSE_KEY = 'agent-space:scene-collapsed'
@@ -160,6 +162,33 @@ export default function Shell() {
 
   const [railExpanded, setRailExpanded] = useState(() => readBool(RAIL_KEY, false))
   const [collapsedScenes, setCollapsedScenes] = useState<Record<string, boolean>>(() => readMap(SCENE_COLLAPSE_KEY))
+  const reviewSpaceId = activeSpaceId ?? preferredSpaceId
+  const [pendingReviewCount, setPendingReviewCount] = useState(0)
+
+  const refreshReviewAttention = useCallback(async () => {
+    if (!currentUser?.id || !reviewSpaceId) {
+      setPendingReviewCount(0)
+      return
+    }
+    try {
+      const page = await proposalsApi.list({ status: 'pending', limit: 1 })
+      setPendingReviewCount(page.total)
+    } catch {
+      // Review indicators are advisory; a transient read failure must not
+      // interrupt navigation or turn into a global error toast.
+    }
+  }, [currentUser?.id, reviewSpaceId])
+
+  useEffect(() => {
+    void refreshReviewAttention()
+    const refresh = () => { void refreshReviewAttention() }
+    window.addEventListener(REVIEW_ATTENTION_CHANGED_EVENT, refresh)
+    const interval = window.setInterval(refresh, 30_000)
+    return () => {
+      window.removeEventListener(REVIEW_ATTENTION_CHANGED_EVENT, refresh)
+      window.clearInterval(interval)
+    }
+  }, [refreshReviewAttention])
 
   useEffect(() => { try { localStorage.setItem(RAIL_KEY, String(railExpanded)) } catch { /* ignore */ } }, [railExpanded])
   useEffect(() => { try { localStorage.setItem(SCENE_COLLAPSE_KEY, JSON.stringify(collapsedScenes)) } catch { /* ignore */ } }, [collapsedScenes])
@@ -192,6 +221,7 @@ export default function Shell() {
         spaceId={preferredSpaceId}
         canManageSpace={canManageSpace}
         canManageInstance={canManageInstance}
+        pendingReviewCount={pendingReviewCount}
         pluginModules={pluginNavItems}
       />
 
@@ -218,7 +248,7 @@ export default function Shell() {
           <Outlet />
         </main>
 
-        <MobileTabBar spaceId={preferredSpaceId} />
+        <MobileTabBar spaceId={preferredSpaceId} pendingReviewCount={pendingReviewCount} />
       </div>
 
       <FloatingQuickCapture scope={scope} />

@@ -57,7 +57,7 @@ describe("source connection consent policy", () => {
 
   it("defaults public external source connectors to external model processing", () => {
     const governance = normalizeSourceConnectionCreateGovernance(identity, {
-      connector_key: "arxiv",
+      connector_type: "external_feed",
     });
 
     expect(governance.consent.allow_local_provider_egress).toBe(true);
@@ -67,7 +67,7 @@ describe("source connection consent policy", () => {
 
   it("keeps credentialed external sources internal-only by default", () => {
     const governance = normalizeSourceConnectionCreateGovernance(identity, {
-      connector_key: "rss",
+      connector_type: "external_feed",
       credential_id: "credential-1",
     });
 
@@ -116,7 +116,7 @@ describe("source connection consent policy", () => {
 
     expect(governance.policy).toMatchObject({
       retention_policy: "full_text",
-      source_egress_class: "internal_only",
+      source_egress_class: "external_provider_allowed",
       allowed_import_targets: ["activity", "source_artifact"],
     });
     expect(() =>
@@ -126,7 +126,7 @@ describe("source connection consent policy", () => {
 
   it("lazy-normalizes legacy public source egress to external model processing on read", () => {
     const legacy = existingConnection({
-      connector_key: "arxiv",
+      connector_type: "external_feed",
       consent_json: {
         allow_local_provider_egress: false,
         allow_external_model_egress: false,
@@ -144,7 +144,7 @@ describe("source connection consent policy", () => {
 
   it("respects advanced source egress overrides on public sources", () => {
     const legacy = existingConnection({
-      connector_key: "arxiv",
+      connector_type: "external_feed",
       consent_json: {
         allow_local_provider_egress: false,
         allow_external_model_egress: false,
@@ -177,15 +177,13 @@ function existingConnection(overrides: Partial<SourceConnectionRow> = {}): Sourc
   return {
     id: "conn-1",
     space_id: "space-1",
-    connector_id: "connector-1",
+    connector_type: "external_feed",
     owner_user_id: "user-1",
     credential_id: null,
     visibility: "private",
     access_level: "full",
     name: "Inbox",
-    endpoint_url: null,
     status: "active",
-    fetch_frequency: "manual",
     capture_policy: "reference_only",
     trust_level: "normal",
     topic_hints_json: null,
@@ -209,9 +207,6 @@ function existingConnection(overrides: Partial<SourceConnectionRow> = {}): Sourc
       revalidation: { required: true, viewer_scoped: true },
     },
     config_json: {},
-    last_checked_at: null,
-    next_check_at: null,
-    schedule_rule_json: null,
     handler_kind: "built_in",
     active_handler_version_id: null,
     active_recipe_version_id: null,

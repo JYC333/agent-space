@@ -89,14 +89,11 @@ function hardFilterReasons(request: RouteRequest, hints: RouteHints, candidate: 
   const requiredTools = unique([...(request.required_tools ?? []), ...hints.required_tools]);
   if (!candidate.enabled) reasons.push("candidate_disabled");
   if (!candidate.credential_available) reasons.push("credential_unavailable");
-  if (candidate.conformance_status === "failed" && candidate.adapter_type !== "model_api") {
+  const localCli = isLocalCliRuntimeAdapter(candidate.adapter_type);
+  if (candidate.conformance_status === "failed" && localCli) {
     reasons.push("runtime_conformance_failed");
   }
-  if (
-    candidate.adapter_type === "opencode" &&
-    request.risk_level !== "low" &&
-    candidate.conformance_status !== "passed"
-  ) {
+  if (localCli && request.risk_level !== "low" && candidate.conformance_status !== "passed") {
     reasons.push("runtime_conformance_required");
   }
   if (request.excluded_runtime_profile_ids?.includes(candidate.runtime_profile_id)) {
@@ -129,13 +126,33 @@ function hardFilterReasons(request: RouteRequest, hints: RouteHints, candidate: 
     ? candidate.supports_one_shot_docker
     : SANDBOX_RANK[candidate.minimum_sandbox_level] >= SANDBOX_RANK[candidateSandbox];
   if (!sandboxSupported) reasons.push("sandbox_requirement_not_supported");
-  if (request.workspace_available === false && SANDBOX_RANK[candidate.minimum_sandbox_level] > SANDBOX_RANK.none) reasons.push("workspace_or_file_access_unavailable");
+  if (requiresPersistentWorkspace(request, requiredSandbox, candidate)) {
+    reasons.push("workspace_or_file_access_unavailable");
+  }
   const minimumTrust = stricterTrust(trustRequiredForRisk(request.risk_level), hints.minimum_trust_level);
-  if (TRUST_RANK[candidate.trust_level] < TRUST_RANK[minimumTrust]) reasons.push("trust_level_too_low");
+  if (TRUST_RANK[candidate.effective_trust_level] < TRUST_RANK[minimumTrust]) reasons.push("trust_level_too_low");
   const mode = hints.execution_mode ?? request.execution_mode;
   if (mode === "dry_run" && !candidate.supports_dry_run) reasons.push("dry_run_unsupported");
   if (mode === "live" && !candidate.supports_live) reasons.push("live_execution_unsupported");
   return reasons;
+}
+
+/**
+ * A runtime's minimum sandbox is not the same thing as a persistent project
+ * workspace requirement. File-access CLIs can use an ephemeral run directory
+ * for low/medium-risk work. Persistent workspace is required only when the
+ * adapter declares it, when high-risk work needs a worktree, or when the
+ * route explicitly asks for one.
+ */
+function requiresPersistentWorkspace(
+  request: RouteRequest,
+  requiredSandbox: SandboxLevel,
+  candidate: RouteCandidate,
+): boolean {
+  if (request.workspace_available) return false;
+  if (candidate.requires_workspace_for_execution) return true;
+  if (requiredSandbox === "worktree") return true;
+  return request.risk_level === "high" && candidate.minimum_sandbox_level !== "none";
 }
 
 function scoreCandidate(request: RouteRequest, hints: RouteHints, candidate: RouteCandidate): Record<string, number> {

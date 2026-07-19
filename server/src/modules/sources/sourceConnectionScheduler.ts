@@ -4,11 +4,10 @@ import {
   type SchedulerTaskStatus,
 } from "../scheduler/taskStore";
 import type { Queryable } from "../routeUtils/common";
-import type { SourceConnectionRow } from "./sourceRepositoryRows";
 
-export const SOURCE_CONNECTION_SCAN_TASK_TYPE = "source_connection_scan";
+export const SOURCE_CHANNEL_SCAN_TASK_TYPE = "source_channel_scan";
 
-export interface SourceConnectionScheduleTarget {
+export interface SourceChannelScheduleTarget {
   id: string;
   space_id: string;
   owner_user_id: string;
@@ -16,84 +15,60 @@ export interface SourceConnectionScheduleTarget {
   fetch_frequency: string;
 }
 
-export function sourceConnectionSchedulerTaskKey(connectionId: string): string {
-  return connectionId;
+export function sourceChannelSchedulerTaskKey(channelId: string): string {
+  return channelId;
 }
 
-export async function getSourceConnectionScanTask(
+export async function getSourceChannelScanTask(
   db: Queryable,
-  connectionId: string,
+  channelId: string,
 ): Promise<SchedulerTaskRow | null> {
-  return new PgSchedulerTaskStore(db).get(
-    SOURCE_CONNECTION_SCAN_TASK_TYPE,
-    sourceConnectionSchedulerTaskKey(connectionId),
-  );
+  return new PgSchedulerTaskStore(db).get(SOURCE_CHANNEL_SCAN_TASK_TYPE, sourceChannelSchedulerTaskKey(channelId));
 }
 
-export async function listDueSourceConnectionScanTasks(
+export async function listDueSourceChannelScanTasks(
   db: Queryable,
   nowIso: string,
   limit: number,
 ): Promise<SchedulerTaskRow[]> {
-  return new PgSchedulerTaskStore(db).listDue(
-    SOURCE_CONNECTION_SCAN_TASK_TYPE,
-    nowIso,
-    limit,
-  );
+  return new PgSchedulerTaskStore(db).listDue(SOURCE_CHANNEL_SCAN_TASK_TYPE, nowIso, limit);
 }
 
-export async function upsertSourceConnectionScanTask(
+export async function upsertSourceChannelScanTask(
   db: Queryable,
   input: {
-    connection: SourceConnectionScheduleTarget;
+    channel: SourceChannelScheduleTarget;
     nextRunAt: string | null;
     lastRunAt?: string | null;
+    cursor?: Record<string, unknown>;
+    watermark?: Record<string, unknown>;
     updatedAt?: string;
   },
 ): Promise<SchedulerTaskRow> {
   const taskStore = new PgSchedulerTaskStore(db);
-  const existing = await taskStore.get(
-    SOURCE_CONNECTION_SCAN_TASK_TYPE,
-    sourceConnectionSchedulerTaskKey(input.connection.id),
-  );
-  const status = sourceConnectionSchedulerStatus(input.connection.status);
-  const stateJson = { ...(existing?.state_json ?? {}) };
-  delete stateJson.schedule_rule;
+  const existing = await taskStore.get(SOURCE_CHANNEL_SCAN_TASK_TYPE, sourceChannelSchedulerTaskKey(input.channel.id));
+  const status = sourceChannelSchedulerStatus(input.channel.status);
+  const metadata = { ...(existing?.metadata_json ?? {}) };
+  if (input.cursor !== undefined) metadata.cursor = input.cursor;
+  if (input.watermark !== undefined) metadata.watermark = input.watermark;
   return taskStore.upsert({
-    taskType: SOURCE_CONNECTION_SCAN_TASK_TYPE,
-    taskKey: sourceConnectionSchedulerTaskKey(input.connection.id),
+    taskType: SOURCE_CHANNEL_SCAN_TASK_TYPE,
+    taskKey: sourceChannelSchedulerTaskKey(input.channel.id),
     scopeType: "space",
-    scopeId: input.connection.space_id,
-    spaceId: input.connection.space_id,
-    userId: input.connection.owner_user_id,
+    scopeId: input.channel.space_id,
+    spaceId: input.channel.space_id,
+    userId: input.channel.owner_user_id,
     status,
     nextRunAt: status === "archived" ? null : input.nextRunAt,
     lastRunAt: input.lastRunAt ?? null,
-    stateJson,
+    stateJson: existing?.state_json ?? {},
+    metadataJson: metadata,
     updatedAt: input.updatedAt,
   });
 }
 
-export function sourceConnectionWithSchedule(
-  row: SourceConnectionRow,
-  task: SchedulerTaskRow | null,
-): SourceConnectionRow {
-  return {
-    ...row,
-    last_checked_at: timestampString(task?.last_run_at) ?? row.last_checked_at ?? null,
-    next_check_at: timestampString(task?.next_run_at) ?? row.next_check_at ?? null,
-  };
-}
-
-function sourceConnectionSchedulerStatus(status: string): SchedulerTaskStatus {
+function sourceChannelSchedulerStatus(status: string): SchedulerTaskStatus {
   if (status === "archived") return "archived";
   if (status === "active") return "active";
   return "paused";
-}
-
-function timestampString(value: unknown): string | null {
-  if (value === null || value === undefined) return null;
-  if (value instanceof Date) return value.toISOString();
-  const raw = String(value);
-  return raw.length > 0 ? raw : null;
 }

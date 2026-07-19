@@ -80,9 +80,9 @@ export default function AgentDetailPage() {
     const next = isActive ? 'disabled' : 'active'
     setStatusBusy(true)
     try {
-      await agentsApi.update(agent.id, { status: next })
+      const updated = await agentsApi.update(agent.id, { status: next })
+      setAgent(updated)
       toast.success(next === 'disabled' ? 'Agent disabled — new runs are blocked by policy' : 'Agent enabled')
-      await reload()
     } catch (err) {
       toast.error(errMsg(err))
     } finally {

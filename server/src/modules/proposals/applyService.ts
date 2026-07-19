@@ -183,7 +183,7 @@ export class PgProposalApplyService {
       });
       rollbackOnFailure = result.rollback ?? null;
       if (afterApply) await afterApply();
-      await this.markProposalAccepted(client, proposal, identity.userId, result.proposalPayloadPatch);
+      await this.markProposalFinal(client, proposal, identity.userId, result.finalStatus ?? "accepted", result.proposalPayloadPatch);
       const accepted = await new PgProposalRepository(client).getVisible(
         identity.spaceId,
         identity.userId,
@@ -253,7 +253,7 @@ export class PgProposalApplyService {
          VALUES ($1,$2,'action_grant',$3,$4,'approved',$5::jsonb,$6)`,
         [randomUUID(), proposal.id, grantingUserId, grantId, JSON.stringify({ approval_source: `action_grant:${grantId}`, action_id: action.actionId }), new Date().toISOString()],
       );
-      await this.markProposalAccepted(client, proposal, grantingUserId, result.proposalPayloadPatch);
+      await this.markProposalFinal(client, proposal, grantingUserId, result.finalStatus ?? "accepted", result.proposalPayloadPatch);
       const accepted = await new PgProposalRepository(client).getVisible(proposal.space_id, grantingUserId, proposal.id);
       if (!accepted) throw new Error("accepted proposal is not visible after grant apply");
       await client.query("COMMIT");
@@ -324,7 +324,7 @@ export class PgProposalApplyService {
     if ((updated.rowCount ?? 0) === 0) return null;
     await releaseRejectedCustomSourceHandlerVersion(client, proposalId, identity.spaceId);
     await releaseRejectedSourceRecipeVersion(client, proposalId, identity.spaceId);
-    await releaseRejectedSourceConnectionDraft(client, proposal);
+    await releaseRejectedSourceChannelDraft(client, proposal);
     await releaseRejectedSourceBackfillPlan(client, proposal);
     if (afterReject) await afterReject();
     const out = await new PgProposalRepository(client).getVisible(identity.spaceId, identity.userId, proposalId);
@@ -554,17 +554,18 @@ export class PgProposalApplyService {
     return result.rows[0] ?? null;
   }
 
-  private async markProposalAccepted(
+  private async markProposalFinal(
     client: PoolClient,
     proposal: ApplyProposalRow,
     userId: string,
+    status: "accepted" | "superseded",
     payloadPatch?: Record<string, unknown>,
   ): Promise<void> {
     const now = new Date().toISOString();
     if (payloadPatch) {
       await client.query(
         `UPDATE proposals
-            SET status = 'accepted',
+            SET status = $6,
                 reviewed_at = COALESCE(reviewed_at, $3),
                 reviewed_by = COALESCE(reviewed_by, $4),
                 payload_json = $5::jsonb,
@@ -572,19 +573,19 @@ export class PgProposalApplyService {
           WHERE id = $1
             AND space_id = $2
             AND status = 'pending'`,
-        [proposal.id, proposal.space_id, now, userId, JSON.stringify(payloadPatch)],
+        [proposal.id, proposal.space_id, now, userId, JSON.stringify(payloadPatch), status],
       );
     } else {
       await client.query(
         `UPDATE proposals
-            SET status = 'accepted',
+            SET status = $5,
                 reviewed_at = COALESCE(reviewed_at, $3),
                 reviewed_by = COALESCE(reviewed_by, $4),
                 updated_at = $3
           WHERE id = $1
             AND space_id = $2
             AND status = 'pending'`,
-        [proposal.id, proposal.space_id, now, userId],
+        [proposal.id, proposal.space_id, now, userId, status],
       );
     }
   }
@@ -723,12 +724,14 @@ export class PgProposalApplyService {
   }
 }
 
-async function releaseRejectedSourceConnectionDraft(client: PoolClient, proposal: ApplyProposalRow): Promise<void> {
-  if (proposal.proposal_type !== "source_connection_create") return;
-  const connectionId = stringValue(proposal.payload_json?.source_connection_id);
-  if (!connectionId) return;
-  await client.query(`UPDATE source_connections SET status='archived', updated_at=$3 WHERE id=$1 AND space_id=$2 AND status='paused'`, [connectionId, proposal.space_id, new Date().toISOString()]);
-  await client.query(`UPDATE proposals SET status='superseded',updated_at=$3 WHERE space_id=$1 AND status='pending' AND payload_json->>'depends_on_proposal_id'=$2`,[proposal.space_id,proposal.id,new Date().toISOString()]);
+async function releaseRejectedSourceChannelDraft(client: PoolClient, proposal: ApplyProposalRow): Promise<void> {
+  if (proposal.proposal_type !== "source_channel_activation") return;
+  const channelId = stringValue(proposal.payload_json?.source_channel_id);
+  if (!channelId) return;
+  const now = new Date().toISOString();
+  await client.query(`UPDATE source_channels SET status='archived', updated_at=$3 WHERE id=$1 AND space_id=$2 AND status='paused'`, [channelId, proposal.space_id, now]);
+  await client.query(`UPDATE source_connections SET status='archived', updated_at=$3 WHERE id=(SELECT source_connection_id FROM source_channels WHERE id=$1 AND space_id=$2) AND space_id=$2 AND status='paused'`, [channelId, proposal.space_id, now]);
+  await client.query(`UPDATE proposals SET status='superseded',updated_at=$3 WHERE space_id=$1 AND status='pending' AND payload_json->>'depends_on_proposal_id'=$2`,[proposal.space_id,proposal.id,now]);
 }
 
 async function releaseRejectedSourceBackfillPlan(client: PoolClient,proposal:ApplyProposalRow):Promise<void>{

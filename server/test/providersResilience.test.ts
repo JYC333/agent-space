@@ -355,7 +355,7 @@ describe("provider invocation resilience", () => {
     expect(outcomes[1]).toEqual({ member: "m2", outcome: { kind: "success" } });
   });
 
-  it("falls back to an anthropic provider's OpenAI-compatible URL on transient network reset", async () => {
+  it("uses an anthropic provider's OpenAI-compatible URL and retries a transient network reset", async () => {
     const outcomes: Array<{ member: string; outcome: PoolOutcome }> = [];
     const store = makeStore(
       {
@@ -404,13 +404,15 @@ describe("provider invocation resilience", () => {
 
     expect(result.content).toBe("openai compatible ok");
     expect(attempts.map((a) => a.url)).toEqual([
-      "https://api.minimaxi.com/anthropic/v1/messages",
+      "https://api.minimaxi.com/v1/chat/completions",
       "https://api.minimaxi.com/v1/chat/completions",
     ]);
     expect(attempts.map((a) => a.key)).toEqual(["k1", "k1"]);
     expect(attempts[0].body).toMatchObject({
-      system: "Return JSON only.",
-      messages: [{ role: "user", content: "hi" }],
+      messages: [
+        { role: "system", content: "Return JSON only." },
+        { role: "user", content: "hi" },
+      ],
     });
     expect(attempts[1].body).toMatchObject({
       messages: [

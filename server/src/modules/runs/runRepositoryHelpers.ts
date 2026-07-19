@@ -50,6 +50,33 @@ export function requiredSandboxLevelForRun(
   return workspaceId ? "worktree" : "ephemeral";
 }
 
+/**
+ * Resolve the effective sandbox after routing has selected the adapter.
+ * Creation-time runs intentionally start at `none` because their adapter is
+ * not known yet; this is the single policy boundary that turns that default
+ * into a run-scope ephemeral directory or a workspace worktree.
+ */
+export function resolveSandboxLevelForRuntime(input: {
+  adapterType: string | null | undefined;
+  configuredLevel: string | null | undefined;
+  riskLevel: string | null | undefined;
+  workspaceId: string | null | undefined;
+}): string | null {
+  if (
+    isVendorCliAdapter(input.adapterType) &&
+    typeof input.riskLevel === "string" &&
+    input.riskLevel.trim().toLowerCase() === "critical"
+  ) {
+    return "one_shot_docker";
+  }
+  if (isVendorCliAdapter(input.adapterType)) {
+    const configured = typeof input.configuredLevel === "string" ? input.configuredLevel.trim() : "";
+    if (configured && configured !== "none") return configured;
+    return requiredSandboxLevelForRun(input.adapterType, input.workspaceId);
+  }
+  return input.configuredLevel ?? null;
+}
+
 function assertOneOf(value: string, allowed: readonly string[], field: string): void {
   if (allowed.includes(value)) return;
   throw new RunCreateValidationError(

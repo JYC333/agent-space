@@ -1230,8 +1230,8 @@ class AgentAutomationFireFakePool implements Queryable {
       return { rowCount: 1, rows: [] };
     }
     if (sql.includes("INSERT INTO runs")) {
-      this.runPrompts.push(params[17]);
-      this.runInstructions.push(params[18]);
+      this.runPrompts.push(params[19]);
+      this.runInstructions.push(params[20]);
       return {
         rowCount: 1,
         rows: [

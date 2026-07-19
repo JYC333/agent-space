@@ -42,6 +42,19 @@ Profiles are mutable and may be changed without creating a new version. An agent
 may have multiple profiles (e.g. dev vs prod) controlled by `enabled` and
 `is_default`.
 
+Project Research uses this same authority boundary without requiring manual
+Agent setup. Its execution-profile service provisions or reuses a space-scoped
+`system_research` Agent and a `model_api` runtime profile from the selected
+ModelProvider/model. Research setup does not accept explicit Agent/profile,
+runtime-adapter, or CLI-credential selection. The resolved Agent/profile IDs
+are recorded in the research workflow and operation before any stage run is
+queued.
+
+OpenCode is a local CLI adapter with two credential paths: CLI login state, or
+an OpenAI-compatible ModelProvider. In provider mode, the CLI receives a
+run-scoped `opencode.json` containing the provider proxy URL and lease token;
+the upstream provider key remains inside the server/provider proxy boundary.
+
 ---
 
 ## Resolution order at run time

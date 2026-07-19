@@ -18,7 +18,7 @@ type ConnectionRow = {
 export class ProjectSourceBindingRepository {
   constructor(private readonly db: Queryable) {}
 
-  async listProjectSourceBindings(identity: SpaceUserIdentity, filters: { projectId: string; sourceConnectionId: string | null }) {
+  async listProjectSourceBindings(identity: SpaceUserIdentity, filters: { projectId: string; sourceChannelId: string | null }) {
     if (!(await canAccessProject(this.db, identity.spaceId, filters.projectId, identity.userId))) {
       throw new HttpError(404, "Project not found");
     }
@@ -28,7 +28,7 @@ export class ProjectSourceBindingRepository {
       params.push(value);
       return `$${params.length}`;
     };
-    if (filters.sourceConnectionId) clauses.push(`source_connection_id = ${add(filters.sourceConnectionId)}`);
+    if (filters.sourceChannelId) clauses.push(`source_channel_id = ${add(filters.sourceChannelId)}`);
     clauses.push(`project_id = ${add(filters.projectId)}`);
     clauses.push(`status <> 'archived'`);
     const rows = await this.db.query<ProjectSourceBindingRow>(
@@ -42,9 +42,9 @@ export class ProjectSourceBindingRepository {
   }
 
   async createProjectSourceBinding(identity: SpaceUserIdentity, body: Record<string, unknown>) {
-    const sourceConnectionId = requiredString(body.source_connection_id, "source_connection_id");
+    const sourceChannelId = requiredString(body.source_channel_id, "source_channel_id");
     const projectId = requiredString(body.project_id, "project_id");
-    const connection = await this.getConnectionRow(identity, sourceConnectionId);
+    const connection = await this.getConnectionRow(identity, sourceChannelId);
     if (!connection || !(await this.canViewConnectionMetadata(identity, connection))) {
       throw new HttpError(404, "Source connection not found");
     }
@@ -57,10 +57,10 @@ export class ProjectSourceBindingRepository {
          FROM project_source_bindings
         WHERE space_id = $1
           AND project_id = $2
-          AND source_connection_id = $3
+          AND source_channel_id = $3
           AND binding_key = $4
         FOR UPDATE`,
-      [identity.spaceId, projectId, sourceConnectionId, bindingKey],
+      [identity.spaceId, projectId, sourceChannelId, bindingKey],
     );
     if (existing.rows[0]) {
       if (existing.rows[0].status !== "archived") {
@@ -96,7 +96,7 @@ export class ProjectSourceBindingRepository {
     }
     const result = await this.db.query<ProjectSourceBindingRow>(
       `INSERT INTO project_source_bindings (
-         id, space_id, project_id, source_connection_id, binding_key,
+         id, space_id, project_id, source_channel_id, binding_key,
          status, priority, delivery_scope, collection_notifications_enabled,
          filters_json, routing_policy_json, extraction_policy_json,
          created_by_user_id, created_at, updated_at
@@ -106,7 +106,7 @@ export class ProjectSourceBindingRepository {
         randomUUID(),
         identity.spaceId,
         projectId,
-        sourceConnectionId,
+        sourceChannelId,
         bindingKey,
         numberValue(body.priority) ?? 0,
         deliveryScope,
@@ -131,7 +131,7 @@ export class ProjectSourceBindingRepository {
     const row = await this.getProjectSourceBindingRow(identity.spaceId, bindingId);
     if (!row) throw new HttpError(404, "Project source binding not found");
     await assertProjectWriter(this.db, identity.spaceId, row.project_id, identity.userId);
-    const connection = await this.getConnectionRow(identity, row.source_connection_id);
+    const connection = await this.getConnectionRow(identity, row.source_channel_id);
     if (!connection) throw new HttpError(404, "Source connection not found");
     const status = optionalString(body.status) ?? row.status;
     if (!["active", "paused", "archived"].includes(status)) throw new HttpError(422, "invalid project source binding status");
@@ -225,7 +225,7 @@ export class ProjectSourceBindingRepository {
     return {
       binding_id: row.id,
       project_id: row.project_id,
-      source_connection_id: row.source_connection_id,
+      source_channel_id: row.source_channel_id,
       ...result,
     };
   }
@@ -237,7 +237,7 @@ export class ProjectSourceBindingRepository {
     const rows = await this.db.query<{
       binding_id: string;
       project_id: string;
-      source_connection_id: string;
+      source_channel_id: string;
       source_name: string;
       binding_status: string;
       connection_status: string;
@@ -266,8 +266,8 @@ export class ProjectSourceBindingRepository {
        )
        SELECT psb.id AS binding_id,
               psb.project_id,
-              psb.source_connection_id,
-              sc.name AS source_name,
+              psb.source_channel_id,
+              sch.name AS source_name,
               psb.status AS binding_status,
               sc.status AS connection_status,
               st.status AS scheduler_status,
@@ -276,30 +276,34 @@ export class ProjectSourceBindingRepository {
               ls.completed_at AS last_success_at,
               lf.completed_at AS last_failure_at,
               lf.error_message AS last_error,
-              (SELECT count(*)::text FROM extraction_jobs ej WHERE ej.space_id = psb.space_id AND ej.connection_id = psb.source_connection_id AND ej.status = 'pending') AS queued_jobs,
-              (SELECT count(*)::text FROM extraction_jobs ej WHERE ej.space_id = psb.space_id AND ej.connection_id = psb.source_connection_id AND ej.status = 'running') AS running_jobs,
+              (SELECT count(*)::text FROM extraction_jobs ej WHERE ej.space_id = psb.space_id AND ej.connection_id = sc.id AND ej.metadata_json->>'source_channel_id' = psb.source_channel_id AND ej.status = 'pending') AS queued_jobs,
+              (SELECT count(*)::text FROM extraction_jobs ej WHERE ej.space_id = psb.space_id AND ej.connection_id = sc.id AND ej.metadata_json->>'source_channel_id' = psb.source_channel_id AND ej.status = 'running') AS running_jobs,
               (SELECT count(*)::text FROM project_source_item_links psil WHERE psil.space_id = psb.space_id AND psil.project_source_binding_id = psb.id AND psil.status = 'active' AND psil.matched_at >= now() - interval '24 hours') AS recent_new_items,
               (SELECT count(*)::text
                  FROM extraction_jobs failed
                 WHERE failed.space_id = psb.space_id
-                  AND failed.connection_id = psb.source_connection_id
+                  AND failed.connection_id = sc.id
+                  AND failed.metadata_json->>'source_channel_id' = psb.source_channel_id
                   AND failed.status = 'failed'
                   AND (ls.completed_at IS NULL OR failed.completed_at > ls.completed_at)) AS consecutive_failures
          FROM project_source_bindings psb
+         JOIN source_channels sch
+           ON sch.space_id = psb.space_id
+          AND sch.id = psb.source_channel_id
          JOIN source_connections sc
-           ON sc.space_id = psb.space_id
-          AND sc.id = psb.source_connection_id
+           ON sc.space_id = sch.space_id
+          AND sc.id = sch.source_connection_id
           AND sc.deleted_at IS NULL
          LEFT JOIN scheduler_tasks st
            ON st.space_id = psb.space_id
-          AND st.task_type = 'source_connection_scan'
-          AND st.task_key = psb.source_connection_id
+          AND st.task_type = 'source_channel_scan'
+          AND st.task_key = psb.source_channel_id
          LEFT JOIN last_success ls
            ON ls.space_id = psb.space_id
-          AND ls.connection_id = psb.source_connection_id
+          AND ls.connection_id = sc.id
          LEFT JOIN last_failure lf
            ON lf.space_id = psb.space_id
-          AND lf.connection_id = psb.source_connection_id
+          AND lf.connection_id = sc.id
         WHERE psb.space_id = $1
           AND psb.project_id = $2
           AND psb.status <> 'archived'
@@ -326,7 +330,7 @@ export class ProjectSourceBindingRepository {
       return {
         binding_id: row.binding_id,
         project_id: row.project_id,
-        source_connection_id: row.source_connection_id,
+        source_channel_id: row.source_channel_id,
         source_name: row.source_name,
         status,
         last_success_at: lastSuccessAt,
@@ -377,9 +381,11 @@ export class ProjectSourceBindingRepository {
     const result = await this.db.query<ConnectionRow>(
       `SELECT sc.id, sc.owner_user_id, sc.credential_id, sc.visibility, sc.handler_kind,
               c.connector_type, c.connector_key
-         FROM source_connections sc
-         JOIN source_connectors c ON c.id = sc.connector_id
-        WHERE sc.space_id = $1 AND sc.id = $2 AND sc.deleted_at IS NULL`,
+         FROM source_channels ch
+         JOIN source_connections sc ON sc.id = ch.source_connection_id
+         JOIN source_provider_connectors spc ON spc.id = sc.provider_connector_id
+         JOIN source_connectors c ON c.id = spc.connector_id
+        WHERE ch.space_id = $1 AND ch.id = $2 AND ch.status <> 'archived' AND sc.deleted_at IS NULL`,
       [identity.spaceId, connectionId],
     );
     return result.rows[0] ?? null;

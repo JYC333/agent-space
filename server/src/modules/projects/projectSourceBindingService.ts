@@ -14,13 +14,13 @@ export class ProjectSourceBindingService {
     this.repository = new ProjectSourceBindingRepository(db);
   }
 
-  listBindings(identity: SpaceUserIdentity, filters: { projectId: string; sourceConnectionId: string | null }) {
+  listBindings(identity: SpaceUserIdentity, filters: { projectId: string; sourceChannelId: string | null }) {
     return this.repository.listProjectSourceBindings(identity, filters);
   }
 
   createBinding(identity: SpaceUserIdentity, body: Record<string, unknown>) {
     requiredString(body.project_id, "project_id");
-    requiredString(body.source_connection_id, "source_connection_id");
+    requiredString(body.source_channel_id, "source_channel_id");
     validateDeliveryScope(body.delivery_scope);
     return this.repository.createProjectSourceBinding(identity, body);
   }

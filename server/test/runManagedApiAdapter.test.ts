@@ -175,6 +175,38 @@ describe("executeManagedApiNoToolAdapter", () => {
     });
   });
 
+  it("honors the model persisted by routing when the worker request omits it", async () => {
+    const calls: Array<{ model?: string | null }> = [];
+    const executor: RuntimeHostExecutor = async (_config, request) => {
+      calls.push(request);
+      return {
+        success: true,
+        stdout: "ok",
+        stderr: "",
+        output_text: "ok",
+        output_json: {},
+        exit_code: 0,
+        error_text: null,
+        error_code: null,
+        started_at: "2026-06-12T10:00:00.000Z",
+        completed_at: "2026-06-12T10:00:01.000Z",
+        model: "routed-model",
+        usage: null,
+        events: [],
+        adapter_metadata: { adapter_type: "ts_agent_host" },
+        adapter_log_json: null,
+      };
+    };
+
+    await executeManagedApiNoToolAdapter(
+      config(),
+      { run: run({ model_override_json: { model: "routed-model" } }) },
+      { executeRuntimeHost: executor },
+    );
+
+    expect(calls).toEqual([expect.objectContaining({ model: "routed-model" })]);
+  });
+
   it("passes native chat messages to runtime-host for managed API runs", async () => {
     const calls: unknown[] = [];
     const executor: RuntimeHostExecutor = async (_config, request) => {

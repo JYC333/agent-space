@@ -35,6 +35,25 @@ class FakeDb implements Queryable {
         rowCount: 1,
       } as { rows: Row[]; rowCount: number };
     }
+    if (sql.includes("FROM source_items si") && sql.includes("COALESCE(")) {
+      return {
+        rows: [{
+          id: "item-1",
+          space_id: "space-1",
+          connection_id: "conn-1",
+          source_uri: "https://example.test/private",
+          title: "Private page",
+          content_state: "content_queued",
+        }],
+        rowCount: 1,
+      } as { rows: Row[]; rowCount: number };
+    }
+    if (sql.includes("FROM project_source_bindings psb")) {
+      return { rows: [] as Row[], rowCount: 0 } as { rows: Row[]; rowCount: number };
+    }
+    if (sql.includes("UPDATE project_corpus_items")) {
+      return { rows: [] as Row[], rowCount: 0 } as { rows: Row[]; rowCount: number };
+    }
     if (sql.includes("FROM source_connections")) {
       return {
         rows: [{

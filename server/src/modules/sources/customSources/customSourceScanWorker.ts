@@ -17,14 +17,15 @@ import { fetchCustomSourceEndpointHtml } from "./customSourceEndpointFetch";
 import { CustomSourceCredentialService } from "./customSourceCredentialService";
 import { computeNextCheckAt } from "../scanSchedule";
 import {
-  getSourceConnectionScanTask,
-  upsertSourceConnectionScanTask,
+  getSourceChannelScanTask,
+  upsertSourceChannelScanTask,
 } from "../sourceConnectionScheduler";
 
 interface QueuedRunRow {
   id: string;
   space_id: string;
   source_connection_id: string;
+  source_channel_id: string;
   handler_version_id: string;
   extraction_job_id: string | null;
 }
@@ -44,10 +45,12 @@ export async function runPendingCustomSourceHandlerRuns(
   batchLimit = 10,
 ): Promise<number> {
   const pending = await db.query<QueuedRunRow>(
-    `SELECT id, space_id, source_connection_id, handler_version_id, extraction_job_id
-       FROM source_handler_runs
-      WHERE status = 'queued'
-      ORDER BY created_at ASC
+    `SELECT shr.id, shr.space_id, shr.source_connection_id, shr.handler_version_id, shr.extraction_job_id,
+            ej.metadata_json->>'source_channel_id' AS source_channel_id
+       FROM source_handler_runs shr
+       LEFT JOIN extraction_jobs ej ON ej.id = shr.extraction_job_id
+      WHERE shr.status = 'queued'
+      ORDER BY shr.created_at ASC
       LIMIT $1`,
     [batchLimit],
   );
@@ -73,11 +76,13 @@ export async function runCustomSourceHandlerScanJob(
   spaceId: string,
 ): Promise<boolean> {
   const result = await db.query<QueuedRunRow>(
-    `SELECT id, space_id, source_connection_id, handler_version_id, extraction_job_id
-       FROM source_handler_runs
-      WHERE extraction_job_id = $1
-        AND space_id = $2
-        AND status = 'queued'
+    `SELECT shr.id, shr.space_id, shr.source_connection_id, shr.handler_version_id, shr.extraction_job_id,
+            ej.metadata_json->>'source_channel_id' AS source_channel_id
+       FROM source_handler_runs shr
+       LEFT JOIN extraction_jobs ej ON ej.id = shr.extraction_job_id
+      WHERE shr.extraction_job_id = $1
+        AND shr.space_id = $2
+        AND shr.status = 'queued'
       LIMIT 1`,
     [jobId, spaceId],
   );
@@ -107,19 +112,22 @@ async function runOne(db: Queryable, config: ServerConfig, run: QueuedRunRow): P
     id: string;
     space_id: string;
     owner_user_id: string;
+    channel_id: string;
     endpoint_url: string | null;
     fetch_frequency: string;
     schedule_rule_json: unknown;
     status: string;
   }>(
-    `SELECT id, space_id, owner_user_id, endpoint_url, fetch_frequency, schedule_rule_json, status
-       FROM source_connections
-      WHERE id = $1 AND space_id = $2`,
-    [run.source_connection_id, run.space_id],
+    `SELECT sc.id, sc.space_id, sc.owner_user_id, ch.id AS channel_id,
+            ch.endpoint_url, ch.fetch_frequency, ch.schedule_rule_json, ch.status
+       FROM source_connections sc
+       JOIN source_channels ch ON ch.source_connection_id = sc.id AND ch.id = $3
+      WHERE sc.id = $1 AND sc.space_id = $2`,
+    [run.source_connection_id, run.space_id, run.source_channel_id],
   );
   const connection = connectionResult.rows[0];
   if (!connection) throw new Error(`Custom Source connection ${run.source_connection_id} not found`);
-  const scheduleTask = await getSourceConnectionScanTask(db, connection.id);
+  const scheduleTask = await getSourceChannelScanTask(db, connection.channel_id);
 
   const versionResult = await db.query<HandlerVersionRow>(
     `SELECT ${HANDLER_VERSION_COLUMNS} FROM source_handler_versions WHERE id = $1 AND space_id = $2`,
@@ -197,7 +205,7 @@ async function runOne(db: Queryable, config: ServerConfig, run: QueuedRunRow): P
         run: {
           runId: run.id,
           spaceId: run.space_id,
-          sourceConnectionId: run.source_connection_id,
+      sourceConnectionId: run.source_connection_id,
           handlerVersionId: run.handler_version_id,
         },
         policyEnvelope,
@@ -209,6 +217,7 @@ async function runOne(db: Queryable, config: ServerConfig, run: QueuedRunRow): P
       if (result.status === "succeeded" && result.itemsCreated > 0) {
         await emitSourcePostProcessingEvent(db, {
           spaceId: run.space_id,
+          sourceChannelId: run.source_channel_id,
           sourceConnectionId: run.source_connection_id,
           newItemCount: result.itemsCreated,
         });
@@ -240,8 +249,14 @@ async function runOne(db: Queryable, config: ServerConfig, run: QueuedRunRow): P
       ],
     );
     await updateRepairStatusAfterRun(db, run);
-    await upsertSourceConnectionScanTask(db, {
-      connection,
+    await upsertSourceChannelScanTask(db, {
+      channel: {
+        id: connection.channel_id,
+        space_id: connection.space_id,
+        owner_user_id: connection.owner_user_id,
+        status: connection.status,
+        fetch_frequency: connection.fetch_frequency,
+      },
       nextRunAt: computeNextCheckAt(connection.fetch_frequency, completedAt, {
         existingNextCheckAt: scheduleTask?.next_run_at,
         scheduleRule: connection.schedule_rule_json,

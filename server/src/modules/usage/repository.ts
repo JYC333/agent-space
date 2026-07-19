@@ -76,6 +76,16 @@ export interface UsageTotals {
   observed_event_percentage: number;
 }
 
+export interface UsageRunSummaryRecord {
+  agent_run_count: number | string;
+  completed_agent_run_count: number | string;
+  input_tokens: number | string | null;
+  output_tokens: number | string | null;
+  total_tokens: number | string | null;
+  estimated_cost_usd: number | string | null;
+  model_names: string[] | null;
+}
+
 export interface UsageBreakdownRow {
   group_key: string;
   group_label: string;
@@ -519,6 +529,133 @@ export class PgUsageRepository {
       [spaceId, runId],
     );
     return numberOrNull(result.rows[0]?.estimated_cost_usd);
+  }
+
+  /**
+   * Read the canonical usage ledger for a project-scoped set of runs.
+   *
+   * Run rows provide lifecycle counts; token_usage_events is the accounting
+   * authority for token and cost totals. Keeping the join here prevents
+   * product read models from treating a run-level snapshot as a second ledger.
+   */
+  async summarizeRunUsage(
+    spaceId: string,
+    projectId: string | null,
+    runIds: readonly string[],
+  ): Promise<UsageRunSummaryRecord> {
+    if (runIds.length === 0) {
+      return {
+        agent_run_count: 0,
+        completed_agent_run_count: 0,
+        input_tokens: null,
+        output_tokens: null,
+        total_tokens: null,
+        estimated_cost_usd: null,
+        model_names: [],
+      };
+    }
+
+    const result = await this.db.query<UsageRunSummaryRecord>(
+      `WITH scoped_runs AS (
+          SELECT r.id, r.status
+           FROM runs r
+          WHERE r.space_id = $1
+            AND ($3::text IS NULL OR r.project_id = $3)
+            AND r.id = ANY($2::text[])
+       ), usage_by_run AS (
+         SELECT e.run_id,
+                sum(e.input_tokens)::numeric AS input_tokens,
+                sum(e.output_tokens)::numeric AS output_tokens,
+                sum(COALESCE(
+                  e.total_tokens,
+                  e.input_tokens + e.output_tokens + e.cache_creation_input_tokens +
+                    e.cache_read_input_tokens + e.reasoning_tokens
+                ))::numeric AS total_tokens,
+                sum(e.estimated_cost_usd)::numeric AS estimated_cost_usd
+           FROM token_usage_events e
+           JOIN scoped_runs sr ON sr.id = e.run_id
+          WHERE e.space_id = $1
+          GROUP BY e.run_id
+       )
+       SELECT count(sr.id)::int AS agent_run_count,
+              count(sr.id) FILTER (WHERE sr.status IN ('succeeded','degraded'))::int AS completed_agent_run_count,
+              sum(ur.input_tokens)::numeric AS input_tokens,
+              sum(ur.output_tokens)::numeric AS output_tokens,
+              sum(ur.total_tokens)::numeric AS total_tokens,
+              sum(ur.estimated_cost_usd)::numeric AS estimated_cost_usd,
+              ARRAY(
+                SELECT model_name
+                  FROM (
+                    SELECT DISTINCT COALESCE(e.model, e.provider_name_snapshot, e.provider_type, 'Unknown provider') AS model_name
+                      FROM token_usage_events e
+                      JOIN scoped_runs sr_models ON sr_models.id = e.run_id
+                     WHERE e.space_id = $1
+                  ) model_names_sorted
+                 ORDER BY model_name
+              ) AS model_names
+         FROM scoped_runs sr
+         LEFT JOIN usage_by_run ur ON ur.run_id = sr.id`,
+      [spaceId, runIds, projectId],
+    );
+    return result.rows[0] ?? {
+      agent_run_count: 0,
+      completed_agent_run_count: 0,
+      input_tokens: null,
+      output_tokens: null,
+      total_tokens: null,
+      estimated_cost_usd: null,
+      model_names: [],
+    };
+  }
+
+  async summarizeRunUsageByRunIds(
+    spaceId: string,
+    runIds: readonly string[],
+  ): Promise<Map<string, UsageRunSummaryRecord>> {
+    if (runIds.length === 0) return new Map();
+
+    const result = await this.db.query<UsageRunSummaryRecord & { run_id: string }>(
+      `WITH scoped_runs AS (
+         SELECT r.id, r.status
+           FROM runs r
+          WHERE r.space_id = $1
+            AND r.id = ANY($2::text[])
+       ), usage_by_run AS (
+         SELECT e.run_id,
+                sum(e.input_tokens)::numeric AS input_tokens,
+                sum(e.output_tokens)::numeric AS output_tokens,
+                sum(COALESCE(
+                  e.total_tokens,
+                  e.input_tokens + e.output_tokens + e.cache_creation_input_tokens +
+                    e.cache_read_input_tokens + e.reasoning_tokens
+                ))::numeric AS total_tokens,
+                sum(e.estimated_cost_usd)::numeric AS estimated_cost_usd
+           FROM token_usage_events e
+           JOIN scoped_runs sr ON sr.id = e.run_id
+          WHERE e.space_id = $1
+          GROUP BY e.run_id
+       )
+       SELECT sr.id AS run_id,
+              1::int AS agent_run_count,
+              CASE WHEN sr.status IN ('succeeded','degraded') THEN 1 ELSE 0 END AS completed_agent_run_count,
+              ur.input_tokens,
+              ur.output_tokens,
+              ur.total_tokens,
+              ur.estimated_cost_usd,
+              ARRAY(
+                SELECT model_name
+                  FROM (
+                    SELECT DISTINCT COALESCE(e.model, e.provider_name_snapshot, e.provider_type, 'Unknown provider') AS model_name
+                      FROM token_usage_events e
+                     WHERE e.space_id = $1 AND e.run_id = sr.id
+                  ) model_names_sorted
+                 ORDER BY model_name
+              ) AS model_names
+         FROM scoped_runs sr
+         LEFT JOIN usage_by_run ur ON ur.run_id = sr.id`,
+      [spaceId, runIds],
+    );
+    return new Map(result.rows.map((row) => [row.run_id, row]));
   }
 
   async aggregate(filters: UsageQueryFilters): Promise<{ totals: UsageTotals; items: UsageBreakdownRow[] }> {

@@ -16,24 +16,18 @@ function makeConnection(overrides: Partial<SourceConnectionRow> = {}): SourceCon
   return {
     id: "conn-1",
     space_id: "space-1",
-    connector_id: "connector-1",
     owner_user_id: "user-1",
     credential_id: null,
     visibility: "space_shared",
     access_level: "full",
     name: "arXiv: cs.AI",
-    endpoint_url: null,
     status: "active",
-    fetch_frequency: "daily",
     capture_policy: "extract_text",
     trust_level: "trusted",
     topic_hints_json: [],
     consent_json: null,
     policy_json: null,
     config_json: null,
-    last_checked_at: null,
-    next_check_at: null,
-    schedule_rule_json: null,
     handler_kind: "builtin",
     active_handler_version_id: null,
     active_recipe_version_id: null,
@@ -306,6 +300,26 @@ describe("parsePostProcessingResult screening requirement", () => {
     expect(parsePostProcessingResult(output, actions, inputConfig, itemIds).digest_markdown).toBe("digest");
   });
 
+  it("generates a count-only digest when every screened item is not relevant", () => {
+    const actions = normalizeActions({ batch_digest: true, mark_items: true });
+    const inputConfig = normalizeInputConfig({});
+    const output = JSON.stringify({
+      schema: "source_post_processing.result.v1",
+      digest_markdown: "",
+      item_summaries: [],
+      item_decisions: [
+        { source_item_id: "item-1", relevance: "not_relevant" },
+        { source_item_id: "item-2", relevance: "not_relevant" },
+      ],
+      evidence_candidates: [],
+      proposal_markdown: "",
+    });
+
+    const parsed = parsePostProcessingResult(output, actions, inputConfig, itemIds);
+    expect(parsed.digest_markdown).toContain("Relevant: 0");
+    expect(parsed.digest_markdown).toContain("Not relevant: 2");
+  });
+
   it("extracts the first complete JSON object from prose-wrapped model output", () => {
     const actions = normalizeActions({ batch_digest: true });
     const inputConfig = normalizeInputConfig({});
@@ -334,5 +348,37 @@ describe("parsePostProcessingResult screening requirement", () => {
     ]);
     const parsed = parsePostProcessingResult(output, actions, inputConfig, itemIds, ["knowledge:claim:known"]);
     expect(parsed.item_decisions[0]?.matched_context_refs).toEqual([{ ref: "knowledge:claim:known" }]);
+  });
+
+  it("normalizes a structurally valid result when a runtime omits the schema discriminator", () => {
+    const actions = normalizeActions({ batch_digest: true, mark_items: true });
+    const inputConfig = normalizeInputConfig({});
+    const output = JSON.stringify({
+      digest_markdown: "digest",
+      item_summaries: [],
+      item_decisions: [
+        { source_item_id: "item-1", relevance: "relevant" },
+        { source_item_id: "item-2", relevance: "not_relevant" },
+      ],
+      evidence_candidates: [],
+      proposal_markdown: "",
+    });
+    expect(parsePostProcessingResult(output, actions, inputConfig, itemIds).digest_markdown).toBe("digest");
+  });
+
+  it("unwraps a runtime result envelope before validating its fields", () => {
+    const actions = normalizeActions({ batch_digest: true });
+    const inputConfig = normalizeInputConfig({});
+    const output = JSON.stringify({
+      result: {
+        schema: "source_post_processing.result.v1",
+        digest_markdown: "digest",
+        item_summaries: [],
+        item_decisions: [],
+        evidence_candidates: [],
+        proposal_markdown: "",
+      },
+    });
+    expect(parsePostProcessingResult(output, actions, inputConfig, itemIds).digest_markdown).toBe("digest");
   });
 });

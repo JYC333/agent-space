@@ -14,4 +14,4 @@ export const runtimeHostModule: ServerModule = {
   registerRoutes,
 };
 
-export { executeRuntimeHost } from "./service";
+export { executeRuntimeHost, type RuntimeHostLogger } from "./service";

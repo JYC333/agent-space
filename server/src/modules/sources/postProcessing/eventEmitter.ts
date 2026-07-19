@@ -8,14 +8,15 @@ import { PgSourcePostProcessingRepository, SOURCE_POST_PROCESSING_EVENT_JOB_TYPE
  */
 export async function emitSourcePostProcessingEvent(
   db: Queryable,
-  input: { spaceId: string; sourceConnectionId: string | null; newItemCount: number },
+  input: { spaceId: string; sourceChannelId?: string | null; sourceConnectionId?: string | null; newItemCount: number },
 ): Promise<void> {
-  if (!input.sourceConnectionId || input.newItemCount < 1) return;
+  const sourceChannelId = input.sourceChannelId ?? input.sourceConnectionId ?? null;
+  if (!sourceChannelId || input.newItemCount < 1) return;
   try {
     await new PgJobQueueRepository(db).enqueue({
       job_type: SOURCE_POST_PROCESSING_EVENT_JOB_TYPE,
       payload: {
-        source_connection_id: input.sourceConnectionId,
+        source_channel_id: sourceChannelId,
         new_item_count: input.newItemCount,
         trigger_type: "items_materialized",
       },
@@ -32,12 +33,14 @@ export async function emitSourcePostProcessingDeepAnalysisEvent(
   db: Queryable,
   input: {
     spaceId: string;
-    sourceConnectionId: string | null;
+    sourceChannelId?: string | null;
+    sourceConnectionId?: string | null;
     sourceItemId: string | null;
     metadata: Record<string, unknown> | null;
   },
 ): Promise<void> {
-  if (!input.sourceConnectionId || !input.sourceItemId) return;
+  const sourceChannelId = input.sourceChannelId ?? input.sourceConnectionId ?? null;
+  if (!sourceChannelId || !input.sourceItemId) return;
   const metadata = input.metadata ?? {};
   const followups = sourcePostProcessingFollowups(metadata);
   if (!followups.length) return;
@@ -57,7 +60,7 @@ export async function emitSourcePostProcessingDeepAnalysisEvent(
         payload: {
           phase: "deep_analysis",
           trigger_type: "manual",
-          source_connection_id: input.sourceConnectionId,
+          source_channel_id: sourceChannelId,
           rule_id: ruleId,
           source_item_ids: [input.sourceItemId],
           source_post_processing_run_id: sourceRunId,

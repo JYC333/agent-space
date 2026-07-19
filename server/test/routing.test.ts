@@ -19,11 +19,14 @@ function candidate(overrides: Partial<RouteCandidate> = {}): RouteCandidate {
     capabilities: ["research"],
     tools: ["browser"],
     minimum_sandbox_level: "none",
+    requires_workspace_for_execution: false,
     supports_workspace: false,
     supports_one_shot_docker: false,
     supports_live: true,
     supports_dry_run: true,
-    trust_level: "high",
+    baseline_trust_level: "high",
+    effective_trust_level: "high",
+    subagent_disable_mechanism: "not_applicable",
     estimated_cost_usd: 1,
     estimated_latency_ms: 500,
     historical_verification_pass_rate: 0.9,
@@ -44,7 +47,7 @@ describe("deterministic route selector", () => {
       workspace_available: true,
       required_capabilities: ["code"],
       required_tools: ["shell"],
-    }, [candidate({ credential_available: false, trust_level: "low" })]);
+    }, [candidate({ credential_available: false, baseline_trust_level: "low", effective_trust_level: "low" })]);
     expect(result.selected).toBeNull();
     expect(result.rejected[0]?.reasons).toEqual(expect.arrayContaining([
       "credential_unavailable",
@@ -83,7 +86,8 @@ describe("deterministic route selector", () => {
         minimum_sandbox_level: "worktree",
         supports_workspace: true,
         supports_one_shot_docker: false,
-        trust_level: "high",
+        baseline_trust_level: "high",
+        effective_trust_level: "high",
       }),
       candidate({ runtime_profile_id: "managed-safe", adapter_type: "model_api" }),
     ]);
@@ -139,7 +143,7 @@ describe("deterministic route selector", () => {
       risk_level: "high",
       workspace_available: true,
       hints,
-    }, [candidate({ minimum_sandbox_level: "none", trust_level: "medium" })]);
+    }, [candidate({ minimum_sandbox_level: "none", baseline_trust_level: "low", effective_trust_level: "medium" })]);
     expect(result.selected).toBeNull();
     expect(result.rejected[0]?.reasons).toEqual(expect.arrayContaining([
       "trust_level_too_low",
@@ -185,7 +189,7 @@ describe("deterministic route selector", () => {
     ]));
   });
 
-  it("requires conformance evidence before OpenCode can serve non-low-risk work", () => {
+  it("requires conformance evidence before any local CLI can serve non-low-risk work", () => {
     const result = new DeterministicRouteSelector().select({
       required_sandbox_level: "worktree",
       execution_mode: "live",
@@ -195,7 +199,9 @@ describe("deterministic route selector", () => {
       adapter_type: "opencode",
       minimum_sandbox_level: "worktree",
       supports_workspace: true,
-      trust_level: "medium",
+      baseline_trust_level: "low",
+      effective_trust_level: "low",
+      subagent_disable_mechanism: "runtime_config",
       conformance_status: null,
     })]);
     expect(result.selected).toBeNull();
@@ -210,9 +216,46 @@ describe("deterministic route selector", () => {
       adapter_type: "opencode",
       minimum_sandbox_level: "worktree",
       supports_workspace: true,
-      trust_level: "medium",
+      baseline_trust_level: "low",
+      effective_trust_level: "medium",
+      subagent_disable_mechanism: "runtime_config",
       conformance_status: "passed",
     })]);
     expect(passed.selected?.candidate.adapter_type).toBe("opencode");
+  });
+
+  it("allows a low/medium-risk file-access CLI without a persistent workspace", () => {
+    const result = new DeterministicRouteSelector().select({
+      required_sandbox_level: "none",
+      execution_mode: "live",
+      risk_level: "low",
+      workspace_available: false,
+    }, [candidate({
+      adapter_type: "opencode",
+      minimum_sandbox_level: "worktree",
+      requires_workspace_for_execution: false,
+      supports_workspace: true,
+      effective_trust_level: "low",
+    })]);
+    expect(result.selected?.candidate.adapter_type).toBe("opencode");
+  });
+
+  it("requires a persistent workspace for high-risk file-access CLI work", () => {
+    const result = new DeterministicRouteSelector().select({
+      required_sandbox_level: "none",
+      execution_mode: "live",
+      risk_level: "high",
+      workspace_available: false,
+    }, [candidate({
+      adapter_type: "opencode",
+      minimum_sandbox_level: "worktree",
+      requires_workspace_for_execution: false,
+      supports_workspace: true,
+      baseline_trust_level: "high",
+      effective_trust_level: "high",
+      conformance_status: "passed",
+    })]);
+    expect(result.selected).toBeNull();
+    expect(result.rejected[0]?.reasons).toContain("workspace_or_file_access_unavailable");
   });
 });

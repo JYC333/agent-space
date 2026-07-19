@@ -39,7 +39,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   if (!available || !pool) return;
-  await pool.query("TRUNCATE claim_sources, source_connections, source_connectors, claims, space_objects, users, spaces CASCADE");
+  await pool.query("TRUNCATE claim_sources, source_connections, source_provider_connectors, source_providers, source_connectors, claims, space_objects, users, spaces CASCADE");
   for (const id of [VIEWER, OTHER]) {
     await pool.query(
       `INSERT INTO users (id, display_name, status, created_at, updated_at)
@@ -120,6 +120,16 @@ async function insertSourceConnection(input: { id: string; connectorId: string; 
      ) VALUES ($1, $2, 'Test connector', 'external_url', 'manual', 'active', '{}'::jsonb, now(), now())`,
     [input.connectorId, `test-${input.connectorId}`],
   );
+  await pool!.query(
+    `INSERT INTO source_providers (id, provider_key, display_name, provider_kind, category, status, capabilities_json, created_at, updated_at)
+     VALUES ($1, $2, 'Test provider', 'generic', 'test', 'active', '{}'::jsonb, now(), now())`,
+    [input.connectorId, `test-${input.connectorId}`],
+  );
+  await pool!.query(
+    `INSERT INTO source_provider_connectors (id, provider_id, connector_id, status, priority, capabilities_json, created_at, updated_at)
+     VALUES ($1,$1,$1,'active',0,'{}'::jsonb,now(),now())`,
+    [input.connectorId],
+  );
   const consent = {
     schema_version: 1,
     owner_user_id: input.ownerUserId,
@@ -135,11 +145,11 @@ async function insertSourceConnection(input: { id: string; connectorId: string; 
   };
   await pool!.query(
     `INSERT INTO source_connections (
-       id, space_id, connector_id, owner_user_id, name, status, fetch_frequency,
+       id, space_id, provider_connector_id, owner_user_id, name, status,
        capture_policy, trust_level, topic_hints_json, consent_json, policy_json,
        config_json, created_at, updated_at
      ) VALUES (
-       $1, $2, $3, $4, 'Denied source', 'active', 'manual',
+       $1, $2, $3, $4, 'Denied source', 'active',
        'reference_only', 'normal', '[]'::jsonb, $5::jsonb, $6::jsonb,
        '{}'::jsonb, now(), now()
      )`,

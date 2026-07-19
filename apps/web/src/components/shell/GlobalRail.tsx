@@ -2,6 +2,7 @@ import { Link, useLocation } from 'react-router-dom'
 import { PanelLeftOpen, PanelLeftClose, Puzzle, BookOpen, Landmark, type LucideIcon } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { RAIL_ITEMS, sceneForPath, spacePath, stripSpacePrefix, type RailItem } from '../../core/navigation'
+import { ReviewAttentionIndicator } from './ReviewAttentionIndicator'
 
 /** Map lucide icon names (kebab-case) used by official plugins to icon components. */
 const PLUGIN_ICON_MAP: Record<string, LucideIcon> = {
@@ -54,6 +55,7 @@ export function GlobalRail({
   spaceId,
   canManageSpace = false,
   canManageInstance = false,
+  pendingReviewCount = 0,
   pluginModules = [],
 }: {
   expanded: boolean
@@ -61,6 +63,7 @@ export function GlobalRail({
   spaceId: string | null
   canManageSpace?: boolean
   canManageInstance?: boolean
+  pendingReviewCount?: number
   /** Enabled official plugin modules — shown dynamically below core nav. */
   pluginModules?: PluginNavItem[]
 }) {
@@ -83,7 +86,7 @@ export function GlobalRail({
         aria-label={item.label}
         aria-current={active ? 'page' : undefined}
         className={cn(
-          'flex items-center rounded-md transition-colors h-9',
+          'relative flex items-center rounded-md transition-colors h-9',
           expanded ? 'gap-3 px-2.5 mx-1.5' : 'justify-center mx-auto w-9',
           active
             ? 'bg-primary/10 text-accent-foreground border border-primary/30'
@@ -92,6 +95,9 @@ export function GlobalRail({
       >
         <Icon className="size-[18px] shrink-0" />
         {expanded && <span className="text-[13px] font-medium truncate">{item.label}</span>}
+        {item.id === 'review' && (
+          <ReviewAttentionIndicator count={pendingReviewCount} compact={!expanded} />
+        )}
       </Link>
     )
   }

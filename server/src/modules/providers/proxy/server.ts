@@ -38,6 +38,13 @@ const HOP_BY_HOP_HEADERS = new Set([
   "transfer-encoding",
   "upgrade",
 ]);
+// The fetch implementation used for the upstream request transparently
+// decodes content-encoding. These headers describe the encoded representation,
+// not the decoded body that this proxy sends to the client.
+const DECODED_RESPONSE_HEADERS = new Set([
+  "content-encoding",
+  "content-length",
+]);
 
 export interface ProviderProxyServerHandle {
   baseUrl: string;
@@ -171,6 +178,11 @@ async function fetchForLease(
   override?: typeof fetch,
 ): Promise<typeof fetch> {
   if (override) return override;
+  // A lease without a network profile is intentionally a direct egress route.
+  // Do not ask the network-profile repository to resolve a null profile: that
+  // turns local provider proxy tests (and local development) into a database
+  // dependency and can hang before the upstream request is made.
+  if (!lease.network_profile_id) return globalThis.fetch;
   const profile = await resolveNetworkProfileRepository(config).resolve(
     lease.space_id,
     lease.network_profile_id,
@@ -195,7 +207,8 @@ async function forwardUpstreamResponse(
 ): Promise<void> {
   response.statusCode = upstream.status;
   upstream.headers.forEach((value, key) => {
-    if (!HOP_BY_HOP_HEADERS.has(key.toLowerCase())) {
+    const normalized = key.toLowerCase();
+    if (!HOP_BY_HOP_HEADERS.has(normalized) && !DECODED_RESPONSE_HEADERS.has(normalized)) {
       response.setHeader(key, value);
     }
   });
@@ -462,6 +475,11 @@ function upstreamHeaders(
     if (first !== null) headers[key] = first;
   }
   headers.authorization = `Bearer ${apiKey}`;
+  // Do not ask the upstream for a compressed representation. The proxy uses
+  // fetch, which may transparently decode compressed responses; requesting the
+  // identity representation also avoids forwarding representation metadata
+  // that cannot describe the body sent to the CLI client.
+  headers["accept-encoding"] = "identity";
   if (route === "anthropic") headers["x-api-key"] = apiKey;
   return headers;
 }

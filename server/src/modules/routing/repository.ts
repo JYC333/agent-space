@@ -21,10 +21,12 @@ interface RuntimeCandidateRow {
   is_default: boolean;
   runtime_config_json: unknown;
   runtime_policy_json: unknown;
+  capabilities_json: unknown;
   estimated_cost_usd: number | string | null;
   estimated_latency_ms: number | string | null;
   historical_verification_pass_rate: number | string | null;
   conformance_status: "passed" | "failed" | "partial" | null;
+  conformance_suite_version: string | null;
 }
 
 export class RouteSelectionError extends Error {
@@ -44,7 +46,7 @@ export class PgRouteDecisionRepository {
     const attemptNumber = await this.currentAttemptNumber(run);
     const retryRoute = attemptNumber > 1 ? await this.retryRouteContext(run, attemptNumber) : null;
     const decision = this.selector.select({
-      runtime_profile_id: run.runtime_profile_id ?? null,
+      runtime_profile_id: run.requested_runtime_profile_id ?? null,
       runtime_profile_is_explicit: run.runtime_profile_selection_source === "explicit",
       excluded_runtime_profile_ids: retryRoute?.excludedProfileIds,
       fallback_runtime_profile_ids: retryRoute?.fallbackProfileIds,
@@ -101,10 +103,23 @@ export class PgRouteDecisionRepository {
             runtime_profile_id: item.candidate.runtime_profile_id,
             adapter_type: item.candidate.adapter_type,
             model_provider_id: item.candidate.model_provider_id,
+            baseline_trust_level: item.candidate.baseline_trust_level,
+            effective_trust_level: item.candidate.effective_trust_level,
+            conformance_status: item.candidate.conformance_status ?? null,
+            conformance_suite_version: item.candidate.conformance_suite_version ?? null,
             score: item.score,
             score_trace: item.score_trace,
           }))),
-          JSON.stringify(decision.rejected),
+          JSON.stringify(decision.rejected.map((item) => {
+            const candidate = candidates.find((value) => value.runtime_profile_id === item.runtime_profile_id);
+            return {
+              ...item,
+              baseline_trust_level: candidate?.baseline_trust_level ?? null,
+              effective_trust_level: candidate?.effective_trust_level ?? null,
+              conformance_status: candidate?.conformance_status ?? null,
+              conformance_suite_version: candidate?.conformance_suite_version ?? null,
+            };
+          })),
           JSON.stringify(decision.fallback_chain),
           JSON.stringify(decision.candidates.map((item) => ({ runtime_profile_id: item.candidate.runtime_profile_id, score_trace: item.score_trace }))),
           now,
@@ -134,7 +149,8 @@ export class PgRouteDecisionRepository {
          runtime_profile_snapshot_json = $8::jsonb,
          updated_at = $9
        WHERE space_id = $1 AND id = $2
-       RETURNING id, space_id, agent_id, agent_version_id, runtime_profile_id,
+       RETURNING id, space_id, agent_id, agent_version_id, run_role,
+                 requested_runtime_profile_id, runtime_profile_id,
                  context_snapshot_id, run_type, status, mode, prompt, instruction,
                  workspace_id, session_id, parent_run_id, root_run_id, run_group_id,
                  delegation_id, project_id, scheduled_at, adapter_type, capability_id,
@@ -142,7 +158,7 @@ export class PgRouteDecisionRepository {
                  runtime_profile_snapshot_json, required_sandbox_level,
                  contract_snapshot_json, workflow_version_id, route_decision_id, trigger_origin,
                  instructed_by_user_id, instructed_by_agent_id, error_message,
-                 error_json, output_json, usage_json, started_at, ended_at,
+                 error_json, output_json, started_at, ended_at,
                  created_at, updated_at, owner_user_id, visibility, access_level,
                  runtime_profile_selection_source`,
       [
@@ -206,11 +222,16 @@ export class PgRouteDecisionRepository {
           GROUP BY vr.run_id
        ), history AS (
          SELECT h.adapter_type,
-                avg(h.estimated_cost)::float8 AS estimated_cost_usd,
+                avg(usage.estimated_cost_usd)::float8 AS estimated_cost_usd,
                 avg(h.runtime_seconds * 1000)::float8 AS estimated_latency_ms,
                 CASE WHEN count(*) >= 3 THEN avg(CASE WHEN v.passed THEN 1.0 ELSE 0.0 END)::float8 ELSE NULL END AS historical_verification_pass_rate
            FROM runs h
            JOIN verified_runs v ON v.run_id = h.id
+           LEFT JOIN LATERAL (
+             SELECT sum(e.estimated_cost_usd)::numeric AS estimated_cost_usd
+               FROM token_usage_events e
+              WHERE e.space_id = h.space_id AND e.run_id = h.id
+           ) usage ON true
           WHERE h.space_id = $1 AND h.agent_id = $2
             AND h.created_at >= now() - interval '90 days'
             AND h.status IN ('succeeded', 'degraded', 'failed')
@@ -227,10 +248,27 @@ export class PgRouteDecisionRepository {
                    AND (mpc.cooldown_until IS NULL OR mpc.cooldown_until <= now())
               ) AS provider_has_healthy_credential,
               arp.enabled, arp.is_default, arp.runtime_config_json,
-              arp.runtime_policy_json, history.estimated_cost_usd,
+              arp.runtime_policy_json,
+              CASE
+                WHEN jsonb_typeof(arp.runtime_config_json->'capabilities') = 'array'
+                  THEN arp.runtime_config_json->'capabilities'
+                WHEN jsonb_typeof(arp.runtime_policy_json->'capabilities') = 'array'
+                  THEN arp.runtime_policy_json->'capabilities'
+                WHEN jsonb_typeof(av.capabilities_json) = 'array'
+                  THEN av.capabilities_json
+                ELSE '[]'::jsonb
+              END AS capabilities_json,
+              history.estimated_cost_usd,
               history.estimated_latency_ms, history.historical_verification_pass_rate,
-              conformance.status AS conformance_status
+              conformance.status AS conformance_status,
+              conformance.suite_version AS conformance_suite_version
          FROM agent_runtime_profiles arp
+         JOIN agents a
+           ON a.id = arp.agent_id AND a.space_id = arp.space_id
+         LEFT JOIN agent_versions av
+           ON av.id = a.current_version_id
+          AND av.space_id = a.space_id
+          AND av.agent_id = a.id
          LEFT JOIN model_providers mp ON mp.id = arp.model_provider_id
          LEFT JOIN cli_credential_profiles cp
            ON cp.id = arp.credential_profile_id AND cp.owner_user_id = $3
@@ -331,7 +369,12 @@ function candidateFromRow(row: RuntimeCandidateRow): RouteCandidate {
   const credentialAvailable = spec?.credentials.credential_mode === "none"
     ? true
     : isLocalCliRuntimeAdapter(row.adapter_type)
-      ? Boolean(row.credential_profile_id && row.credential_profile_owner_id)
+      ? spec?.credentials.credential_mode === "cli_profile_or_model_provider"
+        ? Boolean(
+            (row.credential_profile_id && row.credential_profile_owner_id) ||
+            (row.model_provider_id && row.provider_enabled && (row.provider_credential_id || row.provider_has_healthy_credential)),
+          )
+        : Boolean(row.credential_profile_id && row.credential_profile_owner_id)
       : Boolean(row.provider_enabled && (row.provider_credential_id || row.provider_has_healthy_credential));
   return {
     runtime_profile_id: row.runtime_profile_id,
@@ -345,15 +388,19 @@ function candidateFromRow(row: RuntimeCandidateRow): RouteCandidate {
     enabled: row.enabled && spec?.implementation_status === "implemented",
     is_default: row.is_default,
     credential_available: credentialAvailable,
-    capabilities: stringArray(runtimeConfig.capabilities ?? runtimePolicy.capabilities),
+    capabilities: stringArray(row.capabilities_json),
     tools: stringArray(runtimeConfig.tools ?? runtimeConfig.tool_ids ?? runtimePolicy.tools),
     minimum_sandbox_level: sandboxLevel(spec?.sandbox.minimum_sandbox_level),
+    requires_workspace_for_execution: Boolean(spec?.sandbox.requires_workspace_for_execution),
     supports_workspace: Boolean(spec?.sandbox.supports_worktree),
     supports_one_shot_docker: Boolean(spec?.sandbox.supports_one_shot_docker),
     supports_live: runtimeConfig.supports_live !== false,
     supports_dry_run: runtimeConfig.supports_dry_run !== false,
-    trust_level: trustLevel(spec?.trust_level),
+    baseline_trust_level: trustLevel(spec?.baseline_trust_level),
+    effective_trust_level: effectiveTrustLevel(spec, row.conformance_status),
     conformance_status: row.conformance_status,
+    conformance_suite_version: row.conformance_suite_version,
+    subagent_disable_mechanism: spec?.subagent_disable_mechanism ?? "unknown",
     estimated_cost_usd: numberOrNull(row.estimated_cost_usd),
     estimated_latency_ms: numberOrNull(row.estimated_latency_ms),
     historical_verification_pass_rate: numberOrNull(row.historical_verification_pass_rate),
@@ -369,4 +416,14 @@ function routeSandboxLevel(value: unknown): "none" | "dry_run" | "ephemeral" | "
   return sandboxLevel(value);
 }
 function trustLevel(value: unknown): "low" | "medium" | "high" { return value === "medium" || value === "high" ? value : "low"; }
+function effectiveTrustLevel(
+  spec: ReturnType<typeof getRuntimeAdapterSpec>,
+  conformanceStatus: RuntimeCandidateRow["conformance_status"],
+): "low" | "medium" | "high" {
+  const baseline = trustLevel(spec?.baseline_trust_level);
+  if (!spec || !isLocalCliRuntimeAdapter(spec.adapter_type)) return baseline;
+  return conformanceStatus === "passed" && spec.subagent_disable_mechanism === "runtime_config"
+    ? "medium"
+    : "low";
+}
 function riskLevel(value: unknown): "low" | "medium" | "high" | "critical" { return value === "medium" || value === "high" || value === "critical" ? value : "low"; }

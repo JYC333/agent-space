@@ -1,4 +1,4 @@
-import type { WorkflowDefinition, WorkflowNode } from "@agent-space/protocol" with { "resolution-mode": "import" };
+import type { WorkflowDefinition, WorkflowNode, WorkflowNodeInputBinding } from "@agent-space/protocol" with { "resolution-mode": "import" };
 import { loadProtocol } from "../providers/protocolRuntime";
 import { sha256Json } from "../evolution/hash";
 import { resolveBudgetSources, type RunBudgetSource } from "../runs/contractSnapshot";
@@ -22,6 +22,7 @@ export interface PlanNodeRecord {
   title: string;
   description: string | null;
   dependsOn: string[];
+  inputBindings: WorkflowNodeInputBinding[];
   kind: PlanNodeKind;
   agentId: string | null;
   runtimeProfileId: string | null;
@@ -177,6 +178,7 @@ export function planNodeContentHash(node: PlanNodeRecord): string {
     title: node.title,
     description: node.description,
     depends_on: node.dependsOn,
+    input_bindings: node.inputBindings,
     kind: node.kind,
     agent_id: node.agentId,
     runtime_profile_id: node.runtimeProfileId,
@@ -204,6 +206,7 @@ function toPlanNode(node: WorkflowNode): PlanNodeRecord {
     title: node.title,
     description: stringValue(metadataJson.description),
     dependsOn: [...node.depends_on],
+    inputBindings: [...node.input_bindings],
     kind,
     agentId: node.agent_id ?? null,
     runtimeProfileId: node.runtime_profile_id ?? null,

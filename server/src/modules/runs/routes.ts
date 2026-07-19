@@ -244,6 +244,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
         workspace_id: q.workspace_id ?? null,
         project_id: q.project_id ?? null,
         workflow_version_id: q.workflow_version_id ?? null,
+        run_role: q.run_role === "coordinator" ? "coordinator" : q.run_role === "execution" ? "execution" : null,
         limit: boundedInt(q.limit, 50, 1, 200),
         offset: boundedInt(q.offset, 0, 0, Number.MAX_SAFE_INTEGER),
       });
@@ -374,7 +375,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
         new PgUsageRepository(db),
         {
           reconcileForRun: async (spaceId: string, childRunId: string, userId: string) => {
-            await new PlanExecutionService(db).reconcileForRun(spaceId, childRunId);
+            await new PlanExecutionService(db).reconcileForRun(spaceId, childRunId, userId);
             await new WorkflowExecutionService().reconcileForRun(db, spaceId, childRunId, userId);
           },
         },
@@ -546,7 +547,6 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
       },
       exit_code: 1,
       completed_at: abandonedAt,
-      usage_json: {},
     });
     if (!updated) {
       return reply.code(409).send({ detail: "Run could not be abandoned (status may have changed)" });

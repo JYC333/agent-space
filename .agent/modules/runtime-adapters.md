@@ -91,7 +91,10 @@ authority under `/api/v1/credentials/cli/*`. The frontend runtime page is
    fallback when the adapter requires a provider. The chosen profile is
    snapshotted on the run. Execution resolves the final adapter type from
    `Run.adapter_type` and the immutable
-   `runtime_profile_snapshot_json.runtime_config_json`.
+   `runtime_profile_snapshot_json.runtime_config_json`. Managed execution uses
+   the routed model persisted in `Run.model_override_json.model` when the worker
+   request does not carry an explicit model; it must not silently fall back to
+   the provider default.
 2. `server/src/modules/runtimeAdapters` validates that the adapter exists
    and is implemented.
 3. Native adapters are planned; no native capability executor is active today.
@@ -253,6 +256,30 @@ installed when implemented:
   server. The provider key is released inside the server providers/credentials
   broker over the internal channel and is never passed through ambient
   environment variables.
+
+### Project Research execution boundary
+
+Project Research is a managed API consumer, not a CLI runtime selection surface.
+Its setup accepts a ModelProvider and optional model; the server provisions the
+system research Agent and a `model_api` runtime profile. Research source
+post-processing and synthesis Runs carry an immutable structured-output
+contract, and provider invocation must return the declared JSON Schema object.
+The server validates the returned object against that contract after provider
+decoding; plain text, missing fields, wrong types, and undeclared fields are
+terminal failures with stage/schema/provider/model context. Structured Research
+requests use the selected provider directly, so a generic auxiliary task policy
+cannot silently reroute them to another provider.
+Project Research synthesis uses a result envelope with `status=succeeded` or
+`status=rejected`. `rejected` is a semantic, user-correctable outcome for an
+unactionable research question or corpus, not a provider/runtime error; its
+structured `rejection` details are retained in the Run output and projected to
+the research operation progress API. The synthesis instruction itself resolves
+from the central `project_research.synthesis` Prompt Library asset and the
+resolved version/hash are captured in the Run contract. System, transport, and
+schema failures remain ordinary failed Runs.
+Research never accepts CLI credential profiles, OpenCode, Claude Code, or Codex
+runtime values. Those runtimes remain available to generic Agent and Coding
+Agent flows and are not removed from the adapter registry.
 - Runs default to `tool_mode: disabled`. Managed runs can expose authorized
   internal retrieval tools through the runtime host when enabled per space
   (`retrieval.space.settings` `retrieval_tool_mode`) or per run. Knowledge tools

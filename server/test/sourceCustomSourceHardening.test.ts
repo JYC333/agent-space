@@ -91,12 +91,13 @@ const FIXTURE_HTML = `<html><body>
   <div class="article"><a href="/a1">First Title</a><p>First excerpt text.</p></div>
 </body></html>`;
 
-async function createDraftConnection() {
-  return createFlow!.createDraft(IDENTITY, {
-    name: "Example Source",
-    endpoint_url: "https://example.com/list",
+async function createDraftConnection(suffix = "", actor = IDENTITY) {
+  const channel = await createFlow!.createDraft(actor, {
+    name: `Example Source${suffix}`,
+    endpoint_url: `https://example.com/list${suffix}`,
     config: { list_selector: "article" },
   });
+  return { ...channel, id: channel.source_connection_id };
 }
 
 describe("generateHandler rate limit", () => {
@@ -140,10 +141,16 @@ describe("generateHandler rate limit", () => {
   it("does not share the rate limit budget across different connections", async () => {
     if (!available) return;
     const connectionA = await createDraftConnection();
-    const connectionB = await createDraftConnection();
+    const identityB = { spaceId: SPACE_A, userId: "user-2" };
+    await pool!.query(
+      `INSERT INTO space_memberships (id, space_id, user_id, role, status, created_at, updated_at)
+       VALUES ($1, $2, $3, 'owner', 'active', now(), now())`,
+      [randomUUID(), SPACE_A, identityB.userId],
+    );
+    const connectionB = await createDraftConnection("-b", identityB);
     await createFlow!.generateHandler(IDENTITY, connectionA.id, {});
     await createFlow!.generateHandler(IDENTITY, connectionA.id, {});
-    await expect(createFlow!.generateHandler(IDENTITY, connectionB.id, {})).resolves.toBeDefined();
+    await expect(createFlow!.generateHandler(identityB, connectionB.id, {})).resolves.toBeDefined();
   });
 
   it("applies to repair too, since repair regenerates through generateHandler internally", async () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  MAX_EVIDENCE_TEXT_CHARS,
   redactEvidenceText,
   sanitizeErrorJson,
   sanitizeEvidenceJson,
@@ -43,5 +44,21 @@ describe("run evidence redaction", () => {
 
   it("normalizes null error evidence to an empty object", () => {
     expect(sanitizeErrorJson(null)).toEqual({});
+  });
+
+  it("keeps long structured content intact below the expanded evidence limit", () => {
+    const content = JSON.stringify({ content: "x".repeat(8_000) });
+    const sanitized = sanitizeEvidenceJson({ content }) as { content: string };
+
+    expect(sanitized.content).toBe(content);
+    expect(JSON.parse(sanitized.content)).toEqual({ content: "x".repeat(8_000) });
+  });
+
+  it("truncates only after the expanded evidence limit", () => {
+    const value = "x".repeat(MAX_EVIDENCE_TEXT_CHARS + 1);
+
+    expect(redactEvidenceText(value)).toBe(
+      `${"x".repeat(MAX_EVIDENCE_TEXT_CHARS)}...[truncated]`,
+    );
   });
 });

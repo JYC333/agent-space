@@ -42,7 +42,6 @@ describe("EvolutionSignalEmitter", () => {
         status: "failed",
         started_at: "2026-07-10T23:59:50.000Z",
         ended_at: "2026-07-11T00:00:00.000Z",
-        usage_json: {},
         contract_snapshot_json: { max_cost: 10, max_duration_seconds: 10 },
       }),
       estimated_cost_usd: 8,

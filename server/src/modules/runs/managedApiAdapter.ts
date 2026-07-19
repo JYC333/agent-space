@@ -6,7 +6,8 @@ import type {
   RuntimeHostExecuteResponse,
 } from "@agent-space/protocol" with { "resolution-mode": "import" };
 import type { ServerConfig } from "../../config";
-import { executeRuntimeHost } from "../runtimeHost";
+import { executeRuntimeHost, type RuntimeHostLogger } from "../runtimeHost";
+import { contractRecord } from "./contractSnapshot";
 import type { RunRecord } from "./repository";
 import type { ManagedApiRetrievalToolDeps } from "./managedRetrievalTools";
 import type { AgentDelegationToolDeps } from "./managedAgentDelegationTools";
@@ -41,6 +42,7 @@ export interface ManagedApiNoToolAdapterInput {
 
 export interface ManagedApiNoToolAdapterDeps extends ManagedApiRetrievalToolDeps {
   executeRuntimeHost?: RuntimeHostExecutor;
+  runtimeHostLogger?: RuntimeHostLogger;
   agentDelegationTools?: AgentDelegationToolDeps;
 }
 
@@ -74,7 +76,8 @@ export async function executeManagedApiNoToolAdapter(
   }
 
   const request = runtimeHostRequest(input, adapterType, modelProviderId);
-  const execute = deps.executeRuntimeHost ?? executeRuntimeHost;
+  const execute = deps.executeRuntimeHost
+    ?? ((runtimeConfig, runtimeRequest) => executeRuntimeHost(runtimeConfig, runtimeRequest, deps.runtimeHostLogger));
   const response = await new AgentToolGateway(config).execute(input.run, request, execute, deps);
   return envelopeFromRuntimeHost(input, adapterType, response, startedAt);
 }
@@ -97,11 +100,16 @@ function runtimeHostRequest(
   const chatContextPreamble = typeof override.chat_context_preamble === "string"
     ? override.chat_context_preamble
     : null;
+  const contract = contractRecord(input.run.contract_snapshot_json);
+  const outputFormat = structuredOutputFormat(contract.structured_output_json);
   return {
     run_id: input.run.id,
     space_id: input.run.space_id,
     model_provider_id: modelProviderId,
-    model: input.model ?? null,
+    // Routing persists the selected model on the run. Worker requests do not
+    // repeat that value, so the adapter must honor the durable binding instead
+    // of silently falling back to the provider default.
+    model: input.model ?? stringValue(override.model),
     system_prompt: composeSystemContext(
       groupedAgentIdentity,
       systemPrompt,
@@ -123,9 +131,35 @@ function runtimeHostRequest(
     capability_id: null,
     context_snapshot_id: input.context_snapshot_id ?? null,
     max_tokens: input.max_tokens ?? undefined,
+    ...(outputFormat ? { output_format: outputFormat } : {}),
     tool_mode: "disabled",
     tool_bindings: [],
   };
+}
+
+function structuredOutputFormat(value: unknown): RuntimeHostExecuteRequest["output_format"] {
+  const record = recordOrEmpty(value);
+  const schema = record.schema;
+  if (
+    record.type !== "json_schema" ||
+    typeof record.schema_id !== "string" ||
+    !schema ||
+    typeof schema !== "object" ||
+    Array.isArray(schema)
+  ) return null;
+  return {
+    type: "json_schema",
+    schema_id: record.schema_id,
+    schema: schema as Record<string, unknown>,
+    strict: record.strict !== false,
+    stage: typeof record.stage === "string" ? record.stage : structuredOutputStage(record.schema_id),
+  };
+}
+
+function structuredOutputStage(schemaId: string): string {
+  if (schemaId === "source_post_processing.result.v1") return "source_post_processing";
+  if (schemaId === "project_research.synthesis.v1") return "synthesis";
+  return "managed_api";
 }
 
 function groupedAgentIdentityContext(run: RunRecord): string | null {
@@ -191,7 +225,7 @@ function envelopeFromRuntimeHost(
     // Model chat output is consumed downstream as structured data (e.g.
     // source_post_processing's JSON result contract) and is bounded by the
     // request's max_tokens rather than by arbitrary CLI stdout/patch size, so
-    // it must not be cut with the fixed 4000-char evidence-display limit that
+    // it must not be cut with the fixed evidence-display limit that
     // redactEvidenceText applies — only the secret-pattern redaction applies.
     output_text: redactSecretPatterns(response.output_text || response.stdout || ""),
     output_json: sanitizeEvidenceJson({

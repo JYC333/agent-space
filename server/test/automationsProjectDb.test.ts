@@ -372,7 +372,7 @@ describe("Automation × Project binding (real Postgres)", () => {
         config_json: { target_type: "agent_run", contract_json: { max_runs: 1 } },
       },
     });
-    await service().fire({ spaceId: SPACE, automationId: automation.id, actorUserId: OWNER });
+    const fired = await service().fire({ spaceId: SPACE, automationId: automation.id, actorUserId: OWNER });
 
     const taskId = randomUUID();
     await pool!.query(
@@ -409,7 +409,7 @@ describe("Automation × Project binding (real Postgres)", () => {
     await pool!.query(
       `INSERT INTO task_runs (id, space_id, task_id, run_id, role, created_at)
        VALUES ($1, $2, $3, $4, 'primary', $5)`,
-      [randomUUID(), SPACE, taskId, randomUUID(), new Date().toISOString()],
+      [randomUUID(), SPACE, taskId, String(fired.run_id), new Date().toISOString()],
     );
     const multiSource = [
       { source: { kind: "task" as const, id: taskId }, max_runs: 1 },
@@ -503,7 +503,7 @@ describe("Automation × Project binding (real Postgres)", () => {
     ])).rejects.toMatchObject({ code: "budget_source_not_found" });
   });
 
-  it("resolves a pinned workflow target and launches one plan with bounded input", async () => {
+  it("resolves a pinned workflow target and launches one execution with bounded input", async () => {
     if (!available) return;
     const now = new Date().toISOString();
     const definition = {
@@ -583,12 +583,12 @@ describe("Automation × Project binding (real Postgres)", () => {
       actorUserId: OWNER,
     });
     expect(fired).toMatchObject({ target_type: "workflow", workflow_version_id: WORKFLOW_VERSION });
-    const plan = await pool!.query<{ status: string; metadata_json: Record<string, unknown> }>(
-      `SELECT status, metadata_json FROM plans WHERE id = $1`,
-      [String(fired.plan_id)],
+    const execution = await pool!.query<{ status: string; input_json: Record<string, unknown> }>(
+      `SELECT status, input_json FROM workflow_executions WHERE id = $1`,
+      [String(fired.workflow_execution_id)],
     );
-    expect(plan.rows[0]?.status).toBe("active");
-    expect(plan.rows[0]?.metadata_json).toMatchObject({ input_json: { query: "bounded" } });
+    expect(execution.rows[0]?.status).toBe("running");
+    expect(execution.rows[0]?.input_json).toMatchObject({ query: "bounded" });
     const root = await pool!.query<{ trigger_origin: string; workflow_input_json: Record<string, unknown> }>(
       `SELECT trigger_origin, contract_snapshot_json->'workflow_input_json' AS workflow_input_json FROM runs WHERE id = $1`,
       [String(fired.root_run_id)],

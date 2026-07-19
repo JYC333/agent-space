@@ -2,9 +2,8 @@ import { lazy, Suspense } from 'react'
 import { Routes, Route } from 'react-router-dom'
 import { Skeleton } from '../../components/ui/skeleton'
 
-const SourcesPage = lazy(() => import('./SourcesPage'))
-const SourcePresetsPage = lazy(() => import('./sourcePresets/SourcePresetsPage'))
-const SourceConnectionDetailPage = lazy(() => import('./SourceConnectionDetailPage'))
+const SourcesPage = lazy(() => import('./SourceChannelsPage'))
+const SourceDetailPage = lazy(() => import('./SourceChannelDetailPage'))
 
 function PageFallback() {
   return (
@@ -19,9 +18,7 @@ export default function SourcesModule() {
   return (
     <Routes>
       <Route index element={<Suspense fallback={<PageFallback />}><SourcesPage /></Suspense>} />
-      <Route path="source-presets" element={<Suspense fallback={<PageFallback />}><SourcePresetsPage /></Suspense>} />
-      <Route path="sources/:connectionId" element={<Suspense fallback={<PageFallback />}><SourceConnectionDetailPage /></Suspense>} />
-      <Route path="connections/:connectionId" element={<Suspense fallback={<PageFallback />}><SourceConnectionDetailPage /></Suspense>} />
+      <Route path=":sourceId" element={<Suspense fallback={<PageFallback />}><SourceDetailPage /></Suspense>} />
     </Routes>
   )
 }

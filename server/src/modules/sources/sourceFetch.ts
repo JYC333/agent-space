@@ -19,12 +19,18 @@ export async function fetchSource(
   options: {
     headers?: Record<string, string>;
     maxDownloadBytes: number;
+    /** Abort the request after this many ms; the fetch rejects with a TimeoutError. */
+    timeoutMs?: number;
   },
 ): Promise<SourceFetchResult> {
   const init: Parameters<typeof fetch>[1] = { redirect: "follow" };
-  if (options.headers && Object.keys(options.headers).length > 0) {
-    init.headers = options.headers;
-  }
+  if (options.timeoutMs) init.signal = AbortSignal.timeout(options.timeoutMs);
+  const headers = new Headers(options.headers);
+  // Source bodies are consumed by the server. Keep the representation
+  // uncompressed so an intermediary cannot return a body whose encoding
+  // metadata no longer matches what the server reads.
+  headers.set("accept-encoding", "identity");
+  init.headers = headers;
   const response = await fetch(url, init);
   const contentType = normalizeContentType(response.headers.get("content-type"));
   if (response.status === 304 || !response.ok) {

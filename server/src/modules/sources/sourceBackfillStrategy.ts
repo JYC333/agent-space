@@ -2,14 +2,20 @@ import { HttpError, objectValue, optionalString } from "../routeUtils/common";
 
 const WINDOW_UNITS = ["date_window", "page_cursor", "id_cursor"] as const;
 const QUOTA_WINDOWS = ["minute", "hour", "day"] as const;
+export const ARXIV_HISTORY_FLOOR = "1991-01-01T00:00:00.000Z";
+
+export const BACKFILL_HISTORY_MODES = ["bounded_range", "all_available"] as const;
+export type BackfillHistoryMode = (typeof BACKFILL_HISTORY_MODES)[number];
 
 export interface BackfillStrategy {
   window_unit: (typeof WINDOW_UNITS)[number];
+  history_mode: BackfillHistoryMode;
   from: string | null;
   to: string | null;
   window_size: number;
   max_items: number;
   direction: "backward";
+  monitoring_field?: "submittedDate" | "lastUpdatedDate";
 }
 
 export interface BackfillQuotaPolicy {
@@ -22,6 +28,7 @@ export interface BackfillSegmentWindow {
   to?: string;
   cursor?: number;
   max_items: number;
+  monitoring_field?: "submittedDate" | "lastUpdatedDate";
 }
 
 export function normalizeStrategy(body: Record<string, unknown>): BackfillStrategy {
@@ -34,13 +41,23 @@ export function normalizeStrategy(body: Record<string, unknown>): BackfillStrate
   if (direction !== "backward") {
     throw new HttpError(422, "Only backward history import is currently supported");
   }
+  const historyMode = optionalString(raw.history_mode) ?? "bounded_range";
+  if (!BACKFILL_HISTORY_MODES.includes(historyMode as BackfillHistoryMode)) {
+    throw new HttpError(422, "strategy.history_mode must be bounded_range or all_available");
+  }
+  const monitoringField = optionalString(raw.monitoring_field) ?? "submittedDate";
+  if (!["submittedDate", "lastUpdatedDate"].includes(monitoringField)) {
+    throw new HttpError(422, "strategy.monitoring_field must be submittedDate or lastUpdatedDate");
+  }
   return {
     window_unit: windowUnit as BackfillStrategy["window_unit"],
+    history_mode: historyMode as BackfillHistoryMode,
     from: optionalString(raw.from),
     to: optionalString(raw.to),
     window_size: boundedInteger(raw.window_size, 30, 1, 365, "strategy.window_size"),
     max_items: boundedInteger(raw.max_items, 100, 1, 10000, "strategy.max_items"),
     direction,
+    monitoring_field: monitoringField as "submittedDate" | "lastUpdatedDate",
   };
 }
 
@@ -57,11 +74,14 @@ export function normalizeQuota(value: unknown): BackfillQuotaPolicy {
 }
 
 export function assertSupportedStrategy(connectorKey: string, strategy: BackfillStrategy): void {
-  if (connectorKey !== "arxiv") {
+  if (!["arxiv_api", "openalex_api", "semantic_scholar_api"].includes(connectorKey)) {
     throw new HttpError(422, "History import is not supported by this connector");
   }
   if (!["date_window", "page_cursor"].includes(strategy.window_unit)) {
     throw new HttpError(422, "The connector does not support this history import strategy");
+  }
+  if (strategy.history_mode === "all_available" && strategy.window_unit !== "date_window") {
+    throw new HttpError(422, "All available history requires date_window pagination");
   }
 }
 
@@ -72,15 +92,29 @@ export function assertSupportedStrategy(connectorKey: string, strategy: Backfill
  * a quota unit).
  */
 export function planSegments(strategy: BackfillStrategy): BackfillSegmentWindow[] {
-  if (strategy.window_unit !== "date_window") return planCursorSegments(strategy.max_items);
+  if (strategy.window_unit !== "date_window") return planCursorSegments(strategy.max_items, strategy.monitoring_field ?? "submittedDate");
   return planDateWindowSegments(strategy);
 }
 
-function planCursorSegments(maxItems: number): BackfillSegmentWindow[] {
+export function resolveStrategyBounds(strategy: BackfillStrategy, now = new Date()): BackfillStrategy {
+  if (strategy.history_mode === "all_available") {
+    const to = strategy.to ? new Date(strategy.to) : now;
+    if (Number.isNaN(to.getTime())) throw new HttpError(422, "invalid strategy.to");
+    return {
+      ...strategy,
+      from: ARXIV_HISTORY_FLOOR,
+      to: to.toISOString(),
+    };
+  }
+  return strategy;
+}
+
+function planCursorSegments(maxItems: number, monitoringField: "submittedDate" | "lastUpdatedDate"): BackfillSegmentWindow[] {
   const count = Math.ceil(maxItems / 100);
   return Array.from({ length: count }, (_, index) => ({
     cursor: index,
     max_items: Math.min(100, maxItems - index * 100),
+    monitoring_field: monitoringField,
   }));
 }
 
@@ -99,14 +133,16 @@ function planDateWindowSegments(strategy: BackfillStrategy): BackfillSegmentWind
     cursor = from;
   }
 
-  const segments: BackfillSegmentWindow[] = [];
-  let remaining = strategy.max_items;
-  for (let index = 0; index < windows.length && remaining > 0; index++) {
-    const allocation = Math.min(100, Math.ceil(remaining / (windows.length - index)));
-    remaining -= allocation;
-    segments.push({ ...windows[index], max_items: allocation });
-  }
-  return segments;
+  // The strategy carries the budget used by standalone Source plans. Project
+  // Research supplies its operation-owned budget here while creating the
+  // segments; execution applies the remaining operation budget when it starts
+  // a window. Pre-allocating the budget here makes an exactly-full page look
+  // partial even when later windows still exist.
+  return windows.map((window) => ({
+    ...window,
+    max_items: strategy.max_items,
+    monitoring_field: strategy.monitoring_field ?? "submittedDate",
+  }));
 }
 
 function boundedInteger(value: unknown, fallback: number, min: number, max: number, field: string): number {

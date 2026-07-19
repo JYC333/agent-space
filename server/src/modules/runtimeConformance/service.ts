@@ -86,7 +86,7 @@ export class RuntimeConformanceService {
       runtime_adapter_type: input.runtime_adapter_type,
       runtime_version: input.runtime_version,
       checks,
-      declared_trust_level: spec.trust_level,
+      declared_trust_level: spec.baseline_trust_level,
     });
   }
 
@@ -109,7 +109,7 @@ export class RuntimeConformanceService {
       runtime_adapter_type: input.runtime_adapter_type,
       runtime_version: input.runtime_version,
       checks,
-      declared_trust_level: spec.trust_level,
+      declared_trust_level: spec.baseline_trust_level,
     });
   }
 

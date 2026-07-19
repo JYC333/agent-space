@@ -14,6 +14,7 @@ import { PreviewBadge, UrgencyBadge } from '../../components/PreviewBadge'
 import { ScopeBadge } from '../../components/ScopeBadge'
 import { EmptyState } from '../../components/ui/empty-state'
 import { codePatchAcceptOptions } from '../memory/codePatchConfirm'
+import { notifyReviewAttentionChanged } from '../../core/reviewAttention'
 
 /**
  * Space Today — the space-scoped dashboard for ONE concrete Space (the active Space).
@@ -340,6 +341,7 @@ export default function TodayPage() {
       } else {
         await proposalsApi.reject(proposal.id)
       }
+      notifyReviewAttentionChanged()
       toast.success(`Proposal ${action}ed`)
       await loadSummary()
     } catch (e) {

@@ -156,9 +156,9 @@ class ObjectKindApplyServiceFakeClient extends ObjectKindApplyFakeDb {
       this.auditWrites += 1;
       return { rows: [{ id: "policy-decision-1" }], rowCount: 1 };
     }
-    if (norm.startsWith("UPDATE proposals SET status = 'accepted'")) {
+    if (norm.startsWith("UPDATE proposals SET status = $5")) {
       if (this.proposalRow.status !== "pending") return { rows: [], rowCount: 0 };
-      this.proposalRow.status = "accepted";
+      this.proposalRow.status = params[4];
       this.proposalRow.reviewed_at = params[2];
       this.proposalRow.reviewed_by = params[3];
       this.acceptedUpdates += 1;

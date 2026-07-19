@@ -7,6 +7,7 @@ import { projects } from "./projects";
 import { spaces } from "./spaces";
 import { claims } from "./knowledge";
 import { workspaces } from "./workspaces";
+import { projectOperations } from "./projectOperations";
 
 // Project-owned Academic Research workflow foundation. Runs/Artifacts/
 // Proposals keep their existing authority boundaries — these tables only
@@ -100,6 +101,52 @@ export const projectResearchWorkflows = pgTable("project_research_workflows", {
 	check("ck_project_research_workflows_state_object", sql`jsonb_typeof(state_json) = 'object'::text`),
 ]);
 
+// Immutable outcomes of completed monitoring scans. Keeping this separate
+// from workflow/operation projections means later re-screening cannot rewrite
+// the historical "what was found on this scan" timeline.
+export const researchScanSummaries = pgTable("research_scan_summaries", {
+	id: varchar({ length: 36 }).primaryKey().notNull(),
+	spaceId: varchar("space_id", { length: 36 }).notNull(),
+	projectId: varchar("project_id", { length: 36 }).notNull(),
+	workflowId: varchar("workflow_id", { length: 36 }).notNull(),
+	operationId: varchar("operation_id", { length: 36 }),
+	scanKey: varchar("scan_key", { length: 256 }).notNull(),
+	scanWindowStart: timestamp("scan_window_start", { withTimezone: true, mode: 'string' }),
+	scanWindowEnd: timestamp("scan_window_end", { withTimezone: true, mode: 'string' }),
+	scannedAt: timestamp("scanned_at", { withTimezone: true, mode: 'string' }).notNull(),
+	newItemCount: integer("new_item_count").default(0).notNull(),
+	relevantCount: integer("relevant_count").default(0).notNull(),
+	maybeCount: integer("maybe_count").default(0).notNull(),
+	excludedCount: integer("excluded_count").default(0).notNull(),
+	supportsCount: integer("supports_count").default(0).notNull(),
+	contradictsCount: integer("contradicts_count").default(0).notNull(),
+	newDirectionCount: integer("new_direction_count").default(0).notNull(),
+	comparisonsJson: jsonb("comparisons_json").default([]).notNull(),
+	integrityAlertsJson: jsonb("integrity_alerts_json").default([]).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).notNull(),
+}, (table): PgTableExtraConfigValue[] => [
+	uniqueIndex("uq_research_scan_summaries_workflow_scan").using("btree", table.spaceId.asc().nullsLast(), table.workflowId.asc().nullsLast(), table.scanKey.asc().nullsLast()),
+	index("ix_research_scan_summaries_project_scanned_at").using("btree", table.spaceId.asc().nullsLast(), table.projectId.asc().nullsLast(), table.scannedAt.desc().nullsLast()),
+	foreignKey({
+		columns: [table.workflowId, table.spaceId],
+		foreignColumns: [projectResearchWorkflows.id, projectResearchWorkflows.spaceId],
+		name: "research_scan_summaries_workflow_id_fkey"
+	}).onDelete("cascade"),
+	foreignKey({
+		columns: [table.projectId, table.spaceId],
+		foreignColumns: [projects.id, projects.spaceId],
+		name: "research_scan_summaries_project_id_fkey"
+	}).onDelete("cascade"),
+	foreignKey({
+		columns: [table.spaceId],
+		foreignColumns: [spaces.id],
+		name: "research_scan_summaries_space_id_fkey"
+	}),
+	check("ck_research_scan_summaries_nonnegative_counts", sql`new_item_count >= 0 AND relevant_count >= 0 AND maybe_count >= 0 AND excluded_count >= 0 AND supports_count >= 0 AND contradicts_count >= 0 AND new_direction_count >= 0`),
+	check("ck_research_scan_summaries_comparisons_array", sql`jsonb_typeof(comparisons_json) = 'array'`),
+	check("ck_research_scan_summaries_integrity_alerts_array", sql`jsonb_typeof(integrity_alerts_json) = 'array'`),
+]);
+
 export const projectResearchCheckpoints = pgTable("project_research_checkpoints", {
 	id: varchar({ length: 36 }).primaryKey().notNull(),
 	spaceId: varchar("space_id", { length: 36 }).notNull(),
@@ -140,62 +187,70 @@ export const projectResearchCheckpoints = pgTable("project_research_checkpoints"
 			foreignColumns: [users.id],
 			name: "project_research_checkpoints_decided_by_user_id_fkey"
 		}).onDelete("set null"),
-	check("ck_project_research_checkpoints_checkpoint_type", sql`(checkpoint_type)::text = ANY (ARRAY[('profile_approval'::character varying)::text, ('screening_gate'::character varying)::text, ('integrity_gate'::character varying)::text, ('manuscript_gate'::character varying)::text, ('review_gate'::character varying)::text, ('other'::character varying)::text])`),
+	check("ck_project_research_checkpoints_checkpoint_type", sql`(checkpoint_type)::text = ANY (ARRAY[('profile_approval'::character varying)::text, ('screening_gate'::character varying)::text, ('idea_review'::character varying)::text, ('integrity_gate'::character varying)::text, ('manuscript_gate'::character varying)::text, ('review_gate'::character varying)::text, ('other'::character varying)::text])`),
 	check("ck_project_research_checkpoints_status", sql`(status)::text = ANY (ARRAY[('pending'::character varying)::text, ('approved'::character varying)::text, ('rejected'::character varying)::text, ('waived'::character varying)::text])`),
 	check("ck_project_research_checkpoints_user_decision", sql`(user_decision IS NULL) OR ((user_decision)::text = ANY (ARRAY[('approved'::character varying)::text, ('rejected'::character varying)::text, ('waived'::character varying)::text]))`),
 ]);
 
-export const projectResearchArtifactLinks = pgTable("project_research_artifact_links", {
+export const projectResearchReports = pgTable("project_research_reports", {
 	id: varchar({ length: 36 }).primaryKey().notNull(),
 	spaceId: varchar("space_id", { length: 36 }).notNull(),
 	projectId: varchar("project_id", { length: 36 }).notNull(),
-	workflowId: varchar("workflow_id", { length: 36 }),
-	stageKey: varchar("stage_key", { length: 64 }),
-	artifactId: varchar("artifact_id", { length: 36 }).notNull(),
-	artifactType: varchar("artifact_type", { length: 32 }).notNull(),
-	createdByUserId: varchar("created_by_user_id", { length: 36 }),
-	createdByRunId: varchar("created_by_run_id", { length: 36 }),
+	workflowId: varchar("workflow_id", { length: 36 }).notNull(),
+	operationId: varchar("operation_id", { length: 36 }).notNull(),
+	synthesisRunId: varchar("synthesis_run_id", { length: 36 }).notNull(),
+	runKind: varchar("run_kind", { length: 32 }).notNull(),
+	researchQuestion: text("research_question").notNull(),
+	researchQuestionVersion: integer("research_question_version").notNull(),
+	status: varchar({ length: 32 }).default('awaiting_review').notNull(),
+	contentJson: jsonb("content_json").notNull(),
+	readerDocumentJson: jsonb("reader_document_json").notNull(),
+	normalizedText: text("normalized_text").notNull(),
+	contentHash: varchar("content_hash", { length: 64 }).notNull(),
+	archiveArtifactId: varchar("archive_artifact_id", { length: 36 }).notNull(),
+	literatureMatrixArtifactId: varchar("literature_matrix_artifact_id", { length: 36 }),
+	integrityArtifactId: varchar("integrity_artifact_id", { length: 36 }),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).notNull(),
 }, (table): PgTableExtraConfigValue[] => [
-	index("ix_project_research_artifact_links_space_id").using("btree", table.spaceId.asc().nullsLast()),
-	index("ix_project_research_artifact_links_project_type").using("btree", table.spaceId.asc().nullsLast(), table.projectId.asc().nullsLast(), table.artifactType.asc().nullsLast()),
-	index("ix_project_research_artifact_links_workflow_id").using("btree", table.workflowId.asc().nullsLast()),
-	index("ix_project_research_artifact_links_artifact_id").using("btree", table.artifactId.asc().nullsLast()),
-	// Single-column FK (not composite with space_id): a composite FK's
-	// ON DELETE SET NULL nulls every column in the FK, which would also null
-	// the NOT NULL space_id column. workflow_id (the workflow's PK) is
-	// already globally unique, so this loses no referential integrity.
+	uniqueIndex("uq_project_research_reports_synthesis_run").using("btree", table.spaceId.asc().nullsLast(), table.synthesisRunId.asc().nullsLast()),
+	index("ix_project_research_reports_project_created").using("btree", table.spaceId.asc().nullsLast(), table.projectId.asc().nullsLast(), table.createdAt.desc().nullsLast()),
+	index("ix_project_research_reports_workflow").using("btree", table.workflowId.asc().nullsLast()),
 	foreignKey({
-			columns: [table.workflowId],
-			foreignColumns: [projectResearchWorkflows.id],
-			name: "project_research_artifact_links_workflow_id_fkey"
-		}).onDelete("set null"),
+		columns: [table.workflowId, table.spaceId],
+		foreignColumns: [projectResearchWorkflows.id, projectResearchWorkflows.spaceId],
+		name: "project_research_reports_workflow_id_fkey"
+	}).onDelete("cascade"),
 	foreignKey({
-			columns: [table.projectId, table.spaceId],
-			foreignColumns: [projects.id, projects.spaceId],
-			name: "project_research_artifact_links_project_id_fkey"
-		}).onDelete("cascade"),
+		columns: [table.operationId, table.spaceId],
+		foreignColumns: [projectOperations.id, projectOperations.spaceId],
+		name: "project_research_reports_operation_id_fkey"
+	}).onDelete("cascade"),
 	foreignKey({
-			columns: [table.artifactId],
-			foreignColumns: [artifacts.id],
-			name: "project_research_artifact_links_artifact_id_fkey"
-		}).onDelete("cascade"),
+		columns: [table.projectId, table.spaceId],
+		foreignColumns: [projects.id, projects.spaceId],
+		name: "project_research_reports_project_id_fkey"
+	}).onDelete("cascade"),
 	foreignKey({
-			columns: [table.spaceId],
-			foreignColumns: [spaces.id],
-			name: "project_research_artifact_links_space_id_fkey"
-		}),
+		columns: [table.synthesisRunId, table.spaceId],
+		foreignColumns: [runs.id, runs.spaceId],
+		name: "project_research_reports_synthesis_run_id_fkey"
+	}),
 	foreignKey({
-			columns: [table.createdByUserId],
-			foreignColumns: [users.id],
-			name: "project_research_artifact_links_created_by_user_id_fkey"
-		}).onDelete("set null"),
+		columns: [table.spaceId],
+		foreignColumns: [spaces.id],
+		name: "project_research_reports_space_id_fkey"
+	}),
 	foreignKey({
-			columns: [table.createdByRunId],
-			foreignColumns: [runs.id],
-			name: "project_research_artifact_links_created_by_run_id_fkey"
-		}).onDelete("set null"),
-	check("ck_project_research_artifact_links_artifact_type", sql`(artifact_type)::text = ANY (ARRAY[('rq_brief'::character varying)::text, ('methodology_blueprint'::character varying)::text, ('search_strategy'::character varying)::text, ('annotated_bibliography'::character varying)::text, ('literature_matrix'::character varying)::text, ('synthesis_report'::character varying)::text, ('integrity_report'::character varying)::text, ('outline'::character varying)::text, ('draft'::character varying)::text, ('review_package'::character varying)::text, ('revision_plan'::character varying)::text, ('final_export'::character varying)::text, ('process_summary'::character varying)::text])`),
+		columns: [table.archiveArtifactId, table.spaceId], foreignColumns: [artifacts.id, artifacts.spaceId], name: "project_research_reports_archive_artifact_id_fkey"
+	}),
+	foreignKey({ columns: [table.literatureMatrixArtifactId, table.spaceId], foreignColumns: [artifacts.id, artifacts.spaceId], name: "project_research_reports_matrix_artifact_id_fkey" }),
+	foreignKey({ columns: [table.integrityArtifactId, table.spaceId], foreignColumns: [artifacts.id, artifacts.spaceId], name: "project_research_reports_integrity_artifact_id_fkey" }),
+	check("ck_project_research_reports_run_kind", sql`run_kind IN ('baseline', 'historical_backfill', 'incremental', 'question_rescreen', 'synthesis_only')`),
+	check("ck_project_research_reports_status", sql`status IN ('awaiting_review', 'complete', 'rejected')`),
+	check("ck_project_research_reports_question_version", sql`research_question_version >= 1`),
+	check("ck_project_research_reports_content_object", sql`jsonb_typeof(content_json) = 'object'::text`),
+	check("ck_project_research_reports_reader_object", sql`jsonb_typeof(reader_document_json) = 'object'::text`),
 ]);
 
 // Project-owned screening criteria (include/exclude keywords,
@@ -275,7 +330,7 @@ export const projectResearchClaimLinks = pgTable("project_research_claim_links",
 			foreignColumns: [projects.id, projects.spaceId],
 			name: "project_research_claim_links_project_id_fkey"
 		}).onDelete("cascade"),
-	// Single-column FK (see project_research_artifact_links.workflow_id):
+	// Single-column workflow FK avoids nulling the required space_id column.
 	// composite (workflow_id, space_id) + ON DELETE SET NULL would null the
 	// NOT NULL space_id column on delete.
 	foreignKey({
@@ -351,7 +406,7 @@ export const projectExperimentCampaigns = pgTable("project_experiment_campaigns"
 		}).onDelete("set null"),
 	// Single-column FKs (not composite with space_id): a composite FK's
 	// ON DELETE SET NULL nulls every column in the FK, including the NOT
-	// NULL space_id column — see project_research_artifact_links.workflow_id.
+	// Keep space ownership intact when the optional workflow is removed.
 	foreignKey({
 			columns: [table.baselineRunId],
 			foreignColumns: [projectExperimentRuns.id],

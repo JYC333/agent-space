@@ -37,6 +37,7 @@ import { artifactsModule } from "../modules/artifacts";
 import { projectsModule } from "../modules/projects";
 import { projectPresetsModule } from "../modules/projectPresets";
 import { projectResearchModule } from "../modules/projectResearch";
+import { researchModule } from "../modules/research";
 import { policyModule } from "../modules/policy";
 import { contentAccessModule } from "../modules/contentAccess";
 import { proposalsModule } from "../modules/proposals";
@@ -52,6 +53,7 @@ import { askSpaceModule } from "../modules/askSpace";
 import { activityModule } from "../modules/activity";
 import { publicationsModule } from "../modules/publications";
 import { sourcesModule } from "../modules/sources";
+import { readerModule } from "../modules/reader";
 import { knowledgeModule } from "../modules/knowledge";
 import { relationsModule } from "../modules/relations";
 import { academicModule } from "../modules/academic";
@@ -117,6 +119,7 @@ export const SERVER_MODULES: readonly ServerModule[] = [
   projectsModule,
   projectPresetsModule,
   projectResearchModule,
+  researchModule,
   policyModule,
   contentAccessModule,
   proposalsModule,
@@ -132,6 +135,7 @@ export const SERVER_MODULES: readonly ServerModule[] = [
   activityModule,
   publicationsModule,
   sourcesModule,
+  readerModule,
   knowledgeModule,
   relationsModule,
   academicModule,

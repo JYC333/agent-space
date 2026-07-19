@@ -32,6 +32,10 @@ bucket and weaken its contracts-only role.
 - Command/event envelope schemas.
 - Provider, credential, runtime-host, policy, proposal, runs, memory, and
   session contracts used by server modules.
+- Source Provider, Source Connector, Provider–Connector Mapping, and Source
+  Channel contracts. Public Source contracts expose Provider and
+  Channel configuration; Connector implementation metadata is an Instance
+  Admin/catalog concern.
 - Common primitives and exported value sets.
 - Shared contracts only when the shape is a server/client or internal server
   boundary, not a purely local web view model.

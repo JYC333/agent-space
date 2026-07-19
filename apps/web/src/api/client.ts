@@ -39,27 +39,27 @@ import type {
   PromptPromotionRequest, PromptRenderPreviewRequest, PromptRenderPreviewResult,
   PromptRollbackRequest, PromptVersionCreateRequest,
   Project, ProjectCreate, ProjectUpdate, ProjectWorkspaceLinkCreate, ProjectWorkspaceLinkOut, ProjectSummary,
-  ProjectOperation,
+  ProjectOperation, ProjectResearchInitialIntakeResponse,
   CapabilityDefinition, CapabilityPackDescriptor, WorkflowTemplate, ProjectWorkflowProfile, WorkflowRunDraftRequest, WorkflowRunDraftResponse,
   ProjectPresetDescriptor, ProjectPresetSelection,
-  ProjectResearchArtifactLink, ProjectResearchCheckpoint, ProjectResearchLiteratureMatrixItem, ProjectResearchProfile,
+  ProjectResearchReport, ProjectResearchInitialIntakeInput, ProjectResearchQuestionRefinement, ProjectResearchCheckpoint, ProjectResearchLiteratureMatrixItem, ProjectResearchProfile,
   ProjectResearchScreeningCriteria, ProjectResearchWorkflow,
   AcademicPaper, AcademicPaperAuthor, AcademicPaperCitation, AcademicPaperCreate, AcademicPaperUpdate,
   SkillImportPreviewResponse, SkillPackage, SkillImportApprovalProposalResponse, SkillConvertToCapabilityResponse,
   SkillLibraryIndexResponse, SkillLocalOverlay, SkillLocalOverlayUpsertRequest,
-  SourceConnector, SourceConnection, SourceConnectionCreate, SourceCapturePolicy, SourceScheduleRule, SourceItem, ExtractionJob,
-  SourcePresetListResponse, ArxivPresetPreviewRequest, ArxivPresetPreviewResponse, ArxivPresetCreateRequest,
+  SourceProvider, SourceQueryPreview, SourceCatalog, SourceCatalogProvider, SourceCatalogMapping, SourceConnector, SourceChannel, SourceCapturePolicy, SourceScheduleRule, SourceItem, ExtractionJob,
   ExtractedEvidence, EvidenceLink, ProjectCorpusBackfillResult, ProjectCorpusItem,
   ProjectSourceBinding, ProjectSourceBindingBackfillResult, ProjectSourceItem, ProjectSourceSummary, SourceHealth,
   SourceBackfillPlan, SourceBackfillPreview, SourceBackfillQuotaPolicy, SourceBackfillStrategy,
   CustomSourceActivationResult, CustomSourceCreateDraftRequest, CustomSourceHandlerRun,
+  CustomSourceCredentialDTO,
   CustomSourceHandlerSummary, CustomSourceHandlerVersion, CustomSourceInstanceRunnerSettings,
   CustomSourceInstanceRunnerSettingsUpdate,
   CustomSourceSpacePolicy, CustomSourceSpacePolicyUpdate, CustomSourceTestOutcome,
   SourceRecipeActivationResult, SourceRecipeCreateRequest, SourceRecipeCreateResponse,
   SourceRecipeDryRunResponse, SourceRecipePlanRequest, SourceRecipePlanResponse,
   SourceRecipePipelineBridgeRequest, SourceRecipePipelineBridgeResponse,
-  SourceRecipeVersion, SourceRunSummary,
+  SourceRecipeVersion,
   SourcePostProcessingBacklog, SourcePostProcessingBriefingDaySummary,
   SourcePostProcessingBriefingDetail, SourcePostProcessingDecisionActionResult,
   SourcePostProcessingDecisionReviewStatus, SourcePostProcessingDrainResult,
@@ -95,6 +95,8 @@ import type {
   ReaderCreateEvidenceRequest, ReaderCreatedEvidence,
   ReaderCreateProposalRequest, ReaderCreatedProposal,
   ContentAccessPolicy, ContentAccessUpdate,
+  ResearchEngineSearchResult, ResearchEngineMonitorResult,
+  ResearchWorkspace, ResearchNotebookSection, ResearchNotebookRevision, ResearchChecklistItem, ResearchPaperCard, ResearchReadingList,
 } from '../types/api'
 import type {
   ContentPublication,
@@ -133,22 +135,33 @@ export function setAuth(key: string | null): void {
 }
 
 function formatApiErrorMessage(err: ApiError, fallback: string): string {
-  if (typeof err.detail === 'string') return err.detail
-  if (err.detail && typeof err.detail === 'object') return JSON.stringify(err.detail)
+  const requestId = typeof err.request_id === 'string' && err.request_id.trim()
+    ? ` (request id: ${err.request_id})`
+    : ''
+  const withRequestId = (message: string) => `${message}${requestId}`
+  if (typeof err.detail === 'string') return withRequestId(err.detail)
+  if (err.detail && typeof err.detail === 'object') return withRequestId(JSON.stringify(err.detail))
   const m = err.message
-  if (typeof m === 'string') return m
+  if (typeof m === 'string') return withRequestId(m)
   if (m && typeof m === 'object') {
     const rec = m as Record<string, unknown>
     const code = rec.code
-    if (typeof code === 'string') return code
-    return JSON.stringify(m)
+    if (typeof code === 'string') return withRequestId(code)
+    return withRequestId(JSON.stringify(m))
   }
-  return fallback
+  return withRequestId(fallback)
 }
 
 interface RequestOptions {
   includeSpaceContext?: boolean
   spaceId?: string
+}
+
+export class ApiRequestError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message)
+    this.name = 'ApiRequestError'
+  }
 }
 
 async function request<T = unknown>(method: string, path: string, body?: unknown, options: RequestOptions = {}): Promise<T> {
@@ -179,7 +192,7 @@ async function request<T = unknown>(method: string, path: string, body?: unknown
       const text = await r.text().catch(() => '')
       if (text) msg = text
     }
-    throw new Error(msg)
+    throw new ApiRequestError(msg, r.status)
   }
 
   if (r.status === 204) return null as T
@@ -221,6 +234,7 @@ export const memoryApi = {
     type?: string
     status?: string
     workspace_id?: string
+    include_system_archives?: boolean
     project_id?: string
     limit?: number
     offset?: number
@@ -231,6 +245,7 @@ export const memoryApi = {
     if (params.type !== undefined) q.type = params.type
     if (params.status !== undefined) q.status = params.status
     if (params.workspace_id !== undefined) q.workspace_id = params.workspace_id
+    if (params.include_system_archives !== undefined) q.include_system_archives = String(params.include_system_archives)
     if (params.project_id !== undefined) q.project_id = params.project_id
     if (params.limit !== undefined) q.limit = String(params.limit)
     if (params.offset !== undefined) q.offset = String(params.offset)
@@ -1394,62 +1409,45 @@ export const activityApi = {
 
 // ── Source / Evidence ────────────────────────────────────────────────────
 export const sourcesApi = {
-  connectors: () =>
-    get<SourceConnector[]>('/sources/connectors'),
-
-  connections: (params: { view?: 'subscribed' | 'pending' | 'owned' | 'available' | 'manageable'; status?: string; limit?: number; offset?: number } = {}) => {
-    const q: Record<string, string> = {}
-    if (params.view !== undefined) q.view = params.view
-    if (params.status !== undefined) q.status = params.status
-    if (params.limit !== undefined) q.limit = String(params.limit)
-    if (params.offset !== undefined) q.offset = String(params.offset)
-    return get<Page<SourceConnection>>('/sources/connections?' + new URLSearchParams(q))
+  providers: () => get<SourceProvider[]>('/sources/providers'),
+  sourceCatalog: () => get<SourceCatalog>('/instance/source-catalog'),
+  updateCatalogProvider: (id: string, body: { status?: 'active' | 'disabled' }) =>
+    patch<SourceCatalogProvider>(`/instance/source-catalog/providers/${id}`, body),
+  updateCatalogConnector: (id: string, body: { status?: 'active' | 'disabled' }) =>
+    patch<SourceConnector>(`/instance/source-catalog/connectors/${id}`, body),
+  updateCatalogMapping: (id: string, body: { status?: 'active' | 'disabled'; priority?: number }) =>
+    patch<SourceCatalogMapping>(`/instance/source-catalog/mappings/${id}`, body),
+  channels: (params: { status?: string; provider_key?: string } = {}) => {
+    const q = new URLSearchParams()
+    if (params.status) q.set('status', params.status)
+    if (params.provider_key) q.set('provider_key', params.provider_key)
+    const suffix = q.toString() ? `?${q.toString()}` : ''
+    return get<SourceChannel[]>(`/sources/channels${suffix}`)
   },
-  createConnection: (body: SourceConnectionCreate) =>
-    post<SourceConnection>('/sources/connections', body),
-  sourcePresets: () =>
-    get<SourcePresetListResponse>('/sources/source-presets'),
-  previewArxivSourcePreset: (body: ArxivPresetPreviewRequest) =>
-    post<ArxivPresetPreviewResponse>('/sources/source-presets/arxiv/preview', body),
-  createArxivSourcePreset: (body: ArxivPresetCreateRequest) =>
-    post<SourceConnection>('/sources/source-presets/arxiv', body),
-  getConnection: (id: string) =>
-    get<SourceConnection>(`/sources/connections/${id}`),
-  updateConnection: (id: string, body: Partial<SourceConnectionCreate> & { status?: string }) =>
-    patch<SourceConnection>(`/sources/connections/${id}`, body),
-  recommendConnection: (id: string, body: { target_user_ids?: string[]; all_space?: boolean; message?: string | null }) =>
-    post<{ source_connection_id: string; recommended: number }>(`/sources/connections/${id}/recommendations`, body),
-  updateConnectionSubscription: (id: string, body: {
-    action: 'subscribe' | 'dismiss' | 'mute' | 'unsubscribe'
-    library_enabled?: boolean
-    digest_enabled?: boolean
-  }) =>
-    post<SourceConnection>(`/sources/connections/${id}/subscription`, body),
-  scanConnection: (id: string) =>
-    post<ExtractionJob>(`/sources/connections/${id}/scan`),
-  sourceRuns: (connectionId: string, params: { limit?: number; offset?: number } = {}) => {
-    const q: Record<string, string> = {}
-    if (params.limit !== undefined) q.limit = String(params.limit)
-    if (params.offset !== undefined) q.offset = String(params.offset)
-    return get<Page<SourceRunSummary>>(`/sources/connections/${connectionId}/source-runs?` + new URLSearchParams(q))
-  },
-  previewBackfill: (connectionId: string, body: { strategy: Partial<SourceBackfillStrategy>; quota_policy?: Partial<SourceBackfillQuotaPolicy> }) =>
-    post<SourceBackfillPreview>(`/sources/${connectionId}/backfill/plans/preview`, body),
-  createBackfillPlan: (connectionId: string, body: { idempotency_key: string; strategy: Partial<SourceBackfillStrategy>; quota_policy?: Partial<SourceBackfillQuotaPolicy>; project_source_binding_id?: string; project_operation_id?: string }) =>
-    post<SourceBackfillPlan>(`/sources/${connectionId}/backfill/plans`, body),
-  backfillPlans: (connectionId: string) =>
-    get<SourceBackfillPlan[]>(`/sources/${connectionId}/backfill/plans`),
-  backfillPlan: (connectionId: string, planId: string) =>
-    get<SourceBackfillPlan>(`/sources/${connectionId}/backfill/plans/${planId}`),
-  proposeBackfillStart: (connectionId: string, planId: string) =>
-    post<{ proposal: Proposal; auto_applied: boolean }>(`/sources/${connectionId}/backfill/plans/${planId}/propose-start`, {}),
-  pauseBackfill: (connectionId: string, planId: string) =>
-    post<SourceBackfillPlan>(`/sources/${connectionId}/backfill/plans/${planId}/pause`, {}),
-  resumeBackfill: (connectionId: string, planId: string) =>
-    post<SourceBackfillPlan>(`/sources/${connectionId}/backfill/plans/${planId}/resume`, {}),
-
+  customSourceCredentials: () => get<CustomSourceCredentialDTO[]>('/sources/custom-source-credentials'),
+  getChannel: (id: string) => get<SourceChannel>(`/sources/channels/${id}`),
+  createChannel: (body: {
+    provider_key: string
+    source_name?: string
+    name?: string
+    query: Record<string, unknown>
+    endpoint_url?: string
+    fetch_frequency?: 'manual' | 'hourly' | 'daily' | 'weekly'
+    schedule_rule?: Record<string, unknown>
+    capture_policy?: SourceCapturePolicy
+  }) => post<SourceChannel>('/sources/channels', body),
+  previewQuery: (body: { provider_key: string; query: Record<string, unknown>; source_channel_id?: string }) =>
+    post<SourceQueryPreview>('/sources/query-preview', body),
+  updateChannel: (id: string, body: Partial<Pick<SourceChannel, 'source_name' | 'name' | 'status' | 'fetch_frequency' | 'schedule_rule'>> & { query?: Record<string, unknown>; endpoint_url?: string | null }) =>
+    patch<SourceChannel>(`/sources/channels/${id}`, body),
+  scanChannel: (id: string) => post<ExtractionJob>(`/sources/channels/${id}/scan`),
+  previewChannelBackfill: (channelId: string, body: { strategy: Partial<SourceBackfillStrategy>; quota_policy?: Partial<SourceBackfillQuotaPolicy> }) =>
+    post<SourceBackfillPreview>(`/sources/channels/${channelId}/backfill/plans/preview`, body),
+  createChannelBackfillPlan: (channelId: string, body: { idempotency_key: string; strategy: Partial<SourceBackfillStrategy>; quota_policy?: Partial<SourceBackfillQuotaPolicy>; project_source_binding_id?: string; project_operation_id?: string }) =>
+    post<SourceBackfillPlan>(`/sources/channels/${channelId}/backfill/plans`, body),
+  channelBackfillPlans: (channelId: string) => get<SourceBackfillPlan[]>(`/sources/channels/${channelId}/backfill/plans`),
   createCustomSourceDraft: (body: CustomSourceCreateDraftRequest) =>
-    post<SourceConnection>('/sources/custom-sources/drafts', body),
+    post<SourceChannel>('/sources/custom-sources/drafts', body),
   customSourceSummary: (connectionId: string) =>
     get<CustomSourceHandlerSummary>(`/sources/connections/${connectionId}/custom-source`),
   customSourceVersions: (connectionId: string, params: { limit?: number; offset?: number } = {}) => {
@@ -1577,13 +1575,13 @@ export const sourcesApi = {
     return get<Page<EvidenceLink>>('/sources/evidence-links?' + new URLSearchParams(q))
   },
 
-  projectSourceBindings: (params: { project_id: string; source_connection_id?: string }) => {
+  projectSourceBindings: (params: { project_id: string; source_channel_id?: string }) => {
     const q: Record<string, string> = {}
-    if (params.source_connection_id !== undefined) q.source_connection_id = params.source_connection_id
+    if (params.source_channel_id !== undefined) q.source_channel_id = params.source_channel_id
     return get<ProjectSourceBinding[]>(`/projects/${params.project_id}/sources/bindings?` + new URLSearchParams(q))
   },
   createProjectSourceBinding: (body: {
-    source_connection_id: string
+    source_channel_id: string
     project_id: string
     backfill_history?: boolean
     binding_key?: string
@@ -1610,7 +1608,7 @@ export const sourcesApi = {
     post<ProjectSourceBindingBackfillResult>(`/projects/${projectId}/sources/bindings/${bindingId}/backfill`),
   projectItems: (params: {
     project_id: string
-    source_connection_id?: string
+    source_channel_id?: string
     item_type?: string
     source_domain?: string
     matched_date?: string
@@ -1621,7 +1619,7 @@ export const sourcesApi = {
     offset?: number
   }) => {
     const q: Record<string, string> = { project_id: params.project_id }
-    if (params.source_connection_id !== undefined) q.source_connection_id = params.source_connection_id
+    if (params.source_channel_id !== undefined) q.source_channel_id = params.source_channel_id
     if (params.item_type !== undefined) q.item_type = params.item_type
     if (params.source_domain !== undefined) q.source_domain = params.source_domain
     if (params.matched_date !== undefined) q.matched_date = params.matched_date
@@ -1636,34 +1634,34 @@ export const sourcesApi = {
     get<ProjectSourceSummary>(`/sources/project-source-summary?project_id=${encodeURIComponent(projectId)}`),
   projectSourceHealth: (projectId: string) =>
     get<SourceHealth[]>(`/projects/${encodeURIComponent(projectId)}/sources/health`),
-  sourceHealth: (params: { connection_id?: string } = {}) => {
+  sourceHealth: (params: { channel_id?: string } = {}) => {
     const q: Record<string, string> = {}
-    if (params.connection_id !== undefined) q.connection_id = params.connection_id
+    if (params.channel_id !== undefined) q.channel_id = params.channel_id
     const suffix = new URLSearchParams(q).toString()
     return get<SourceHealth[]>(`/sources/source-health${suffix ? `?${suffix}` : ''}`)
   },
   summarize: (body: SummaryRunRequest) =>
     post<SummaryRunOut>('/sources/post-processing/run-once', body),
-  postProcessingRules: (connectionId: string) =>
-    get<SourcePostProcessingRule[]>(`/sources/connections/${connectionId}/post-processing/rules`),
-  createPostProcessingRule: (connectionId: string, body: SourcePostProcessingRuleCreate) =>
-    post<SourcePostProcessingRule>(`/sources/connections/${connectionId}/post-processing/rules`, body),
-  updatePostProcessingRule: (connectionId: string, ruleId: string, body: SourcePostProcessingRuleUpdate) =>
-    patch<SourcePostProcessingRule>(`/sources/connections/${connectionId}/post-processing/rules/${ruleId}`, body),
-  runPostProcessingRule: (connectionId: string, ruleId: string) =>
-    post<SourcePostProcessingRun>(`/sources/connections/${connectionId}/post-processing/rules/${ruleId}/run`),
-  drainPostProcessingRule: (connectionId: string, ruleId: string) =>
-    post<SourcePostProcessingDrainResult>(`/sources/connections/${connectionId}/post-processing/rules/${ruleId}/drain`),
-  postProcessingRuns: (connectionId: string, params: { limit?: number; offset?: number } = {}) => {
+  postProcessingRules: (channelId: string) =>
+    get<SourcePostProcessingRule[]>(`/sources/channels/${channelId}/post-processing/rules`),
+  createPostProcessingRule: (channelId: string, body: SourcePostProcessingRuleCreate) =>
+    post<SourcePostProcessingRule>(`/sources/channels/${channelId}/post-processing/rules`, body),
+  updatePostProcessingRule: (channelId: string, ruleId: string, body: SourcePostProcessingRuleUpdate) =>
+    patch<SourcePostProcessingRule>(`/sources/channels/${channelId}/post-processing/rules/${ruleId}`, body),
+  runPostProcessingRule: (channelId: string, ruleId: string) =>
+    post<SourcePostProcessingRun>(`/sources/channels/${channelId}/post-processing/rules/${ruleId}/run`),
+  drainPostProcessingRule: (channelId: string, ruleId: string) =>
+    post<SourcePostProcessingDrainResult>(`/sources/channels/${channelId}/post-processing/rules/${ruleId}/drain`),
+  postProcessingRuns: (channelId: string, params: { limit?: number; offset?: number } = {}) => {
     const q: Record<string, string> = {}
     if (params.limit !== undefined) q.limit = String(params.limit)
     if (params.offset !== undefined) q.offset = String(params.offset)
-    return get<Page<SourcePostProcessingRun>>(`/sources/connections/${connectionId}/post-processing/runs?` + new URLSearchParams(q))
+    return get<Page<SourcePostProcessingRun>>(`/sources/channels/${channelId}/post-processing/runs?` + new URLSearchParams(q))
   },
-  postProcessingBacklog: (connectionId: string) =>
-    get<SourcePostProcessingBacklog>(`/sources/connections/${connectionId}/post-processing/backlog`),
+  postProcessingBacklog: (channelId: string) =>
+    get<SourcePostProcessingBacklog>(`/sources/channels/${channelId}/post-processing/backlog`),
   postProcessingDecisions: (params: {
-    connection_id?: string
+    channel_id?: string
     project_id?: string
     rule_id?: string
     relevance?: SourcePostProcessingItemRelevance
@@ -1672,7 +1670,7 @@ export const sourcesApi = {
     offset?: number
   } = {}) => {
     const q: Record<string, string> = {}
-    if (params.connection_id !== undefined) q.connection_id = params.connection_id
+    if (params.channel_id !== undefined) q.channel_id = params.channel_id
     if (params.project_id !== undefined) q.project_id = params.project_id
     if (params.rule_id !== undefined) q.rule_id = params.rule_id
     if (params.relevance !== undefined) q.relevance = params.relevance
@@ -1681,7 +1679,7 @@ export const sourcesApi = {
     if (params.offset !== undefined) q.offset = String(params.offset)
     return get<Page<SourcePostProcessingItemDecision>>('/sources/post-processing/decisions?' + new URLSearchParams(q))
   },
-  postProcessingConnectionDecisions: (connectionId: string, params: {
+  postProcessingChannelDecisions: (channelId: string, params: {
     rule_id?: string
     relevance?: SourcePostProcessingItemRelevance
     review_status?: SourcePostProcessingDecisionReviewStatus
@@ -1694,65 +1692,65 @@ export const sourcesApi = {
     if (params.review_status !== undefined) q.review_status = params.review_status
     if (params.limit !== undefined) q.limit = String(params.limit)
     if (params.offset !== undefined) q.offset = String(params.offset)
-    return get<Page<SourcePostProcessingItemDecision>>(`/sources/connections/${connectionId}/post-processing/decisions?` + new URLSearchParams(q))
+    return get<Page<SourcePostProcessingItemDecision>>(`/sources/channels/${channelId}/post-processing/decisions?` + new URLSearchParams(q))
   },
   postProcessingDecisionAction: (decisionId: string, action: string) =>
     post<SourcePostProcessingDecisionActionResult>(`/sources/post-processing/decisions/${decisionId}/actions`, { action }),
   briefings: (params: {
-    connection_id?: string
+    channel_id?: string
     project_id?: string
     limit?: number
     offset?: number
   } = {}) => {
     const q: Record<string, string> = {}
-    if (params.connection_id !== undefined) q.connection_id = params.connection_id
+    if (params.channel_id !== undefined) q.channel_id = params.channel_id
     if (params.project_id !== undefined) q.project_id = params.project_id
     if (params.limit !== undefined) q.limit = String(params.limit)
     if (params.offset !== undefined) q.offset = String(params.offset)
     return get<Page<SourcePostProcessingBriefingDaySummary>>('/sources/briefings?' + new URLSearchParams(q))
   },
-  briefing: (connectionId: string, date: string) =>
-    get<SourcePostProcessingBriefingDetail>(`/sources/briefings/${connectionId}/${date}`),
+  briefing: (channelId: string, date: string) =>
+    get<SourcePostProcessingBriefingDetail>(`/sources/briefings/${channelId}/${date}`),
 }
 
-// ── Source Reader ─────────────────────────────────────────────────────────
-export const sourceReaderApi = {
+// ── Reader ────────────────────────────────────────────────────────────────
+export const readerApi = {
   getDocument: (documentType: string, documentId: string) =>
-    get<ReaderDocumentPayload>(`/sources/reader/documents/${documentType}/${documentId}`),
+    get<ReaderDocumentPayload>(`/reader/documents/${documentType}/${documentId}`),
 
   listAnnotations: (documentType: string, documentId: string) =>
-    get<ReaderAnnotationsResponse>(`/sources/reader/documents/${documentType}/${documentId}/annotations`),
+    get<ReaderAnnotationsResponse>(`/reader/documents/${documentType}/${documentId}/annotations`),
 
   createAnnotation: (body: ReaderAnnotationCreate) =>
-    post<ReaderAnnotation>('/sources/reader/annotations', body),
+    post<ReaderAnnotation>('/reader/annotations', body),
 
   updateAnnotation: (annotationId: string, body: ReaderAnnotationUpdate) =>
-    patch<ReaderAnnotation>(`/sources/reader/annotations/${annotationId}`, body),
+    patch<ReaderAnnotation>(`/reader/annotations/${annotationId}`, body),
 
   deleteAnnotation: (annotationId: string) =>
-    del(`/sources/reader/annotations/${annotationId}`),
+    del(`/reader/annotations/${annotationId}`),
 
   listThreads: (annotationId: string) =>
-    get<{ items: ReaderCommentThread[] }>(`/sources/reader/annotations/${annotationId}/threads`),
+    get<{ items: ReaderCommentThread[] }>(`/reader/annotations/${annotationId}/threads`),
 
   createComment: (annotationId: string, body: ReaderCommentCreate) =>
-    post<{ thread: ReaderCommentThread }>(`/sources/reader/annotations/${annotationId}/comments`, body),
+    post<{ thread: ReaderCommentThread }>(`/reader/annotations/${annotationId}/comments`, body),
 
   updateComment: (commentId: string, body: ReaderCommentUpdate) =>
-    patch<ReaderComment>(`/sources/reader/comments/${commentId}`, body),
+    patch<ReaderComment>(`/reader/comments/${commentId}`, body),
 
   updateThread: (threadId: string, body: ReaderThreadUpdate) =>
-    patch<ReaderCommentThread>(`/sources/reader/comment-threads/${threadId}`, body),
+    patch<ReaderCommentThread>(`/reader/comment-threads/${threadId}`, body),
 
   createEvidence: (annotationId: string, body: ReaderCreateEvidenceRequest) =>
-    post<ReaderCreatedEvidence>(`/sources/reader/annotations/${annotationId}/evidence`, body),
+    post<ReaderCreatedEvidence>(`/reader/annotations/${annotationId}/evidence`, body),
 
   createProposal: (annotationId: string, body: ReaderCreateProposalRequest) =>
-    post<ReaderCreatedProposal>(`/sources/reader/annotations/${annotationId}/proposals`, body),
+    post<ReaderCreatedProposal>(`/reader/annotations/${annotationId}/proposals`, body),
 
   listByProject: (projectId: string, limit?: number) =>
     get<{ items: ReaderAnnotation[] }>(
-      `/sources/reader/annotations?project_id=${encodeURIComponent(projectId)}${limit != null ? `&limit=${limit}` : ''}`,
+      `/reader/annotations?project_id=${encodeURIComponent(projectId)}${limit != null ? `&limit=${limit}` : ''}`,
     ),
 }
 
@@ -1815,8 +1813,8 @@ export const projectsApi = {
   createOperation: (id: string, body: { kind: ProjectOperation['kind']; title: string; intent_text?: string; steps?: Array<{ title: string; detail?: Record<string, unknown> }> }) =>
     post<ProjectOperation>(`/projects/${id}/operations`, body),
   cancelOperation: (id: string, operationId: string) => post<ProjectOperation>(`/projects/${id}/operations/${operationId}/cancel`, {}),
-  sourceBindings: (id: string, sourceConnectionId?: string) => {
-    const q = sourceConnectionId ? `?source_connection_id=${encodeURIComponent(sourceConnectionId)}` : ''
+  sourceBindings: (id: string, sourceChannelId?: string) => {
+    const q = sourceChannelId ? `?source_channel_id=${encodeURIComponent(sourceChannelId)}` : ''
     return get<ProjectSourceBinding[]>(`/projects/${id}/sources/bindings${q}`)
   },
   sourceHealth: (id: string) => get<SourceHealth[]>(`/projects/${id}/sources/health`),
@@ -1824,7 +1822,7 @@ export const projectsApi = {
     post<ProjectSourceBinding>(`/projects/${id}/sources/bindings`, body),
   proposeSourceBinding: (id: string, body: Record<string, unknown>) =>
     post<{ proposal: Proposal; auto_applied: boolean }>(`/projects/${id}/sources/propose-bind`, body),
-  proposeSourceSetup: (id:string,body:Record<string,unknown>) => post<{operation:ProjectOperation;connection_draft:SourceConnection;source_proposal:Proposal;binding_proposal:Proposal}>(`/projects/${id}/sources/propose-setup`,body),
+  proposeSourceSetup: (id:string,body:Record<string,unknown>) => post<{operation:ProjectOperation;channel_draft:SourceChannel;source_proposal:Proposal;binding_proposal:Proposal}>(`/projects/${id}/sources/propose-setup`,body),
   updateSourceBinding: (id: string, bindingId: string, body: Record<string, unknown>) =>
     patch<ProjectSourceBinding>(`/projects/${id}/sources/bindings/${bindingId}`, body),
   deleteSourceBinding: (id: string, bindingId: string) =>
@@ -1884,6 +1882,43 @@ export const projectPresetsApi = {
 }
 
 export const projectResearchApi = {
+  workspace: (projectId: string) => get<ResearchWorkspace>(`/projects/${encodeURIComponent(projectId)}/research/workspace`),
+  initializeWorkspace: (projectId: string) => post<ResearchWorkspace>(`/projects/${encodeURIComponent(projectId)}/research/workspace`, {}),
+  readingList: (projectId: string, params: { triage_status?: string; read_status?: string; q?: string } = {}) => get<ResearchReadingList>(`/projects/${encodeURIComponent(projectId)}/research/reading-list?${new URLSearchParams(params)}`),
+  updateNotebookSection: (projectId: string, sectionKey: string, body: { base_version: number; content_json: Record<string, unknown> }) => put<ResearchNotebookSection>(`/projects/${encodeURIComponent(projectId)}/research/notebook/sections/${encodeURIComponent(sectionKey)}`, body),
+  notebookRevisions: (projectId: string, sectionKey: string, limit = 20) => get<ResearchNotebookRevision[]>(`/projects/${encodeURIComponent(projectId)}/research/notebook/sections/${encodeURIComponent(sectionKey)}/revisions?limit=${limit}`),
+  rollbackNotebookSection: (projectId: string, sectionKey: string, toVersion: number) => post<ResearchNotebookSection>(`/projects/${encodeURIComponent(projectId)}/research/notebook/sections/${encodeURIComponent(sectionKey)}/rollback`, { to_version: toVersion }),
+  updatePaperCard: (projectId: string, sourceItemId: string, body: { why_md: string; how_md: string; what_md: string }) => put<ResearchPaperCard>(`/projects/${encodeURIComponent(projectId)}/research/reading-list/${encodeURIComponent(sourceItemId)}/card`, body),
+  createChecklistItem: (projectId: string, text: string) => post<ResearchChecklistItem>(`/projects/${encodeURIComponent(projectId)}/research/checklist`, { text }),
+  updateChecklistItem: (projectId: string, itemId: string, body: Partial<Pick<ResearchChecklistItem, 'text' | 'status' | 'sort_order'>>) => patch<ResearchChecklistItem>(`/projects/${encodeURIComponent(projectId)}/research/checklist/${encodeURIComponent(itemId)}`, body),
+  deleteChecklistItem: (projectId: string, itemId: string) => del<{ id: string }>(`/projects/${encodeURIComponent(projectId)}/research/checklist/${encodeURIComponent(itemId)}`),
+  askAi: (projectId: string, body: { prompt: string; section_key: string; source_item_ids?: string[]; execution: { model_provider_id: string; model_name?: string } }) => post<{ run_id: string; job_id: string; status: string; daily_limit: number; daily_used: number }>(`/projects/${encodeURIComponent(projectId)}/research/ask-ai`, body),
+  generateReportSnapshot: (projectId: string) => post<ProjectOperation>(`/projects/${encodeURIComponent(projectId)}/research/reports`, {}),
+  refineQuestion: (projectId: string, body: {
+    research_question: string
+    history?: Array<{ role: 'user' | 'assistant'; content: string }>
+    execution: { model_provider_id?: string; model_name?: string }
+  }) => post<ProjectResearchQuestionRefinement>(`/projects/${encodeURIComponent(projectId)}/research/question/refine`, body),
+  saveInitialIntakeDraft: (projectId: string, body: ProjectResearchInitialIntakeInput) =>
+    put<ProjectResearchWorkflow>(`/projects/${encodeURIComponent(projectId)}/research/initial-intake`, body),
+  startInitialIntake: (projectId: string, body: {
+    research_question: string
+    source_channel_ids: string[]
+    history_mode?: 'bounded_range' | 'all_available'
+    from?: string | null
+    to?: string | null
+    max_items?: number
+    monitoring_field?: 'submittedDate' | 'lastUpdatedDate'
+    report_depth?: 'quick' | 'full'
+    question_refine_skipped?: boolean
+    schedule?: 'daily'
+    execution?: {
+      model_provider_id?: string
+      model_name?: string
+    }
+    idempotency_key?: string
+  }) =>
+    post<ProjectResearchInitialIntakeResponse>(`/projects/${encodeURIComponent(projectId)}/research/initial-intake/start`, body),
   profile: (projectId: string) =>
     get<ProjectResearchProfile>(`/projects/${encodeURIComponent(projectId)}/research/profile`),
   upsertProfile: (projectId: string, body: Partial<Pick<
@@ -1903,12 +1938,72 @@ export const projectResearchApi = {
     post<ProjectResearchProfile>(`/projects/${encodeURIComponent(projectId)}/research/profile/approve`, {}),
   workflows: (projectId: string) =>
     get<ProjectResearchWorkflow[]>(`/projects/${encodeURIComponent(projectId)}/research/workflow`),
+  scanSummaries: (projectId: string, limit = 30) =>
+    get<import('../types/api').ProjectResearchScanSummary[]>(
+      `/projects/${encodeURIComponent(projectId)}/research/scan-summaries?limit=${limit}`,
+    ),
   startWorkflow: (projectId: string, body: { workflow_type: string; mode?: string }) =>
     post<ProjectResearchWorkflow>(`/projects/${encodeURIComponent(projectId)}/research/workflow/start`, body),
   runStage: (projectId: string, workflowId: string, stageKey: string, body: { run_id?: string } = {}) =>
     post<ProjectResearchWorkflow>(
       `/projects/${encodeURIComponent(projectId)}/research/workflow/${encodeURIComponent(workflowId)}/stages/${encodeURIComponent(stageKey)}/run`,
       body,
+    ),
+  triggerIncremental: (projectId: string, workflowId: string, body: { source_item_ids?: string[]; idempotency_key?: string } = {}) =>
+    post<Record<string, unknown>>(
+      `/projects/${encodeURIComponent(projectId)}/research/workflow/${encodeURIComponent(workflowId)}/trigger`,
+      { run_kind: 'incremental', ...body },
+    ),
+  historyBackfill: (projectId: string, workflowId: string, body: { from: string; to?: string; max_items?: number; idempotency_key?: string }) =>
+    post<Record<string, unknown>>(
+      `/projects/${encodeURIComponent(projectId)}/research/workflow/${encodeURIComponent(workflowId)}/history-backfill`,
+      body,
+    ),
+  updateInitialItemLimit: (projectId: string, max_items: number) =>
+    put<ProjectResearchWorkflow>(
+      `/projects/${encodeURIComponent(projectId)}/research/item-limit`,
+      { max_items },
+    ),
+  applyQuestionForward: (projectId: string) =>
+    post<ProjectResearchWorkflow>(
+      `/projects/${encodeURIComponent(projectId)}/research/question/apply-forward`,
+      {},
+    ),
+  questionChangeImpact: (projectId: string) =>
+    get<import('../types/api').ProjectResearchQuestionImpact>(
+      `/projects/${encodeURIComponent(projectId)}/research/question/impact`,
+    ),
+  resolveQuestionChange: (projectId: string, strategy: import('../types/api').ProjectResearchQuestionResolutionStrategy) =>
+    post<{ workflow: import('../types/api').ProjectResearchWorkflow; operation?: ProjectOperation } | import('../types/api').ProjectResearchWorkflow>(
+      `/projects/${encodeURIComponent(projectId)}/research/question/resolve`,
+      { strategy },
+    ),
+  retryOperation: (projectId: string, operationId: string) =>
+    post<Record<string, unknown>>(
+      `/projects/${encodeURIComponent(projectId)}/research/operations/${encodeURIComponent(operationId)}/retry`,
+      {},
+    ),
+  reconcileOperation: (projectId: string, operationId: string) =>
+    post<ProjectOperation & { reconcile_diagnostic?: {
+      operation_id: string
+      bound_run_id: string | null
+      bound_run_status: string | null
+      before_status: string
+      after_status: string
+      after_stage: string
+    } }>(
+      `/projects/${encodeURIComponent(projectId)}/research/operations/${encodeURIComponent(operationId)}/reconcile`,
+      {},
+    ),
+  updateItemLimit: (projectId: string, operationId: string, max_items: number) =>
+    put<Record<string, unknown>>(
+      `/projects/${encodeURIComponent(projectId)}/research/operations/${encodeURIComponent(operationId)}/item-limit`,
+      { max_items },
+    ),
+  rescanBackfill: (projectId: string, operationId: string) =>
+    post<Record<string, unknown>>(
+      `/projects/${encodeURIComponent(projectId)}/research/operations/${encodeURIComponent(operationId)}/rescan`,
+      {},
     ),
   checkpoints: (projectId: string, workflowId: string) =>
     get<ProjectResearchCheckpoint[]>(
@@ -1930,17 +2025,19 @@ export const projectResearchApi = {
     get<ProjectResearchLiteratureMatrixItem[]>(`/projects/${encodeURIComponent(projectId)}/research/literature-matrix`),
   rebuildLiteratureMatrix: (projectId: string) =>
     post<ProjectResearchLiteratureMatrixItem[]>(`/projects/${encodeURIComponent(projectId)}/research/literature-matrix/rebuild`, {}),
-  synthesis: (projectId: string) =>
-    get<ProjectResearchArtifactLink[]>(`/projects/${encodeURIComponent(projectId)}/research/synthesis`),
-  artifacts: (projectId: string, params: { workflow_id?: string; artifact_type?: string } = {}) => {
-    const q: Record<string, string> = {}
-    if (params.workflow_id !== undefined) q.workflow_id = params.workflow_id
-    if (params.artifact_type !== undefined) q.artifact_type = params.artifact_type
-    const suffix = Object.keys(q).length ? '?' + new URLSearchParams(q) : ''
-    return get<ProjectResearchArtifactLink[]>(`/projects/${encodeURIComponent(projectId)}/research/artifacts${suffix}`)
-  },
-  runIntegrity: (projectId: string, body: { workflow_id: string; stage_key?: string }) =>
-    post<ProjectResearchCheckpoint>(`/projects/${encodeURIComponent(projectId)}/research/integrity/run`, body),
+  reports: (projectId: string) =>
+    get<ProjectResearchReport[]>(`/projects/${encodeURIComponent(projectId)}/research/reports`),
+  report: (projectId: string, reportId: string) =>
+    get<ProjectResearchReport>(`/projects/${encodeURIComponent(projectId)}/research/reports/${encodeURIComponent(reportId)}`),
+  runReportIntegrity: (projectId: string, reportId: string) =>
+    post<Record<string, unknown>>(`/projects/${encodeURIComponent(projectId)}/research/reports/${encodeURIComponent(reportId)}/integrity`, {}),
+}
+
+export const researchEngineApi = {
+  search: (body: { question: string; project_id?: string; scope?: Record<string, unknown>; execution?: { model_provider_id?: string; model_name?: string }; credentials?: Record<string, string> }) =>
+    post<ResearchEngineSearchResult>('/research/engine/search', body),
+  createMonitors: (body: { strategy_id: string; project_id: string; provider_keys: string[]; credentials?: Record<string, string> }) =>
+    post<ResearchEngineMonitorResult>('/research/engine/monitors', body),
 }
 
 export const academicApi = {

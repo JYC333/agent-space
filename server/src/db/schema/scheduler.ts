@@ -15,6 +15,7 @@ export const schedulerTasks = pgTable("scheduler_tasks", {
 	nextRunAt: timestamp("next_run_at", { withTimezone: true, mode: 'string' }),
 	lastRunAt: timestamp("last_run_at", { withTimezone: true, mode: 'string' }),
 	stateJson: jsonb("state_json").default({}).notNull(),
+	metadataJson: jsonb("metadata_json").default({}).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).notNull(),
 }, (table): PgTableExtraConfigValue[] => [
@@ -34,5 +35,6 @@ export const schedulerTasks = pgTable("scheduler_tasks", {
 	unique("uq_scheduler_tasks_type_key").on(table.taskKey, table.taskType),
 	check("ck_scheduler_tasks_scope_type", sql`(scope_type)::text = ANY (ARRAY[('instance'::character varying)::text, ('space'::character varying)::text, ('user'::character varying)::text, ('space_user'::character varying)::text])`),
 	check("ck_scheduler_tasks_state_json_object", sql`jsonb_typeof(state_json) = 'object'::text`),
+	check("ck_scheduler_tasks_metadata_json_object", sql`jsonb_typeof(metadata_json) = 'object'::text`),
 	check("ck_scheduler_tasks_status", sql`(status)::text = ANY (ARRAY[('active'::character varying)::text, ('paused'::character varying)::text, ('archived'::character varying)::text])`),
 ]);

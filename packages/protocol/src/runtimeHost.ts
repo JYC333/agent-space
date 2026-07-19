@@ -36,6 +36,15 @@ export const RuntimeHostToolBindingSchema = z
   .passthrough();
 export type RuntimeHostToolBinding = z.infer<typeof RuntimeHostToolBindingSchema>;
 
+export const RuntimeHostStructuredOutputSchema = z.object({
+  type: z.literal("json_schema"),
+  schema_id: z.string().trim().min(1),
+  schema: z.record(z.unknown()),
+  strict: z.boolean().default(true),
+  stage: z.string().trim().min(1).optional(),
+});
+export type RuntimeHostStructuredOutput = z.infer<typeof RuntimeHostStructuredOutputSchema>;
+
 export const RuntimeHostExecuteRequestSchema = z.object({
   run_id: IdSchema,
   space_id: IdSchema,
@@ -57,6 +66,7 @@ export const RuntimeHostExecuteRequestSchema = z.object({
   capability_id: z.string().nullish(),
   context_snapshot_id: IdSchema.nullish(),
   max_tokens: z.number().int().positive().optional(),
+  output_format: RuntimeHostStructuredOutputSchema.nullish(),
   tool_mode: RuntimeHostToolModeSchema.default("disabled"),
   tool_bindings: z.array(RuntimeHostToolBindingSchema).default([]),
   tools: z.array(CanonicalToolDefinitionSchema).optional(),

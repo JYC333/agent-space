@@ -46,6 +46,7 @@ export interface RunContractSnapshotInput {
   acceptance_criteria_json?: unknown;
   definition_of_done?: string | null;
   required_outputs_json?: unknown;
+  structured_output_json?: unknown;
   risk_level?: string | null;
   max_runs?: number | null;
   max_attempts?: number | null;
@@ -54,7 +55,10 @@ export interface RunContractSnapshotInput {
   budget_precedence?: number | null;
   budget_sources?: RunBudgetSource[];
   workflow_input_json?: unknown;
+  upstream_inputs_json?: unknown;
   route_hints_json?: unknown;
+  /** Server-owned policy facts captured by trusted internal run creators. */
+  policy_context_json?: unknown;
 }
 
 export interface RunContractSnapshot {
@@ -65,6 +69,7 @@ export interface RunContractSnapshot {
   acceptance_criteria_json: unknown;
   definition_of_done: string | null;
   required_outputs_json: unknown;
+  structured_output_json: unknown;
   risk_level: string | null;
   max_runs: number | null;
   max_attempts: number | null;
@@ -74,7 +79,9 @@ export interface RunContractSnapshot {
   effective_budget: EffectiveRunBudget;
   budget_resolution: RunBudgetResolution;
   workflow_input_json: unknown;
+  upstream_inputs_json: unknown;
   route_hints_json: unknown;
+  policy_context_json: unknown;
   created_at: string;
 }
 
@@ -96,6 +103,7 @@ export function createRunContractSnapshot(
     acceptance_criteria_json: cloneJson(input?.acceptance_criteria_json),
     definition_of_done: input?.definition_of_done ?? null,
     required_outputs_json: cloneJson(input?.required_outputs_json),
+    structured_output_json: cloneJson(input?.structured_output_json),
     risk_level: input?.risk_level ?? null,
     max_runs: budget.effective.max_runs,
     max_attempts: budget.effective.max_attempts,
@@ -105,7 +113,9 @@ export function createRunContractSnapshot(
     effective_budget: budget.effective,
     budget_resolution: budget.resolution,
     workflow_input_json: cloneJson(input?.workflow_input_json),
+    upstream_inputs_json: cloneJson(input?.upstream_inputs_json),
     route_hints_json: cloneJson(input?.route_hints_json),
+    policy_context_json: cloneJson(input?.policy_context_json),
     created_at: createdAt,
   };
 }

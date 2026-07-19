@@ -10,10 +10,12 @@ import { PgVerificationEngine } from "./verification";
 import type { JobEnvelopeForHandler, JobHandlerRegistry } from "../jobs/handlerRegistry";
 import type { JobHandlerResult } from "../jobs/handlerRegistry";
 import { PgJobQueueRepository } from "../jobs/repository";
+import type { RuntimeHostLogger } from "../runtimeHost";
 
 export function registerAgentRunHandler(
   registry: JobHandlerRegistry,
   config: ServerConfig,
+  runtimeHostLogger?: RuntimeHostLogger,
 ): void {
   if (!config.databaseUrl) return;
 
@@ -27,14 +29,16 @@ export function registerAgentRunHandler(
     codePatchCollector: PgCodePatchCollector.fromConfig(config),
     verificationEngine: PgVerificationEngine.fromConfig(config),
     processRegistry: sharedCliProcessRegistry,
+    managedApi: { runtimeHostLogger },
   });
 
-  registry.register("agent_run", async (job) => handleAgentRun(job, orchestration));
+  registry.register("agent_run", async (job) => handleAgentRun(job, orchestration, config));
 }
 
 async function handleAgentRun(
   job: JobEnvelopeForHandler,
   orchestration: RunOrchestrationService,
+  config: ServerConfig,
 ): Promise<JobHandlerResult> {
   const runId = stringValue(job.payload.run_id);
   if (!runId) {
@@ -46,13 +50,30 @@ async function handleAgentRun(
   if (!job.user_id) {
     throw new Error("agent_run job requires user_id");
   }
-  return orchestration.executeRun({
+  const result = await orchestration.executeRun({
     run_id: runId,
     space_id: job.space_id,
     worker_id: job.worker_id,
     job_id: job.job_id,
     command_source: "job",
   });
+  // Research runs use the normal Run/Materialization authority. This hook is
+  // only a latency optimization: the reconciler observes the committed run
+  // and advances the owning Project Research operation.
+  if (result.status === "succeeded" || result.status === "failed" || result.status === "degraded" || result.status === "cancelled") {
+    try {
+      await new PgJobQueueRepository(getDbPool(config.databaseUrl!)).enqueue({
+        job_type: "project_research_reconcile",
+        space_id: job.space_id,
+        user_id: job.user_id,
+        payload: { run_id: runId, reason: "agent_run_terminal" },
+      });
+    } catch {
+      // Preserve the completed Run if the latency nudge cannot be queued;
+      // the periodic project research reconciler remains the recovery path.
+    }
+  }
+  return result;
 }
 
 export async function enqueueAgentRunJob(

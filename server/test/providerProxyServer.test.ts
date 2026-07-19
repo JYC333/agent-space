@@ -88,6 +88,52 @@ describe("provider proxy server", () => {
     expect(upstream.requests[0].headers.authorization).toBe("Bearer provider-secret");
     expect(upstream.requests[0].headers["x-api-key"]).toBe("provider-secret");
     expect(upstream.requests[0].headers["anthropic-version"]).toBe("2023-06-01");
+    expect(upstream.requests[0].headers["accept-encoding"]).toBe("identity");
+  });
+
+  it("does not forward upstream encoding metadata after fetch decodes the body", async () => {
+    const leases = new ProviderProxyLeaseRegistry();
+    const proxy = await startProviderProxyServer(config(), {
+      leaseRegistry: leases,
+      commandStore: {
+        async resolveProviderApiKey() {
+          return "provider-secret";
+        },
+      },
+      resolveUsageAttribution: testUsageAttribution,
+      async recordUsageObservation() {},
+      fetch: async () => new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          "content-encoding": "br",
+          "content-length": "999",
+        },
+      }),
+    });
+    handles.push(proxy);
+    const lease = leases.create({
+      run_id: "run-encoding",
+      space_id: "space-1",
+      provider_id: "provider-encoding",
+      route: "openai",
+      upstream_base_url: "https://provider.example",
+      ttl_ms: 60_000,
+    });
+
+    const response = await fetch(`${proxy.baseUrl}/openai/${lease.id}/chat/completions`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${lease.token}`,
+        "content-type": "application/json",
+      },
+      body: "{}",
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true });
+    expect(response.headers.get("content-encoding")).toBeNull();
+    expect(response.headers.get("content-length")).not.toBe("999");
   });
 
   it("rejects invalid lease tokens before reaching the upstream provider", async () => {

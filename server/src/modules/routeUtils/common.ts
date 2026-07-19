@@ -72,6 +72,7 @@ export async function resolveIdentity(
 }
 
 export function sendRouteError(reply: FastifyReply, error: unknown): FastifyReply {
+  logServerRouteError(reply, error);
   if (error instanceof HttpError) {
     return reply.code(error.statusCode).send(error.responseBody ?? { detail: error.message });
   }
@@ -85,6 +86,25 @@ export function sendRouteError(reply: FastifyReply, error: unknown): FastifyRepl
       .send({ detail: error.message });
   }
   throw error;
+}
+
+/**
+ * 5xx responses carry only `detail` to the client; the server log keeps the
+ * full picture, including any provider response text a ProviderInvocationError
+ * retained for failure triage.
+ */
+function logServerRouteError(reply: FastifyReply, error: unknown): void {
+  if (!(error instanceof Error)) return;
+  const statusCode = (error as { statusCode?: unknown }).statusCode;
+  if (typeof statusCode !== "number" || statusCode < 500) return;
+  const responseText = (error as { responseText?: unknown }).responseText;
+  reply.log.error({
+    status_code: statusCode,
+    error_code: (error as { code?: unknown }).code ?? null,
+    reason: error.message,
+    diagnostics: (error as { diagnostics?: unknown }).diagnostics ?? null,
+    provider_response_text: typeof responseText === "string" ? responseText.slice(0, 8000) : null,
+  }, "route request failed");
 }
 
 export function params(request: FastifyRequest): Record<string, string | undefined> {

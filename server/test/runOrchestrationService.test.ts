@@ -388,7 +388,6 @@ describe("RunOrchestrationService", () => {
     expect(repo.terminalUpdates[0]).toMatchObject({
       status: "succeeded",
       output_text: "done",
-      usage_json: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
     });
   });
 

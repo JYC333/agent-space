@@ -15,7 +15,7 @@ describe("Project source composite command idempotency", () => {
       throw new Error(`Unexpected SQL: ${sql}`);
     });
     const service=new ProjectSourceProposalService({query} as unknown as Queryable,loadConfig({}));
-    await expect(service.proposeBind(identity,"project-1",{source_connection_id:"connection-1"})).rejects.toMatchObject({statusCode:403});
+    await expect(service.proposeBind(identity,"project-1",{source_channel_id:"channel-1"})).rejects.toMatchObject({statusCode:403});
     expect(query.mock.calls.some(([sql])=>String(sql).includes("INSERT INTO proposals"))).toBe(false);
   });
 
@@ -55,7 +55,7 @@ describe("Project source composite command idempotency", () => {
       if (sql.includes("FROM project_source_bindings") && sql.includes("status='active'")) {
         return { rows: [{ source_connection_id: "connection-1" }] };
       }
-      if (sql.includes("JOIN source_connectors")) return { rows: [{ connector_key: "arxiv" }] };
+      if (sql.includes("JOIN source_connectors")) return { rows: [{ connector_key: "arxiv_api" }] };
       if (sql.includes("effective_access_level")) return { rows: [{ effective_access_level: "full" }] };
       if (sql.includes("FROM source_backfill_plans") && sql.includes("idempotency_key") && sql.includes("FOR UPDATE")) {
         return { rows: [{

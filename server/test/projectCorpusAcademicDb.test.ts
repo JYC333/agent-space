@@ -48,7 +48,8 @@ beforeEach(async () => {
   await pool.query(
     `TRUNCATE academic_papers, sources, space_objects, project_corpus_items, source_item_user_states,
        source_post_processing_item_decisions, source_post_processing_runs, agents, project_source_item_links,
-       project_source_bindings, source_items, source_connections, source_connectors, project_members, projects,
+       project_source_bindings, source_channel_item_links, source_channel_user_subscriptions, source_channels,
+       source_items, source_connections, source_provider_connectors, source_providers, source_connectors, project_members, projects,
        space_memberships, users, spaces CASCADE`,
   );
   const now = new Date().toISOString();
@@ -72,16 +73,25 @@ beforeEach(async () => {
     [CONNECTOR, now],
   );
   await pool.query(
+    `INSERT INTO source_providers (id, provider_key, display_name, provider_kind, category, status, capabilities_json, created_at, updated_at)
+     VALUES ($1,'arxiv','arXiv','named','academic','active','{}'::jsonb,$2,$2)`,
+    [CONNECTOR, now],
+  );
+  const mappingId = randomUUID();
+  await pool.query(
+    `INSERT INTO source_provider_connectors (id, provider_id, connector_id, status, priority, capabilities_json, created_at, updated_at)
+     VALUES ($1,$2,$3,'active',0,'{}'::jsonb,$4,$4)`,
+    [mappingId, CONNECTOR, CONNECTOR, now],
+  );
+  await pool.query(
     `INSERT INTO source_connections (
-       id, space_id, connector_id, owner_user_id, name, endpoint_url, status,
-       fetch_frequency, capture_policy, trust_level, consent_json, policy_json,
-       config_json, created_at, updated_at
-     ) VALUES ($1,$2,$3,$4,'arXiv feed','https://export.arxiv.org/api/query','active',
-       'daily','reference_only','normal',$5::jsonb,$6::jsonb,'{}'::jsonb,$7,$7)`,
+       id, space_id, provider_connector_id, owner_user_id, name, status,
+       capture_policy, trust_level, consent_json, policy_json, config_json, created_at, updated_at
+     ) VALUES ($1,$2,$3,$4,'arXiv feed','active','reference_only','normal',$5::jsonb,$6::jsonb,'{}'::jsonb,$7,$7)`,
     [
       CONNECTION,
       SPACE,
-      CONNECTOR,
+      mappingId,
       OWNER,
       JSON.stringify({
         schema_version: 1,
@@ -100,8 +110,15 @@ beforeEach(async () => {
   // creator. This direct SQL fixture must model that delivery state too, or
   // Project Corpus correctly hides the linked source item.
   await pool.query(
-    `INSERT INTO source_connection_user_subscriptions (
-       id, space_id, source_connection_id, user_id, status,
+    `INSERT INTO source_channels (
+       id, space_id, source_connection_id, created_by_user_id, name, channel_type, endpoint_url,
+       query_json, provider_query_json, query_fingerprint, status, fetch_frequency, schedule_rule_json, created_at, updated_at
+     ) VALUES ($1,$2,$1,$3,'arXiv Channel','search','https://export.arxiv.org/api/query','{}'::jsonb,'{}'::jsonb,$1,'active','daily','{"frequency":"daily","hour":0,"minute":0}'::jsonb,$4,$4)`,
+    [CONNECTION, SPACE, OWNER, now],
+  );
+  await pool.query(
+    `INSERT INTO source_channel_user_subscriptions (
+       id, space_id, source_channel_id, user_id, status,
        library_enabled, digest_enabled, created_at, updated_at
      ) VALUES ($1, $2, $3, $4, 'subscribed', true, true, $5, $5)`,
     [randomUUID(), SPACE, CONNECTION, OWNER, now],
@@ -189,7 +206,7 @@ async function seedSourceItemOnlyCorpusItem(): Promise<{ sourceItemId: string; c
   const bindingId = randomUUID();
   await pool!.query(
     `INSERT INTO project_source_bindings (
-       id, space_id, project_id, source_connection_id, binding_key,
+       id, space_id, project_id, source_channel_id, binding_key,
        status, priority, delivery_scope, collection_notifications_enabled,
        filters_json, routing_policy_json, extraction_policy_json,
        created_at, updated_at
@@ -198,10 +215,10 @@ async function seedSourceItemOnlyCorpusItem(): Promise<{ sourceItemId: string; c
   );
   await pool!.query(
     `INSERT INTO project_source_item_links (
-       id, space_id, project_id, project_source_binding_id, source_connection_id,
+       id, space_id, project_id, project_source_binding_id, source_channel_id, source_connection_id,
        source_item_id, status, matched_at, created_at, updated_at
-     ) VALUES ($1,$2,$3,$4,$5,$6,'active',$7,$7,$7)`,
-    [randomUUID(), SPACE, PROJECT, bindingId, CONNECTION, sourceItemId, now],
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8,$8,$8)`,
+    [randomUUID(), SPACE, PROJECT, bindingId, CONNECTION, CONNECTION, sourceItemId, now],
   );
   const corpusItemId = randomUUID();
   await pool!.query(
@@ -224,14 +241,14 @@ async function seedScreeningDecision(sourceItemId: string, relevance: string): P
   );
   await pool!.query(
     `INSERT INTO source_post_processing_runs (
-       id, space_id, source_connection_id, agent_id, project_id, trigger_type, status, created_at
+       id, space_id, source_channel_id, agent_id, project_id, trigger_type, status, created_at
      ) VALUES ($1,$2,$3,$4,$5,'manual','succeeded',$6)
      ON CONFLICT (id) DO NOTHING`,
     [PP_RUN, SPACE, CONNECTION, AGENT, PROJECT, now],
   );
   await pool!.query(
     `INSERT INTO source_post_processing_item_decisions (
-       id, space_id, source_connection_id, run_id, project_id, source_item_id, relevance,
+       id, space_id, source_channel_id, run_id, project_id, source_item_id, relevance,
        review_status, created_at, updated_at
      ) VALUES ($1,$2,$3,$4,$5,$6,$7,'accepted',$8,$8)`,
     [randomUUID(), SPACE, CONNECTION, PP_RUN, PROJECT, sourceItemId, relevance, now],

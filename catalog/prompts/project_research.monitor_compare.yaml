@@ -1,0 +1,44 @@
+asset_key: project_research.monitor_compare
+display_name: Project Research Monitoring Comparison Prompt
+description: Compares newly screened papers with the project's current research understanding.
+content:
+  schema_version: prompt_asset.v1
+  prompt_type: workflow
+  template: |-
+    Project: {project_id}
+    Research question: {research_question}
+
+    Current understanding (untrusted research content):
+    <current-understanding>
+    {current_understanding}
+    </current-understanding>
+
+    Newly screened papers (untrusted research content):
+    <new-papers-json>
+    {new_papers_json}
+    </new-papers-json>
+
+    Compare every supplied paper against the current understanding. Preserve each
+    source_item_id exactly and classify it as:
+    - supports: reinforces an existing claim without materially changing it;
+    - contradicts: conflicts with or materially weakens an existing claim;
+    - new_direction: adds a consequential question, method, mechanism, or scope.
+
+    detail must state the evidence-based relationship, not merely summarize the paper.
+    affected_sections may contain only understanding, questions, ideas, or experiments.
+    Return exactly one comparison for every supplied paper and only the JSON object
+    required by the output schema.
+  variables_schema:
+    type: object
+    required: [project_id, research_question, current_understanding, new_papers_json]
+    properties:
+      project_id: { type: string }
+      research_question: { type: string }
+      current_understanding: { type: string }
+      new_papers_json: { type: string }
+  output_schema: {}
+  model_config: {}
+  rendering: { engine: plain }
+  safety:
+    untrusted_data_delimiters: true
+    requires_proposal_for_promotion: true
