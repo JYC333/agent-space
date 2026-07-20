@@ -168,6 +168,7 @@ CREATE TABLE public.extracted_evidence (
     visibility character varying(32) DEFAULT 'space_shared' NOT NULL,
     access_level character varying(16) DEFAULT 'full' NOT NULL,
     source_item_id character varying(36),
+    origin_source_item_id character varying(36),
     extraction_job_id character varying(36),
     source_snapshot_id character varying(36),
     source_object_type character varying(64),
@@ -197,11 +198,23 @@ CREATE TABLE public.extracted_evidence (
     CONSTRAINT ck_extracted_evidence_trust_level CHECK (((trust_level)::text = ANY ((ARRAY['trusted'::character varying, 'normal'::character varying, 'untrusted'::character varying])::text[])))
 );
 
+CREATE UNIQUE INDEX uq_extracted_evidence_source_content
+    ON public.extracted_evidence USING btree (space_id, source_item_id, content_hash)
+    WHERE source_item_id IS NOT NULL AND content_hash IS NOT NULL;
+
 -- Evidence→project auto-link surface (evidenceProjectLinker) — the linker joins
 -- source_items/extracted_evidence with active project bindings and inserts
 -- idempotent context_candidate links.
 ALTER TABLE public.source_items ADD COLUMN deleted_at timestamp with time zone;
 ALTER TABLE public.extracted_evidence ADD COLUMN deleted_at timestamp with time zone;
+
+CREATE TABLE public.projects (
+    id character varying(36) NOT NULL,
+    space_id character varying(36) NOT NULL,
+    status character varying(32) DEFAULT 'active'::character varying NOT NULL,
+    deleted_at timestamp with time zone,
+    CONSTRAINT projects_pkey PRIMARY KEY (id)
+);
 
 CREATE TABLE public.project_source_bindings (
     id character varying(36) NOT NULL,

@@ -50,10 +50,15 @@ export const proposals = pgTable("proposals", {
 	unique("uq_proposals_id_space_id").on(table.id, table.spaceId),
 	uniqueIndex("uq_proposals_run_action_idempotency").on(table.createdByRunId,table.proposalType,table.actionIdempotencyKey).where(sql`action_idempotency_key IS NOT NULL`),
 	foreignKey({
+			columns: [table.projectId],
+			foreignColumns: [projects.id],
+			name: "proposals_project_id_delete_fkey"
+		}).onDelete("set null"),
+	foreignKey({
 			columns: [table.projectId, table.spaceId],
 			foreignColumns: [projects.id, projects.spaceId],
 			name: "fk_proposals_project_id_projects"
-		}).onDelete("set null"),
+		}),
 	foreignKey({
 			columns: [table.createdByAgentId],
 			foreignColumns: [agents.id],

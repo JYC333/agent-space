@@ -36,6 +36,15 @@ planning and review results, but cannot create or revise a PlanVersion directly.
   Automation fires. Automation does not write `plans` or `plan_review`
   proposals.
 
+Plan nodes and Workflow Execution nodes are structural snapshots. After their
+creation transaction, definition/contract fields (title, description,
+dependencies, bindings, assigned capability/Agent, risk, acceptance criteria,
+required outputs, and budgets) are immutable. Execution code may transition
+only lifecycle fields such as `status`, `blocked_reason`, checkpoint proposal
+references, and timestamps. A changed Plan definition requires a new
+PlanVersion; a changed fixed Workflow requires a new Workflow Version and a
+new WorkflowExecution. Editable product intent belongs only in `tasks`.
+
 The schema is authored under `server/src/db/schema/` and the only generated
 migration artifact is `server/migrations/0001_baseline.sql`.
 

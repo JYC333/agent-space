@@ -51,7 +51,16 @@ class FakeDb implements Queryable {
     if (sql.includes("FROM project_source_bindings psb")) {
       return { rows: [] as Row[], rowCount: 0 } as { rows: Row[]; rowCount: number };
     }
-    if (sql.includes("UPDATE project_corpus_items")) {
+    if (sql.includes("SELECT EXISTS") && sql.includes("FROM project_source_item_links")) {
+      return { rows: [{ exists: false }] as Row[], rowCount: 1 } as { rows: Row[]; rowCount: number };
+    }
+    if (sql.includes("SELECT DISTINCT link.project_id") && sql.includes("FROM project_source_item_links")) {
+      return { rows: [] as Row[], rowCount: 0 } as { rows: Row[]; rowCount: number };
+    }
+    if (sql.includes("FROM projects project") && sql.includes("FOR UPDATE")) {
+      return { rows: [] as Row[], rowCount: 0 } as { rows: Row[]; rowCount: number };
+    }
+    if (sql.includes("project_corpus_items") || sql.includes("project_corpus_item_sources")) {
       return { rows: [] as Row[], rowCount: 0 } as { rows: Row[]; rowCount: number };
     }
     if (sql.includes("FROM source_connections")) {
@@ -99,8 +108,11 @@ class FakeDb implements Queryable {
     if (sql.includes("UPDATE source_items")) {
       return { rows: [], rowCount: 1 };
     }
+    if (sql.includes("SELECT owner_user_id, access_level FROM source_items")) {
+      return { rows: [{ owner_user_id: "user-1", access_level: "full" }] as Row[], rowCount: 1 };
+    }
     if (sql.includes("INSERT INTO extracted_evidence")) {
-      return { rows: [], rowCount: 1 };
+      return { rows: [{ id: String(params[0]) }] as Row[], rowCount: 1 };
     }
     if (sql.includes("INSERT INTO evidence_links")) {
       return { rows: [], rowCount: 0 };
@@ -194,7 +206,7 @@ describe("SourceExtractionWorker source retention policy", () => {
     expect(String(readerInsert?.params[3])).toContain("\"extraction_method\":\"pdf_text_v1\"");
     expect(String(readerInsert?.params[3])).toContain("Project Research PDF");
     const evidenceInsert = db.calls.find((call) => call.sql.includes("INSERT INTO extracted_evidence"));
-    expect(evidenceInsert?.params[12]).toBe("pdf_text_v1");
+    expect(evidenceInsert?.params[21]).toBe("pdf_text_v1");
   });
 
   it("uses the space download limit when extracting source URLs", async () => {

@@ -630,8 +630,9 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
     const adapterType = normalizeAdapterType(input.adapterType);
     const providerId = input.defaultModelProviderId ?? null;
     const modelName = input.defaultModel ?? null;
-    await this.validateModelSelection(input.spaceId, adapterType, providerId, modelName);
+    await this.validateModelSelection(this.pool, input.spaceId, adapterType, providerId, modelName);
     const runtimeConfigJson = await this.resolveRuntimeConfig(
+      this.pool,
       input.spaceId,
       adapterType,
       input.runtimeConfigJson ?? DEFAULT_RUNTIME_CONFIG,
@@ -726,21 +727,21 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
       runtimeConfigJson?: Record<string, unknown> | null;
     },
   ): Promise<AgentOut> {
-    const current = await this.getCurrentVersion(spaceId, agentId);
-    if (!current) throw new HttpError(404, "Agent has no current version");
-    const modelProviderId = Object.hasOwn(patch, "modelProviderId")
-      ? patch.modelProviderId ?? null
-      : current.model_provider_id;
-    const modelName = Object.hasOwn(patch, "modelName")
-      ? patch.modelName ?? null
-      : current.model_name;
-    if (modelProviderId || modelName) {
-      const adapterType = normalizeAdapterType(
-        stringValue(current.runtime_policy_json?.default_adapter_type),
-      );
-      await this.validateModelSelection(spaceId, adapterType, modelProviderId, modelName);
-    }
     return withTransaction(this.pool, async (client) => {
+      const current = await this.lockCurrentVersion(client, spaceId, agentId);
+      if (!current) throw new HttpError(404, "Agent has no current version");
+      const modelProviderId = Object.hasOwn(patch, "modelProviderId")
+        ? patch.modelProviderId ?? null
+        : current.model_provider_id;
+      const modelName = Object.hasOwn(patch, "modelName")
+        ? patch.modelName ?? null
+        : current.model_name;
+      if (modelProviderId || modelName) {
+        const adapterType = normalizeAdapterType(
+          stringValue(current.runtime_policy_json?.default_adapter_type),
+        );
+        await this.validateModelSelection(client, spaceId, adapterType, modelProviderId, modelName);
+      }
       const now = new Date().toISOString();
       if (Object.hasOwn(patch, "name") || Object.hasOwn(patch, "description")) {
         await client.query(
@@ -781,6 +782,7 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
         stringValue(current.runtime_policy_json?.default_adapter_type),
       );
       const runtimeConfigJson = await this.resolveRuntimeConfig(
+        client,
         spaceId,
         currentAdapterType,
         versionPatch.runtime_config_json ?? current.runtime_config_json,
@@ -827,6 +829,63 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
     return result.rows[0] ?? null;
   }
 
+  /**
+   * Replaces the current version of a system-managed Agent without mutating
+   * historical AgentVersion rows. The Agent row is locked so concurrent
+   * refreshes either observe the newly-published version or serialize behind
+   * the publisher instead of allocating the same version label.
+   */
+  async publishSystemManagedPrompt(input: {
+    spaceId: string;
+    agentId: string;
+    agentKind: "system_assistant" | "system_evolver" | "system_source_post_processor" | "system_research";
+    systemPrompt: string;
+    promptProvenanceJson?: PromptProvenance | null;
+  }): Promise<{ changed: boolean; versionId: string }> {
+    return withTransaction(this.pool, async (client) => {
+      const current = await this.lockCurrentVersion(
+        client,
+        input.spaceId,
+        input.agentId,
+        input.agentKind,
+      );
+      if (!current) throw new HttpError(404, "Active system-managed Agent not found");
+      const promptProvenanceJson = input.promptProvenanceJson ?? null;
+      if (
+        current.system_prompt === input.systemPrompt
+        && JSON.stringify(current.prompt_provenance_json) === JSON.stringify(promptProvenanceJson)
+      ) {
+        return { changed: false, versionId: current.id };
+      }
+
+      const version = await this.insertVersion(client, {
+        agentId: input.agentId,
+        spaceId: input.spaceId,
+        versionLabel: await this.nextVersionLabel(client, input.spaceId, input.agentId),
+        modelProviderId: current.model_provider_id,
+        modelName: current.model_name,
+        systemPrompt: input.systemPrompt,
+        promptProvenanceJson,
+        modelConfigJson: current.model_config_json,
+        runtimeConfigJson: current.runtime_config_json,
+        contextPolicyJson: current.context_policy_json,
+        memoryPolicyJson: current.memory_policy_json,
+        capabilitiesJson: current.capabilities_json,
+        toolPermissionsJson: current.tool_permissions_json,
+        runtimePolicyJson: current.runtime_policy_json,
+        toolPolicyJson: current.tool_policy_json,
+        outputPolicyJson: current.output_policy_json,
+        scheduleConfigJson: current.schedule_config_json,
+        outputSchemaJson: current.output_schema_json,
+      });
+      await client.query(
+        `UPDATE agents SET current_version_id = $3, updated_at = $4 WHERE space_id = $1 AND id = $2`,
+        [input.spaceId, input.agentId, version.id, new Date().toISOString()],
+      );
+      return { changed: true, versionId: version.id };
+    });
+  }
+
   async listVersions(spaceId: string, agentId: string): Promise<AgentVersionRecord[]> {
     await this.requireAgent(spaceId, agentId);
     const result = await this.pool.query<AgentVersionRecord>(
@@ -864,6 +923,9 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
   ): Promise<AgentOut> {
     const source = await this.getVersion(spaceId, agentId, versionId);
     return withTransaction(this.pool, async (client) => {
+      if (!(await this.lockCurrentVersion(client, spaceId, agentId))) {
+        throw new HttpError(404, "Agent has no current version");
+      }
       const version = await this.insertVersion(client, {
         agentId,
         spaceId,
@@ -1082,6 +1144,7 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
   }
 
   private async validateModelSelection(
+    db: Queryable,
     spaceId: string,
     adapterType: string,
     providerId: string | null,
@@ -1099,7 +1162,7 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
       );
     }
     if (providerId) {
-      const provider = await this.pool.query<{ id: string; config_json: unknown }>(
+      const provider = await db.query<{ id: string; config_json: unknown }>(
         `SELECT p.id, p.config_json
            FROM model_provider_space_grants g
            JOIN model_providers p ON p.id = g.provider_id
@@ -1137,6 +1200,7 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
   }
 
   private async resolveRuntimeConfig(
+    db: Queryable,
     spaceId: string,
     adapterType: string,
     input: Record<string, unknown>,
@@ -1148,7 +1212,7 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
     }
     const requestedVersion = stringValue(config["runtime_tool_version"]);
     const version = await resolveRuntimeToolVersionForSpace(
-      this.pool,
+      db,
       new RuntimeToolRegistry(this.config),
       spaceId,
       adapterType,
@@ -1163,6 +1227,32 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
       [spaceId, agentId],
     );
     if (!found.rows[0]) throw new HttpError(404, "Agent not found");
+  }
+
+  private async lockCurrentVersion(
+    db: Queryable,
+    spaceId: string,
+    agentId: string,
+    agentKind?: "system_assistant" | "system_evolver" | "system_source_post_processor" | "system_research",
+  ): Promise<AgentVersionRecord | null> {
+    const agent = await db.query<{ current_version_id: string | null }>(
+      `SELECT current_version_id
+         FROM agents
+        WHERE space_id = $1
+          AND id = $2
+          AND ($3::varchar IS NULL OR (agent_kind = $3 AND status = 'active'))
+        FOR UPDATE`,
+      [spaceId, agentId, agentKind ?? null],
+    );
+    const versionId = agent.rows[0]?.current_version_id;
+    if (!versionId) return null;
+    const version = await db.query<AgentVersionRecord>(
+      `SELECT ${VERSION_COLUMNS}
+         FROM agent_versions
+        WHERE id = $1 AND agent_id = $2 AND space_id = $3`,
+      [versionId, agentId, spaceId],
+    );
+    return version.rows[0] ?? null;
   }
 
   private async createAgentWithVersion(
@@ -1386,6 +1476,7 @@ ${DEFAULT_RUNTIME_PROFILE_JOIN}
       credentialProfileId,
     );
     const runtimeConfigJson = await this.resolveRuntimeConfig(
+      this.pool,
       spaceId,
       adapterType,
       normalizedRuntimeConfig(input.runtimeConfigJson ?? {}, adapterType, credentialProfileId),

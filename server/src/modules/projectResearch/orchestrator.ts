@@ -3,7 +3,7 @@ import { getDbPool } from "../../db/pool";
 import type { ServerConfig } from "../../config";
 import type { Queryable, SpaceUserIdentity } from "../routeUtils/common";
 import { HttpError, dateIso, objectValue, optionalString, withQueryableTransaction } from "../routeUtils/common";
-import { assertProjectWriter } from "../projects/access";
+import { assertProjectWriter, lockActiveProjectForMutation } from "../projects/access";
 import { ProjectOperationService } from "../projects/projectOperationService";
 import { ProjectSourceBindingService } from "../projects/projectSourceBindingService";
 import { PgJobQueueRepository } from "../jobs/repository";
@@ -282,6 +282,7 @@ export class ProjectResearchOrchestrator {
   }
 
   private async saveInitialIntakeDraftLocked(identity: SpaceUserIdentity, projectId: string, draft: InitialIntakeDraft) {
+    await lockActiveProjectForMutation(this.db, identity.spaceId, projectId);
     await this.db.query(
       `UPDATE projects SET current_focus=$3, updated_at=$4 WHERE space_id=$1 AND id=$2 AND status='active'`,
       [identity.spaceId, projectId, draft.researchQuestion, new Date().toISOString()],
@@ -341,7 +342,7 @@ export class ProjectResearchOrchestrator {
         [workflowId, identity.spaceId, projectId, JSON.stringify(state), identity.userId, now],
       );
     }
-    const workflow = await this.workflow(identity.spaceId, projectId, workflowId);
+    const workflow = await this.workflow(identity.spaceId, projectId, workflowId, true);
     if (!workflow) throw new HttpError(500, "Failed to save initial literature intake setup");
     return workflowOutput(workflow);
   }
@@ -407,13 +408,19 @@ export class ProjectResearchOrchestrator {
     await assertProjectWriter(this.db, identity.spaceId, projectId, identity.userId);
     return withQueryableTransaction(this.db, async (db) => {
       const service = new ProjectResearchOrchestrator(db, this.config);
+      await lockActiveProjectForMutation(db, identity.spaceId, projectId);
       const workflow = await service.workflow(identity.spaceId, projectId, null, true);
       if (!workflow) throw new HttpError(409, "There is no active research workflow to synthesize");
       await service.assertResearchQuestionAligned(identity.spaceId, projectId, workflow.state_json);
       const active = await service.activeResearchOperation(identity.spaceId, projectId, workflow.id);
       if (active) throw new HttpError(409, "Wait for the active research operation to finish before generating a report snapshot");
       const corpus = await db.query<{ source_item_id: string }>(
-        `SELECT DISTINCT source_item_id FROM project_corpus_items WHERE space_id=$1 AND project_id=$2 AND status='active' AND source_item_id IS NOT NULL ORDER BY source_item_id`,
+        `SELECT DISTINCT pcis.source_item_id
+           FROM project_corpus_item_sources pcis
+           JOIN project_corpus_items pci ON pci.id=pcis.corpus_item_id AND pci.space_id=pcis.space_id
+           JOIN source_items si ON si.id=pcis.source_item_id AND si.space_id=pcis.space_id AND si.deleted_at IS NULL
+          WHERE pcis.space_id=$1 AND pcis.project_id=$2 AND pci.status='active'
+          ORDER BY pcis.source_item_id`,
         [identity.spaceId, projectId],
       );
       const sourceItemIds = corpus.rows.map((row) => row.source_item_id);
@@ -447,8 +454,9 @@ export class ProjectResearchOrchestrator {
     projectId: string,
     strategy: "rescreen" | "synthesis_only" | "apply_forward",
   ) {
+    await lockActiveProjectForMutation(this.db, identity.spaceId, projectId);
     const project = await this.db.query<{ current_focus: string | null }>(
-      `SELECT current_focus FROM projects WHERE space_id=$1 AND id=$2 FOR UPDATE`,
+      `SELECT current_focus FROM projects WHERE space_id=$1 AND id=$2`,
       [identity.spaceId, projectId],
     );
     const currentQuestion = optionalString(project.rows[0]?.current_focus);
@@ -608,6 +616,7 @@ export class ProjectResearchOrchestrator {
     workflowId: string,
     body: Record<string, unknown>,
   ) {
+    await lockActiveProjectForMutation(this.db, identity.spaceId, projectId);
     const workflow = await this.workflow(identity.spaceId, projectId, workflowId, true);
     if (!workflow) throw new HttpError(404, "Research workflow not found");
     await this.assertResearchQuestionAligned(identity.spaceId, projectId, workflow.state_json);
@@ -723,7 +732,14 @@ export class ProjectResearchOrchestrator {
 
   async triggerIncremental(identity: SpaceUserIdentity, projectId: string, workflowId: string, body: Record<string, unknown>) {
     await assertProjectWriter(this.db, identity.spaceId, projectId, identity.userId);
-    const workflow = await this.workflow(identity.spaceId, projectId, workflowId);
+    return withQueryableTransaction(this.db, async (db) => {
+      await lockActiveProjectForMutation(db, identity.spaceId, projectId);
+      return new ProjectResearchOrchestrator(db, this.config).triggerIncrementalLocked(identity, projectId, workflowId, body);
+    });
+  }
+
+  private async triggerIncrementalLocked(identity: SpaceUserIdentity, projectId: string, workflowId: string, body: Record<string, unknown>) {
+    const workflow = await this.workflow(identity.spaceId, projectId, workflowId, true);
     if (!workflow) throw new HttpError(404, "Research workflow not found");
     await this.assertResearchQuestionAligned(identity.spaceId, projectId, workflow.state_json);
     const state = researchState(workflow.state_json);
@@ -742,14 +758,24 @@ export class ProjectResearchOrchestrator {
     const workflowState = objectValue(workflow.state_json);
     const pendingItemIds = stringArray(workflowState.pending_incremental_source_item_ids);
     const itemIds = unique([...pendingItemIds, ...stringArray(body.source_item_ids)]);
-    if (pendingItemIds.length > 0) {
+    const consumePending = async () => {
+      if (pendingItemIds.length === 0) return;
       await this.db.query(
         `UPDATE project_research_workflows SET state_json=state_json - 'pending_incremental_source_item_ids', updated_at=$4 WHERE space_id=$1 AND project_id=$2 AND id=$3`,
         [identity.spaceId, projectId, workflowId, new Date().toISOString()],
       );
-    }
+    };
     const prior = await this.operationByIdempotency(identity.spaceId, projectId, key);
     if (prior && prior.status !== "failed" && prior.status !== "cancelled") {
+      const priorState = researchState(prior.progress_json);
+      if (pendingItemIds.length > 0
+        && ["active", "waiting_review"].includes(prior.status)
+        && priorState.run_kind === "incremental"
+        && priorState.workflow_id === workflowId) {
+        const merged = { ...priorState, source_item_ids: unique([...priorState.source_item_ids, ...itemIds]) };
+        await this.setState(prior, merged, deriveStepStates(merged));
+        await consumePending();
+      }
       return this.readOperation(identity, projectId, prior.id);
     }
     const awaitingSourceScan = itemIds.length === 0;
@@ -766,6 +792,7 @@ export class ProjectResearchOrchestrator {
       const existingState = researchState(existing.progress_json);
       const merged = { ...existingState, source_item_ids: unique([...existingState.source_item_ids, ...itemIds]) };
       await this.setState(existing, merged, deriveStepStates(merged));
+      await consumePending();
       return this.readOperation(identity, projectId, existing.id);
     }
 
@@ -777,6 +804,7 @@ export class ProjectResearchOrchestrator {
       steps: operationSteps(),
       state: operationState,
     });
+    await consumePending();
     await this.enqueueReconcile(identity.spaceId, identity.userId, operation.id, "incremental_trigger");
     return this.readOperation(identity, projectId, operation.id);
   }
@@ -1399,6 +1427,7 @@ export class ProjectResearchOrchestrator {
     spaceId: string; projectId: string; workflowId: string; operationId: string; runId: string;
     report: Record<string, unknown>; archiveArtifactId: string;
   }): Promise<void> {
+    await lockActiveProjectForMutation(this.db, input.spaceId, input.projectId);
     const locked = await this.db.query<OperationRow>(
       `SELECT id,space_id,project_id,kind,title,intent_text,status,progress_json,created_at,updated_at
          FROM project_operations WHERE space_id=$1 AND project_id=$2 AND id=$3 FOR UPDATE`,
@@ -1467,6 +1496,7 @@ export class ProjectResearchOrchestrator {
     }
     let revisionNeeded = false;
     await withQueryableTransaction(this.db, async (db) => {
+      await lockActiveProjectForMutation(db, input.spaceId, input.projectId);
       const locked = await db.query<OperationRow>(
         `SELECT id,space_id,project_id,kind,title,intent_text,status,progress_json,created_at,updated_at
            FROM project_operations WHERE space_id=$1 AND project_id=$2 AND id=$3 FOR UPDATE`,
@@ -1579,7 +1609,7 @@ export class ProjectResearchOrchestrator {
          exportable,export_formats_json,canonical_format,preview,created_at,updated_at,
          metadata_json,visibility,owner_user_id,trust_level
        ) VALUES ($1,$2,$3,$4,'research_critique','operational',$5,$6,'application/json',
-         true,'["json"]'::jsonb,'json',false,$7,$7,$8::jsonb,'space_shared',$9,'high')`,
+         true,'["json"]'::jsonb,'json',false,$7,$7,$8::jsonb,'private',$9,'high')`,
       [
         id, input.spaceId, input.runId, input.projectId,
         `Research synthesis critique · round ${input.round + 1}`,
@@ -1596,6 +1626,7 @@ export class ProjectResearchOrchestrator {
     spaceId: string; projectId: string; workflowId: string; operationId: string; runId: string;
     report: Record<string, unknown>; archiveArtifactId: string;
   }): Promise<void> {
+    await lockActiveProjectForMutation(this.db, input.spaceId, input.projectId);
     const locked = await this.db.query<OperationRow>(
       `SELECT id,space_id,project_id,kind,title,intent_text,status,progress_json,created_at,updated_at
          FROM project_operations WHERE space_id=$1 AND project_id=$2 AND id=$3 FOR UPDATE`,
@@ -1881,6 +1912,7 @@ export class ProjectResearchOrchestrator {
   }
 
   private async updateInitialItemLimitLocked(identity: SpaceUserIdentity, projectId: string, body: Record<string, unknown>) {
+    await lockActiveProjectForMutation(this.db, identity.spaceId, projectId);
     const requestedLimit = Number(body.max_items);
     if (!Number.isInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > MAX_ITEMS_DEFAULT) {
       throw new HttpError(422, `max_items must be an integer between 1 and ${MAX_ITEMS_DEFAULT}`);
@@ -1951,6 +1983,7 @@ export class ProjectResearchOrchestrator {
   }
 
   private async updateItemLimitLocked(identity: SpaceUserIdentity, projectId: string, operationId: string, body: Record<string, unknown>) {
+    await lockActiveProjectForMutation(this.db, identity.spaceId, projectId);
     const requestedLimit = Number(body.max_items);
     if (!Number.isInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > MAX_ITEMS_DEFAULT) {
       throw new HttpError(422, `max_items must be an integer between 1 and ${MAX_ITEMS_DEFAULT}`);
@@ -2052,7 +2085,7 @@ export class ProjectResearchOrchestrator {
 
   async reconcileAll(spaceId: string): Promise<number> {
     const operations = await this.db.query<{ id: string }>(
-      `SELECT id FROM project_operations WHERE space_id=$1 AND kind='research' AND status IN ('draft','active','waiting_review') ORDER BY updated_at ASC LIMIT 100`,
+      `SELECT id FROM project_operations WHERE space_id=$1 AND kind='research' AND status IN ('active','waiting_review') ORDER BY updated_at ASC LIMIT 100`,
       [spaceId],
     );
     for (const operation of operations.rows) await this.reconcileOperation(spaceId, operation.id);
@@ -2081,6 +2114,36 @@ export class ProjectResearchOrchestrator {
   }
 
   private async reconcilePostProcessingRunLocked(spaceId: string, runId: string): Promise<void> {
+    const scope = await this.db.query<{
+      project_id: string | null;
+      status: string;
+      research_reconciled_at: string | null;
+    }>(
+      `SELECT project_id,status,research_reconciled_at
+         FROM source_post_processing_runs
+        WHERE id=$1 AND space_id=$2`,
+      [runId, spaceId],
+    );
+    const scopedRun = scope.rows[0];
+    if (!scopedRun || scopedRun.status !== "succeeded" || !scopedRun.project_id || scopedRun.research_reconciled_at) return;
+    // Project is the aggregate fence and must be locked before the recovery
+    // row. Archived projects acknowledge the durable marker without writing
+    // new Corpus/workflow state, which prevents an endless recovery retry.
+    const project = await this.db.query<{ status: string }>(
+      `SELECT status FROM projects
+        WHERE id=$1 AND space_id=$2 AND deleted_at IS NULL
+        FOR UPDATE`,
+      [scopedRun.project_id, spaceId],
+    );
+    if (!project.rows[0] || project.rows[0].status !== "active") {
+      await this.db.query(
+        `UPDATE source_post_processing_runs
+            SET research_reconciled_at=COALESCE(research_reconciled_at,$3)
+          WHERE id=$1 AND space_id=$2`,
+        [runId, spaceId, new Date().toISOString()],
+      );
+      return;
+    }
     const result = await this.db.query<{
       id: string;
       project_id: string | null;
@@ -2099,8 +2162,15 @@ export class ProjectResearchOrchestrator {
     );
     const run = result.rows[0];
     if (!run || run.status !== "succeeded" || !run.project_id || run.research_reconciled_at) return;
+    if (run.project_id !== scopedRun.project_id) throw new HttpError(409, "Post-processing Project changed during reconciliation");
     const sourceItemIds = stringArray(run.input_item_ids_json);
-    if (sourceItemIds.length === 0) return;
+    if (sourceItemIds.length === 0) {
+      await this.db.query(
+        `UPDATE source_post_processing_runs SET research_reconciled_at=$3 WHERE id=$1 AND space_id=$2`,
+        [runId, spaceId, new Date().toISOString()],
+      );
+      return;
+    }
     try {
       await this.syncPostProcessingCorpus(spaceId, run.project_id, sourceItemIds);
 
@@ -2497,16 +2567,19 @@ export class ProjectResearchOrchestrator {
   }
 
   private async createOperation(identity: SpaceUserIdentity, projectId: string, input: { title: string; intentText: string; steps: string[]; state: ResearchOperationState }) {
-    const created = await new ProjectOperationService(this.db).create(identity, projectId, {
-      kind: "research",
+    const derived = deriveStepStates(input.state);
+    const created = await new ProjectOperationService(this.db).createManagedResearch(identity, projectId, {
       title: input.title,
-      intent_text: input.intentText,
-      progress: input.state,
-      steps: input.steps.map((title) => ({ title })),
+      intentText: input.intentText,
+      status: input.state.stage_state === "waiting_review" ? "waiting_review" : "active",
+      progress: input.state as unknown as Record<string, unknown>,
+      steps: input.steps.map((title, seq) => {
+        const projected = derived.find((step) => step.seq === seq);
+        return { title, status: projected?.status ?? "pending" };
+      }),
     });
     const operation = await this.operation(identity.spaceId, String(created.id));
     if (!operation) throw new HttpError(500, "Failed to create project research operation");
-    await this.setState(operation, input.state, deriveStepStates(input.state));
     return operation;
   }
 
@@ -2900,6 +2973,7 @@ export class ProjectResearchOrchestrator {
    * can adjust the saved query/date range and start a new intake.
    */
   private async completeEmptyInitialIntake(operation: OperationRow, state: ResearchOperationState): Promise<void> {
+    const base = researchState(operation.progress_json);
     const now = new Date().toISOString();
     state.empty_result = {
       kind: "no_source_items",
@@ -2925,34 +2999,50 @@ export class ProjectResearchOrchestrator {
       message: state.empty_result.message,
       updated_at: now,
     };
-    await this.skipPendingScreeningCheckpoint(
-      operation.space_id,
-      operation.project_id,
-      state.workflow_id,
-      operation.id,
-      "No source items were returned; screening was skipped automatically.",
-    );
-    await this.setState(operation, state, deriveSkippedAfterScreeningSteps());
-    await this.completeWorkflowCoverage(operation.space_id, operation.project_id, state.workflow_id, operation.id, "completed");
-    await this.db.query(
-      `UPDATE project_research_workflows
-          SET status='paused', current_stage='initial_intake_setup',
-              state_json=jsonb_set(
-                COALESCE(state_json,'{}'::jsonb) || jsonb_build_object(
-                  'draft', COALESCE(state_json->'draft','{}'::jsonb) || jsonb_build_object('status','saved')
-                ),
-                '{last_empty_result}',$4::jsonb,true
-              ),
-              updated_at=$5
-        WHERE space_id=$1 AND project_id=$2 AND id=$3`,
-      [
-        operation.space_id,
-        operation.project_id,
-        state.workflow_id,
-        JSON.stringify(state.empty_result),
-        now,
-      ],
-    );
+    await transitionResearchOperation(this.db, operation.space_id, operation.id, {
+      from: [researchStage(base.current_stage)],
+      to: "complete",
+      mutate: async ({ db, state: current }) => {
+        applyResearchStatePatch(current, base, state);
+        await db.query(
+          `UPDATE project_research_checkpoints
+              SET status='waived', user_decision='waived', decision_reason=$4,
+                  decided_by_user_id=NULL, decided_at=$5, updated_at=$5
+            WHERE space_id=$1 AND project_id=$2 AND workflow_id=$3
+              AND checkpoint_type='screening_gate' AND status='pending'
+              AND machine_result_json->>'operation_id'=$6`,
+          [operation.space_id, operation.project_id, state.workflow_id,
+            "No source items were returned; screening was skipped automatically.", now, operation.id],
+        );
+        const workflow = await db.query<{ state_json: unknown }>(
+          `SELECT state_json FROM project_research_workflows
+            WHERE space_id=$1 AND project_id=$2 AND id=$3 FOR UPDATE`,
+          [operation.space_id, operation.project_id, state.workflow_id],
+        );
+        const ranges = historyCoverage(workflow.rows[0]?.state_json).map((range) =>
+          range.operation_id === operation.id ? { ...range, status: "completed" as const } : range,
+        );
+        await db.query(
+          `UPDATE project_research_workflows
+              SET status='paused', current_stage='initial_intake_setup',
+                  state_json=jsonb_set(
+                    jsonb_set(
+                      COALESCE(state_json,'{}'::jsonb) || jsonb_build_object(
+                        'draft', COALESCE(state_json->'draft','{}'::jsonb) || jsonb_build_object('status','saved')
+                      ),
+                      '{last_empty_result}',$4::jsonb,true
+                    ),
+                    '{coverage_ranges}',$5::jsonb,true
+                  ),
+                  updated_at=$6
+            WHERE space_id=$1 AND project_id=$2 AND id=$3`,
+          [operation.space_id, operation.project_id, state.workflow_id,
+            JSON.stringify(state.empty_result), JSON.stringify(ranges), now],
+        );
+      },
+      stepOverrides: deriveSkippedAfterScreeningSteps(),
+      onIllegal: "noop",
+    });
   }
 
   private async createCheckpoint(spaceId: string, projectId: string, workflowId: string, operationId: string, type: string, result: Record<string, unknown>): Promise<string> {
@@ -2989,9 +3079,9 @@ export class ProjectResearchOrchestrator {
         failed_items: 0,
       };
     }
-    // A paper may have separate source-item, object, and evidence corpus rows.
-    // Aggregate those rows by source item before counting so one paper cannot
-    // inflate missing-full-text, evidence, or screening totals.
+    // The projection maps each exact-one Corpus target back to its acquisition
+    // SourceItem. Aggregate by SourceItem so object/evidence rows cannot inflate
+    // missing-full-text, evidence, or screening totals.
     const result = await this.db.query<{ total: string; relevant: string; maybe: string; excluded: string; missing_full_text: string; evidence_count: string; failed_items: string }>(
       `WITH requested_items AS (
          SELECT DISTINCT unnest($3::text[]) AS source_item_id
@@ -3004,10 +3094,18 @@ export class ProjectResearchOrchestrator {
                 count(DISTINCT pci.evidence_id)::int AS evidence_records,
                 COALESCE(bool_or(pci.metadata_json->>'processing_status'='failed'), false) AS has_failed_item
            FROM requested_items
+           LEFT JOIN project_corpus_item_sources pcis
+             ON pcis.space_id=$1
+            AND pcis.project_id=$2
+            AND pcis.source_item_id=requested_items.source_item_id
+           LEFT JOIN source_items provenance_source
+             ON provenance_source.id=pcis.source_item_id
+            AND provenance_source.space_id=pcis.space_id
+            AND provenance_source.deleted_at IS NULL
            LEFT JOIN project_corpus_items pci
-             ON pci.space_id=$1
-            AND pci.project_id=$2
-            AND pci.source_item_id=requested_items.source_item_id
+             ON pci.id=pcis.corpus_item_id
+            AND pci.space_id=pcis.space_id
+            AND provenance_source.id IS NOT NULL
             AND pci.status='active'
           GROUP BY requested_items.source_item_id
        )
@@ -3251,25 +3349,6 @@ export class ProjectResearchOrchestrator {
     );
   }
 
-  private async skipPendingScreeningCheckpoint(
-    spaceId: string,
-    projectId: string,
-    workflowId: string,
-    operationId: string,
-    reason: string,
-  ): Promise<void> {
-    const now = new Date().toISOString();
-    await this.db.query(
-      `UPDATE project_research_checkpoints
-          SET status='waived', user_decision='waived', decision_reason=$4,
-              decided_by_user_id=NULL, decided_at=$5, updated_at=$5
-        WHERE space_id=$1 AND project_id=$2 AND workflow_id=$3
-          AND checkpoint_type='screening_gate' AND status='pending'
-          AND machine_result_json->>'operation_id'=$6`,
-      [spaceId, projectId, workflowId, reason, now, operationId],
-    );
-  }
-
   private async workflow(spaceId: string, projectId: string, workflowId: string | null, forUpdate = false, includeDraft = false): Promise<WorkflowRow | null> {
     const result = await this.db.query<WorkflowRow>(
       `SELECT * FROM project_research_workflows WHERE space_id=$1 AND project_id=$2 ${workflowId ? "AND id=$3" : includeDraft ? "AND status IN ('active','paused','not_started')" : "AND status IN ('active','paused')"} ORDER BY updated_at DESC LIMIT 1${forUpdate ? " FOR UPDATE" : ""}`,
@@ -3396,7 +3475,16 @@ export class ProjectResearchOrchestrator {
   }
 
   private async appendPendingIncrementalItems(spaceId: string, projectId: string, workflowId: string, itemIds: string[]): Promise<void> {
-    const workflow = await this.workflow(spaceId, projectId, workflowId);
+    return withQueryableTransaction(this.db, async (db) => {
+      await lockActiveProjectForMutation(db, spaceId, projectId);
+      await new ProjectResearchOrchestrator(db, this.config).appendPendingIncrementalItemsLocked(
+        spaceId, projectId, workflowId, itemIds,
+      );
+    });
+  }
+
+  private async appendPendingIncrementalItemsLocked(spaceId: string, projectId: string, workflowId: string, itemIds: string[]): Promise<void> {
+    const workflow = await this.workflow(spaceId, projectId, workflowId, true);
     if (!workflow) return;
     const state = objectValue(workflow.state_json);
     const pending = unique([...stringArray(state.pending_incremental_source_item_ids), ...itemIds]);
@@ -3413,10 +3501,6 @@ export class ProjectResearchOrchestrator {
     const state = objectValue(workflow.state_json);
     const pending = unique(stringArray(state.pending_incremental_source_item_ids));
     if (pending.length === 0) return;
-    await this.db.query(
-      `UPDATE project_research_workflows SET state_json=state_json - 'pending_incremental_source_item_ids',updated_at=$4 WHERE space_id=$1 AND project_id=$2 AND id=$3`,
-      [spaceId, projectId, workflowId, new Date().toISOString()],
-    );
     const actorUserId = await this.projectWriterActor(spaceId, projectId);
     if (!actorUserId) return;
     await this.triggerIncremental(

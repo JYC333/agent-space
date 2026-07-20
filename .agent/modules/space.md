@@ -7,11 +7,10 @@ Product-level isolation boundary. Every piece of data lives inside a space. Enab
 - `Space` ORM model (space_id, name, type)
 - `SpaceMembership` (user ↔ space relationship, role)
 - `Workspace` ORM model (workspace_id, space_id, name, type, path)
-- `WorkspaceMembership` (user ↔ workspace relationship)
 - All `space_id` scoping enforcement at the data layer
 
 ## Does Not Own
-- User identity (users are referenced by string ID only — no User ORM model by design)
+- User identity lifecycle and authentication (`users` is authored by the auth schema/module)
 - Memory content (memory module)
 - Agent definitions (agents module)
 
@@ -21,7 +20,6 @@ Product-level isolation boundary. Every piece of data lives inside a space. Enab
 Space: id, name, type (personal|household|team), created_at
 SpaceMembership: id, space_id, user_id, role, status
 Workspace: id, space_id, created_by, name, description, type, status, path
-WorkspaceMembership: id, workspace_id, user_id, role
 ```
 
 ## Main Flows
@@ -35,7 +33,9 @@ WorkspaceMembership: id, workspace_id, user_id, role
 - One deployment instance hosts many spaces — never create one instance per space
 
 ## Related Files
-- `server/migrations/` — Space, SpaceMembership, Workspace, WorkspaceMembership
+- `server/src/db/schema/auth.ts` — User schema authority
+- `server/src/db/schema/spaces.ts` — Space and SpaceMembership schema authority
+- `server/src/db/schema/workspaces.ts` — Workspace schema authority; workspace access is inherited from Space/Project ownership and links, not a separate membership table
 - `packages/protocol/src/` — shared workspace/space DTOs when exported
 - `server/src/config.ts` — bootstrap/default config
 - `server/src/modules/spaces/` — default space and membership routes

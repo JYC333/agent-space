@@ -46,6 +46,8 @@ import { PgTaskRepository } from "../src/modules/tasks/repository";
 import { PgRunRepository } from "../src/modules/runs/repository";
 import { assertBudgetSourcesAvailable, checkRunBudget } from "../src/modules/runs/budgetEnforcement";
 import type { RunRecord } from "../src/modules/runs/runRepositoryTypes";
+import { WorkflowExecutionService } from "../src/modules/automations/workflowExecutionService";
+import { PgProjectRepository } from "../src/modules/projects/repository";
 
 const MIGRATIONS_DIR = join(process.cwd(), "migrations");
 const SPACE = "11111111-1111-4111-8111-111111111111";
@@ -157,6 +159,34 @@ function service(): AutomationService {
 }
 
 describe("Automation × Project binding (real Postgres)", () => {
+  it("joins an existing transaction for project-fenced create and update", async () => {
+    if (!available || !pool) return;
+    const client = await pool.connect();
+    let automationId = "";
+    try {
+      await client.query("BEGIN");
+      const repository = new PgAutomationRepository(client);
+      const created = await repository.create({
+        spaceId: SPACE,
+        ownerUserId: OWNER,
+        name: "Transactional automation",
+        agentId: AGENT,
+        projectId: PROJECT,
+        triggerType: "manual",
+        configJson: { target_type: "agent_run" },
+        preflightSnapshot: {},
+      });
+      automationId = created.id;
+      const updated = await repository.update(SPACE, created.id, { name: "Updated in transaction" });
+      expect(updated.name).toBe("Updated in transaction");
+      await client.query("ROLLBACK");
+    } finally {
+      client.release();
+    }
+    const persisted = await pool.query(`SELECT 1 FROM automations WHERE id=$1`, [automationId]);
+    expect(persisted.rows).toHaveLength(0);
+  });
+
   it("creates a project-bound automation, exposes project_id, and clears it on update", async () => {
     if (!available) return;
     const created = await service().create({
@@ -600,6 +630,62 @@ describe("Automation × Project binding (real Postgres)", () => {
     await expect(
       service().fire({ spaceId: SPACE, automationId: automation.id, actorUserId: OWNER }),
     ).rejects.toMatchObject({ statusCode: 409 });
+
+    const linkedBeforeArchive = await pool!.query<{ count: number }>(
+      `SELECT count(*)::int AS count
+         FROM workflow_execution_node_runs link
+         JOIN workflow_execution_nodes node ON node.id=link.node_id AND node.space_id=link.space_id
+        WHERE node.space_id=$1 AND node.execution_id=$2`,
+      [SPACE, String(fired.workflow_execution_id)],
+    );
+    await new PgProjectRepository(pool!).archive({ spaceId: SPACE, userId: OWNER }, PROJECT);
+    await expect(new WorkflowExecutionService().reconcile(
+      pool!, SPACE, String(fired.workflow_execution_id), OWNER,
+    )).rejects.toMatchObject({ statusCode: 409 });
+    const stopped = await pool!.query<{ execution_status: string; linked_runs: number }>(
+      `SELECT execution.status AS execution_status,
+              count(link.id)::int AS linked_runs
+         FROM workflow_executions execution
+         LEFT JOIN workflow_execution_nodes node
+           ON node.space_id=execution.space_id AND node.execution_id=execution.id
+         LEFT JOIN workflow_execution_node_runs link
+           ON link.space_id=node.space_id AND link.node_id=node.id
+        WHERE execution.space_id=$1 AND execution.id=$2
+        GROUP BY execution.status`,
+      [SPACE, String(fired.workflow_execution_id)],
+    );
+    expect(stopped.rows[0]).toEqual({
+      execution_status: "cancelled",
+      linked_runs: linkedBeforeArchive.rows[0]!.count,
+    });
+    const terminal = await pool!.query<{
+      root_status: string;
+      node_statuses: string[];
+      child_statuses: string[];
+      job_statuses: string[];
+    }>(
+      `SELECT
+         (SELECT status FROM runs WHERE id=$3) AS root_status,
+         ARRAY(SELECT status FROM workflow_execution_nodes WHERE space_id=$1 AND execution_id=$2 ORDER BY id) AS node_statuses,
+         ARRAY(
+           SELECT run.status
+             FROM workflow_execution_node_runs link
+             JOIN workflow_execution_nodes node ON node.id=link.node_id AND node.space_id=link.space_id
+             JOIN runs run ON run.id=link.run_id AND run.space_id=link.space_id
+            WHERE node.space_id=$1 AND node.execution_id=$2 ORDER BY run.id
+         ) AS child_statuses,
+         ARRAY(
+           SELECT job.status FROM jobs job
+            WHERE job.space_id=$1
+              AND job.payload_json->>'workflow_execution_id'=$2
+            ORDER BY job.id
+         ) AS job_statuses`,
+      [SPACE, String(fired.workflow_execution_id), String(fired.root_run_id)],
+    );
+    expect(terminal.rows[0]?.root_status).toBe("cancelled");
+    expect(terminal.rows[0]?.node_statuses).toEqual(["blocked"]);
+    expect(terminal.rows[0]?.child_statuses).toEqual(["cancelled"]);
+    expect(terminal.rows[0]?.job_statuses).toEqual(["cancelled"]);
   });
 
   it("rejects follow resolution for unattended workflow triggers", async () => {

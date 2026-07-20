@@ -20,7 +20,7 @@ describe("research report reference resolution", () => {
   it("returns readable metadata and replaces private source identifiers with stable references", async () => {
     const result = await resolveResearchReportReferences(new ReferenceDb([{
       id: "item-readable", title: "Readable source", metadata_json: { authors: ["Ada", "Lin"], year: 2025 },
-      occurred_at: "2025-04-01T00:00:00.000Z", source_object_id: "paper-1",
+      occurred_at: "2025-04-01T00:00:00.000Z", reference_object_id: "paper-1",
     }]), identity, {
       findings: [{ references: [{ source_item_id: "item-readable" }] }], sources: [], ideas: [],
     });

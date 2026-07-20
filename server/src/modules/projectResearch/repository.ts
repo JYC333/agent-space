@@ -4,12 +4,15 @@ import {
   dateIso,
   objectValue,
   optionalString,
+  withQueryableTransaction,
   type Queryable,
   type SpaceUserIdentity,
 } from "../routeUtils/common";
-import { contentReadSql } from "../access/contentAccessSql";
-import { assertProjectReadable, assertProjectWriter } from "../projects/access";
+import { contentAccessLevelSql, contentReadSql } from "../access/contentAccessSql";
+import { contentResourceDefinition } from "../access/contentAccessRegistry";
+import { assertProjectReadable, assertProjectWriter, lockActiveProjectForMutation } from "../projects/access";
 import { ProjectCorpusRepository } from "../projects/corpusRepository";
+import { evidenceProvenanceReadableClause, sourceItemReadableClause } from "../sources/sourceItemAccess";
 import { PgUsageRepository, type UsageRunSummaryRecord } from "../usage/repository";
 
 const OUTPUT_TYPES = new Set(["paper", "thesis", "report", "review", "proposal", "other"]);
@@ -22,6 +25,10 @@ const CHECKPOINT_TYPES = new Set(["profile_approval", "screening_gate", "idea_re
 const SCREENING_REVIEW_ITEM_LIMIT = 200;
 const CHECKPOINT_DECISIONS = new Set(["approved", "rejected", "waived"]);
 const SUPPORT_STATUSES = new Set(["unsupported", "supported", "partial", "gap_declared"]);
+const RESEARCH_OBJECT_ACCESS = contentResourceDefinition("space_object")!;
+const RESEARCH_SOURCE_ACCESS = contentResourceDefinition("source_item")!;
+const RESEARCH_EVIDENCE_ACCESS = contentResourceDefinition("extracted_evidence")!;
+const RESEARCH_ANNOTATION_ACCESS = contentResourceDefinition("reader_annotation")!;
 
 interface ProfileRow {
   id: string;
@@ -170,7 +177,7 @@ function screeningPaperReviewCtes(): string {
             ORDER BY paper_key, last_seen_at DESC NULLS LAST, updated_at DESC NULLS LAST, source_item_id ASC
          ), corpus_candidates AS (
            SELECT ${screeningPaperIdentitySql("si")} AS paper_key,
-                  pci.source_item_id,
+                  pcis.source_item_id,
                   pci.object_id,
                   pci.evidence_id,
                   pci.source_decision_id,
@@ -184,13 +191,15 @@ function screeningPaperReviewCtes(): string {
                   d.confidence AS ai_confidence,
                   d.reason AS ai_reason
              FROM project_corpus_items pci
+             JOIN project_corpus_item_sources pcis
+               ON pcis.corpus_item_id=pci.id AND pcis.space_id=pci.space_id
              JOIN source_items si
-               ON si.space_id=pci.space_id AND si.id=pci.source_item_id AND si.deleted_at IS NULL
+               ON si.space_id=pcis.space_id AND si.id=pcis.source_item_id AND si.deleted_at IS NULL
              LEFT JOIN source_post_processing_item_decisions d
                ON d.space_id=pci.space_id AND d.id=pci.source_decision_id
             WHERE pci.space_id=$1 AND pci.project_id=$2
               AND pci.status='active'
-              AND pci.source_item_id=ANY($3::text[])
+              AND pcis.source_item_id=ANY($3::text[])
          ), corpus_best AS (
            SELECT DISTINCT ON (paper_key) *
              FROM corpus_candidates
@@ -555,6 +564,13 @@ export class ProjectResearchRepository {
 
   async startWorkflow(identity: SpaceUserIdentity, projectId: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
     await assertProjectWriter(this.db, identity.spaceId, projectId, identity.userId);
+    return withQueryableTransaction(this.db, async (db) => {
+      await lockActiveProjectForMutation(db, identity.spaceId, projectId);
+      return new ProjectResearchRepository(db).startWorkflowLocked(identity, projectId, body);
+    });
+  }
+
+  private async startWorkflowLocked(identity: SpaceUserIdentity, projectId: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
     const profile = await this.profileRow(identity.spaceId, projectId);
     if (!profile || profile.status !== "approved") {
       throw new HttpError(422, "The research profile must be approved before starting a workflow");
@@ -587,6 +603,19 @@ export class ProjectResearchRepository {
     body: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
     await assertProjectWriter(this.db, identity.spaceId, projectId, identity.userId);
+    return withQueryableTransaction(this.db, async (db) => {
+      await lockActiveProjectForMutation(db, identity.spaceId, projectId);
+      return new ProjectResearchRepository(db).runStageLocked(identity, projectId, workflowId, stageKey, body);
+    });
+  }
+
+  private async runStageLocked(
+    identity: SpaceUserIdentity,
+    projectId: string,
+    workflowId: string,
+    stageKey: string,
+    body: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
     const row = await this.workflowRow(identity.spaceId, projectId, workflowId);
     if (!row) throw new HttpError(404, "Research workflow not found");
     if (row.status !== "active") throw new HttpError(422, `Cannot run a stage on a workflow with status ${row.status}`);
@@ -1144,7 +1173,7 @@ export class ProjectResearchRepository {
        ) VALUES (
          $1, $2, $3, $4, $5, $6, 'application/json',
          true, $7::jsonb, 'json', false,
-         $8, $8, 'space_shared', $9
+         $8, $8, 'private', $9
        )`,
       [artifactId, identity.spaceId, projectId, input.artifactType, input.title.slice(0, 512), input.content, JSON.stringify(["json"]), now, identity.userId],
     );
@@ -1326,21 +1355,106 @@ export class ProjectResearchRepository {
               ap.cited_by_count, ap.reference_count,
               src.uri AS source_uri, src.metadata_json->'authors' AS authors, src.metadata_json->'categories' AS categories,
               (SELECT count(*) FROM extracted_evidence ee
-                WHERE ee.space_id = pci.space_id AND ee.source_item_id = pci.source_item_id
-                  AND pci.source_item_id IS NOT NULL AND ee.deleted_at IS NULL) AS evidence_count,
+                WHERE ee.space_id = pci.space_id AND ee.deleted_at IS NULL
+                  AND ${contentReadSql("extracted_evidence", "ee", "$3")}
+                  AND ${contentAccessLevelSql({ definition: RESEARCH_EVIDENCE_ACCESS, alias: "ee", userExpr: "$3" })} = 'full'
+                  AND ${evidenceProvenanceReadableClause("ee", "$3", true)}
+                  AND EXISTS (
+                    SELECT 1
+                      FROM project_corpus_item_sources pcis
+                      JOIN source_items provenance_source
+                        ON provenance_source.id = pcis.source_item_id
+                       AND provenance_source.space_id = pcis.space_id
+                       AND provenance_source.deleted_at IS NULL
+                     WHERE pcis.corpus_item_id = pci.id
+                       AND pcis.space_id = pci.space_id
+                       AND pcis.source_item_id = COALESCE(ee.source_item_id, ee.origin_source_item_id)
+                       AND ${sourceItemReadableClause("provenance_source", "$3", false)}
+                       AND ${contentAccessLevelSql({ definition: RESEARCH_SOURCE_ACCESS, alias: "provenance_source", userExpr: "$3" })} = 'full'
+                  )) AS evidence_count,
               (SELECT count(*) FROM reader_annotations ra
                 WHERE ra.space_id = pci.space_id
                   AND ra.document_type = 'source_item'
-                  AND ra.document_id = pci.source_item_id
-                  AND pci.source_item_id IS NOT NULL AND ra.status = 'active') AS annotation_count
+                  AND ra.status = 'active'
+                  AND ${contentReadSql("reader_annotation", "ra", "$3")}
+                  AND ${contentAccessLevelSql({ definition: RESEARCH_ANNOTATION_ACCESS, alias: "ra", userExpr: "$3" })} = 'full'
+                  AND EXISTS (
+                    SELECT 1
+                      FROM project_corpus_item_sources pcis
+                      JOIN source_items provenance_source
+                        ON provenance_source.id = pcis.source_item_id
+                       AND provenance_source.space_id = pcis.space_id
+                       AND provenance_source.deleted_at IS NULL
+                     WHERE pcis.corpus_item_id = pci.id
+                       AND pcis.space_id = pci.space_id
+                       AND pcis.source_item_id = ra.document_id
+                       AND ${sourceItemReadableClause("provenance_source", "$3", false)}
+                       AND ${contentAccessLevelSql({ definition: RESEARCH_SOURCE_ACCESS, alias: "provenance_source", userExpr: "$3" })} = 'full'
+                  )) AS annotation_count
          FROM project_corpus_items pci
          LEFT JOIN space_objects so ON so.id = pci.object_id AND so.space_id = pci.space_id
          LEFT JOIN academic_papers ap ON ap.object_id = so.id AND ap.space_id = pci.space_id
          LEFT JOIN sources src ON src.object_id = so.id AND src.space_id = pci.space_id
+         LEFT JOIN source_items direct_source
+           ON direct_source.id = pci.source_item_id
+          AND direct_source.space_id = pci.space_id
+          AND direct_source.deleted_at IS NULL
+         LEFT JOIN extracted_evidence matrix_evidence
+           ON matrix_evidence.id = pci.evidence_id
+          AND matrix_evidence.space_id = pci.space_id
+          AND matrix_evidence.deleted_at IS NULL
+         LEFT JOIN source_items evidence_source
+           ON evidence_source.id = COALESCE(matrix_evidence.source_item_id, matrix_evidence.origin_source_item_id)
+          AND evidence_source.space_id = matrix_evidence.space_id
+          AND evidence_source.deleted_at IS NULL
         WHERE pci.space_id = $1 AND pci.project_id = $2 AND pci.status = 'active'
           AND pci.triage_status IN ('included', 'maybe')
+          AND (
+            pci.object_id IS NULL
+            OR (
+              so.id IS NOT NULL
+              AND ${contentReadSql("space_object", "so", "$3")}
+              AND ${contentAccessLevelSql({ definition: RESEARCH_OBJECT_ACCESS, alias: "so", userExpr: "$3" })} = 'full'
+            )
+          )
+          AND (
+            pci.source_item_id IS NULL
+            OR (
+              direct_source.id IS NOT NULL
+              AND ${sourceItemReadableClause("direct_source", "$3", false)}
+              AND ${contentAccessLevelSql({ definition: RESEARCH_SOURCE_ACCESS, alias: "direct_source", userExpr: "$3" })} = 'full'
+            )
+          )
+          AND (
+            pci.evidence_id IS NULL
+            OR (
+              matrix_evidence.id IS NOT NULL
+              AND ${contentReadSql("extracted_evidence", "matrix_evidence", "$3")}
+              AND ${contentAccessLevelSql({ definition: RESEARCH_EVIDENCE_ACCESS, alias: "matrix_evidence", userExpr: "$3" })} = 'full'
+              AND ${evidenceProvenanceReadableClause("matrix_evidence", "$3", true)}
+            )
+          )
+          AND (
+            NOT EXISTS (
+              SELECT 1 FROM project_corpus_item_sources any_provenance
+               WHERE any_provenance.corpus_item_id = pci.id
+                 AND any_provenance.space_id = pci.space_id
+            )
+            OR EXISTS (
+              SELECT 1
+                FROM project_corpus_item_sources readable_provenance
+                JOIN source_items provenance_source
+                  ON provenance_source.id = readable_provenance.source_item_id
+                 AND provenance_source.space_id = readable_provenance.space_id
+                 AND provenance_source.deleted_at IS NULL
+               WHERE readable_provenance.corpus_item_id = pci.id
+                 AND readable_provenance.space_id = pci.space_id
+                 AND ${sourceItemReadableClause("provenance_source", "$3", false)}
+                 AND ${contentAccessLevelSql({ definition: RESEARCH_SOURCE_ACCESS, alias: "provenance_source", userExpr: "$3" })} = 'full'
+            )
+          )
         ORDER BY pci.triage_status ASC, so.title ASC NULLS LAST`,
-      [identity.spaceId, projectId],
+      [identity.spaceId, projectId, identity.userId],
     );
     return result.rows.map((row) => ({
       corpus_item_id: row.id,

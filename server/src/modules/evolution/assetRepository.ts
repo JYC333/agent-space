@@ -24,7 +24,6 @@ import {
 const ASSET_TYPES = new Set([
   "prompt_template",
   "workflow_template",
-  "capability",
   "agent_config",
   "runtime_skill_binding",
   "source_post_processing_rule",

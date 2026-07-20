@@ -7,6 +7,7 @@ import {
   requiredString,
   optionalString,
   numberValue,
+  toDbDate,
   withDbTransaction,
   type SpaceUserIdentity,
 } from "../routeUtils/common";
@@ -19,9 +20,10 @@ import {
   type RelationPersonRow,
   type RelationSourceLinkRow,
 } from "./repository";
+import { PgKnowledgeRepository } from "../knowledge/repository";
 
 const IDENTITY_TYPES = new Set(["email", "url", "phone", "orcid", "github", "twitter", "linkedin", "other"]);
-// Shared by relation_identities.source and relation_affiliations.source — both columns declare the same CHECK allow-list.
+// Shared vocabulary for identity and affiliation proposal provenance.
 const PROVENANCE_SOURCES = new Set(["manual", "import", "source_sync", "agent"]);
 const ORG_TYPES = new Set([
   "company",
@@ -34,7 +36,7 @@ const ORG_TYPES = new Set([
   "family",
   "other",
 ]);
-const SOURCE_LINK_TYPES = new Set(["activity", "source_item", "evidence", "external", "import"]);
+const SOURCE_LINK_TYPES = new Set(["activity", "source_item", "evidence", "external"]);
 
 export interface PersonOut {
   object_id: string;
@@ -292,20 +294,19 @@ export class RelationsService {
     ]);
     if (!person) throw new HttpError(422, "person_object_id does not reference an existing relation person");
     if (!organization) throw new HttpError(422, "organization_object_id does not reference an existing relation organization");
-    return withDbTransaction(this.pool, async (client) => {
-      const row = await this.repository.createAffiliation(client, {
-        spaceId: identity.spaceId,
-        personObjectId,
-        organizationObjectId,
+    return new PgKnowledgeRepository(this.pool).proposeObjectRelation(identity, {
+      from_object_id: personObjectId,
+      to_object_id: organizationObjectId,
+      relation_type: "affiliated_with",
+      confidence,
+      metadata: {
         role: optionalString(body.role),
         title: optionalString(body.title),
-        startDate: optionalString(body.start_date),
-        endDate: optionalString(body.end_date),
-        confidence,
+        start_date: toDbDate(body.start_date),
+        end_date: toDbDate(body.end_date),
         source,
-        createdByUserId: identity.userId,
-      });
-      return affiliationOut(row);
+      },
+      rationale: "Affiliation relation requested.",
     });
   }
 
@@ -321,10 +322,8 @@ export class RelationsService {
     const personObjectId = await this.repository.affiliationPersonObjectId(identity.spaceId, affiliationId);
     if (!personObjectId) throw new HttpError(404, "Relation affiliation not found");
     await this.requireOwnedRelationObject(identity, personObjectId);
-    return withDbTransaction(this.pool, async (client) => {
-      const row = await this.repository.endAffiliation(client, identity.spaceId, affiliationId, endDate);
-      if (!row) throw new HttpError(404, "Relation affiliation not found");
-      return affiliationOut(row);
+    return new PgKnowledgeRepository(this.pool).proposeObjectRelationArchive(identity, affiliationId, {
+      end_date: toDbDate(endDate) ?? new Date().toISOString(),
     });
   }
 
@@ -380,7 +379,7 @@ export class RelationsService {
 
   async listSourceLinks(identity: SpaceUserIdentity, objectId: string) {
     await this.requireRelationObject(identity, objectId);
-    const rows = await this.repository.listSourceLinks(identity.spaceId, objectId);
+    const rows = await this.repository.listSourceLinks(identity.spaceId, objectId, identity.userId);
     return rows.map(sourceLinkOut);
   }
 
@@ -421,6 +420,11 @@ export class RelationsService {
     if (input.linkType === "external" && !input.externalRef) {
       throw new HttpError(422, "external_ref is required for external source links");
     }
+    const targetCount = [input.activityId, input.sourceItemId, input.evidenceId, input.externalRef]
+      .filter((target) => target !== null).length;
+    if (targetCount !== 1) {
+      throw new HttpError(422, "Exactly one source link target is required");
+    }
 
     const checks: Array<Promise<void>> = [];
     if (input.activityId) {
@@ -432,14 +436,14 @@ export class RelationsService {
     }
     if (input.sourceItemId) {
       checks.push(
-        this.repository.sourceItemExistsInSpace(identity.spaceId, input.sourceItemId).then((exists) => {
+        this.repository.sourceItemExistsInSpace(identity.spaceId, input.sourceItemId, identity.userId).then((exists) => {
           if (!exists) throw new HttpError(422, "source_item_id does not reference a source item in this space");
         }),
       );
     }
     if (input.evidenceId) {
       checks.push(
-        this.repository.evidenceExistsInSpace(identity.spaceId, input.evidenceId).then((exists) => {
+        this.repository.evidenceExistsInSpace(identity.spaceId, input.evidenceId, identity.userId).then((exists) => {
           if (!exists) throw new HttpError(422, "evidence_id does not reference extracted evidence in this space");
         }),
       );

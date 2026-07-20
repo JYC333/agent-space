@@ -2,6 +2,8 @@ import type { ServerConfig } from "../../config";
 import { dateIso, dbPool, HttpError, page, requiredString, optionalString, numberValue, withDbTransaction, type SpaceUserIdentity } from "../routeUtils/common";
 import { AcademicRepository, type AcademicAuthorRow, type AcademicCitationRow, type AcademicPaperRow } from "./repository";
 import { contentOwnerFromDb } from "../access/contentAccessQuery";
+import { PgKnowledgeRepository } from "../knowledge/repository";
+import { canonicalAcademicIdentity } from "./identity";
 
 const PAPER_TYPES = new Set(["article", "preprint", "conference_paper", "book_chapter", "thesis", "report", "other"]);
 
@@ -80,8 +82,8 @@ export class AcademicService {
     const title = requiredString(body.title, "title");
     const paperType = optionalString(body.paper_type) ?? "article";
     if (!PAPER_TYPES.has(paperType)) throw new HttpError(422, `paper_type must be one of ${[...PAPER_TYPES].join(", ")}`);
-    const doi = optionalString(body.doi);
-    const arxivId = optionalString(body.arxiv_id);
+    const doi = canonicalAcademicIdentity(optionalString(body.doi));
+    const arxivId = canonicalAcademicIdentity(optionalString(body.arxiv_id));
     if (doi || arxivId) {
       const existing = await this.repository.findByExternalId(
         identity.spaceId,
@@ -97,8 +99,8 @@ export class AcademicService {
         summary: optionalString(body.summary),
         doi,
         arxivId,
-        pmid: optionalString(body.pmid),
-        openalexId: optionalString(body.openalex_id),
+        pmid: canonicalAcademicIdentity(optionalString(body.pmid)),
+        openalexId: canonicalAcademicIdentity(optionalString(body.openalex_id)),
         publicationDate: optionalString(body.publication_date),
         venue: optionalString(body.venue),
         paperType,
@@ -143,12 +145,16 @@ export class AcademicService {
     const personObjectId = requiredString(body.person_object_id, "person_object_id");
     const personExists = await this.repository.personExists(identity.spaceId, personObjectId, identity.userId);
     if (!personExists) throw new HttpError(422, "person_object_id does not reference an existing relation person");
-    const relationId = await this.repository.linkAuthor(identity.spaceId, paperObjectId, personObjectId, {
-      authorPosition: numberValue(body.author_position),
-      isCorresponding: body.is_corresponding === true,
-      createdByUserId: identity.userId,
+    return new PgKnowledgeRepository(this.pool).proposeObjectRelation(identity, {
+      from_object_id: paperObjectId,
+      to_object_id: personObjectId,
+      relation_type: "authored_by",
+      metadata: {
+        author_position: numberValue(body.author_position),
+        is_corresponding: body.is_corresponding === true,
+      },
+      rationale: "Academic author link requested.",
     });
-    return { object_relation_id: relationId };
   }
 
   async listAuthors(identity: SpaceUserIdentity, paperObjectId: string) {
@@ -168,8 +174,12 @@ export class AcademicService {
     ]);
     if (!citingPaper) throw new HttpError(404, "Citing paper not found");
     if (!citedPaper) throw new HttpError(422, "cited_paper_object_id does not reference an existing paper in this space");
-    const relationId = await this.repository.linkCitation(identity.spaceId, citingPaperObjectId, citedPaperObjectId, identity.userId);
-    return { object_relation_id: relationId };
+    return new PgKnowledgeRepository(this.pool).proposeObjectRelation(identity, {
+      from_object_id: citingPaperObjectId,
+      to_object_id: citedPaperObjectId,
+      relation_type: "cites",
+      rationale: "Academic citation link requested.",
+    });
   }
 
   async listCitations(identity: SpaceUserIdentity, paperObjectId: string) {

@@ -17,6 +17,7 @@ import type { SourceConnectionRow } from "../src/modules/sources/sourceRepositor
 const MIGRATIONS_DIR = join(process.cwd(), "migrations");
 const SPACE = "11111111-1111-4111-8111-111111111111";
 const OWNER = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const OTHER = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const PROJECT = "55555555-5555-4555-8555-555555555555";
 const AGENT = "77777777-7777-4777-8777-777777777777";
 const AGENT_VERSION = "88888888-8888-4888-8888-888888888888";
@@ -185,10 +186,10 @@ async function seedItem(title: string, createdAt: string): Promise<string> {
   const id = randomUUID();
   await pool!.query(
     `INSERT INTO source_items (
-       id, space_id, owner_user_id, visibility, connection_id, item_type, source_object_type, source_object_id,
+       id, space_id, owner_user_id, visibility, connection_id, item_type,
        title, source_uri, excerpt, first_seen_at, last_seen_at,
        content_state, retention_policy, created_at, updated_at
-     ) VALUES ($1,$2,$3,'space_shared',$4,'external_url','source_item',$1,$5,$7,'Paper abstract',
+     ) VALUES ($1,$2,$3,'space_shared',$4,'external_url',$5,$7,'Paper abstract',
        $6,$6,'excerpt_saved','summary_only',$6,$6)`,
     [id, SPACE, OWNER, CONNECTION, title, createdAt, `https://example.org/paper/${id}`],
   );
@@ -358,6 +359,51 @@ describe("source post-processing repository (real Postgres)", () => {
     });
     expect(next.items.map((item) => item.id)).toEqual([second]);
     expect(next.evidence).toHaveLength(0);
+  });
+
+  it("applies channel and reader gates to origin-backed explicit Evidence", async () => {
+    if (!available || !pool) return;
+    const itemId = await seedItem("Origin paper", "2026-07-01T00:00:00.000Z");
+    const evidenceId = randomUUID();
+    const now = new Date().toISOString();
+    await pool.query(
+      `INSERT INTO extracted_evidence (
+         id,space_id,owner_user_id,visibility,source_item_id,origin_source_item_id,source_object_type,
+         evidence_type,title,content_excerpt,trust_level,extraction_method,status,created_at,updated_at
+       ) VALUES ($1,$2,$3,'space_shared',NULL,$4,'reader_annotation','excerpt','Origin quote','Secret quote',
+                 'normal','manual','candidate',$5,$5)`,
+      [evidenceId, SPACE, OWNER, itemId, now],
+    );
+    const config = normalizeInputConfig({ window: "explicit", include_evidence: true });
+    const ownerBatch = await repo().collectInputBatch({
+      spaceId: SPACE, sourceChannelId: CONNECTION, viewerUserId: OWNER, inputConfig: config,
+      cursor: null, explicitItemIds: [itemId], explicitEvidenceIds: [evidenceId],
+    });
+    expect(ownerBatch.evidence.map((row) => row.id)).toEqual([evidenceId]);
+
+    await pool.query(`INSERT INTO users (id,display_name,status,created_at,updated_at) VALUES ($1,$1,'active',$2,$2)`, [OTHER, now]);
+    await pool.query(
+      `INSERT INTO space_memberships (id,space_id,user_id,role,status,created_at,updated_at)
+       VALUES ($1,$2,$3,'member','active',$4,$4)`,
+      [randomUUID(), SPACE, OTHER, now],
+    );
+    await expect(repo().collectInputBatch({
+      spaceId: SPACE, sourceChannelId: CONNECTION, viewerUserId: OTHER, inputConfig: config,
+      cursor: null, explicitItemIds: [], explicitEvidenceIds: [evidenceId],
+    })).rejects.toMatchObject({ statusCode: 404 });
+
+    await pool.query(
+      `INSERT INTO source_channel_user_subscriptions (
+         id,space_id,source_channel_id,user_id,status,library_enabled,digest_enabled,created_at,updated_at
+       ) VALUES ($1,$2,$3,$4,'subscribed',true,true,$5,$5)`,
+      [randomUUID(), SPACE, CONNECTION, OTHER, now],
+    );
+    await pool.query(`UPDATE source_items SET access_level='summary' WHERE id=$1`, [itemId]);
+    await pool.query(`UPDATE extracted_evidence SET access_level='summary' WHERE id=$1`, [evidenceId]);
+    await expect(repo().collectInputBatch({
+      spaceId: SPACE, sourceChannelId: CONNECTION, viewerUserId: OTHER, inputConfig: config,
+      cursor: null, explicitItemIds: [itemId], explicitEvidenceIds: [evidenceId],
+    })).rejects.toMatchObject({ statusCode: 404 });
   });
 
   it("records runs and advances per-rule cursor explicitly", async () => {

@@ -16,6 +16,7 @@ import {
   type CustomSourceContractValidationResult,
 } from "./customSourceContractValidator";
 import { effectiveCustomSourceLimits, type CustomSourceRunnerSettings } from "./customSourceRunner";
+import { upsertCanonicalEvidence } from "../evidenceIdentity";
 
 /**
  * Validates and materializes source implementation output (Level 2 recipes or
@@ -407,39 +408,34 @@ export class CustomSourceMaterializationService {
     descriptor: SourceMaterializationDescriptor,
   ): Promise<void> {
     const now = new Date().toISOString();
-    const evidenceId = randomUUID();
-    await this.db.query(
-      `INSERT INTO extracted_evidence (
-         id, space_id, source_item_id, source_object_type, source_object_id,
-         evidence_type, title, content_excerpt, content_hash,
-         extraction_method, trust_level, confidence, status,
-         metadata_json, created_at, updated_at, owner_user_id, visibility, access_level
-       ) VALUES (
-         $1, $2::varchar, $3::varchar, 'source_item', $3::varchar,
-         $4, $5, $6, $7,
-         $11, 'untrusted', $8::float, 'candidate',
-         $9::jsonb, $10, $10,
-         (SELECT owner_user_id FROM source_items WHERE space_id = $2::varchar AND id = $3::varchar),
-         (SELECT visibility FROM source_items WHERE space_id = $2::varchar AND id = $3::varchar),
-         (SELECT access_level FROM source_items WHERE space_id = $2::varchar AND id = $3::varchar)
-       )`,
-      [
-        evidenceId,
-        run.spaceId,
-        sourceItemId,
-        normalizeEvidenceType(evidence.evidence_type),
-        evidence.title.slice(0, 1024),
-        evidence.content_excerpt?.slice(0, 4096) ?? null,
-        evidence.content_excerpt ? sha256(evidence.content_excerpt) : null,
-        evidence.confidence ?? 0.5,
-        JSON.stringify({
-          [descriptor.implementationVersionMetadataKey]: run.handlerVersionId,
-          [descriptor.runMetadataKey]: run.runId,
-        }),
-        now,
-        descriptor.captureMethod,
-      ],
+    const item = await this.db.query<{ owner_user_id: string | null; visibility: string; access_level: string }>(
+      `SELECT owner_user_id, visibility, access_level FROM source_items WHERE space_id=$1 AND id=$2`,
+      [run.spaceId, sourceItemId],
     );
+    if (!item.rows[0]) throw new Error("Custom Source Evidence target disappeared");
+    const metadata = {
+      [descriptor.implementationVersionMetadataKey]: run.handlerVersionId,
+      [descriptor.runMetadataKey]: run.runId,
+    };
+    const evidenceId = await upsertCanonicalEvidence(this.db, {
+      spaceId: run.spaceId,
+      ownerUserId: item.rows[0].owner_user_id,
+      visibility: item.rows[0].visibility,
+      accessLevel: item.rows[0].access_level,
+      sourceItemId,
+      sourceObjectType: "source_item",
+      sourceObjectId: sourceItemId,
+      evidenceType: normalizeEvidenceType(evidence.evidence_type),
+      title: evidence.title.slice(0, 1024),
+      contentExcerpt: evidence.content_excerpt?.slice(0, 4096) ?? null,
+      contentHash: evidence.content_excerpt ? sha256(evidence.content_excerpt) : null,
+      trustLevel: "untrusted",
+      extractionMethod: descriptor.captureMethod,
+      confidence: evidence.confidence ?? 0.5,
+      status: "candidate",
+      metadata,
+      observedAt: now,
+    });
     await inheritContentAccessGrants(this.db, {
       spaceId: run.spaceId,
       sourceResourceType: "source_item",

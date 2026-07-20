@@ -16,6 +16,8 @@ export const extractionJobs = pgTable("extraction_jobs", {
 	connectionId: varchar("connection_id", { length: 36 }),
 	sourceItemId: varchar("source_item_id", { length: 36 }),
 	sourceSnapshotId: varchar("source_snapshot_id", { length: 36 }),
+	// Capture origin only. Materialized Knowledge References live in the
+	// FK-backed source_item_references bridge.
 	sourceObjectType: varchar("source_object_type", { length: 64 }),
 	sourceObjectId: varchar("source_object_id", { length: 36 }),
 	jobType: varchar("job_type", { length: 64 }).notNull(),
@@ -124,6 +126,7 @@ export const sourceItems = pgTable("source_items", {
 	index("ix_source_items_visibility").using("btree", table.visibility.asc().nullsLast()),
 	uniqueIndex("uq_source_items_active_canonical_uri").using("btree", table.spaceId.asc().nullsLast(), table.canonicalUri.asc().nullsLast()).where(sql`((canonical_uri IS NOT NULL) AND (deleted_at IS NULL))`),
 	uniqueIndex("uq_source_items_active_source_uri").using("btree", table.spaceId.asc().nullsLast(), table.sourceUri.asc().nullsLast()).where(sql`((source_uri IS NOT NULL) AND (deleted_at IS NULL))`),
+	unique("uq_source_items_id_space").on(table.id, table.spaceId),
 	foreignKey({
 			columns: [table.extractedArtifactId],
 			foreignColumns: [artifacts.id],
@@ -162,6 +165,8 @@ export const sourceItems = pgTable("source_items", {
 	check("ck_source_items_content_state", sql`(content_state)::text = ANY (ARRAY[('metadata_only'::character varying)::text, ('excerpt_saved'::character varying)::text, ('content_queued'::character varying)::text, ('content_saved'::character varying)::text, ('snapshot_queued'::character varying)::text, ('snapshot_saved'::character varying)::text, ('extraction_failed'::character varying)::text, ('content_unavailable'::character varying)::text])`),
 	check("ck_source_items_item_type", sql`(item_type)::text = ANY (ARRAY[('external_url'::character varying)::text, ('feed_entry'::character varying)::text, ('activity_record'::character varying)::text, ('artifact'::character varying)::text, ('run_event'::character varying)::text, ('file'::character varying)::text, ('document'::character varying)::text, ('log'::character varying)::text])`),
 	check("ck_source_items_retention_policy", sql`(retention_policy)::text = ANY (ARRAY[('metadata_only'::character varying)::text, ('summary_only'::character varying)::text, ('full_text'::character varying)::text, ('full_snapshot'::character varying)::text, ('archived'::character varying)::text])`),
+	check("ck_source_items_origin_pair", sql`(source_object_type IS NULL) = (source_object_id IS NULL)`),
+	check("ck_source_items_origin_type", sql`source_object_type IS NULL OR source_object_type IN ('activity_record', 'artifact', 'run_event')`),
 	check("ck_source_items_visibility", sql`visibility IN ('private', 'space_shared', 'selected_users')`),
 	check("ck_source_items_access_level", sql`access_level IN ('full', 'summary')`),
 	check("ck_source_items_private_owner", sql`visibility = 'space_shared' OR owner_user_id IS NOT NULL`),
@@ -483,6 +488,7 @@ export const sourcePostProcessingItemDecisions = pgTable("source_post_processing
 	index("ix_source_post_processing_item_decisions_project_review").using("btree", table.spaceId.asc().nullsLast(), table.projectId.asc().nullsLast(), table.reviewStatus.asc().nullsLast(), table.relevance.asc().nullsLast(), table.createdAt.desc().nullsFirst()),
 	index("ix_source_post_processing_item_decisions_rule_run").using("btree", table.spaceId.asc().nullsLast(), table.ruleId.asc().nullsLast(), table.runId.asc().nullsLast()),
 	uniqueIndex("uq_source_post_processing_item_decisions_run_item").using("btree", table.spaceId.asc().nullsLast(), table.runId.asc().nullsLast(), table.sourceItemId.asc().nullsLast()),
+	unique("uq_source_post_processing_item_decisions_id_space").on(table.id, table.spaceId),
 	foreignKey({
 			columns: [table.sourceItemId],
 			foreignColumns: [sourceItems.id],

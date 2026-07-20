@@ -91,10 +91,15 @@ export const activityRecords = pgTable("activity_records", {
 			name: "activity_records_workspace_id_fkey"
 		}),
 	foreignKey({
+			columns: [table.projectId],
+			foreignColumns: [projects.id],
+			name: "activity_records_project_id_delete_fkey"
+		}).onDelete("set null"),
+	foreignKey({
 			columns: [table.projectId, table.spaceId],
 			foreignColumns: [projects.id, projects.spaceId],
 			name: "fk_activity_records_project_id_projects"
-		}).onDelete("set null"),
+		}),
 	foreignKey({
 			columns: [table.sourceTaskId],
 			foreignColumns: [tasks.id],

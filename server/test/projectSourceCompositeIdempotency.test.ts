@@ -8,7 +8,7 @@ const identity = { spaceId: "space-1", userId: "user-1" };
 describe("Project source composite command idempotency", () => {
   it("denies a Project viewer before creating a binding proposal",async()=>{
     const query=vi.fn(async(sql:string)=>{
-      if(sql.includes("SELECT id")&&sql.includes("FROM projects"))return{rows:[{id:"project-1"}],rowCount:1};
+      if(sql.includes("SELECT id")&&sql.includes("FROM projects"))return{rows:[{id:"project-1",status:"active"}],rowCount:1};
       if(sql.includes("SELECT owner_user_id")&&sql.includes("FROM projects"))return{rows:[{owner_user_id:"user-2"}],rowCount:1};
       if(sql.includes("FROM space_memberships"))return{rows:[{role:"member"}],rowCount:1};
       if(sql.includes("FROM project_members"))return{rows:[{role:"viewer"}],rowCount:1};
@@ -30,7 +30,7 @@ describe("Project source composite command idempotency", () => {
 
   it("fails closed when a source setup key is reused with different parameters", async () => {
     const query = vi.fn(async (sql: string) => {
-      if(sql.includes("FROM projects"))return{rows:[{id:"project-1",owner_user_id:"user-1"}],rowCount:1};
+      if(sql.includes("FROM projects"))return{rows:[{id:"project-1",owner_user_id:"user-1",status:"active"}],rowCount:1};
       if (sql.includes("pg_advisory_xact_lock")) return { rows: [{}] };
       if (sql.includes("FROM project_operations") && sql.includes("idempotency")) {
         return { rows: [{ id: "operation-1", fingerprint: "different" }] };
@@ -50,7 +50,7 @@ describe("Project source composite command idempotency", () => {
 
   it("rejects a backfill key owned by another Project binding before creating an operation", async () => {
     const query = vi.fn(async (sql: string) => {
-      if(sql.includes("FROM projects"))return{rows:[{id:"project-1",owner_user_id:"user-1"}],rowCount:1};
+      if(sql.includes("FROM projects"))return{rows:[{id:"project-1",owner_user_id:"user-1",status:"active"}],rowCount:1};
       if (sql.includes("pg_advisory_xact_lock")) return { rows: [{}] };
       if (sql.includes("FROM project_source_bindings") && sql.includes("status='active'")) {
         return { rows: [{ source_connection_id: "connection-1" }] };
@@ -78,5 +78,30 @@ describe("Project source composite command idempotency", () => {
     });
     await expect(command).rejects.toMatchObject({ statusCode: 409 });
     expect(query.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO project_operations"))).toBe(false);
+  });
+
+  it("locks Project before the Source binding in backfill proposal transactions", async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("SELECT owner_user_id") && sql.includes("FROM projects")) {
+        return { rows: [{ owner_user_id: identity.userId }], rowCount: 1 };
+      }
+      if (sql.includes("FROM projects")) {
+        return { rows: [{ id: "project-1", status: "active" }], rowCount: 1 };
+      }
+      if (sql.includes("pg_advisory_xact_lock")) return { rows: [{}], rowCount: 1 };
+      if (sql.includes("FROM project_source_bindings") && sql.includes("FOR UPDATE")) {
+        return { rows: [], rowCount: 0 };
+      }
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+    const service = new ProjectSourceProposalService({ query } as unknown as Queryable, loadConfig({}));
+    await expect(service.proposeBackfill(identity, "project-1", "binding-1", {
+      idempotency_key: "lock-order",
+    })).rejects.toMatchObject({ statusCode: 404 });
+    const statements = query.mock.calls.map(([sql]) => String(sql));
+    const projectLock = statements.findIndex((sql) => sql.includes("FROM projects") && sql.includes("FOR UPDATE"));
+    const bindingLock = statements.findIndex((sql) => sql.includes("FROM project_source_bindings") && sql.includes("FOR UPDATE"));
+    expect(projectLock).toBeGreaterThanOrEqual(0);
+    expect(bindingLock).toBeGreaterThan(projectLock);
   });
 });

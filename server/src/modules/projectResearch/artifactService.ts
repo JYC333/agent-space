@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { Queryable } from "../routeUtils/common";
 import { objectValue } from "../routeUtils/common";
+import { contentAccessLevelSql, contentReadSql } from "../access/contentAccessSql";
+import { contentResourceDefinition } from "../access/contentAccessRegistry";
+import { evidenceProvenanceReadableClause, sourceItemReadableClause } from "../sources/sourceItemAccess";
+
+const MATRIX_SOURCE_ACCESS = contentResourceDefinition("source_item")!;
+const MATRIX_EVIDENCE_ACCESS = contentResourceDefinition("extracted_evidence")!;
 
 interface MatrixRow {
   id: string;
@@ -47,20 +53,50 @@ export class ProjectResearchArtifactService {
     if (existing.rows[0]) return existing.rows[0].id;
 
     const rows = await this.db.query<MatrixRow>(
-      `SELECT pci.id, pci.object_id, pci.source_item_id, pci.evidence_id,
+      `SELECT pci.id, pci.object_id, si.id AS source_item_id, pci.evidence_id,
               si.title, si.source_external_id, si.occurred_at,
               pci.triage_status, pci.relevance, pci.confidence, pci.role,
               pci.reason, si.metadata_json AS source_metadata,
               ee.title AS evidence_title, ee.content_excerpt AS evidence_excerpt
          FROM project_corpus_items pci
-         LEFT JOIN source_items si
-           ON si.id=pci.source_item_id AND si.space_id=pci.space_id
+         LEFT JOIN LATERAL (
+           SELECT source_item.*
+             FROM project_corpus_item_sources pcis
+             JOIN source_items source_item
+               ON source_item.id=pcis.source_item_id AND source_item.space_id=pcis.space_id
+              AND source_item.deleted_at IS NULL
+            WHERE pcis.corpus_item_id=pci.id AND pcis.space_id=pci.space_id
+              AND ${sourceItemReadableClause("source_item", "$3", false)}
+              AND ${contentAccessLevelSql({ definition: MATRIX_SOURCE_ACCESS, alias: "source_item", userExpr: "$3" })} = 'full'
+            ORDER BY source_item.last_seen_at DESC, source_item.id ASC
+            LIMIT 1
+         ) si ON true
          LEFT JOIN extracted_evidence ee
            ON ee.id=pci.evidence_id AND ee.space_id=pci.space_id
+         LEFT JOIN source_items evidence_source
+           ON evidence_source.id=COALESCE(ee.source_item_id,ee.origin_source_item_id)
+          AND evidence_source.space_id=ee.space_id
+          AND evidence_source.deleted_at IS NULL
         WHERE pci.space_id=$1 AND pci.project_id=$2 AND pci.status='active'
           AND pci.triage_status <> 'excluded'
+          AND (
+            pci.evidence_id IS NULL
+            OR (
+              ee.id IS NOT NULL
+              AND ${contentReadSql("extracted_evidence", "ee", "$3")}
+              AND ${contentAccessLevelSql({ definition: MATRIX_EVIDENCE_ACCESS, alias: "ee", userExpr: "$3" })} = 'full'
+              AND ${evidenceProvenanceReadableClause("ee", "$3", true)}
+            )
+          )
+          AND (
+            NOT EXISTS (
+              SELECT 1 FROM project_corpus_item_sources any_source
+               WHERE any_source.corpus_item_id=pci.id AND any_source.space_id=pci.space_id
+            )
+            OR si.id IS NOT NULL
+          )
         ORDER BY COALESCE(si.occurred_at, pci.created_at) DESC, pci.id`,
-      [input.spaceId, input.projectId],
+      [input.spaceId, input.projectId, input.ownerUserId],
     );
 
     const content = JSON.stringify({
@@ -93,7 +129,7 @@ export class ProjectResearchArtifactService {
          created_at, updated_at, metadata_json, visibility, owner_user_id, trust_level
        ) VALUES (
          $1,$2,$3,'literature_matrix','operational',$4,$5,'application/json',
-         true,$6::jsonb,'json',false,$7,$7,$8::jsonb,'space_shared',$9,'medium'
+         true,$6::jsonb,'json',false,$7,$7,$8::jsonb,'private',$9,'medium'
        )`,
       [
         artifactId,

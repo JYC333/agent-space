@@ -6,12 +6,15 @@ import {
 } from "../src/modules/capabilities/runtimeSkillProvider";
 
 class FakeQueryable implements Queryable {
+  readonly queries: string[] = [];
+
   constructor(
     private readonly dbBindingRows: Record<string, unknown>[],
     private readonly enablementRows: Record<string, unknown>[],
   ) {}
 
   async query<Row = Record<string, unknown>>(sql: string): Promise<QueryResult<Row>> {
+    this.queries.push(sql);
     const rows = sql.includes("JOIN capability_runtime_bindings")
       ? this.dbBindingRows
       : this.enablementRows;
@@ -21,8 +24,7 @@ class FakeQueryable implements Queryable {
 
 describe("PgRuntimeSkillProvider", () => {
   it("loads default runtime bindings for enabled built-in capabilities", async () => {
-    const provider = new PgRuntimeSkillProvider(
-      new FakeQueryable([], [
+    const db = new FakeQueryable([], [
         {
           capability_enablement_id: "enable-1",
           capability_key: "research.source_collect",
@@ -30,8 +32,8 @@ describe("PgRuntimeSkillProvider", () => {
           enabled: true,
           config_json: { source_mode: "project_sources" },
         },
-      ]),
-    );
+      ]);
+    const provider = new PgRuntimeSkillProvider(db);
 
     const candidates = await provider.loadCandidatesForRun({
       space_id: "space-1",
@@ -57,5 +59,7 @@ describe("PgRuntimeSkillProvider", () => {
     expect(rendered?.rendered.files.map((file) => file.path)).toContain(
       ".agent-space/generated-skills/codex/research-source-collect/SKILL.md",
     );
+    expect(db.queries.find((sql) => sql.includes("JOIN capability_runtime_bindings")))
+      .toContain("se.capability_version_id IS NOT NULL");
   });
 });

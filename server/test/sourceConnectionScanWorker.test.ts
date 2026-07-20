@@ -37,6 +37,7 @@ class ScanDb implements Queryable {
     existingFollowUpStatus?: "pending" | "running" | "failed"
     manualScan?: boolean
     runFollowUpJobs?: boolean
+    linkedProjectId?: string
   }) {
     this.schedulerTask = {
       id: "task-1",
@@ -112,10 +113,25 @@ class ScanDb implements Queryable {
     if (sql.includes("FROM project_source_bindings psb")) {
       return { rows: [] as Row[], rowCount: 0 };
     }
+    if (sql.includes("SELECT EXISTS") && sql.includes("FROM project_source_item_links")) {
+      return { rows: [{ exists: false }] as Row[], rowCount: 1 };
+    }
+    if (sql.includes("SELECT DISTINCT link.project_id") && sql.includes("FROM project_source_item_links")) {
+      const rows = this.input.linkedProjectId ? [{ project_id: this.input.linkedProjectId }] : [];
+      return { rows: rows as Row[], rowCount: rows.length };
+    }
+    if (sql.includes("FROM projects project") && sql.includes("FOR UPDATE")) {
+      const rows = this.input.linkedProjectId ? [{ status: "active" }] : [];
+      return { rows: rows as Row[], rowCount: rows.length };
+    }
+    if (sql.includes("SELECT status FROM projects") && sql.includes("FOR UPDATE")) {
+      const rows = this.input.linkedProjectId ? [{ status: "active" }] : [];
+      return { rows: rows as Row[], rowCount: rows.length };
+    }
     if (sql.includes("FROM project_research_workflows")) {
       return { rows: [] as Row[], rowCount: 0 };
     }
-    if (sql.includes("UPDATE project_corpus_items")) {
+    if (sql.includes("project_corpus_items") || sql.includes("project_corpus_item_sources")) {
       return { rows: [] as Row[], rowCount: 0 };
     }
     if (sql.includes("content_state = 'extraction_failed'") && sql.includes("FROM source_items")) {
@@ -140,6 +156,9 @@ class ScanDb implements Queryable {
     if (sql.includes("UPDATE source_items")) {
       return { rows: [] as Row[], rowCount: 1 };
     }
+    if (sql.includes("SELECT owner_user_id, access_level FROM source_items")) {
+      return { rows: [{ owner_user_id: "user-1", access_level: "full" }] as Row[], rowCount: 1 };
+    }
     if (sql.includes("INSERT INTO artifacts")) {
       return { rows: [] as Row[], rowCount: 1 };
     }
@@ -150,7 +169,7 @@ class ScanDb implements Queryable {
       return { rows: [] as Row[], rowCount: 1 };
     }
     if (sql.includes("INSERT INTO extracted_evidence")) {
-      return { rows: [] as Row[], rowCount: 1 };
+      return { rows: [{ id: String(params[0]) }] as Row[], rowCount: 1 };
     }
     if (sql.includes("INSERT INTO evidence_links")) {
       return { rows: [] as Row[], rowCount: 0 };
@@ -221,6 +240,8 @@ class ScanDb implements Queryable {
       space_id: "space-1",
       connector_id: "connector-1",
       owner_user_id: "user-1",
+      visibility: "private",
+      access_level: "full",
       credential_id: null,
       name: "Source",
       endpoint_url: "https://example.test/feed.xml",
@@ -262,6 +283,8 @@ class ScanDb implements Queryable {
       author: null,
       occurred_at: "2026-06-30T09:00:00.000Z",
       content_state: "content_queued",
+      visibility: "private",
+      access_level: "full",
     };
   }
 }
@@ -448,14 +471,14 @@ describe("SourceExtractionWorker connection_scan", () => {
     expect(artifactInsert?.sql).toContain("'source_reader_document'");
     expect(artifactInsert?.params).toContain(JSON.stringify(["json"]));
     const evidenceInsert = db.calls.find(call => call.sql.includes("INSERT INTO extracted_evidence"));
-    expect(evidenceInsert?.sql).toContain("space_id = $16::varchar");
-    expect(evidenceInsert?.params.slice(15, 21)).toEqual([
+    expect(evidenceInsert?.sql).toContain("RETURNING id");
+    expect(evidenceInsert?.params.slice(1, 7)).toEqual([
       "space-1",
+      "user-1",
+      "private",
+      "full",
       expect.any(String),
-      "space-1",
-      expect.any(String),
-      "space-1",
-      expect.any(String),
+      null,
     ]);
   });
 
@@ -607,6 +630,7 @@ describe("SourceExtractionWorker connection_scan", () => {
       policyRetention: "metadata_only",
       existingItemId: "item-existing",
       existingContentState: "content_saved",
+      linkedProjectId: "project-1",
     });
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(arxivFeed(), { status: 200 }));
 

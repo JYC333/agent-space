@@ -7,7 +7,7 @@ server-owned modules.
 
 ## Purpose
 Relations is the reusable relationship data foundation for Agent Space. It owns
-people and organization records, identity handles, affiliation history, and
+people and organization records, identity handles, affiliation edges, and
 provenance links that can be used by normal life, team, and research workflows.
 
 Academic research is a Project preset layered on these core modules. It is not a
@@ -33,15 +33,21 @@ Relations writes object-backed records through the shared object model:
   `organization`.
 - `academic_papers` extends the existing `sources` object extension for papers;
   papers are not a new `space_objects.object_type`.
-- Affiliations, authorship, and citations materialize canonical graph edges in
-  `object_relations`.
+- Affiliations, authorship, and citations are proposed through the Knowledge
+  proposal path. Only proposal acceptance materializes their canonical
+  `object_relations` edge; structured affiliation/author metadata lives in the
+  edge's `metadata_json`, so there is no domain-table dual write. The proposal
+  applier validates relation-type-specific metadata (including affiliation
+  timestamps and authored-by position/boolean fields) before canonical write.
+  It also validates typed endpoints: `affiliated_with` is person → organization
+  and `authored_by` is source → person. Domain readers join those subtype tables
+  rather than treating an arbitrary object edge as a valid typed relation.
 
 The module owns these Drizzle-authored tables in `server/src/db/schema/`:
 
 - `relation_people`
 - `relation_organizations`
 - `relation_identities`
-- `relation_affiliations`
 - `relation_notes`
 - `relation_source_links`
 - `academic_papers`

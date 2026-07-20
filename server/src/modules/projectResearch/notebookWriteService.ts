@@ -61,13 +61,13 @@ export async function writeNotebookSection(db: Queryable, input: {
     `UPDATE research_notebook_sections
         SET content_json=$2::jsonb,normalized_text=$3,content_hash=$4,refs_json=$5::jsonb,version=version+1,
             updated_by_user_id=$6,updated_by_run_id=$7,updated_at=$8
-      WHERE id=$1
+      WHERE id=$1 AND space_id=$9
       RETURNING id,section_key,content_json,normalized_text,content_hash,refs_json,version,updated_by_user_id,updated_by_run_id,updated_at`,
-    [current.id, JSON.stringify(doc), normalized, hash, JSON.stringify(mergedRefs), input.userId ?? null, input.runId ?? null, now],
+    [current.id, JSON.stringify(doc), normalized, hash, JSON.stringify(mergedRefs), input.userId ?? null, input.runId ?? null, now, input.spaceId],
   );
   const section = updated.rows[0]!;
   await insertRevision(db, {
-    sectionId: section.id, version: section.version, doc, normalized, hash, refs: mergedRefs,
+    spaceId: input.spaceId, sectionId: section.id, version: section.version, doc, normalized, hash, refs: mergedRefs,
     source: input.source, userId: input.userId ?? null, runId: input.runId ?? null, diff: input.diff ?? null, at: now,
   });
   await db.query(`UPDATE research_notebooks SET updated_at=$3 WHERE space_id=$1 AND project_id=$2`, [input.spaceId, input.projectId, now]);
@@ -125,26 +125,27 @@ export async function listNotebookRevisions(db: Queryable, input: {
 }
 
 export async function insertInitialRevision(db: Queryable, input: {
+  spaceId: string;
   sectionId: string;
   doc: Record<string, unknown>;
   at: string;
 }): Promise<void> {
   await insertRevision(db, {
-    sectionId: input.sectionId, version: 1, doc: input.doc, normalized: "", hash: sha256(""), refs: [],
+    spaceId: input.spaceId, sectionId: input.sectionId, version: 1, doc: input.doc, normalized: "", hash: sha256(""), refs: [],
     source: "seed", userId: null, runId: null, diff: null, at: input.at,
   });
 }
 
 async function insertRevision(db: Queryable, input: {
-  sectionId: string; version: number; doc: Record<string, unknown>; normalized: string; hash: string;
+  spaceId: string; sectionId: string; version: number; doc: Record<string, unknown>; normalized: string; hash: string;
   refs: string[]; source: NotebookRevisionSource; userId: string | null; runId: string | null; diff: unknown; at: string;
 }): Promise<void> {
   await db.query(
     `INSERT INTO research_notebook_section_revisions
-       (id,section_id,version,content_json,normalized_text,content_hash,refs_json,source,diff_json,created_by_user_id,created_by_run_id,created_at)
-     VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7::jsonb,$8,$9::jsonb,$10,$11,$12)
+       (id,space_id,section_id,version,content_json,normalized_text,content_hash,refs_json,source,diff_json,created_by_user_id,created_by_run_id,created_at)
+     VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8::jsonb,$9,$10::jsonb,$11,$12,$13)
      ON CONFLICT (section_id,version) DO NOTHING`,
-    [randomUUID(), input.sectionId, input.version, JSON.stringify(input.doc), input.normalized, input.hash,
+    [randomUUID(), input.spaceId, input.sectionId, input.version, JSON.stringify(input.doc), input.normalized, input.hash,
       JSON.stringify(input.refs), input.source, input.diff === null || input.diff === undefined ? null : JSON.stringify(input.diff), input.userId, input.runId, input.at],
   );
 }

@@ -23,11 +23,9 @@ describe("recommendedMaxOutputTokens", () => {
 });
 
 describe("effectiveMaxOutputTokens", () => {
-  it("raises an explicit smaller cap to the registered recommendation", () => {
-    // A reasoning model thinks inside the completion budget: a caller-side
-    // 1800 cap truncates mid-think and the answer never starts.
-    expect(effectiveMaxOutputTokens("MiniMax-M3", 1800)).toBe(131_072);
-    expect(effectiveMaxOutputTokens("MiniMax-M3", 8_192)).toBe(131_072);
+  it("preserves explicit caller caps below the registered recommendation", () => {
+    expect(effectiveMaxOutputTokens("MiniMax-M3", 1800)).toBe(1800);
+    expect(effectiveMaxOutputTokens("MiniMax-M3", 8_192)).toBe(8_192);
   });
 
   it("keeps a caller cap above the recommendation and caller caps for unregistered models", () => {

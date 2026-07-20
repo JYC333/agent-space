@@ -12,7 +12,9 @@ This document describes the **agent-native task board** domain layer. It is back
   discriminator.
 - **Plan Node** — An internal step in an Agent Plan. It lives in
   `plan_nodes`, not in `tasks`, and links to physical Runs through
-  `plan_node_runs`. It is not shown in the Task board.
+  `plan_node_runs`. It is not shown in the Task board. Its contract fields are
+  an immutable PlanVersion snapshot after insertion; execution may update only
+  lifecycle fields such as status, blocking/checkpoint state, and timestamps.
 - **Run** — One **logical execution** for an agent (or system workflow), carrying an immutable contract snapshot. A task may have many runs over time (re-execution, validation passes, reviews). Physical retries live one level below: a Run owns `run_attempts` rows, and Supervisor retries create a new attempt under the same Run rather than a new Run (see EXECUTION_MODEL.md).
 - **Job** — An **infrastructure queue row** (`jobs` table). Used for workers, retries, and dispatch plumbing. **Jobs are not product tasks** and must not be used as the source of truth for user-visible task state.
 - **Artifact** — Output attached to a run or task (files, reports, logs). Linked to tasks through `task_artifacts` when needed.
@@ -39,6 +41,13 @@ users review and execute an approved Plan, but do not submit raw Plan
 definitions through a public Plan-create API. A fixed Workflow Automation has
 its own `WorkflowExecution` aggregate and never creates Plan Nodes or Task
 rows.
+
+`tasks` is the only editable work-item model: title, description, assignment,
+priority, acceptance criteria, budget, and board placement may be revised by
+the Task API. Those edits never rewrite an existing `plan_node` or
+`workflow_execution_node`. The three tables intentionally remain separate
+because editable product work, immutable versioned planning snapshots, and
+immutable execution instances have different lifecycles.
 
 ## Agent–human collaboration
 

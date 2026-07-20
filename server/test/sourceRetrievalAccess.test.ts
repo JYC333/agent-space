@@ -76,6 +76,7 @@ describe("source retrieval access revalidation", () => {
     expect(db.calls[0]?.sql).toContain("content_access_grants");
     expect(db.calls[0]?.sql).toContain("source_channel_user_subscriptions");
     expect(db.calls[0]?.sql).toContain("space_memberships");
+    expect(db.calls[0]?.sql).toContain("= 'full'");
   });
 
   it("filters evidence and its parent item before returning search text", async () => {
@@ -95,7 +96,8 @@ describe("source retrieval access revalidation", () => {
       ["candidate", "active"],
       "viewer-1",
     ]);
-    expect(db.calls[0]?.sql.match(/content_access_grants/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(db.calls[0]?.sql.match(/content_access_grants/g)?.length).toBeGreaterThanOrEqual(3);
     expect(db.calls[0]?.sql).toContain("source_channel_user_subscriptions");
+    expect(db.calls[0]?.sql.match(/= 'full'/g)?.length).toBeGreaterThanOrEqual(3);
   });
 });

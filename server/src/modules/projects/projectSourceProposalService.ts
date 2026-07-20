@@ -6,7 +6,7 @@ import { PgProposalApplyService } from "../proposals/applyService";
 import { SourceChannelService } from "../sources/channels/sourceChannelService";
 import { SourceBackfillPlanningService } from "../sources/sourceBackfillService";
 import { ProjectOperationService } from "./projectOperationService";
-import { assertProjectWriter } from "./access";
+import { assertProjectWriter, lockActiveProjectForMutation } from "./access";
 import { advisoryLock, findIdempotentOperation, fingerprintOf } from "./projectOperationIdempotency";
 
 interface BindProposalActor {
@@ -104,7 +104,7 @@ export class ProjectSourceProposalService {
         steps: [{ title: "Review source activation" }, { title: "Review project binding" }],
       });
       await db.query(
-        `UPDATE project_operations SET progress_json=$4::jsonb WHERE id=$1 AND space_id=$2 AND project_id=$3`,
+        `UPDATE project_operations SET progress_json=$4::jsonb, version=version+1 WHERE id=$1 AND space_id=$2 AND project_id=$3`,
         [operation.id, identity.spaceId, projectId, JSON.stringify({ idempotency: { key, fingerprint } })],
       );
 
@@ -156,6 +156,7 @@ export class ProjectSourceProposalService {
     await assertProjectWriter(this.db, identity.spaceId, projectId, identity.userId);
 
     return withQueryableTransaction(this.db, async (db) => {
+      await lockActiveProjectForMutation(db, identity.spaceId, projectId);
       await advisoryLock(db, identity.spaceId, "source_backfill", key);
       const binding = await db.query<{ source_channel_id: string }>(
         `SELECT source_channel_id FROM project_source_bindings WHERE id=$1 AND space_id=$2 AND project_id=$3 AND status='active' FOR UPDATE`,

@@ -140,10 +140,11 @@ export const evolutionTargets = pgTable("evolution_targets", {
 			name: "evolution_targets_space_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.currentVersionId],
-			foreignColumns: [capabilityVersions.id],
-			name: "fk_evolution_targets_current_version_id"
+			columns: [table.currentVersionId, table.spaceId],
+			foreignColumns: [capabilityVersions.id, capabilityVersions.spaceId],
+			name: "evolution_targets_current_version_fkey"
 		}),
+	check("ck_evolution_targets_current_version_space", sql`current_version_id IS NULL OR space_id IS NOT NULL`),
 ]);
 
 export const evolutionStrategyAssets = pgTable("evolution_strategy_assets", {

@@ -18,6 +18,14 @@ beforeAll(async () => { try { database = await getTestPostgres(__filename); pool
 afterAll(async () => { await pool?.end(); await database?.stop(); });
 beforeEach(async () => { if (!available || !pool) return; await pool.query(`TRUNCATE research_checklist_items,research_paper_cards,research_notebook_section_revisions,research_notebook_sections,research_notebooks,project_corpus_items,source_items,projects,space_memberships,users,spaces CASCADE`); const now = new Date().toISOString(); await pool.query(`INSERT INTO spaces (id,name,type,created_at,updated_at) VALUES ($1,'Space','personal',$2,$2)`, [SPACE, now]); await pool.query(`INSERT INTO users (id,display_name,status,created_at,updated_at) VALUES ($1,'Owner','active',$2,$2)`, [USER, now]); await pool.query(`INSERT INTO space_memberships (id,space_id,user_id,role,status,created_at,updated_at) VALUES ($1,$2,$3,'owner','active',$4,$4)`, [randomUUID(), SPACE, USER, now]); await pool.query(`INSERT INTO projects (id,space_id,owner_user_id,name,status,created_at,updated_at) VALUES ($1,$2,$3,'Project','active',$4,$4)`, [PROJECT, SPACE, USER, now]); });
 
+async function seedCorpusSourceProvenance(corpusItemId: string, sourceItemId: string, now: string): Promise<void> {
+  await pool!.query(
+    `INSERT INTO project_corpus_item_sources (id,corpus_item_id,space_id,project_id,source_item_id,created_at)
+     VALUES ($1,$2,$3,$4,$5,$6)`,
+    [randomUUID(), corpusItemId, SPACE, PROJECT, sourceItemId, now],
+  );
+}
+
 describe("Research Workspace (real Postgres)", () => {
   it("creates four notebook sections and enforces optimistic section versions", async () => {
     if (!available || !pool) return; const service = new ProjectResearchWorkspaceService(pool); const identity = { spaceId: SPACE, userId: USER };
@@ -27,6 +35,17 @@ describe("Research Workspace (real Postgres)", () => {
     const reader = await new PgReaderRepository(pool, { artifactStorageRoot: "/tmp", sandboxRoot: "/tmp" } as ServerConfig).getDocument(identity, "research_notebook", updated.id);
     expect(reader).toMatchObject({ document_type: "research_notebook", document_id: updated.id, normalized_text: "Current finding", content_hash: updated.content_hash });
     await expect(service.updateSection(identity, PROJECT, "understanding", { base_version: 1, content_json: doc })).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it("does not initialize a workspace after its Project is archived", async () => {
+    if (!available || !pool) return;
+    await pool.query(`UPDATE projects SET status='archived',archived_at=now() WHERE id=$1 AND space_id=$2`, [PROJECT, SPACE]);
+    await expect(
+      new ProjectResearchWorkspaceService(pool).initializeWorkspace({ spaceId: SPACE, userId: USER }, PROJECT),
+    ).rejects.toMatchObject({ statusCode: 409 });
+    expect((await pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM research_notebooks WHERE space_id=$1 AND project_id=$2`, [SPACE, PROJECT],
+    )).rows[0]?.count).toBe("0");
   });
 
   it("applies AI block ops without touching other blocks and supports rollback from the revision history", async () => {
@@ -58,6 +77,7 @@ describe("Research Workspace (real Postgres)", () => {
     if (!available || !pool) return; const now = new Date().toISOString(); const item = randomUUID(); const corpus = randomUUID();
     await pool.query(`INSERT INTO source_items (id,space_id,owner_user_id,visibility,item_type,title,first_seen_at,last_seen_at,content_state,retention_policy,created_at,updated_at) VALUES ($1,$2,$3,'space_shared','feed_entry','Paper',$4,$4,'excerpt_saved','summary_only',$4,$4)`, [item, SPACE, USER, now]);
     await pool.query(`INSERT INTO project_corpus_items (id,space_id,project_id,source_item_id,role,status,triage_status,triage_confirmed_by_user,read_status,created_at,updated_at) VALUES ($1,$2,$3,$4,'candidate','active','relevant',true,'unread',$5,$5)`, [corpus, SPACE, PROJECT, item, now]);
+    await seedCorpusSourceProvenance(corpus, item, now);
     const service = new ProjectResearchWorkspaceService(pool);
     const first = await service.materializePaperCardsFromDeepAnalysis({ spaceId: SPACE, projectId: PROJECT, runId: randomUUID(), summaries: [{ source_item_id: item, summary_markdown: "WHY: Relevant\nHOW: Experiment\nWHAT: Result" }] });
     expect(first).toBe(1);
@@ -77,17 +97,27 @@ describe("Research Workspace (real Postgres)", () => {
        VALUES ($1,$2,$3,'literature_review','active','autonomous','{}'::jsonb,$4,$5,$5)`,
       [workflow, SPACE, PROJECT, USER, now],
     );
+    await pool.query(
+      `INSERT INTO project_operations (
+         id, space_id, project_id, kind, title, status, progress_json,
+         created_at, updated_at
+       ) VALUES ($1, $2, $3, 'research', 'Monitoring scan', 'active',
+                 '{}'::jsonb, $4, $4)`,
+      [operation, SPACE, PROJECT, now],
+    );
     for (const [item, title] of [[supporting, "Supporting paper"], [contradicting, "Contradicting paper"]]) {
       await pool.query(
         `INSERT INTO source_items (id,space_id,owner_user_id,visibility,item_type,title,first_seen_at,last_seen_at,content_state,retention_policy,created_at,updated_at)
          VALUES ($1,$2,$3,'space_shared','feed_entry',$4,$5,$5,'excerpt_saved','summary_only',$5,$5)`,
         [item, SPACE, USER, title, now],
       );
+      const corpusItemId = randomUUID();
       await pool.query(
         `INSERT INTO project_corpus_items (id,space_id,project_id,source_item_id,role,status,triage_status,triage_confirmed_by_user,read_status,created_at,updated_at)
          VALUES ($1,$2,$3,$4,'candidate','active','relevant',true,'unread',$5,$5)`,
-        [randomUUID(), SPACE, PROJECT, item, now],
+        [corpusItemId, SPACE, PROJECT, item, now],
       );
+      await seedCorpusSourceProvenance(corpusItemId, item, now);
     }
     await pool.query(
       `INSERT INTO research_scan_summaries (id,space_id,project_id,workflow_id,operation_id,scan_key,scanned_at,new_item_count,relevant_count,maybe_count,excluded_count,created_at)
@@ -115,6 +145,14 @@ describe("Research Workspace (real Postgres)", () => {
     expect(String(section?.normalized_text)).toContain("**Contradiction**");
     expect(String(section?.normalized_text)).not.toContain("Replicates");
     const supportOnlyOperation = randomUUID();
+    await pool.query(
+      `INSERT INTO project_operations (
+         id, space_id, project_id, kind, title, status, progress_json,
+         created_at, updated_at
+       ) VALUES ($1, $2, $3, 'research', 'Support-only scan', 'active',
+                 '{}'::jsonb, $4, $4)`,
+      [supportOnlyOperation, SPACE, PROJECT, now],
+    );
     await pool.query(
       `INSERT INTO research_scan_summaries (id,space_id,project_id,workflow_id,operation_id,scan_key,scanned_at,new_item_count,relevant_count,maybe_count,excluded_count,created_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,1,1,0,0,$7)`,
@@ -144,11 +182,13 @@ describe("Research Workspace (real Postgres)", () => {
        VALUES ($1,$2,$3,'space_shared','feed_entry','Cited paper',$4::jsonb,$5,$5,'excerpt_saved','summary_only',$5,$5)`,
       [sourceItem, SPACE, USER, JSON.stringify({ doi: "10.1000/original" }), now],
     );
+    const corpusItemId = randomUUID();
     await pool.query(
       `INSERT INTO project_corpus_items (id,space_id,project_id,source_item_id,role,status,triage_status,triage_confirmed_by_user,read_status,created_at,updated_at)
        VALUES ($1,$2,$3,$4,'reference','active','relevant',true,'read',$5,$5)`,
-      [randomUUID(), SPACE, PROJECT, sourceItem, now],
+      [corpusItemId, SPACE, PROJECT, sourceItem, now],
     );
+    await seedCorpusSourceProvenance(corpusItemId, sourceItem, now);
     await pool.query(`UPDATE research_notebook_sections SET refs_json=$2::jsonb WHERE notebook_id=$1 AND section_key='understanding'`, [workspace.notebook.id, JSON.stringify([sourceItem])]);
     const monitor = new ProjectResearchIntegrityMonitorService(pool, async () => ({ message: { "updated-by": [
       { DOI: "10.1000/retraction", type: "retraction", source: "retraction-watch" },

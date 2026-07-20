@@ -1,5 +1,5 @@
 import type { Queryable, SpaceUserIdentity } from "../routeUtils/common";
-import { HttpError, optionalString, requiredString } from "../routeUtils/common";
+import { HttpError, optionalString, requiredString, withQueryableTransaction } from "../routeUtils/common";
 import { ProjectSourceBindingRepository } from "./projectSourceBindingRepository";
 
 /**
@@ -22,7 +22,8 @@ export class ProjectSourceBindingService {
     requiredString(body.project_id, "project_id");
     requiredString(body.source_channel_id, "source_channel_id");
     validateDeliveryScope(body.delivery_scope);
-    return this.repository.createProjectSourceBinding(identity, body);
+    return withQueryableTransaction(this.db, (db) =>
+      new ProjectSourceBindingRepository(db).createProjectSourceBinding(identity, body));
   }
 
   async updateBinding(identity: SpaceUserIdentity, bindingId: string, body: Record<string, unknown>, expectedProjectId?: string) {
@@ -30,17 +31,20 @@ export class ProjectSourceBindingService {
     validateBindingStatus(body.status);
     validateDeliveryScope(body.delivery_scope);
     await this.assertBindingProject(identity.spaceId, bindingId, expectedProjectId);
-    return this.repository.updateProjectSourceBinding(identity, bindingId, body);
+    return withQueryableTransaction(this.db, (db) =>
+      new ProjectSourceBindingRepository(db).updateProjectSourceBinding(identity, bindingId, body));
   }
 
   async deleteBinding(identity: SpaceUserIdentity, bindingId: string, expectedProjectId?: string) {
     await this.assertBindingProject(identity.spaceId, bindingId, expectedProjectId);
-    return this.repository.deleteProjectSourceBinding(identity, bindingId);
+    return withQueryableTransaction(this.db, (db) =>
+      new ProjectSourceBindingRepository(db).deleteProjectSourceBinding(identity, bindingId));
   }
 
   async backfillBinding(identity: SpaceUserIdentity, bindingId: string, expectedProjectId?: string) {
     await this.assertBindingProject(identity.spaceId, bindingId, expectedProjectId);
-    return this.repository.backfillProjectSourceBinding(identity, bindingId);
+    return withQueryableTransaction(this.db, (db) =>
+      new ProjectSourceBindingRepository(db).backfillProjectSourceBinding(identity, bindingId));
   }
 
   health(identity: SpaceUserIdentity, projectId: string) {

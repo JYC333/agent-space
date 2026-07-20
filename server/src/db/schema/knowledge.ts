@@ -77,6 +77,7 @@ export const extractedEvidence = pgTable("extracted_evidence", {
 	visibility: varchar({ length: 32 }).default('private').notNull(),
 	accessLevel: varchar("access_level", { length: 16 }).default('full').notNull(),
 	sourceItemId: varchar("source_item_id", { length: 36 }),
+	originSourceItemId: varchar("origin_source_item_id", { length: 36 }),
 	extractionJobId: varchar("extraction_job_id", { length: 36 }),
 	sourceSnapshotId: varchar("source_snapshot_id", { length: 36 }),
 	sourceObjectType: varchar("source_object_type", { length: 64 }),
@@ -112,6 +113,7 @@ export const extractedEvidence = pgTable("extracted_evidence", {
 	index("ix_extracted_evidence_extraction_job_id").using("btree", table.extractionJobId.asc().nullsLast()),
 	index("ix_extracted_evidence_occurred_at").using("btree", table.occurredAt.asc().nullsLast()),
 	index("ix_extracted_evidence_owner_user_id").using("btree", table.ownerUserId.asc().nullsLast()),
+	index("ix_extracted_evidence_origin_source_item_id").using("btree", table.originSourceItemId.asc().nullsLast()),
 	index("ix_extracted_evidence_source_item_id").using("btree", table.sourceItemId.asc().nullsLast()),
 	index("ix_extracted_evidence_source_object").using("btree", table.spaceId.asc().nullsLast(), table.sourceObjectType.asc().nullsLast(), table.sourceObjectId.asc().nullsLast()),
 	index("ix_extracted_evidence_source_object_id").using("btree", table.sourceObjectId.asc().nullsLast()),
@@ -126,9 +128,9 @@ export const extractedEvidence = pgTable("extracted_evidence", {
 		"btree",
 		table.spaceId.asc().nullsLast(),
 		table.sourceItemId.asc().nullsLast(),
-		table.extractionMethod.asc().nullsLast(),
 		table.contentHash.asc().nullsLast(),
-	).where(sql`content_hash IS NOT NULL`),
+	).where(sql`source_item_id IS NOT NULL AND content_hash IS NOT NULL`),
+	unique("uq_extracted_evidence_id_space").on(table.id, table.spaceId),
 	foreignKey({
 			columns: [table.artifactId],
 			foreignColumns: [artifacts.id],
@@ -163,6 +165,11 @@ export const extractedEvidence = pgTable("extracted_evidence", {
 			columns: [table.sourceItemId],
 			foreignColumns: [sourceItems.id],
 			name: "extracted_evidence_source_item_id_fkey"
+		}),
+	foreignKey({
+			columns: [table.originSourceItemId, table.spaceId],
+			foreignColumns: [sourceItems.id, sourceItems.spaceId],
+			name: "extracted_evidence_origin_source_item_space_fkey"
 		}),
 	foreignKey({
 			columns: [table.sourceSnapshotId],
@@ -214,20 +221,35 @@ export const knowledgeItems = pgTable("knowledge_items", {
 	index("ix_knowledge_items_space_slug").using("btree", table.spaceId.asc().nullsLast(), table.slug.asc().nullsLast()),
 	index("ix_knowledge_items_supersedes_item_id").using("btree", table.supersedesItemId.asc().nullsLast()),
 	foreignKey({
+			columns: [table.redirectToItemId],
+			foreignColumns: [table.objectId],
+			name: "knowledge_items_redirect_delete_fkey"
+		}).onDelete("set null"),
+	foreignKey({
 			columns: [table.redirectToItemId, table.spaceId],
 			foreignColumns: [table.objectId, table.spaceId],
 			name: "fk_knowledge_items_redirect_to_item_id_knowledge_items"
+		}),
+	foreignKey({
+			columns: [table.rootItemId],
+			foreignColumns: [table.objectId],
+			name: "knowledge_items_root_delete_fkey"
 		}).onDelete("set null"),
 	foreignKey({
 			columns: [table.rootItemId, table.spaceId],
 			foreignColumns: [table.objectId, table.spaceId],
 			name: "fk_knowledge_items_root_item_id_knowledge_items"
+		}),
+	foreignKey({
+			columns: [table.supersedesItemId],
+			foreignColumns: [table.objectId],
+			name: "knowledge_items_supersedes_delete_fkey"
 		}).onDelete("set null"),
 	foreignKey({
 			columns: [table.supersedesItemId, table.spaceId],
 			foreignColumns: [table.objectId, table.spaceId],
 			name: "fk_knowledge_items_supersedes_item_id_knowledge_items"
-		}).onDelete("set null"),
+		}),
 	foreignKey({
 			columns: [table.approvedByUserId],
 			foreignColumns: [users.id],
@@ -320,7 +342,7 @@ export const spaceObjects = pgTable("space_objects", {
 			name: "space_objects_workspace_id_fkey"
 		}),
 	unique("space_objects_id_space_id_key").on(table.id, table.spaceId),
-	check("ck_space_objects_object_type", sql`(object_type)::text = ANY (ARRAY[('knowledge_item'::character varying)::text, ('note'::character varying)::text, ('source'::character varying)::text, ('project'::character varying)::text, ('person'::character varying)::text, ('organization'::character varying)::text, ('relationship'::character varying)::text, ('asset'::character varying)::text, ('event'::character varying)::text, ('task'::character varying)::text, ('document'::character varying)::text, ('claim'::character varying)::text])`),
+	check("ck_space_objects_object_type", sql`(object_type)::text = ANY (ARRAY[('knowledge_item'::character varying)::text, ('note'::character varying)::text, ('source'::character varying)::text, ('person'::character varying)::text, ('organization'::character varying)::text, ('relationship'::character varying)::text, ('claim'::character varying)::text])`),
 	check("ck_space_objects_status", sql`(status)::text = ANY (ARRAY[('draft'::character varying)::text, ('active'::character varying)::text, ('disputed'::character varying)::text, ('superseded'::character varying)::text, ('rejected'::character varying)::text, ('archived'::character varying)::text, ('deleted'::character varying)::text, ('raw'::character varying)::text, ('processing'::character varying)::text, ('processed'::character varying)::text, ('error'::character varying)::text])`),
 	check("ck_space_objects_status_by_type", sql`CASE (object_type)::text
     WHEN 'knowledge_item'::text THEN ((status)::text = ANY (ARRAY[('draft'::character varying)::text, ('active'::character varying)::text, ('superseded'::character varying)::text, ('archived'::character varying)::text, ('deleted'::character varying)::text]))
@@ -506,6 +528,29 @@ export const sources = pgTable("sources", {
 		}).onDelete("cascade"),
 	unique("sources_object_id_space_id_key").on(table.objectId, table.spaceId),
 	check("ck_sources_source_type", sql`(source_type)::text = ANY (ARRAY[('activity_record'::character varying)::text, ('chat_capture'::character varying)::text, ('webpage'::character varying)::text, ('article'::character varying)::text, ('paper'::character varying)::text, ('pdf'::character varying)::text, ('file'::character varying)::text, ('email'::character varying)::text, ('manual_reference'::character varying)::text, ('external_note'::character varying)::text])`),
+]);
+
+// Canonical bridge from an ingested SourceItem to the Knowledge Reference it
+// materialized. SourceItem origin fields describe where an item was captured
+// from (Activity/Artifact/RunEvent); they must not also carry Reference identity.
+export const sourceItemReferences = pgTable("source_item_references", {
+	sourceItemId: varchar("source_item_id", { length: 36 }).primaryKey().notNull(),
+	spaceId: varchar("space_id", { length: 36 }).notNull(),
+	referenceObjectId: varchar("reference_object_id", { length: 36 }).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).notNull(),
+}, (table): PgTableExtraConfigValue[] => [
+	index("ix_source_item_references_reference").using("btree", table.spaceId.asc().nullsLast(), table.referenceObjectId.asc().nullsLast()),
+	foreignKey({
+		columns: [table.sourceItemId, table.spaceId],
+		foreignColumns: [sourceItems.id, sourceItems.spaceId],
+		name: "source_item_references_source_item_fkey",
+	}).onDelete("cascade"),
+	foreignKey({
+		columns: [table.referenceObjectId, table.spaceId],
+		foreignColumns: [sources.objectId, sources.spaceId],
+		name: "source_item_references_reference_fkey",
+	}).onDelete("cascade"),
 ]);
 
 export const claims = pgTable("claims", {
@@ -727,10 +772,15 @@ export const noteCollections = pgTable("note_collections", {
 	index("ix_note_collections_space_id").using("btree", table.spaceId.asc().nullsLast()),
 	index("ix_note_collections_system_role").using("btree", table.systemRole.asc().nullsLast()),
 	foreignKey({
+			columns: [table.parentId],
+			foreignColumns: [table.id],
+			name: "note_collections_parent_delete_fkey"
+		}).onDelete("set null"),
+	foreignKey({
 			columns: [table.parentId, table.spaceId],
 			foreignColumns: [table.id, table.spaceId],
 			name: "note_collections_parent_id_space_id_fkey"
-		}).onDelete("set null"),
+		}),
 	foreignKey({
 			columns: [table.spaceId],
 			foreignColumns: [spaces.id],

@@ -256,4 +256,29 @@ describe("SourcePostProcessingRecoveryService.ensureItemsProcessed (real Postgre
       source_item_ids: [ITEM_3],
     });
   });
+
+  it("marks recovery reconciled without mutating an archived Project", async () => {
+    if (!available || !pool) return;
+    const now = new Date().toISOString();
+    const runId = randomUUID();
+    await pool.query(
+      `INSERT INTO source_post_processing_runs (
+         id,space_id,source_channel_id,agent_id,project_id,rule_id,trigger_type,status,input_item_ids_json,created_at
+       ) VALUES ($1,$2,$3,$4,$5,$6,'manual','succeeded',$7::jsonb,$8)`,
+      [runId, SPACE, CHANNEL, AGENT, PROJECT, RULE, JSON.stringify([ITEM_3]), now],
+    );
+    await pool.query(`UPDATE projects SET status='archived',archived_at=$3 WHERE id=$1 AND space_id=$2`, [PROJECT, SPACE, now]);
+
+    await reconcileProjectResearch(pool);
+
+    expect((await pool.query<{ research_reconciled_at: string | null }>(
+      `SELECT research_reconciled_at FROM source_post_processing_runs WHERE id=$1`, [runId],
+    )).rows[0]?.research_reconciled_at).not.toBeNull();
+    expect((await pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM project_operations WHERE space_id=$1 AND project_id=$2`, [SPACE, PROJECT],
+    )).rows[0]?.count).toBe("0");
+    expect((await pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM project_corpus_items WHERE space_id=$1 AND project_id=$2`, [SPACE, PROJECT],
+    )).rows[0]?.count).toBe("0");
+  });
 });

@@ -19,6 +19,7 @@ import {
 } from "../access/contentAccessSql";
 import { contentResourceDefinition } from "../access/contentAccessRegistry";
 import { resolveOversightLevel } from "../access/oversightResolver";
+import { evidenceProvenanceReadableClause } from "../sources/sourceItemAccess";
 import {
   loadSourcePolicySnapshots,
   loadViewerSpaceRole,
@@ -51,6 +52,9 @@ const DEFAULT_MAX_MEMORIES = 20;
 
 const CONTEXT_MEMORY_COLUMNS = `${MEMORY_COLUMNS}, agent_id, access_count, last_accessed_at, last_retrieved_at`;
 const MEMORY_DEFINITION = contentResourceDefinition("memory")!;
+const CONTEXT_EVIDENCE_DEFINITION = contentResourceDefinition("extracted_evidence")!;
+const CONTEXT_SOURCE_ITEM_DEFINITION = contentResourceDefinition("source_item")!;
+const CONTEXT_SOURCE_SNAPSHOT_DEFINITION = contentResourceDefinition("source_snapshot")!;
 
 function contextMemoryColumns(alias: string, userExpr: string): string {
   return `${CONTEXT_MEMORY_COLUMNS}, ${contentAccessLevelSql({
@@ -626,7 +630,7 @@ export class PgRunContextRepository {
 
     const result = await this.db.query<EvidenceContextRow>(
       `SELECT ev.id, ev.title, ev.content_excerpt, ev.evidence_type,
-              ev.trust_level, ev.source_item_id, ev.source_snapshot_id,
+              ev.trust_level, COALESCE(ev.source_item_id, ev.origin_source_item_id) AS source_item_id, ev.source_snapshot_id,
               ev.artifact_id, ev.source_uri,
               COALESCE(ii.connection_id, ss.connection_id) AS source_connection_id,
               el.id AS link_id, el.link_type, el.target_type, el.target_id
@@ -636,7 +640,7 @@ export class PgRunContextRepository {
           AND el.space_id = ev.space_id
          LEFT JOIN source_items ii
            ON ii.space_id = ev.space_id
-          AND ii.id = ev.source_item_id
+          AND ii.id = COALESCE(ev.source_item_id, ev.origin_source_item_id)
           AND ii.deleted_at IS NULL
          LEFT JOIN source_snapshots ss
            ON ss.space_id = ev.space_id
@@ -650,13 +654,23 @@ export class PgRunContextRepository {
           AND ev.status IN ('candidate', 'active')
           AND ev.deleted_at IS NULL
           AND ${contentReadSql("extracted_evidence", "ev", "$3")}
+          AND ${contentAccessLevelSql({ definition: CONTEXT_EVIDENCE_DEFINITION, alias: "ev", userExpr: "$3" })} = 'full'
+          AND ${evidenceProvenanceReadableClause("ev", "$3", true)}
           AND (
-            ev.source_item_id IS NULL
-            OR (ii.id IS NOT NULL AND ${contentReadSql("source_item", "ii", "$3")})
+            COALESCE(ev.source_item_id, ev.origin_source_item_id) IS NULL
+            OR (
+              ii.id IS NOT NULL
+              AND ${contentReadSql("source_item", "ii", "$3")}
+              AND ${contentAccessLevelSql({ definition: CONTEXT_SOURCE_ITEM_DEFINITION, alias: "ii", userExpr: "$3" })} = 'full'
+            )
           )
           AND (
             ev.source_snapshot_id IS NULL
-            OR (ss.id IS NOT NULL AND ${contentReadSql("source_snapshot", "ss", "$3")})
+            OR (
+              ss.id IS NOT NULL
+              AND ${contentReadSql("source_snapshot", "ss", "$3")}
+              AND ${contentAccessLevelSql({ definition: CONTEXT_SOURCE_SNAPSHOT_DEFINITION, alias: "ss", userExpr: "$3" })} = 'full'
+            )
           )
           AND el.status = 'active'
           AND el.link_type = ANY($2::varchar[])

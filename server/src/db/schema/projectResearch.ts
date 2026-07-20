@@ -93,8 +93,13 @@ export const projectResearchWorkflows = pgTable("project_research_workflows", {
 	foreignKey({
 			columns: [table.startedRunId],
 			foreignColumns: [runs.id],
-			name: "project_research_workflows_started_run_id_fkey"
+			name: "project_research_workflows_started_run_delete_fkey"
 		}).onDelete("set null"),
+	foreignKey({
+			columns: [table.startedRunId, table.spaceId],
+			foreignColumns: [runs.id, runs.spaceId],
+			name: "project_research_workflows_started_run_id_fkey"
+		}),
 	check("ck_project_research_workflows_workflow_type", sql`(workflow_type)::text = ANY (ARRAY[('literature_review'::character varying)::text, ('empirical_paper'::character varying)::text, ('theory_paper'::character varying)::text, ('paper_review'::character varying)::text, ('revision'::character varying)::text])`),
 	check("ck_project_research_workflows_status", sql`(status)::text = ANY (ARRAY[('not_started'::character varying)::text, ('active'::character varying)::text, ('paused'::character varying)::text, ('completed'::character varying)::text, ('archived'::character varying)::text])`),
 	check("ck_project_research_workflows_mode", sql`(mode)::text = ANY (ARRAY[('manual'::character varying)::text, ('agent_assisted'::character varying)::text, ('autonomous'::character varying)::text])`),
@@ -137,6 +142,11 @@ export const researchScanSummaries = pgTable("research_scan_summaries", {
 		foreignColumns: [projects.id, projects.spaceId],
 		name: "research_scan_summaries_project_id_fkey"
 	}).onDelete("cascade"),
+	foreignKey({
+		columns: [table.operationId, table.spaceId],
+		foreignColumns: [projectOperations.id, projectOperations.spaceId],
+		name: "research_scan_summaries_operation_id_fkey"
+	}),
 	foreignKey({
 		columns: [table.spaceId],
 		foreignColumns: [spaces.id],
@@ -330,14 +340,16 @@ export const projectResearchClaimLinks = pgTable("project_research_claim_links",
 			foreignColumns: [projects.id, projects.spaceId],
 			name: "project_research_claim_links_project_id_fkey"
 		}).onDelete("cascade"),
-	// Single-column workflow FK avoids nulling the required space_id column.
-	// composite (workflow_id, space_id) + ON DELETE SET NULL would null the
-	// NOT NULL space_id column on delete.
 	foreignKey({
 			columns: [table.workflowId],
 			foreignColumns: [projectResearchWorkflows.id],
-			name: "project_research_claim_links_workflow_id_fkey"
+			name: "project_research_claim_links_workflow_delete_fkey"
 		}).onDelete("set null"),
+	foreignKey({
+			columns: [table.workflowId, table.spaceId],
+			foreignColumns: [projectResearchWorkflows.id, projectResearchWorkflows.spaceId],
+			name: "project_research_claim_links_workflow_id_fkey"
+		}),
 	foreignKey({
 			columns: [table.spaceId],
 			foreignColumns: [spaces.id],
@@ -390,8 +402,8 @@ export const projectExperimentCampaigns = pgTable("project_experiment_campaigns"
 			name: "project_experiment_campaigns_project_id_fkey"
 		}).onDelete("cascade"),
 	foreignKey({
-			columns: [table.workspaceId],
-			foreignColumns: [workspaces.id],
+			columns: [table.workspaceId, table.spaceId],
+			foreignColumns: [workspaces.id, workspaces.spaceId],
 			name: "project_experiment_campaigns_workspace_id_fkey"
 		}),
 	foreignKey({
@@ -404,19 +416,26 @@ export const projectExperimentCampaigns = pgTable("project_experiment_campaigns"
 			foreignColumns: [users.id],
 			name: "project_experiment_campaigns_created_by_user_id_fkey"
 		}).onDelete("set null"),
-	// Single-column FKs (not composite with space_id): a composite FK's
-	// ON DELETE SET NULL nulls every column in the FK, including the NOT
-	// Keep space ownership intact when the optional workflow is removed.
 	foreignKey({
 			columns: [table.baselineRunId],
 			foreignColumns: [projectExperimentRuns.id],
-			name: "project_experiment_campaigns_baseline_run_id_fkey"
+			name: "project_experiment_campaigns_baseline_run_delete_fkey"
 		}).onDelete("set null"),
+	foreignKey({
+			columns: [table.baselineRunId, table.spaceId],
+			foreignColumns: [projectExperimentRuns.id, projectExperimentRuns.spaceId],
+			name: "project_experiment_campaigns_baseline_run_id_fkey"
+		}),
 	foreignKey({
 			columns: [table.bestRunId],
 			foreignColumns: [projectExperimentRuns.id],
-			name: "project_experiment_campaigns_best_run_id_fkey"
+			name: "project_experiment_campaigns_best_run_delete_fkey"
 		}).onDelete("set null"),
+	foreignKey({
+			columns: [table.bestRunId, table.spaceId],
+			foreignColumns: [projectExperimentRuns.id, projectExperimentRuns.spaceId],
+			name: "project_experiment_campaigns_best_run_id_fkey"
+		}),
 	check("ck_project_experiment_campaigns_status", sql`(status)::text = ANY (ARRAY[('draft'::character varying)::text, ('active'::character varying)::text, ('paused'::character varying)::text, ('completed'::character varying)::text, ('archived'::character varying)::text])`),
 	check("ck_project_experiment_campaigns_editable_scope_array", sql`jsonb_typeof(editable_scope_json) = 'array'::text`),
 	check("ck_project_experiment_campaigns_protected_scope_array", sql`jsonb_typeof(protected_scope_json) = 'array'::text`),
@@ -452,15 +471,20 @@ export const projectExperimentRuns = pgTable("project_experiment_runs", {
 			name: "project_experiment_runs_campaign_id_fkey"
 		}).onDelete("cascade"),
 	foreignKey({
-			columns: [table.workspaceId],
-			foreignColumns: [workspaces.id],
+			columns: [table.workspaceId, table.spaceId],
+			foreignColumns: [workspaces.id, workspaces.spaceId],
 			name: "project_experiment_runs_workspace_id_fkey"
 		}),
 	foreignKey({
 			columns: [table.runId],
 			foreignColumns: [runs.id],
-			name: "project_experiment_runs_run_id_fkey"
+			name: "project_experiment_runs_run_delete_fkey"
 		}).onDelete("set null"),
+	foreignKey({
+			columns: [table.runId, table.spaceId],
+			foreignColumns: [runs.id, runs.spaceId],
+			name: "project_experiment_runs_run_id_fkey"
+		}),
 	foreignKey({
 			columns: [table.spaceId],
 			foreignColumns: [spaces.id],
@@ -504,8 +528,13 @@ export const projectExperimentProvenance = pgTable("project_experiment_provenanc
 	foreignKey({
 			columns: [table.campaignId],
 			foreignColumns: [projectExperimentCampaigns.id],
-			name: "project_experiment_provenance_campaign_id_fkey"
+			name: "project_experiment_provenance_campaign_delete_fkey"
 		}).onDelete("set null"),
+	foreignKey({
+			columns: [table.campaignId, table.spaceId],
+			foreignColumns: [projectExperimentCampaigns.id, projectExperimentCampaigns.spaceId],
+			name: "project_experiment_provenance_campaign_id_fkey"
+		}),
 	foreignKey({
 			columns: [table.spaceId],
 			foreignColumns: [spaces.id],

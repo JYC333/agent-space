@@ -40,6 +40,7 @@ const DEFAULT_TASK_LIMITS = {
   maxCost: 10,
   maxDurationSeconds: 3600,
 } as const;
+const TASK_STATUSES = new Set(["inbox", "ready", "in_progress", "blocked", "done", "cancelled"]);
 import {
   BOARD_COLUMNS,
   BOARD_COLUMN_COLUMNS,
@@ -279,7 +280,7 @@ export class PgTaskRepository {
         requiredString(body.title, "title"),
         optionalString(body.description),
         optionalString(body.task_type) ?? "general",
-        optionalString(body.status) ?? "inbox",
+        taskStatus(body.status) ?? "inbox",
         optionalString(body.priority) ?? "normal",
         optionalString(body.risk_level) ?? "low",
         visibility,
@@ -381,7 +382,7 @@ export class PgTaskRepository {
         Object.hasOwn(body, "parent_task_id"),
         optionalString(body.parent_task_id),
         optionalString(body.task_type),
-        optionalString(body.status),
+        taskStatus(body.status),
         optionalString(body.priority),
         optionalString(body.risk_level),
         Object.hasOwn(body, "assigned_user_id"),
@@ -873,6 +874,14 @@ function buildTaskWhere(identity: SpaceUserIdentity, filters: { boardId: string 
 function positiveIntegerOrNull(value: unknown): number | null {
   const parsed = numberValue(value);
   return parsed !== null && Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function taskStatus(value: unknown): string | null {
+  const status = optionalString(value);
+  if (status !== null && !TASK_STATUSES.has(status)) {
+    throw new HttpError(422, "task status must be inbox, ready, in_progress, blocked, done, or cancelled");
+  }
+  return status;
 }
 
 function defaultNumber(value: unknown, fallback: number): number | null {

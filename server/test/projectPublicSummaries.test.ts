@@ -44,8 +44,8 @@ class ProjectSummaryFakeDb implements Queryable {
         current_focus: "Cross-project high-level summaries",
       }] as Row[]);
     }
-    if (norm.startsWith("SELECT id FROM projects")) {
-      return result([{ id: PROJECT }] as Row[]);
+    if (norm.startsWith("SELECT id FROM projects") || norm.startsWith("SELECT id, status FROM projects")) {
+      return result([{ id: PROJECT, status: "active" }] as Row[]);
     }
     if (norm.startsWith("SELECT owner_user_id FROM projects")) {
       return result([{ owner_user_id: OWNER }] as Row[]);

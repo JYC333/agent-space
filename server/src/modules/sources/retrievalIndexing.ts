@@ -49,7 +49,7 @@ async function evidenceIdsForItem(db: Queryable, spaceId: string, itemId: string
     `SELECT id
        FROM extracted_evidence
       WHERE space_id = $1
-        AND source_item_id = $2
+        AND COALESCE(source_item_id, origin_source_item_id) = $2
         AND deleted_at IS NULL`,
     [spaceId, itemId],
   );
@@ -58,7 +58,7 @@ async function evidenceIdsForItem(db: Queryable, spaceId: string, itemId: string
 
 async function sourceItemIdForEvidence(db: Queryable, spaceId: string, evidenceId: string): Promise<string | null> {
   const result = await db.query<{ source_item_id: string | null }>(
-    `SELECT source_item_id
+    `SELECT COALESCE(source_item_id, origin_source_item_id) AS source_item_id
        FROM extracted_evidence
       WHERE space_id = $1 AND id = $2
       LIMIT 1`,

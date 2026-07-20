@@ -84,7 +84,7 @@ async function lookupEvidence(
   if (cached !== undefined) return cached;
   const prefixed = /^[0-9a-f][0-9a-f-]{7,35}$/i.test(token);
   const rows = await db.query<{ id: string; source_item_id: string | null }>(
-    `SELECT id, source_item_id FROM extracted_evidence
+    `SELECT id, COALESCE(source_item_id, origin_source_item_id) AS source_item_id FROM extracted_evidence
       WHERE space_id=$2 AND deleted_at IS NULL AND (id=$1 OR ($3::boolean AND id LIKE $1 || '%'))
       LIMIT 2`,
     [token, spaceId, prefixed],

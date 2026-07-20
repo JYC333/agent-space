@@ -16,12 +16,15 @@ import {
   type SpaceUserIdentity,
 } from "../routeUtils/common";
 import { SourceExtractionWorker } from "./extractionWorker";
+import { upsertCanonicalEvidence } from "./evidenceIdentity";
 import { runCustomSourceHandlerScanJob } from "./customSources/customSourceScanWorker";
 import { RECIPE_SCAN_JOB_IMPLEMENTATION, runSourceRecipeScanJob } from "./sourceRecipes/recipeScanWorker";
 import { insertProposalRow } from "../proposals/reviewPackets";
 import {
+  contentAccessLevelSql,
   contentReadSql,
 } from "../access/contentAccessSql";
+import { contentResourceDefinition } from "../access/contentAccessRegistry";
 import { inheritContentAccessGrants } from "../access/contentAccessInheritance";
 import {
   buildSummary,
@@ -62,7 +65,12 @@ import {
   reindexSourceItemAndEvidenceForRetrieval,
 } from "./retrievalIndexing";
 import { projectSourceRoutingHook } from "../projects/projectSourceRoutingRegistry";
-import { sourceItemConnectionGateClause, sourceItemReadableClause } from "./sourceItemAccess";
+import {
+  evidenceEffectiveAccessLevelSql,
+  evidenceProvenanceReadableClause,
+  sourceItemConnectionGateClause,
+  sourceItemReadableClause,
+} from "./sourceItemAccess";
 import { ProjectSourceBindingRepository } from "../projects/projectSourceBindingRepository";
 
 const EVIDENCE_LINK_TYPES = new Set([
@@ -76,6 +84,8 @@ const EVIDENCE_LINK_TYPES = new Set([
 const EVIDENCE_STATUSES = new Set(["candidate", "active", "rejected", "archived"]);
 const SOURCE_ITEM_LIBRARY_STATUSES = new Set(["open", "new", "triaged", "selected", "ignored", "archived"]);
 const SOURCE_ITEM_READ_STATUSES = new Set(["unread", "skimmed", "read", "discussed"]);
+const SOURCE_ITEM_ACCESS = contentResourceDefinition("source_item")!;
+const EVIDENCE_ACCESS = contentResourceDefinition("extracted_evidence")!;
 
 const CONNECTION_SUBSCRIPTION_SELECT = [
   "scus.status AS subscription_status",
@@ -215,7 +225,15 @@ export class PgSourcesRepository {
     if (filters.createdAfter) clauses.push(`si.created_at >= ${add(filters.createdAfter)}::timestamptz`);
     if (filters.occurredAfter) clauses.push(`si.occurred_at >= ${add(filters.occurredAfter)}::timestamptz`);
     if (filters.q) {
-      clauses.push(`(si.title ILIKE ${add(`%${filters.q}%`)} OR si.excerpt ILIKE $${params.length} OR si.source_uri ILIKE $${params.length} OR si.source_domain ILIKE $${params.length})`);
+      const queryParam = add(`%${filters.q}%`);
+      clauses.push(`(
+        si.title ILIKE ${queryParam}
+        OR si.source_domain ILIKE ${queryParam}
+        OR (
+          ${contentAccessLevelSql({ definition: SOURCE_ITEM_ACCESS, alias: "si", userExpr: "$2" })} = 'full'
+          AND (si.excerpt ILIKE ${queryParam} OR si.source_uri ILIKE ${queryParam})
+        )
+      )`);
     }
     const where = `WHERE ${clauses.join(" AND ")}`;
     const stateJoin = `LEFT JOIN source_item_user_states suis
@@ -227,7 +245,8 @@ export class PgSourcesRepository {
       params,
     );
     const rows = await this.db.query<SourceItemRow>(
-      `SELECT ${itemColumnsWithCurrentUserState("si")}
+      `SELECT ${itemColumnsWithCurrentUserState("si")},
+              ${contentAccessLevelSql({ definition: SOURCE_ITEM_ACCESS, alias: "si", userExpr: "$2" })} AS effective_access_level
          FROM source_items si
          ${stateJoin}
        ${where}
@@ -324,7 +343,7 @@ export class PgSourcesRepository {
   }
 
   async itemAction(identity: SpaceUserIdentity, itemId: string, body: Record<string, unknown>) {
-    const item = await this.getItemRow(identity, itemId);
+    const item = await this.getItemRow(identity, itemId, true);
     if (!item) throw new HttpError(404, "Source item not found");
     const action = requiredString(body.action, "action");
     if (action === "queue_content" || action === "archive_snapshot") {
@@ -378,7 +397,7 @@ export class PgSourcesRepository {
   }
 
   async updateItem(identity: SpaceUserIdentity, itemId: string, body: Record<string, unknown>) {
-    const item = await this.getItemRow(identity, itemId);
+    const item = await this.getItemRow(identity, itemId, true);
     if (!item) throw new HttpError(404, "Source item not found");
     if (!Object.hasOwn(body, "connection_id")) throw new HttpError(422, "connection_id is required");
     if (!isManualUrlItem(item)) {
@@ -476,6 +495,7 @@ export class PgSourcesRepository {
       "space_id = $1",
       "deleted_at IS NULL",
       contentReadSql("extracted_evidence", "extracted_evidence", "$2"),
+      evidenceProvenanceReadableClause("extracted_evidence", "$2"),
     ];
     const add = (value: unknown) => {
       params.push(value);
@@ -483,7 +503,7 @@ export class PgSourcesRepository {
     };
     if (filters.status) clauses.push(`status = ${add(filters.status)}`);
     if (filters.evidenceType) clauses.push(`evidence_type = ${add(filters.evidenceType)}`);
-    if (filters.sourceItemId) clauses.push(`source_item_id = ${add(filters.sourceItemId)}`);
+    if (filters.sourceItemId) clauses.push(`COALESCE(source_item_id, origin_source_item_id) = ${add(filters.sourceItemId)}`);
     if (filters.connectionId) {
       const connectionParam = add(filters.connectionId);
       clauses.push(
@@ -492,7 +512,7 @@ export class PgSourcesRepository {
             SELECT 1
               FROM source_items ii
              WHERE ii.space_id = extracted_evidence.space_id
-               AND ii.id = extracted_evidence.source_item_id
+               AND ii.id = COALESCE(extracted_evidence.source_item_id, extracted_evidence.origin_source_item_id)
                AND ii.connection_id = ${connectionParam}
           )
           OR EXISTS (
@@ -506,7 +526,7 @@ export class PgSourcesRepository {
             SELECT 1
               FROM source_snapshots ss
              WHERE ss.space_id = extracted_evidence.space_id
-               AND ss.source_item_id = extracted_evidence.source_item_id
+               AND ss.source_item_id = COALESCE(extracted_evidence.source_item_id, extracted_evidence.origin_source_item_id)
                AND ss.connection_id = ${connectionParam}
           )
         )`,
@@ -524,7 +544,7 @@ export class PgSourcesRepository {
                AND psb.id = psil.project_source_binding_id
                AND psb.status = 'active'
              WHERE psil.space_id = extracted_evidence.space_id
-               AND psil.source_item_id = extracted_evidence.source_item_id
+               AND psil.source_item_id = COALESCE(extracted_evidence.source_item_id, extracted_evidence.origin_source_item_id)
                AND psil.project_id = ${projectParam}
                AND psil.status = 'active'
           )
@@ -543,7 +563,9 @@ export class PgSourcesRepository {
     const where = `WHERE ${clauses.join(" AND ")}`;
     const total = await this.db.query<{ total: string }>(`SELECT count(*)::text AS total FROM extracted_evidence ${where}`, params);
     const rows = await this.db.query<EvidenceRow>(
-      `SELECT ${EVIDENCE_COLUMNS} FROM extracted_evidence ${where} ORDER BY updated_at DESC, id DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      `SELECT ${EVIDENCE_COLUMNS},
+              ${evidenceEffectiveAccessLevelSql("extracted_evidence", "$2")} AS effective_access_level
+         FROM extracted_evidence ${where} ORDER BY updated_at DESC, id DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
       [...params, filters.limit, filters.offset],
     );
     return page(rows.rows.map(evidenceOut), countFromRow(total.rows[0]), filters.limit, filters.offset);
@@ -554,7 +576,7 @@ export class PgSourcesRepository {
     if (status === "active") throw new HttpError(409, "Source evidence remains candidate-only");
     if (!EVIDENCE_STATUSES.has(status)) throw new HttpError(422, "invalid evidence status");
     const sourceItemId = optionalString(body.source_item_id);
-    const item = sourceItemId ? await this.getItemRow(identity, sourceItemId) : null;
+    const item = sourceItemId ? await this.getItemRow(identity, sourceItemId, true) : null;
     if (sourceItemId && !item) throw new HttpError(404, "Source item not found");
     const artifactId = optionalString(body.artifact_id);
     if (artifactId) {
@@ -566,48 +588,34 @@ export class PgSourcesRepository {
     }
     const content = optionalString(body.content_excerpt);
     const now = new Date().toISOString();
+    const evidenceId = await upsertCanonicalEvidence(this.db, {
+      spaceId: identity.spaceId,
+      ownerUserId: item?.owner_user_id ?? identity.userId,
+      visibility: item?.visibility ?? "private",
+      accessLevel: item?.access_level ?? "full",
+      sourceItemId,
+      sourceObjectType: optionalString(body.source_object_type) ?? item?.source_object_type ?? null,
+      sourceObjectId: optionalString(body.source_object_id) ?? item?.source_object_id ?? null,
+      evidenceType: optionalString(body.evidence_type) ?? "excerpt",
+      title: requiredString(body.title, "title"),
+      contentExcerpt: content,
+      contentHash: content ? sha256(content) : null,
+      artifactId,
+      sourceUri: optionalString(body.source_uri) ?? item?.source_uri ?? null,
+      sourceTitle: item?.title ?? null,
+      sourceAuthor: item?.author ?? null,
+      occurredAt: toDbDate(body.occurred_at) ?? dateIso(item?.occurred_at),
+      trustLevel: optionalString(body.trust_level) ?? "normal",
+      extractionMethod: optionalString(body.extraction_method) ?? "manual",
+      confidence: numberValue(body.confidence),
+      status,
+      metadata: optionalObject(body.metadata) ?? optionalObject(body.metadata_json),
+      createdByUserId: identity.userId,
+      observedAt: now,
+    });
     const result = await this.db.query<EvidenceRow>(
-      `INSERT INTO extracted_evidence (
-         id, space_id, owner_user_id, visibility, access_level,
-         source_item_id, source_object_type, source_object_id,
-         evidence_type, title, content_excerpt, content_hash, artifact_id,
-         source_uri, source_title, source_author, occurred_at, trust_level,
-         extraction_method, confidence, status, metadata_json, created_by_user_id,
-         created_at, updated_at
-       ) VALUES (
-         $1, $2, $3, $4, $5,
-         $6, $7, $8,
-         $9, $10, $11, $12, $13,
-         $14, $15, $16, $17::timestamptz, $18,
-         $19, $20::float, $21, $22::jsonb, $23,
-         $24, $24
-       ) RETURNING ${EVIDENCE_COLUMNS}`,
-      [
-        randomUUID(),
-        identity.spaceId,
-        item?.owner_user_id ?? identity.userId,
-        item?.visibility ?? "private",
-        item?.access_level ?? "full",
-        sourceItemId,
-        optionalString(body.source_object_type) ?? item?.source_object_type ?? null,
-        optionalString(body.source_object_id) ?? item?.source_object_id ?? null,
-        optionalString(body.evidence_type) ?? "excerpt",
-        requiredString(body.title, "title"),
-        content,
-        content ? sha256(content) : null,
-        artifactId,
-        optionalString(body.source_uri) ?? item?.source_uri ?? null,
-        item?.title ?? null,
-        item?.author ?? null,
-        toDbDate(body.occurred_at) ?? dateIso(item?.occurred_at),
-        optionalString(body.trust_level) ?? "normal",
-        optionalString(body.extraction_method) ?? "manual",
-        numberValue(body.confidence),
-        status,
-        JSON.stringify(optionalObject(body.metadata) ?? optionalObject(body.metadata_json)),
-        identity.userId,
-        now,
-      ],
+      `SELECT ${EVIDENCE_COLUMNS} FROM extracted_evidence WHERE space_id=$1 AND id=$2`,
+      [identity.spaceId, evidenceId],
     );
     const row = result.rows[0]!;
     if (item?.visibility === "selected_users") {
@@ -630,7 +638,7 @@ export class PgSourcesRepository {
   }
 
   async updateEvidence(identity: SpaceUserIdentity, evidenceId: string, body: Record<string, unknown>) {
-    if (!(await this.getEvidenceRow(identity, evidenceId))) throw new HttpError(404, "Evidence not found");
+    if (!(await this.getEvidenceRow(identity, evidenceId, true))) throw new HttpError(404, "Evidence not found");
     const status = optionalString(body.status);
     if (status && !EVIDENCE_STATUSES.has(status)) throw new HttpError(422, "invalid evidence status");
     const now = new Date().toISOString();
@@ -638,7 +646,15 @@ export class PgSourcesRepository {
       `UPDATE extracted_evidence SET
          status = COALESCE($3, status),
          confidence = COALESCE($4::float, confidence),
-         metadata_json = CASE WHEN $5::boolean THEN $6::jsonb ELSE metadata_json END,
+         metadata_json = CASE WHEN $5::boolean THEN
+           COALESCE($6::jsonb, '{}'::jsonb)
+           || CASE
+                WHEN jsonb_typeof(metadata_json->'evidence_observations') = 'array'
+                  THEN jsonb_build_object('evidence_observations', metadata_json->'evidence_observations')
+                ELSE '{}'::jsonb
+              END
+           ELSE metadata_json
+         END,
          updated_at = $7
        WHERE space_id = $1 AND id = $2
        RETURNING ${EVIDENCE_COLUMNS}`,
@@ -799,7 +815,15 @@ export class PgSourcesRepository {
     if (filters.createdAfter) clauses.push(`si.created_at >= ${add(filters.createdAfter)}::timestamptz`);
     if (filters.occurredAfter) clauses.push(`si.occurred_at >= ${add(filters.occurredAfter)}::timestamptz`);
     if (filters.q) {
-      clauses.push(`(si.title ILIKE ${add(`%${filters.q}%`)} OR si.excerpt ILIKE $${params.length} OR si.source_uri ILIKE $${params.length} OR si.source_domain ILIKE $${params.length})`);
+      const queryParam = add(`%${filters.q}%`);
+      clauses.push(`(
+        si.title ILIKE ${queryParam}
+        OR si.source_domain ILIKE ${queryParam}
+        OR (
+          ${contentAccessLevelSql({ definition: SOURCE_ITEM_ACCESS, alias: "si", userExpr: "$2" })} = 'full'
+          AND (si.excerpt ILIKE ${queryParam} OR si.source_uri ILIKE ${queryParam})
+        )
+      )`);
     }
     const where = `WHERE ${clauses.join(" AND ")}`;
     const joins = `
@@ -831,7 +855,8 @@ export class PgSourcesRepository {
               psil.match_reason AS project_link_match_reason,
               psil.created_at AS project_link_created_at,
               psil.updated_at AS project_link_updated_at,
-              ${itemColumnsWithCurrentUserState("si")}
+              ${itemColumnsWithCurrentUserState("si")},
+              ${contentAccessLevelSql({ definition: SOURCE_ITEM_ACCESS, alias: "si", userExpr: "$2" })} AS effective_access_level
          ${joins}
        ${where}
        ORDER BY psil.matched_at DESC, psil.id DESC
@@ -1011,16 +1036,14 @@ export class PgSourcesRepository {
              FROM extracted_evidence ee
              LEFT JOIN source_items si
                ON si.space_id = ee.space_id
-              AND si.id = ee.source_item_id
+              AND si.id = COALESCE(ee.source_item_id, ee.origin_source_item_id)
               AND si.deleted_at IS NULL
             WHERE ee.space_id = $1
               AND ee.id::text = ANY($2::text[])
               AND ee.deleted_at IS NULL
               AND ${contentReadSql("extracted_evidence", "ee", "$3")}
-              AND (
-                ee.source_item_id IS NULL
-                OR ${sourceItemReadableClause("si", "$3", false)}
-              )`,
+              AND ${contentAccessLevelSql({ definition: EVIDENCE_ACCESS, alias: "ee", userExpr: "$3" })} = 'full'
+              AND ${evidenceProvenanceReadableClause("ee", "$3", true)}`,
           [identity.spaceId, evidenceIds, identity.userId],
         )
       : { rows: [] as EvidenceRow[] };
@@ -1031,11 +1054,13 @@ export class PgSourcesRepository {
             WHERE si.space_id = $1
               AND si.id::text = ANY($2::text[])
               AND si.deleted_at IS NULL
-              AND ${sourceItemReadableClause("si", "$3", false)}`,
+              AND ${sourceItemReadableClause("si", "$3", false)}
+              AND ${contentAccessLevelSql({ definition: SOURCE_ITEM_ACCESS, alias: "si", userExpr: "$3" })} = 'full'`,
           [identity.spaceId, sourceItemIds, identity.userId],
         )
       : { rows: [] as SourceItemRow[] };
     if (evidenceRows.rows.length !== evidenceIds.length || itemRows.rows.length !== sourceItemIds.length) throw new HttpError(404, "Summary input not found");
+    await this.enforceSummaryImportTargetPolicy(identity, evidenceRows.rows, itemRows.rows, "source_artifact");
     const summary = buildSummary(evidenceRows.rows, itemRows.rows, optionalString(body.summary_goal));
     if (body.create_memory_proposal === true || body.create_memory_proposals === true) {
       await this.enforceSummaryImportTargetPolicy(identity, evidenceRows.rows, itemRows.rows, "memory_proposal");
@@ -1054,7 +1079,7 @@ export class PgSourcesRepository {
        ) VALUES (
          $1, $2, NULL, NULL, 'summary', $3, $4,
          NULL, NULL, 'text/markdown', $5::jsonb, 'markdown',
-         false, $6, $6, $7::jsonb, 'space_shared', $8, 'medium'
+         false, $6, $6, $7::jsonb, 'private', $8, 'medium'
        )`,
       [
         artifactId,
@@ -1088,7 +1113,7 @@ export class PgSourcesRepository {
     identity: SpaceUserIdentity,
     evidenceRows: EvidenceRow[],
     itemRows: SourceItemRow[],
-    target: "knowledge" | "memory_proposal",
+    target: "knowledge" | "memory_proposal" | "source_artifact",
   ) {
     const itemsById = new Map<string, SourceItemRow>();
     for (const row of itemRows) {
@@ -1097,7 +1122,7 @@ export class PgSourcesRepository {
     const evidenceItemIds = [
       ...new Set(
         evidenceRows
-          .map((row) => row.source_item_id)
+          .map((row) => row.source_item_id ?? row.origin_source_item_id)
           .filter((id): id is string => typeof id === "string" && id.length > 0 && !itemsById.has(id)),
       ),
     ];
@@ -1117,13 +1142,21 @@ export class PgSourcesRepository {
       }
     }
 
-    const connectionIds = [
-      ...new Set(
-        [...itemsById.values()]
-          .map((row) => row.connection_id)
-          .filter((id): id is string => typeof id === "string" && id.length > 0),
-      ),
-    ];
+    const snapshotIds = [...new Set(evidenceRows
+      .map((row) => row.source_snapshot_id)
+      .filter((id): id is string => typeof id === "string" && id.length > 0))];
+    const snapshotConnections = snapshotIds.length
+      ? await this.db.query<{ id: string; connection_id: string | null }>(
+          `SELECT id, connection_id FROM source_snapshots
+            WHERE space_id=$1 AND id::text=ANY($2::text[])`,
+          [identity.spaceId, snapshotIds],
+        )
+      : { rows: [] as Array<{ id: string; connection_id: string | null }> };
+    if (snapshotConnections.rows.length !== snapshotIds.length) throw new HttpError(404, "Source snapshot not found");
+    const connectionIds = [...new Set([
+      ...[...itemsById.values()].map((row) => row.connection_id),
+      ...snapshotConnections.rows.map((row) => row.connection_id),
+    ].filter((id): id is string => typeof id === "string" && id.length > 0))];
     if (!connectionIds.length) return;
 
     const connections = await this.db.query<SourceConnectionRow>(
@@ -1132,17 +1165,17 @@ export class PgSourcesRepository {
     );
     if (connections.rows.length !== connectionIds.length) throw new HttpError(404, "Source connection not found");
     const connectionsById = new Map(connections.rows.map((row) => [row.id, row]));
-    for (const item of itemsById.values()) {
-      if (!item.connection_id) continue;
-      const connection = connectionsById.get(item.connection_id);
+    for (const connectionId of connectionIds) {
+      const connection = connectionsById.get(connectionId);
       if (!connection) throw new HttpError(404, "Source connection not found");
       enforceSourceDerivedImportTarget(normalizeSourceConnectionReadGovernance(connection).policy, target);
     }
   }
 
-  private async getItemRow(identity: SpaceUserIdentity, itemId: string) {
+  private async getItemRow(identity: SpaceUserIdentity, itemId: string, requireFull = false) {
     const result = await this.db.query<SourceItemRow>(
-      `SELECT ${itemColumnsWithCurrentUserState("si")}
+      `SELECT ${itemColumnsWithCurrentUserState("si")},
+              ${contentAccessLevelSql({ definition: SOURCE_ITEM_ACCESS, alias: "si", userExpr: "$2" })} AS effective_access_level
          FROM source_items si
          LEFT JOIN source_item_user_states suis
            ON suis.space_id = si.space_id
@@ -1151,7 +1184,8 @@ export class PgSourcesRepository {
         WHERE si.space_id = $1
           AND si.id = $3
           AND si.deleted_at IS NULL
-          AND ${sourceItemReadableClause("si", "$2", false)}`,
+          AND ${sourceItemReadableClause("si", "$2", false)}
+          ${requireFull ? `AND ${contentAccessLevelSql({ definition: SOURCE_ITEM_ACCESS, alias: "si", userExpr: "$2" })} = 'full'` : ""}`,
       [identity.spaceId, identity.userId, itemId],
     );
     return result.rows[0] ?? null;
@@ -1286,22 +1320,21 @@ export class PgSourcesRepository {
     );
   }
 
-  private async getEvidenceRow(identity: SpaceUserIdentity, evidenceId: string) {
+  private async getEvidenceRow(identity: SpaceUserIdentity, evidenceId: string, requireFull = false) {
     const result = await this.db.query<EvidenceRow>(
-      `SELECT ${evidenceColumnsForAlias("ee")}
+      `SELECT ${evidenceColumnsForAlias("ee")},
+              ${evidenceEffectiveAccessLevelSql("ee", "$3")} AS effective_access_level
          FROM extracted_evidence ee
          LEFT JOIN source_items si
            ON si.space_id = ee.space_id
-          AND si.id = ee.source_item_id
+          AND si.id = COALESCE(ee.source_item_id, ee.origin_source_item_id)
           AND si.deleted_at IS NULL
         WHERE ee.space_id = $1
           AND ee.id = $2
           AND ee.deleted_at IS NULL
           AND ${contentReadSql("extracted_evidence", "ee", "$3")}
-          AND (
-            ee.source_item_id IS NULL
-            OR ${sourceItemReadableClause("si", "$3", false)}
-          )`,
+          AND ${evidenceProvenanceReadableClause("ee", "$3")}
+          ${requireFull ? `AND ${evidenceEffectiveAccessLevelSql("ee", "$3")} = 'full'` : ""}`,
       [identity.spaceId, evidenceId, identity.userId],
     );
     return result.rows[0] ?? null;
@@ -1362,7 +1395,8 @@ export class PgSourcesRepository {
           title,
           content: summary,
           content_format: "markdown",
-          visibility: "space_shared",
+          visibility: "private",
+          owner_user_id: identity.userId,
           tags: ["summary"],
           source_artifact_id: artifactId,
           source_refs: sourceRefs,
@@ -1373,6 +1407,9 @@ export class PgSourcesRepository {
           memory_type: "experience",
           target_scope: "user",
           target_namespace: "source.summary",
+          target_visibility: "private",
+          owner_user_id: identity.userId,
+          subject_user_id: identity.userId,
           source_artifact_id: artifactId,
           provenance_entries: sourceRefs,
         };
@@ -1383,7 +1420,7 @@ export class PgSourcesRepository {
       payload,
       rationale: "Source summary generated a proposal without directly mutating memory or knowledge.",
       createdByUserId: identity.userId,
-      visibility: "space_shared",
+      visibility: "private",
       riskLevel: "low",
     });
     return row.id;

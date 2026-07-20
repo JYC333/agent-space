@@ -98,7 +98,9 @@ describe("Project association validation", () => {
     const calls: Array<{ sql: string; params: readonly unknown[] }> = [];
     const db = new FakeDb((sql, params) => {
       calls.push({ sql, params });
-      if (sql.includes("FROM projects")) return [{ id: "project-1", owner_user_id: "user-1" }];
+      if (sql.includes("FROM projects")) {
+        return [{ id: "project-1", owner_user_id: "user-1", status: "active" }];
+      }
       if (sql.startsWith("DELETE FROM project_workspaces")) return [];
       throw new Error(`unexpected SQL: ${sql}`);
     });

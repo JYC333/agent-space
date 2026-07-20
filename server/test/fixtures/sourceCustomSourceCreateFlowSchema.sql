@@ -365,6 +365,7 @@ CREATE TABLE public.projects (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
     owner_user_id character varying(36),
+    status character varying(32) DEFAULT 'active'::character varying NOT NULL,
     deleted_at timestamp with time zone,
     CONSTRAINT projects_pkey PRIMARY KEY (id)
 );
@@ -584,6 +585,7 @@ CREATE TABLE public.extracted_evidence (
     visibility character varying(32) DEFAULT 'space_shared' NOT NULL,
     access_level character varying(16) DEFAULT 'full' NOT NULL,
     source_item_id character varying(36),
+    origin_source_item_id character varying(36),
     extraction_job_id character varying(36),
     source_snapshot_id character varying(36),
     source_object_type character varying(64),
@@ -610,6 +612,10 @@ CREATE TABLE public.extracted_evidence (
     deleted_at timestamp with time zone,
     CONSTRAINT extracted_evidence_pkey PRIMARY KEY (id)
 );
+
+CREATE UNIQUE INDEX uq_extracted_evidence_source_content
+    ON public.extracted_evidence USING btree (space_id, source_item_id, content_hash)
+    WHERE source_item_id IS NOT NULL AND content_hash IS NOT NULL;
 
 CREATE TABLE public.project_source_bindings (
     id character varying(36) NOT NULL,
@@ -663,6 +669,14 @@ CREATE UNIQUE INDEX uq_evidence_links_active_dedupe
 CREATE TABLE public.space_objects (
     id character varying(36) NOT NULL,
     space_id character varying(36) NOT NULL,
+    object_type character varying(32) DEFAULT 'source' NOT NULL,
+    title character varying(512) DEFAULT '' NOT NULL,
+    status character varying(32) DEFAULT 'raw' NOT NULL,
+    visibility character varying(32) DEFAULT 'space_shared' NOT NULL,
+    access_level character varying(16) DEFAULT 'full' NOT NULL,
+    owner_user_id character varying(36),
+    primary_project_id character varying(36),
+    workspace_id character varying(36),
     deleted_at timestamp with time zone,
     CONSTRAINT space_objects_pkey PRIMARY KEY (id)
 );

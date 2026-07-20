@@ -113,36 +113,44 @@ describe("academic module (real Postgres)", () => {
     });
   });
 
-  it("links an author to a paper via an authored_by object_relations edge", async () => {
+  it("proposes an authored_by edge without directly mutating the graph", async () => {
     if (!available) return;
     const paper = await service().createPaper(identity, { title: "Deep Learning Survey" });
     const person = await relationsService().createPerson(identity, { title: "Yann LeCun" });
 
-    await service().linkAuthor(identity, paper.object_id, { person_object_id: person.object_id, author_position: 1 });
-    const authors = await service().listAuthors(identity, paper.object_id);
-    expect(authors).toHaveLength(1);
-    expect(authors[0]!.person_object_id).toBe(person.object_id);
-    expect(authors[0]!.author_position).toBe(1);
+    const proposal = await service().linkAuthor(identity, paper.object_id, { person_object_id: person.object_id, author_position: 1 });
+    expect(proposal).toMatchObject({ proposal_type: "object_relation_create", status: "pending" });
+    const stored = await pool!.query<{ payload_json: Record<string, unknown> }>(
+      `SELECT payload_json FROM proposals WHERE id=$1`,
+      [proposal.id],
+    );
+    expect(stored.rows[0]!.payload_json).toMatchObject({
+      relation_type: "authored_by",
+      metadata: { author_position: 1, is_corresponding: false },
+    });
 
     const edgeResult = await pool!.query(
       `SELECT relation_type FROM object_relations WHERE from_object_id = $1 AND to_object_id = $2`,
       [paper.object_id, person.object_id],
     );
-    expect(edgeResult.rows[0].relation_type).toBe("authored_by");
+    expect(edgeResult.rows).toHaveLength(0);
   });
 
-  it("reuses an existing active author edge when the same author is linked again", async () => {
+  it("lists author metadata from an approved canonical graph edge", async () => {
     if (!available) return;
     const paper = await service().createPaper(identity, { title: "Author Idempotency" });
     const person = await relationsService().createPerson(identity, { title: "First Author" });
 
-    const first = await service().linkAuthor(identity, paper.object_id, { person_object_id: person.object_id, author_position: 2 });
-    const second = await service().linkAuthor(identity, paper.object_id, { person_object_id: person.object_id, author_position: 1 });
-
-    expect(second.object_relation_id).toBe(first.object_relation_id);
+    await pool!.query(
+      `INSERT INTO object_relations (
+         id, space_id, from_object_id, to_object_id, relation_type, status, metadata_json, created_by_user_id, created_at, updated_at
+       ) VALUES (gen_random_uuid()::varchar,$1,$2,$3,'authored_by','active',$4::jsonb,$5,now(),now())`,
+      [SPACE, paper.object_id, person.object_id, JSON.stringify({ author_position: 1, is_corresponding: true }), USER],
+    );
     const authors = await service().listAuthors(identity, paper.object_id);
     expect(authors).toHaveLength(1);
     expect(authors[0]!.author_position).toBe(1);
+    expect(authors[0]!.is_corresponding).toBe(true);
   });
 
   it("rejects linking a non-existent person as an author", async () => {
@@ -153,33 +161,36 @@ describe("academic module (real Postgres)", () => {
     ).rejects.toMatchObject({ statusCode: 422 });
   });
 
-  it("links a citation edge and lists it from both directions", async () => {
+  it("proposes a citation edge without directly mutating the graph", async () => {
     if (!available) return;
     const citing = await service().createPaper(identity, { title: "Citing Paper" });
     const cited = await service().createPaper(identity, { title: "Cited Paper" });
 
-    await service().linkCitation(identity, citing.object_id, { cited_paper_object_id: cited.object_id });
-
-    const outgoing = await service().listCitations(identity, citing.object_id);
-    expect(outgoing).toHaveLength(1);
-    expect(outgoing[0]!.paper_object_id).toBe(cited.object_id);
-
-    const incoming = await service().listCitedBy(identity, cited.object_id);
-    expect(incoming).toHaveLength(1);
-    expect(incoming[0]!.paper_object_id).toBe(citing.object_id);
+    const proposal = await service().linkCitation(identity, citing.object_id, { cited_paper_object_id: cited.object_id });
+    expect(proposal).toMatchObject({ proposal_type: "object_relation_create", status: "pending" });
+    const stored = await pool!.query<{ payload_json: Record<string, unknown> }>(
+      `SELECT payload_json FROM proposals WHERE id=$1`,
+      [proposal.id],
+    );
+    expect(stored.rows[0]!.payload_json).toMatchObject({ relation_type: "cites" });
+    expect((await pool!.query(`SELECT id FROM object_relations WHERE from_object_id=$1`, [citing.object_id])).rows).toHaveLength(0);
   });
 
-  it("reuses an existing active citation edge when the same citation is linked again", async () => {
+  it("lists citations from an approved canonical graph edge", async () => {
     if (!available) return;
     const citing = await service().createPaper(identity, { title: "Citing Idempotently" });
     const cited = await service().createPaper(identity, { title: "Cited Once" });
 
-    const first = await service().linkCitation(identity, citing.object_id, { cited_paper_object_id: cited.object_id });
-    const second = await service().linkCitation(identity, citing.object_id, { cited_paper_object_id: cited.object_id });
-
-    expect(second.object_relation_id).toBe(first.object_relation_id);
+    await pool!.query(
+      `INSERT INTO object_relations (
+         id, space_id, from_object_id, to_object_id, relation_type, status, metadata_json, created_by_user_id, created_at, updated_at
+       ) VALUES (gen_random_uuid()::varchar,$1,$2,$3,'cites','active','{}'::jsonb,$4,now(),now())`,
+      [SPACE, citing.object_id, cited.object_id, USER],
+    );
     const outgoing = await service().listCitations(identity, citing.object_id);
     expect(outgoing).toHaveLength(1);
+    const incoming = await service().listCitedBy(identity, cited.object_id);
+    expect(incoming).toHaveLength(1);
   });
 
   it("rejects a paper citing itself", async () => {

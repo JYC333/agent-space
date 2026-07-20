@@ -348,7 +348,7 @@ describe("Leaf domain repository behavior", () => {
     const calls: Array<{ sql: string; params: readonly unknown[] }> = [];
     const db = new FakeDb((sql, params) => {
       calls.push({ sql, params });
-      if (sql.includes("FROM projects")) return [{ id: "project-1", owner_user_id: "user-1" }];
+      if (sql.includes("FROM projects")) return [{ id: "project-1", owner_user_id: "user-1", status: "active" }];
       if (sql.includes("FROM spaces")) return [{ type: "personal" }];
       if (sql.includes("count(*)::text AS total")) return [{ total: "0" }];
       if (sql.includes("FROM project_source_item_links")) return [];
@@ -623,7 +623,7 @@ describe("Leaf domain repository behavior", () => {
       if (sql.includes("FROM project_source_bindings") && sql.includes("binding_key")) return [];
       if (sql.includes("AS effective_access_level")) return [{ effective_access_level: "full" }];
       if (sql.includes("JOIN source_connections")) return [sourceConnectionRow()];
-      if (sql.includes("FROM projects")) return [{ id: "project-1", owner_user_id: "user-1" }];
+      if (sql.includes("FROM projects")) return [{ id: "project-1", owner_user_id: "user-1", status: "active" }];
       if (sql.includes("INSERT INTO project_source_bindings")) {
         insertParams = params;
         return [projectSourceBindingRow(params)];
@@ -652,7 +652,7 @@ describe("Leaf domain repository behavior", () => {
       calls.push(sql);
       if (sql.includes("AS effective_access_level")) return [{ effective_access_level: "full" }];
       if (sql.includes("JOIN source_connections")) return [sourceConnectionRow()];
-      if (sql.includes("FROM projects")) return [{ id: "project-1", owner_user_id: "user-1" }];
+      if (sql.includes("FROM projects")) return [{ id: "project-1", owner_user_id: "user-1", status: "active" }];
       if (sql.includes("FROM project_source_bindings") && sql.includes("binding_key")) return [archived];
       if (sql.includes("UPDATE project_source_bindings") && sql.includes("SET status = 'active'")) {
         return [{ ...archived, status: "active", updated_at: String(params[8]) }];
@@ -684,7 +684,7 @@ describe("Leaf domain repository behavior", () => {
         return [];
       }
       if (sql.includes("JOIN source_connections")) return [sourceConnectionRow()];
-      if (sql.includes("FROM projects")) return [{ id: "project-1", owner_user_id: "user-1" }];
+      if (sql.includes("FROM projects")) return [{ id: "project-1", owner_user_id: "user-1", status: "active" }];
       if (sql.includes("INSERT INTO project_source_bindings")) {
         bindingId = String(params[0]);
         return [projectSourceBindingRow(params)];
@@ -719,7 +719,7 @@ describe("Leaf domain repository behavior", () => {
       if (sql.includes("FROM project_source_bindings")) {
         return [projectSourceBindingRow(["binding-1", "space-1", "project-1", "channel-1"])];
       }
-      if (sql.includes("FROM projects")) return [{ id: "project-1", owner_user_id: "user-1" }];
+      if (sql.includes("FROM projects")) return [{ id: "project-1", owner_user_id: "user-1", status: "active" }];
       throw new Error(`unexpected SQL: ${sql}`);
     });
 
@@ -871,6 +871,53 @@ describe("Leaf domain repository behavior", () => {
       source_item_ids: ["item-1"],
       create_memory_proposal: true,
     })).rejects.toThrow("Source policy does not allow memory_proposal imports");
+  });
+
+  it("blocks source-derived summary artifacts unless the source policy allows source_artifact", async () => {
+    const db = new FakeDb((sql) => {
+      if (sql.includes("FROM source_items")) {
+        return [sourceItemRow({ connection_id: "conn-1" })];
+      }
+      if (sql.includes("FROM source_connections")) {
+        return [sourceConnectionRow({ allowed_import_targets: ["activity"] })];
+      }
+      throw new Error(`unexpected SQL: ${sql}`);
+    });
+
+    await expect(new PgSourcesRepository(db, sourcesConfig()).createSummaryRun(identity, {
+      source_item_ids: ["item-1"],
+    })).rejects.toThrow("Source policy does not allow source_artifact imports");
+  });
+
+  it("applies Source import-target policy through Evidence origin and snapshot provenance", async () => {
+    for (const provenance of ["origin_item", "snapshot"] as const) {
+      const db = new FakeDb((sql) => {
+        if (sql.includes("FROM extracted_evidence")) {
+          return [{
+            id: "evidence-1",
+            title: "Reader evidence",
+            content_excerpt: "Excerpt",
+            trust_level: "normal",
+            source_item_id: null,
+            origin_source_item_id: provenance === "origin_item" ? "item-1" : null,
+            source_snapshot_id: provenance === "snapshot" ? "snapshot-1" : null,
+          }];
+        }
+        if (sql.includes("FROM source_items si")) return [sourceItemRow({ id: "item-1", connection_id: "conn-1" })];
+        if (sql.includes("SELECT id, connection_id FROM source_snapshots")) {
+          return [{ id: "snapshot-1", connection_id: "conn-1" }];
+        }
+        if (sql.includes("FROM source_connections")) {
+          return [sourceConnectionRow({ allowed_import_targets: ["activity", "source_artifact"] })];
+        }
+        if (sql.includes("INSERT INTO artifacts")) return [];
+        throw new Error(`unexpected SQL: ${sql}`);
+      });
+      await expect(new PgSourcesRepository(db, sourcesConfig()).createSummaryRun(identity, {
+        evidence_ids: ["evidence-1"],
+        create_knowledge_proposal: true,
+      })).rejects.toThrow("Source policy does not allow knowledge imports");
+    }
   });
 
   it("gates source summary item inputs through the current user's readable source set", async () => {

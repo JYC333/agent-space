@@ -191,6 +191,7 @@ describe("PgReaderActionRepository.createEvidence", () => {
       [fakeAnnotation({ visibility: "private", created_by_user_id: USER })],
       [fakeItem({ visibility: "private" })],
       [],
+      [{ id: "evidence-1" }],
       [fakeEvidenceRow()],
     ]);
     const repo = new PgReaderActionRepository(db);
@@ -237,7 +238,8 @@ describe("PgReaderActionRepository.createEvidence", () => {
       [fakeItem()],
       // loadAnnotationConnectionPolicy → SELECT policy (empty, no connection)
       [],
-      // INSERT INTO extracted_evidence RETURNING
+      // canonical insert id, then canonical row read
+      [{ id: "evidence-1" }],
       [fakeEvidenceRow()],
     ]);
     const repo = new PgReaderActionRepository(db);
@@ -250,8 +252,9 @@ describe("PgReaderActionRepository.createEvidence", () => {
 
     const evidenceInsert = calls.find((c) => c.sql.includes("INSERT INTO extracted_evidence"));
     expect(evidenceInsert).toBeDefined();
-    // Verify it was inserted with 'candidate' status (in params, not inlined into SQL)
-    expect(evidenceInsert?.sql).toContain("'candidate'");
+    expect(evidenceInsert?.params).toContain("candidate");
+    expect(evidenceInsert?.params?.[5]).toBeNull();
+    expect(evidenceInsert?.params?.[6]).toBe("item-1");
   });
 
   it("does not write to memory_entries or knowledge_items", async () => {
@@ -259,6 +262,7 @@ describe("PgReaderActionRepository.createEvidence", () => {
       [fakeAnnotation({ visibility: "space_shared" })],
       [fakeItem()],
       [],
+      [{ id: "evidence-1" }],
       [fakeEvidenceRow()],
     ]);
     const repo = new PgReaderActionRepository(db);
@@ -277,6 +281,7 @@ describe("PgReaderActionRepository.createEvidence", () => {
       [fakeAnnotation({ visibility: "space_shared" })],
       [fakeItem()],
       [],
+      [{ id: "evidence-1" }],
       [fakeEvidenceRow({ title: "Custom title" })],
     ]);
     const repo = new PgReaderActionRepository(db);

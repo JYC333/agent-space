@@ -70,10 +70,15 @@ export const artifacts = pgTable("artifacts", {
 			name: "artifacts_workspace_id_fkey"
 		}),
 	foreignKey({
+			columns: [table.projectId],
+			foreignColumns: [projects.id],
+			name: "artifacts_project_id_delete_fkey"
+		}).onDelete("set null"),
+	foreignKey({
 			columns: [table.projectId, table.spaceId],
 			foreignColumns: [projects.id, projects.spaceId],
 			name: "fk_artifacts_project_id_projects"
-		}).onDelete("set null"),
+		}),
 	check("ck_artifacts_storage_path_relative", sql`(storage_path IS NULL) OR ((storage_path)::text !~~ '/%'::text)`),
 	check("ck_artifacts_trust_level", sql`(trust_level IS NULL) OR ((trust_level)::text = ANY (ARRAY[('high'::character varying)::text, ('medium'::character varying)::text, ('low'::character varying)::text, ('unknown'::character varying)::text]))`),
 	check("ck_artifacts_visibility", sql`visibility IN ('private', 'space_shared', 'selected_users')`),

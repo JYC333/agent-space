@@ -5,6 +5,7 @@ import { Pool } from "pg";
 import { getTestPostgres, type TestPostgresDatabase } from "./support/sharedPostgres";
 import { migrate } from "../src/db/migrator";
 import { transition, type ResearchOperationState } from "../src/modules/projectResearch/stateMachine";
+import { ProjectOperationService } from "../src/modules/projects/projectOperationService";
 
 const MIGRATIONS_DIR = join(process.cwd(), "migrations");
 const SPACE = "11111111-1111-4111-8111-111111111111";
@@ -40,6 +41,8 @@ function operationState(): ResearchOperationState {
     workflow_id: WORKFLOW,
     research_question: "Question",
     research_question_version: 1,
+    report_depth: "full",
+    question_refine_skipped: false,
     channel_ids: [],
     project_source_binding_ids: [],
     source_post_processing_rule_ids: [],
@@ -104,11 +107,11 @@ describe("project research state machine (real Postgres)", () => {
 
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
     expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
-    const row = await pool.query<{ current_stage: string; status: string }>(
-      `SELECT progress_json->>'current_stage' AS current_stage, status FROM project_operations WHERE id=$1`,
+    const row = await pool.query<{ current_stage: string; status: string; version: number }>(
+      `SELECT progress_json->>'current_stage' AS current_stage, status, version FROM project_operations WHERE id=$1`,
       [OPERATION],
     );
-    expect(row.rows[0]).toEqual({ current_stage: "backfill", status: "active" });
+    expect(row.rows[0]).toEqual({ current_stage: "backfill", status: "active", version: 2 });
   });
 
   it("enforces one active research operation per workflow in the database", async () => {
@@ -118,5 +121,43 @@ describe("project research state machine (real Postgres)", () => {
        VALUES ($1,$2,$3,'research','Duplicate','waiting_review',$4,$5::jsonb,now(),now())`,
       [randomUUID(), SPACE, PROJECT, OWNER, JSON.stringify(operationState())],
     )).rejects.toMatchObject({ code: "23505", constraint: "uq_project_operations_active_research_workflow" });
+  });
+
+  it("rejects a stale managed-operation version", async () => {
+    if (!available || !pool) return;
+    await expect(new ProjectOperationService(pool).setManagedState(SPACE, PROJECT, OPERATION, {
+      status: "active",
+      progress: operationState() as unknown as Record<string, unknown>,
+      replaceProgress: true,
+      expectedVersion: 0,
+    })).rejects.toMatchObject({ statusCode: 409 });
+    const row = await pool.query<{ version: number }>(`SELECT version FROM project_operations WHERE id=$1`, [OPERATION]);
+    expect(row.rows[0]!.version).toBe(1);
+  });
+
+  it("creates and activates managed operations atomically under contention", async () => {
+    if (!available || !pool) return;
+    await pool.query(`UPDATE project_operations SET status='completed' WHERE id=$1`, [OPERATION]);
+    const service = new ProjectOperationService(pool);
+    const input = {
+      title: "Incremental research",
+      intentText: "Test atomic activation",
+      status: "active" as const,
+      progress: operationState() as unknown as Record<string, unknown>,
+      steps: [{ title: "Collect", status: "active" as const }],
+    };
+    const results = await Promise.allSettled([
+      service.createManagedResearch({ spaceId: SPACE, userId: OWNER }, PROJECT, input),
+      service.createManagedResearch({ spaceId: SPACE, userId: OWNER }, PROJECT, input),
+    ]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    const rows = await pool.query<{ status: string; count: number }>(
+      `SELECT status, count(*)::int AS count FROM project_operations
+        WHERE space_id=$1 AND project_id=$2 AND kind='research' AND status IN ('draft','active','waiting_review')
+        GROUP BY status ORDER BY status`,
+      [SPACE, PROJECT],
+    );
+    expect(rows.rows).toEqual([{ status: "active", count: 1 }]);
   });
 });

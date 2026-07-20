@@ -8,11 +8,14 @@ import {
   type RevalidatedObject,
 } from "../retrieval";
 import type { Queryable } from "../routeUtils/common";
-import { contentReadSql } from "../access/contentAccessSql";
-import { sourceItemReadableClause } from "./sourceItemAccess";
+import { contentAccessLevelSql, contentReadSql } from "../access/contentAccessSql";
+import { contentResourceDefinition } from "../access/contentAccessRegistry";
+import { evidenceProvenanceReadableClause, sourceItemReadableClause } from "./sourceItemAccess";
 
 const SOURCE_RETRIEVAL_OBJECT_TYPES = ["source_item", "extracted_evidence"] as const;
 const INDEXABLE_EVIDENCE_STATUSES = ["candidate", "active"] as const;
+const SOURCE_ITEM_ACCESS = contentResourceDefinition("source_item")!;
+const EVIDENCE_ACCESS = contentResourceDefinition("extracted_evidence")!;
 
 interface SourceItemProjectionRow {
   id: string;
@@ -117,10 +120,13 @@ export const sourceRetrievalAdapter: RetrievalDomainAdapter = {
     const evidence = await db.query<{ id: string }>(
       `SELECT ee.id
          FROM extracted_evidence ee
-         JOIN source_items ii
+         LEFT JOIN source_items ii
           ON ii.space_id = ee.space_id
-          AND ii.id = ee.source_item_id
+          AND ii.id = COALESCE(ee.source_item_id, ee.origin_source_item_id)
           AND ii.deleted_at IS NULL
+         LEFT JOIN source_snapshots ss
+           ON ss.space_id = ee.space_id
+          AND ss.id = ee.source_snapshot_id
         WHERE ee.space_id = $1
           AND ee.status = ANY($2::varchar[])
           AND ee.deleted_at IS NULL`,
@@ -180,8 +186,7 @@ async function loadExtractedEvidence(
         AND ee.id = $2
         AND ee.deleted_at IS NULL
         AND ee.status = ANY($3::varchar[])
-        AND ii.id IS NOT NULL
-        AND ii.deleted_at IS NULL`,
+        AND (ii.id IS NOT NULL OR ss.id IS NOT NULL)`,
     ),
     [spaceId, evidenceId, [...INDEXABLE_EVIDENCE_STATUSES]],
   );
@@ -224,7 +229,8 @@ async function revalidateSourcesMany(
         WHERE space_id = $1
           AND id = ANY($2::varchar[])
           AND deleted_at IS NULL
-          AND ${sourceItemReadableClause("source_items", "$3", false)}`,
+          AND ${sourceItemReadableClause("source_items", "$3", false)}
+          AND ${contentAccessLevelSql({ definition: SOURCE_ITEM_ACCESS, alias: "source_items", userExpr: "$3" })} = 'full'`,
       [spaceId, ids, viewerUserId],
     );
     return new Map(result.rows.map((row) => [row.id, { title: row.title, text: sourceItemText(row) }]));
@@ -236,10 +242,10 @@ async function revalidateSourcesMany(
           AND ee.id = ANY($2::varchar[])
           AND ee.deleted_at IS NULL
           AND ee.status = ANY($3::varchar[])
-          AND ii.id IS NOT NULL
-          AND ii.deleted_at IS NULL
+          AND (ii.id IS NOT NULL OR ss.id IS NOT NULL)
           AND ${contentReadSql("extracted_evidence", "ee", "$4")}
-          AND ${sourceItemReadableClause("ii", "$4", false)}`,
+          AND ${contentAccessLevelSql({ definition: EVIDENCE_ACCESS, alias: "ee", userExpr: "$4" })} = 'full'
+          AND ${evidenceProvenanceReadableClause("ee", "$4", true)}`,
       ),
       [spaceId, ids, [...INDEXABLE_EVIDENCE_STATUSES], viewerUserId],
     );
@@ -257,7 +263,7 @@ async function sourceItemEvidenceEdges(
     `SELECT id AS evidence_id, evidence_type, confidence
        FROM extracted_evidence
       WHERE space_id = $1
-        AND source_item_id = $2
+        AND COALESCE(source_item_id, origin_source_item_id) = $2
         AND status = ANY($3::varchar[])
         AND deleted_at IS NULL`,
     [spaceId, itemId, [...INDEXABLE_EVIDENCE_STATUSES]],
@@ -279,11 +285,11 @@ async function evidenceSourceItemEdge(
   evidenceId: string,
 ): Promise<RetrievalEdge[]> {
   const result = await db.query<EvidenceEdgeRow>(
-    `SELECT ee.source_item_id
+    `SELECT COALESCE(ee.source_item_id, ee.origin_source_item_id) AS source_item_id
        FROM extracted_evidence ee
        JOIN source_items ii
          ON ii.space_id = ee.space_id
-        AND ii.id = ee.source_item_id
+        AND ii.id = COALESCE(ee.source_item_id, ee.origin_source_item_id)
         AND ii.deleted_at IS NULL
       WHERE ee.space_id = $1
         AND ee.id = $2
@@ -306,7 +312,8 @@ async function evidenceSourceItemEdge(
 
 function evidenceSelectSql(whereClause: string): string {
   return `SELECT ee.id, ee.owner_user_id, ee.visibility, ee.access_level,
-                 ee.source_item_id, ss.connection_id AS source_snapshot_connection_id,
+                 COALESCE(ee.source_item_id, ee.origin_source_item_id) AS source_item_id,
+                 ss.connection_id AS source_snapshot_connection_id,
                  ii.connection_id AS item_connection_id, ee.evidence_type, ee.title,
                  ee.content_excerpt, ee.source_uri, ee.source_title, ee.source_author,
                  ee.occurred_at, ee.trust_level, ee.extraction_method, ee.confidence,
@@ -314,7 +321,7 @@ function evidenceSelectSql(whereClause: string): string {
             FROM extracted_evidence ee
             LEFT JOIN source_items ii
               ON ii.space_id = ee.space_id
-             AND ii.id = ee.source_item_id
+             AND ii.id = COALESCE(ee.source_item_id, ee.origin_source_item_id)
             LEFT JOIN source_snapshots ss
               ON ss.space_id = ee.space_id
              AND ss.id = ee.source_snapshot_id

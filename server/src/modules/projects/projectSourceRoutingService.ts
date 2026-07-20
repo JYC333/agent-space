@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
-import type { Queryable } from "../routeUtils/common";
+import { withQueryableTransaction, type Queryable } from "../routeUtils/common";
 import {
   syncProjectCorpusEvidenceForSourceItem,
   syncProjectCorpusForSourceItem,
 } from "./corpusRepository";
 import { materializeAcademicPaperFromSourceItem } from "../academic/paperMaterializer";
+import { lockActiveProjectForMutation } from "./access";
 
 type ProjectSourceBindingFilterRow = {
   id: string;
@@ -131,6 +132,11 @@ async function matchingBindingRows(
             psb.priority, psb.filters_json, psb.collection_notifications_enabled,
             psb.extraction_policy_json
        FROM project_source_bindings psb
+       JOIN projects project
+         ON project.id = psb.project_id
+        AND project.space_id = psb.space_id
+        AND project.status = 'active'
+        AND project.deleted_at IS NULL
       WHERE psb.space_id = $1
         AND psb.status = 'active'
         AND ($3::varchar IS NULL OR psb.id = $3)
@@ -188,22 +194,80 @@ async function upsertProjectSourceCollectionActivity(
   );
 }
 
+async function bestEffortAcademicPaperMaterialization(
+  db: Queryable,
+  input: { spaceId: string; sourceItemId: string },
+): Promise<void> {
+  const savepoint = "academic_paper_materialization";
+  await db.query(`SAVEPOINT ${savepoint}`);
+  try {
+    await materializeAcademicPaperFromSourceItem(db, input);
+    await db.query(`RELEASE SAVEPOINT ${savepoint}`);
+  } catch (error) {
+    await db.query(`ROLLBACK TO SAVEPOINT ${savepoint}`).catch(() => undefined);
+    await db.query(`RELEASE SAVEPOINT ${savepoint}`).catch(() => undefined);
+    process.stderr.write(
+      `[academic.paper_materializer] materialization failed (${input.sourceItemId}): ${String((error as Error)?.message ?? error)}\n`,
+    );
+  }
+}
+
 export async function materializeProjectSourceItemLinks(
   db: Queryable,
   input: { spaceId: string; sourceItemId: string; bindingId?: string | null; archiveNonMatching?: boolean },
 ): Promise<{ created: number; reactivated: number; archived: number }> {
+  return withQueryableTransaction(db, (tx) => materializeProjectSourceItemLinksInTransaction(tx, input));
+}
+
+type ProjectSourceMaterializationPlan = {
+  item: SourceItemFilterRow | null;
+  bindings: ProjectSourceBindingFilterRow[];
+  projectIds: string[];
+};
+
+async function loadProjectSourceMaterializationPlan(
+  db: Queryable,
+  input: { spaceId: string; sourceItemId: string; bindingId?: string | null },
+): Promise<ProjectSourceMaterializationPlan> {
   const item = await itemRow(db, input.spaceId, input.sourceItemId);
-  if (!item) return { created: 0, reactivated: 0, archived: 0 };
-  const bindings = await matchingBindingRows(db, item, input.bindingId ?? null);
+  const bindings = item ? await matchingBindingRows(db, item, input.bindingId ?? null) : [];
+  return {
+    item,
+    bindings,
+    projectIds: [...new Set(bindings.map((binding) => binding.project_id))].sort(),
+  };
+}
+
+async function lockActiveProjectIds(db: Queryable, spaceId: string, projectIds: string[]): Promise<void> {
+  for (const projectId of projectIds) {
+    await lockActiveProjectForMutation(db, spaceId, projectId);
+  }
+}
+
+async function materializeProjectSourceItemLinksInTransaction(
+  db: Queryable,
+  input: { spaceId: string; sourceItemId: string; bindingId?: string | null; archiveNonMatching?: boolean },
+): Promise<{ created: number; reactivated: number; archived: number }> {
+  const plan = await loadProjectSourceMaterializationPlan(db, input);
+  await lockActiveProjectIds(db, input.spaceId, plan.projectIds);
+  return materializeProjectSourceItemLinksFromPlan(db, input, plan);
+}
+
+async function materializeProjectSourceItemLinksFromPlan(
+  db: Queryable,
+  input: { spaceId: string; sourceItemId: string; archiveNonMatching?: boolean },
+  plan: ProjectSourceMaterializationPlan,
+): Promise<{ created: number; reactivated: number; archived: number }> {
+  const { item, bindings, projectIds } = plan;
+  if (!item || bindings.length === 0) return { created: 0, reactivated: 0, archived: 0 };
   if (bindings.some((binding) => extractionProfileKey(binding.extraction_policy_json) === "academic_paper_v1")) {
     // Best-effort: a materialization failure (e.g. a dedupe race between
     // concurrent connection scans hitting the same arxiv_id) must not fail
     // the whole scan/extraction job over one item, mirroring the retrieval
     // reindex helpers in extractionWorker.ts.
-    await materializeAcademicPaperFromSourceItem(db, { spaceId: input.spaceId, sourceItemId: input.sourceItemId }).catch((error) => {
-      process.stderr.write(
-        `[academic.paper_materializer] materialization failed (${input.sourceItemId}): ${String((error as Error)?.message ?? error)}\n`,
-      );
+    await bestEffortAcademicPaperMaterialization(db, {
+      spaceId: input.spaceId,
+      sourceItemId: input.sourceItemId,
     });
   }
   const now = new Date().toISOString();
@@ -272,10 +336,13 @@ export async function materializeProjectSourceItemLinks(
     }
   }
 
-  await syncProjectCorpusForSourceItem(db, {
-    spaceId: input.spaceId,
-    sourceItemId: input.sourceItemId,
-  });
+  for (const projectId of projectIds) {
+    await syncProjectCorpusForSourceItem(db, {
+      spaceId: input.spaceId,
+      sourceItemId: input.sourceItemId,
+      projectId,
+    });
+  }
 
   return { created, reactivated, archived };
 }
@@ -285,12 +352,31 @@ export async function linkEvidenceToBoundProjects(
   input: { spaceId: string; sourceItemId: string },
   options: { materializeSourceItemLinks?: boolean } = {},
 ): Promise<number> {
-  if (options.materializeSourceItemLinks !== false) {
-    await materializeProjectSourceItemLinks(db, input);
+  return withQueryableTransaction(db, (tx) => linkEvidenceToBoundProjectsInTransaction(tx, input, options));
+}
+
+async function linkEvidenceToBoundProjectsInTransaction(
+  db: Queryable,
+  input: { spaceId: string; sourceItemId: string },
+  options: { materializeSourceItemLinks?: boolean } = {},
+): Promise<number> {
+  const materializationPlan = options.materializeSourceItemLinks === false
+    ? null
+    : await loadProjectSourceMaterializationPlan(db, input);
+  const linkedProjectIds = await activeLinkedProjectIdsForSourceItem(db, input);
+  const projectIds = [...new Set([
+    ...(materializationPlan?.projectIds ?? []),
+    ...linkedProjectIds,
+  ])].sort();
+  await lockActiveProjectIds(db, input.spaceId, projectIds);
+  if (materializationPlan) {
+    await materializeProjectSourceItemLinksFromPlan(db, input, materializationPlan);
   }
   const now = new Date().toISOString();
-  const result = await db.query(
-    `INSERT INTO evidence_links (
+  let inserted = 0;
+  for (const projectId of projectIds) {
+    const result = await db.query(
+      `INSERT INTO evidence_links (
        id, space_id, evidence_id, target_type, target_id, link_type,
        status, reason, created_at, updated_at
      )
@@ -306,20 +392,56 @@ export async function linkEvidenceToBoundProjects(
          ON psb.id = psil.project_source_binding_id
         AND psb.space_id = psil.space_id
         AND psb.status = 'active'
+       JOIN projects project
+         ON project.id = psil.project_id
+        AND project.space_id = psil.space_id
+        AND project.status = 'active'
+        AND project.deleted_at IS NULL
       WHERE ev.space_id = $1
         AND ev.source_item_id = $2
+        AND psil.project_id = $4
         AND ev.deleted_at IS NULL
       ORDER BY ev.id, psil.project_id, psb.priority DESC, psil.project_source_binding_id
      ON CONFLICT (space_id, evidence_id, target_type, target_id, link_type)
        WHERE status = 'active'
      DO NOTHING`,
-    [input.spaceId, input.sourceItemId, now],
+      [input.spaceId, input.sourceItemId, now, projectId],
+    );
+    inserted += result.rowCount ?? 0;
+  }
+  for (const projectId of projectIds) {
+    await syncProjectCorpusEvidenceForSourceItem(db, {
+      spaceId: input.spaceId,
+      sourceItemId: input.sourceItemId,
+      projectId,
+    });
+  }
+  return inserted;
+}
+
+async function activeLinkedProjectIdsForSourceItem(
+  db: Queryable,
+  input: { spaceId: string; sourceItemId: string },
+): Promise<string[]> {
+  const projects = await db.query<{ project_id: string }>(
+    `SELECT DISTINCT link.project_id
+       FROM project_source_item_links link
+       JOIN project_source_bindings binding
+         ON binding.id = link.project_source_binding_id
+        AND binding.space_id = link.space_id
+        AND binding.status = 'active'
+       JOIN projects project
+         ON project.id = link.project_id
+        AND project.space_id = link.space_id
+        AND project.status = 'active'
+        AND project.deleted_at IS NULL
+      WHERE link.space_id = $1
+        AND link.source_item_id = $2
+        AND link.status = 'active'
+      ORDER BY link.project_id`,
+    [input.spaceId, input.sourceItemId],
   );
-  await syncProjectCorpusEvidenceForSourceItem(db, {
-    spaceId: input.spaceId,
-    sourceItemId: input.sourceItemId,
-  });
-  return result.rowCount ?? 0;
+  return projects.rows.map((project) => project.project_id);
 }
 
 export async function recomputeProjectSourceBindingLinks(

@@ -42,4 +42,5 @@ export const academicPapers = pgTable("academic_papers", {
 		}).onDelete("cascade"),
 	unique("academic_papers_object_id_space_id_key").on(table.objectId, table.spaceId),
 	check("ck_academic_papers_paper_type", sql`(paper_type)::text = ANY (ARRAY[('article'::character varying)::text, ('preprint'::character varying)::text, ('conference_paper'::character varying)::text, ('book_chapter'::character varying)::text, ('thesis'::character varying)::text, ('report'::character varying)::text, ('other'::character varying)::text])`),
+	check("ck_academic_papers_canonical_identity", sql`(doi IS NULL OR (doi <> '' AND doi = lower(btrim(doi)))) AND (arxiv_id IS NULL OR (arxiv_id <> '' AND arxiv_id = lower(btrim(arxiv_id)))) AND (pmid IS NULL OR (pmid <> '' AND pmid = lower(btrim(pmid)))) AND (openalex_id IS NULL OR (openalex_id <> '' AND openalex_id = lower(btrim(openalex_id)))) AND (semantic_scholar_id IS NULL OR (semantic_scholar_id <> '' AND semantic_scholar_id = lower(btrim(semantic_scholar_id))))`),
 ]);

@@ -52,10 +52,16 @@ export const boards = pgTable("boards", {
 			name: "boards_workspace_id_fkey"
 		}),
 	foreignKey({
+			columns: [table.projectId],
+			foreignColumns: [projects.id],
+			name: "boards_project_id_delete_fkey"
+		}).onDelete("set null"),
+	foreignKey({
 			columns: [table.projectId, table.spaceId],
 			foreignColumns: [projects.id, projects.spaceId],
 			name: "boards_project_id_fkey"
-		}).onDelete("set null"),
+		}),
+	unique("uq_boards_id_space").on(table.id, table.spaceId),
 ]);
 
 export const boardColumns = pgTable("board_columns", {
@@ -77,8 +83,8 @@ export const boardColumns = pgTable("board_columns", {
 	index("ix_board_columns_board_id").using("btree", table.boardId.asc().nullsLast()),
 	index("ix_board_columns_space_id").using("btree", table.spaceId.asc().nullsLast()),
 	foreignKey({
-			columns: [table.boardId],
-			foreignColumns: [boards.id],
+			columns: [table.boardId, table.spaceId],
+			foreignColumns: [boards.id, boards.spaceId],
 			name: "board_columns_board_id_fkey"
 		}),
 	foreignKey({
@@ -86,6 +92,8 @@ export const boardColumns = pgTable("board_columns", {
 			foreignColumns: [spaces.id],
 			name: "board_columns_space_id_fkey"
 		}),
+	unique("uq_board_columns_id_board_space").on(table.id, table.boardId, table.spaceId),
+	check("ck_board_columns_status_key", sql`status_key IN ('inbox', 'ready', 'in_progress', 'blocked', 'done', 'cancelled')`),
 ]);
 
 export const tasks = pgTable("tasks", {
@@ -156,8 +164,8 @@ export const tasks = pgTable("tasks", {
 			name: "tasks_assigned_user_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.boardId],
-			foreignColumns: [boards.id],
+			columns: [table.boardId, table.spaceId],
+			foreignColumns: [boards.id, boards.spaceId],
 			name: "tasks_board_id_fkey"
 		}),
 	foreignKey({
@@ -171,8 +179,8 @@ export const tasks = pgTable("tasks", {
 			name: "tasks_claimed_by_user_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.columnId],
-			foreignColumns: [boardColumns.id],
+			columns: [table.columnId, table.boardId, table.spaceId],
+			foreignColumns: [boardColumns.id, boardColumns.boardId, boardColumns.spaceId],
 			name: "tasks_column_id_fkey"
 		}),
 	foreignKey({
@@ -226,14 +234,21 @@ export const tasks = pgTable("tasks", {
 			name: "tasks_workspace_id_fkey"
 		}),
 	foreignKey({
+			columns: [table.projectId],
+			foreignColumns: [projects.id],
+			name: "tasks_project_id_delete_fkey"
+		}).onDelete("set null"),
+	foreignKey({
 			columns: [table.projectId, table.spaceId],
 			foreignColumns: [projects.id, projects.spaceId],
 			name: "tasks_project_id_fkey"
-		}).onDelete("set null"),
+		}),
 	check("ck_tasks_visibility", sql`visibility IN ('private', 'space_shared', 'selected_users')`),
 	check("ck_tasks_access_level", sql`access_level IN ('full', 'summary')`),
 	check("ck_tasks_private_owner", sql`visibility = 'space_shared' OR owner_user_id IS NOT NULL`),
 	check("ck_tasks_role", sql`task_role IN ('source', 'subtask')`),
+	check("ck_tasks_status", sql`status IN ('inbox', 'ready', 'in_progress', 'blocked', 'done', 'cancelled')`),
+	check("ck_tasks_column_requires_board", sql`column_id IS NULL OR board_id IS NOT NULL`),
 ]);
 
 export const taskArtifacts = pgTable("task_artifacts", {

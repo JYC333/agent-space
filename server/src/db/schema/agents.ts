@@ -42,10 +42,10 @@ export const agents = pgTable("agents", {
 			name: "agents_space_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.currentVersionId],
-			foreignColumns: [agentVersions.id],
+			columns: [table.currentVersionId, table.id, table.spaceId],
+			foreignColumns: [agentVersions.id, agentVersions.agentId, agentVersions.spaceId],
 			name: "fk_agents_current_version_id_agent_versions"
-		}).onDelete("set null"),
+		}),
 	unique("uq_agents_space_id_id").on(table.id, table.spaceId),
 	check("ck_agents_agent_kind", sql`(agent_kind)::text = ANY (ARRAY[('standard'::character varying)::text, ('system_assistant'::character varying)::text, ('system_evolver'::character varying)::text, ('system_source_post_processor'::character varying)::text, ('system_research'::character varying)::text])`),
 	check("ck_agents_status", sql`(status)::text = ANY (ARRAY[('active'::character varying)::text, ('inactive'::character varying)::text, ('archived'::character varying)::text, ('disabled'::character varying)::text])`),
@@ -148,6 +148,7 @@ export const agentVersions = pgTable("agent_versions", {
 			foreignColumns: [proposals.id],
 			name: "fk_agent_versions_source_proposal_id_proposals"
 		}).onDelete("set null"),
+	unique("uq_agent_versions_id_agent_space").on(table.id, table.agentId, table.spaceId),
 	unique("uq_agent_versions_agent_label").on(table.agentId, table.versionLabel),
 ]);
 

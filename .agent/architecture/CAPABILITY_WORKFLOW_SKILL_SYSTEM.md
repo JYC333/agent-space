@@ -171,6 +171,13 @@ Runtime skill files are generated adapter files. They are not source of truth.
 Built-in capabilities can use their default runtime bindings after an enabled
 capability enablement is selected. Imported skill capabilities use persisted
 `capability_runtime_bindings` rows attached to reviewed capability versions.
+`capability_versions.status = 'available'` is a lifecycle state and may apply
+to multiple reviewed versions in one Space. The approved version for a Space,
+Project, Agent, or User scope is pinned only by that scope's
+`capability_enablements.capability_version_id`; publishing or enabling another
+version never rewrites other scopes' pins. A null version pin is reserved for
+the matching built-in definition and never selects persisted imported runtime
+bindings; imported conversion also rejects ids that collide with built-in keys.
 
 ### RuntimeSkillRenderer
 

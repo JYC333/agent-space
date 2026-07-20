@@ -154,8 +154,7 @@ export class PgCapabilitiesRepository {
     const rows = await this.db.query<CapabilityVersionRow>(
       `SELECT id, capability_key, version, source, status, metadata_json
          FROM capability_versions
-        WHERE scope_type = 'space'
-          AND scope_id = $1
+        WHERE space_id = $1
           AND source = 'imported_skill'
           AND status <> 'archived'
         ORDER BY capability_key ASC, created_at DESC`,
@@ -481,6 +480,9 @@ export class PgCapabilitiesRepository {
     const normalized = normalizedFromPackage(packageRecord);
     const capabilityId =
       capabilityIdOverride ?? `${namespace}.${slugify(normalized.name)}`;
+    if (getBuiltInCapabilityDefinition(capabilityId)) {
+      throw new HttpError(409, "Imported capability id conflicts with a built-in capability");
+    }
     return this.insertProposal(input.identity, {
       proposal_type: "capability_install",
       title: `Install capability: ${capabilityId}`,
@@ -559,7 +561,7 @@ export class PgCapabilitiesRepository {
       const rows = await this.db.query<{ capability_key: string; metadata_json: unknown }>(
         `SELECT capability_key, metadata_json
            FROM capability_versions
-          WHERE id = $1 AND scope_type = 'space' AND scope_id = $2 AND status <> 'archived'`,
+          WHERE id = $1 AND space_id = $2 AND status <> 'archived'`,
         [capabilityVersionId, identity.spaceId],
       );
       const row = rows.rows[0];
@@ -584,7 +586,7 @@ export class PgCapabilitiesRepository {
     const rows = await this.db.query<{ id: string; metadata_json: unknown }>(
       `SELECT id, metadata_json
          FROM capability_versions
-        WHERE capability_key = $1 AND scope_type = 'space' AND scope_id = $2 AND status <> 'archived'
+        WHERE capability_key = $1 AND space_id = $2 AND status <> 'archived'
         ORDER BY created_at DESC
         LIMIT 1`,
       [capabilityKey, identity.spaceId],
@@ -859,6 +861,9 @@ export async function convertSkillPackageToCapabilityInTransaction(input: {
   const riskLevel = packageRecord.risk_level as SkillRiskLevel;
   const capabilityId =
     capabilityIdOverride ?? `${namespace}.${slugify(normalized.name)}`;
+  if (getBuiltInCapabilityDefinition(capabilityId)) {
+    throw new HttpError(409, "Imported capability id conflicts with a built-in capability");
+  }
   const definition = capabilityDefinitionFromNormalized({
     capabilityId,
     namespace,
@@ -869,10 +874,10 @@ export async function convertSkillPackageToCapabilityInTransaction(input: {
   const versionId = randomUUID();
   await input.db.query(
     `INSERT INTO capability_versions (
-       id, capability_key, scope_type, scope_id, parent_version_id, version,
+       id, capability_key, space_id, parent_version_id, version,
        source, artifact_uri, content_ref, content_hash, status, proposal_id,
        metadata_json, created_at, updated_at
-     ) VALUES ($1, $2, 'space', $3, NULL, $4, 'imported_skill', NULL, $5, $6,
+     ) VALUES ($1, $2, $3, NULL, $4, 'imported_skill', NULL, $5, $6,
                'draft', $7, $8::jsonb, $9, $9)`,
     [
       versionId,

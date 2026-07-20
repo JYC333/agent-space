@@ -16,6 +16,7 @@ import type { SpaceUserIdentity } from "../src/modules/routeUtils/common";
 const MIGRATIONS_DIR = join(process.cwd(), "migrations");
 const SPACE = "11111111-1111-4111-8111-111111111111";
 const OWNER = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const OTHER = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const PROJECT = "55555555-5555-4555-8555-555555555555";
 
 let container: TestPostgresDatabase | undefined;
@@ -443,6 +444,7 @@ describe("ProjectResearchRepository (real Postgres)", () => {
     if (!available) return;
     const now = new Date().toISOString();
     const sourceItemId = randomUUID();
+    const corpusItemId = randomUUID();
     await pool!.query(
       `INSERT INTO source_items (
          id, space_id, owner_user_id, visibility, item_type, title, first_seen_at, last_seen_at, content_state, retention_policy, created_at, updated_at
@@ -466,11 +468,21 @@ describe("ProjectResearchRepository (real Postgres)", () => {
       [objectId, SPACE, now],
     );
     await pool!.query(
+      `INSERT INTO source_item_references (source_item_id, space_id, reference_object_id, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$4)`,
+      [sourceItemId, SPACE, objectId, now],
+    );
+    await pool!.query(
       `INSERT INTO project_corpus_items (
-         id, space_id, project_id, object_id, source_item_id, role, status, triage_status, read_status,
+         id, space_id, project_id, object_id, role, status, triage_status, read_status,
          metadata_json, created_at, updated_at
-       ) VALUES ($1,$2,$3,$4,$5,'candidate','active','included','unread','{}'::jsonb,$6,$6)`,
-      [randomUUID(), SPACE, PROJECT, objectId, sourceItemId, now],
+       ) VALUES ($1,$2,$3,$4,'candidate','active','included','unread','{}'::jsonb,$5,$5)`,
+      [corpusItemId, SPACE, PROJECT, objectId, now],
+    );
+    await pool!.query(
+      `INSERT INTO project_corpus_item_sources (id, corpus_item_id, space_id, project_id, source_item_id, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [randomUUID(), corpusItemId, SPACE, PROJECT, sourceItemId, now],
     );
     await pool!.query(
       `INSERT INTO extracted_evidence (
@@ -478,6 +490,21 @@ describe("ProjectResearchRepository (real Postgres)", () => {
          extraction_method, trust_level, status, created_at, updated_at
        ) VALUES ($1,$2,$3,'space_shared',$4,'source_item',$4,'excerpt','Key finding','full_text','normal','candidate',$5,$5)`,
       [randomUUID(), SPACE, OWNER, sourceItemId, now],
+    );
+    await pool!.query(`INSERT INTO users (id,display_name,status,created_at,updated_at) VALUES ($1,$1,'active',$2,$2)`, [OTHER, now]);
+    await pool!.query(
+      `INSERT INTO extracted_evidence (
+         id,space_id,owner_user_id,visibility,source_item_id,source_object_type,source_object_id,evidence_type,title,
+         extraction_method,trust_level,status,created_at,updated_at
+       ) VALUES ($1,$2,$3,'private',$4,'source_item',$4,'excerpt','Private finding','full_text','normal','candidate',$5,$5)`,
+      [randomUUID(), SPACE, OTHER, sourceItemId, now],
+    );
+    await pool!.query(
+      `INSERT INTO reader_annotations (
+         id,space_id,document_type,document_id,annotation_type,quote_text,anchor_json,visibility,status,
+         anchor_state,created_by_user_id,owner_user_id,created_at,updated_at
+       ) VALUES ($1,$2,'source_item',$3,'highlight','Private note','{}'::jsonb,'private','active','verified',$4,$4,$5,$5)`,
+      [randomUUID(), SPACE, sourceItemId, OTHER, now],
     );
 
     const matrix = await repo().getLiteratureMatrix(identity, PROJECT);
@@ -490,11 +517,57 @@ describe("ProjectResearchRepository (real Postgres)", () => {
     });
   });
 
+  it("omits source-backed matrix rows whose object is readable but provenance is summary-only", async () => {
+    if (!available) return;
+    const now = new Date().toISOString();
+    await pool!.query(`INSERT INTO users (id,display_name,status,created_at,updated_at) VALUES ($1,$1,'active',$2,$2)`, [OTHER, now]);
+    await pool!.query(
+      `INSERT INTO space_memberships (id,space_id,user_id,role,status,created_at,updated_at)
+       VALUES ($1,$2,$3,'member','active',$4,$4)`,
+      [randomUUID(), SPACE, OTHER, now],
+    );
+    await pool!.query(
+      `INSERT INTO project_members (id,space_id,project_id,user_id,role,status,created_at,updated_at)
+       VALUES ($1,$2,$3,$4,'member','active',$5,$5)`,
+      [randomUUID(), SPACE, PROJECT, OTHER, now],
+    );
+    const objectId = randomUUID();
+    const sourceItemId = randomUUID();
+    const corpusItemId = randomUUID();
+    await pool!.query(
+      `INSERT INTO space_objects (id,space_id,object_type,title,status,visibility,created_at,updated_at)
+       VALUES ($1,$2,'source','Restricted paper','processed','space_shared',$3,$3)`,
+      [objectId, SPACE, now],
+    );
+    await pool!.query(
+      `INSERT INTO source_items (
+         id,space_id,owner_user_id,created_by_user_id,visibility,access_level,item_type,title,first_seen_at,last_seen_at,
+         content_state,retention_policy,created_at,updated_at
+       ) VALUES ($1,$2,$3,$3,'space_shared','summary','feed_entry','Restricted provenance',$4,$4,'excerpt_saved','summary_only',$4,$4)`,
+      [sourceItemId, SPACE, OWNER, now],
+    );
+    await pool!.query(
+      `INSERT INTO project_corpus_items (
+         id,space_id,project_id,object_id,role,status,triage_status,read_status,metadata_json,created_at,updated_at
+       ) VALUES ($1,$2,$3,$4,'candidate','active','included','unread','{}'::jsonb,$5,$5)`,
+      [corpusItemId, SPACE, PROJECT, objectId, now],
+    );
+    await pool!.query(
+      `INSERT INTO project_corpus_item_sources (id,corpus_item_id,space_id,project_id,source_item_id,created_at)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [randomUUID(), corpusItemId, SPACE, PROJECT, sourceItemId, now],
+    );
+
+    await expect(repo().getLiteratureMatrix(identity, PROJECT)).resolves.toHaveLength(1);
+    await expect(repo().getLiteratureMatrix({ spaceId: SPACE, userId: OTHER }, PROJECT)).resolves.toEqual([]);
+  });
+
   it("counts corpus status once per source item when evidence has its own corpus row", async () => {
     if (!available) return;
     const now = new Date().toISOString();
     const sourceItemId = randomUUID();
     const evidenceId = randomUUID();
+    const sourceCorpusItemId = randomUUID();
     await pool!.query(
       `INSERT INTO source_items (
          id, space_id, owner_user_id, visibility, item_type, title, first_seen_at, last_seen_at,
@@ -514,14 +587,25 @@ describe("ProjectResearchRepository (real Postgres)", () => {
          id, space_id, project_id, source_item_id, role, status, triage_status, read_status,
          metadata_json, created_at, updated_at
        ) VALUES ($1,$2,$3,$4,'candidate','active','new','unread','{}'::jsonb,$5,$5)`,
-      [randomUUID(), SPACE, PROJECT, sourceItemId, now],
+      [sourceCorpusItemId, SPACE, PROJECT, sourceItemId, now],
     );
     await pool!.query(
+      `INSERT INTO project_corpus_item_sources (id, corpus_item_id, space_id, project_id, source_item_id, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [randomUUID(), sourceCorpusItemId, SPACE, PROJECT, sourceItemId, now],
+    );
+    const evidenceCorpusItemId = randomUUID();
+    await pool!.query(
       `INSERT INTO project_corpus_items (
-         id, space_id, project_id, source_item_id, evidence_id, role, status, triage_status,
+         id, space_id, project_id, evidence_id, role, status, triage_status,
          read_status, metadata_json, created_at, updated_at
-       ) VALUES ($1,$2,$3,$4,$5,'candidate','active','new','unread','{}'::jsonb,$6,$6)`,
-      [randomUUID(), SPACE, PROJECT, sourceItemId, evidenceId, now],
+       ) VALUES ($1,$2,$3,$4,'candidate','active','new','unread','{}'::jsonb,$5,$5)`,
+      [evidenceCorpusItemId, SPACE, PROJECT, evidenceId, now],
+    );
+    await pool!.query(
+      `INSERT INTO project_corpus_item_sources (id, corpus_item_id, space_id, project_id, source_item_id, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [randomUUID(), evidenceCorpusItemId, SPACE, PROJECT, sourceItemId, now],
     );
 
     const orchestrator = new ProjectResearchOrchestrator(pool!);
@@ -535,17 +619,33 @@ describe("ProjectResearchRepository (real Postgres)", () => {
     });
 
     const objectId = randomUUID();
+    const objectCorpusItemId = randomUUID();
     await pool!.query(
       `INSERT INTO space_objects (id, space_id, object_type, title, status, created_at, updated_at)
        VALUES ($1,$2,'source','Paper A','processed',$3,$3)`,
       [objectId, SPACE, now],
     );
     await pool!.query(
+      `INSERT INTO sources (object_id, space_id, source_type, uri, metadata_json)
+       VALUES ($1,$2,'paper','https://example.test/paper-a','{}'::jsonb)`,
+      [objectId, SPACE],
+    );
+    await pool!.query(
+      `INSERT INTO source_item_references (source_item_id, space_id, reference_object_id, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$4)`,
+      [sourceItemId, SPACE, objectId, now],
+    );
+    await pool!.query(
       `INSERT INTO project_corpus_items (
-         id, space_id, project_id, object_id, source_item_id, evidence_id, role, status,
+         id, space_id, project_id, object_id, role, status,
          triage_status, read_status, metadata_json, created_at, updated_at
-       ) VALUES ($1,$2,$3,$4,$5,$6,'candidate','active','new','unread','{}'::jsonb,$7,$7)`,
-      [randomUUID(), SPACE, PROJECT, objectId, sourceItemId, evidenceId, now],
+       ) VALUES ($1,$2,$3,$4,'candidate','active','new','unread','{}'::jsonb,$5,$5)`,
+      [objectCorpusItemId, SPACE, PROJECT, objectId, now],
+    );
+    await pool!.query(
+      `INSERT INTO project_corpus_item_sources (id, corpus_item_id, space_id, project_id, source_item_id, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [randomUUID(), objectCorpusItemId, SPACE, PROJECT, sourceItemId, now],
     );
     await expect(countRelevantItems(SPACE, PROJECT, [sourceItemId])).resolves.toMatchObject({
       total: 1,

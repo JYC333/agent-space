@@ -6,6 +6,7 @@ import { spaces } from "./spaces";
 import { workspaces } from "./workspaces";
 import { projects } from "./projects";
 import { runs } from "./runs";
+import { evolvableAssetVersions } from "./evolvableAssets";
 
 export const automations = pgTable("automations", {
 	id: varchar({ length: 36 }).primaryKey().notNull(),
@@ -41,10 +42,15 @@ export const automations = pgTable("automations", {
 			name: "automations_owner_user_id_fkey"
 		}),
 	foreignKey({
+			columns: [table.projectId],
+			foreignColumns: [projects.id],
+			name: "automations_project_id_delete_fkey"
+		}).onDelete("set null"),
+	foreignKey({
 			columns: [table.projectId, table.spaceId],
 			foreignColumns: [projects.id, projects.spaceId],
 			name: "automations_project_id_fkey"
-		}).onDelete("set null"),
+		}),
 	foreignKey({
 			columns: [table.spaceId],
 			foreignColumns: [spaces.id],
@@ -121,7 +127,9 @@ export const workflowExecutions = pgTable("workflow_executions", {
 	unique("uq_workflow_executions_id_space_id").on(table.id, table.spaceId),
 	unique("uq_workflow_executions_id_automation_id").on(table.id, table.automationId),
 	foreignKey({ columns: [table.automationId, table.spaceId], foreignColumns: [automations.id, automations.spaceId], name: "workflow_executions_automation_space_fkey" }),
-	foreignKey({ columns: [table.rootRunId, table.spaceId], foreignColumns: [runs.id, runs.spaceId], name: "workflow_executions_root_run_space_fkey" }).onDelete("set null"),
+	foreignKey({ columns: [table.rootRunId], foreignColumns: [runs.id], name: "workflow_executions_root_run_delete_fkey" }).onDelete("set null"),
+	foreignKey({ columns: [table.rootRunId, table.spaceId], foreignColumns: [runs.id, runs.spaceId], name: "workflow_executions_root_run_space_fkey" }),
+	foreignKey({ columns: [table.workflowVersionId], foreignColumns: [evolvableAssetVersions.id], name: "workflow_executions_workflow_version_fkey" }),
 	foreignKey({ columns: [table.spaceId], foreignColumns: [spaces.id], name: "workflow_executions_space_id_fkey" }),
 ]);
 
@@ -152,8 +160,10 @@ export const workflowExecutionNodes = pgTable("workflow_execution_nodes", {
 	unique("uq_workflow_execution_nodes_key").on(table.executionId, table.nodeKey),
 	unique("uq_workflow_execution_nodes_id_space").on(table.id, table.spaceId),
 	foreignKey({ columns: [table.executionId, table.spaceId], foreignColumns: [workflowExecutions.id, workflowExecutions.spaceId], name: "workflow_execution_nodes_execution_space_fkey" }),
-	foreignKey({ columns: [table.assignedAgentId, table.spaceId], foreignColumns: [agents.id, agents.spaceId], name: "workflow_execution_nodes_agent_space_fkey" }).onDelete("set null"),
+	foreignKey({ columns: [table.assignedAgentId], foreignColumns: [agents.id], name: "workflow_execution_nodes_agent_delete_fkey" }).onDelete("set null"),
+	foreignKey({ columns: [table.assignedAgentId, table.spaceId], foreignColumns: [agents.id, agents.spaceId], name: "workflow_execution_nodes_agent_space_fkey" }),
 	foreignKey({ columns: [table.spaceId], foreignColumns: [spaces.id], name: "workflow_execution_nodes_space_id_fkey" }),
+	check("ck_workflow_execution_nodes_status", sql`status IN ('inbox', 'ready', 'in_progress', 'blocked', 'waiting_for_review', 'done', 'failed')`),
 ]);
 
 export const workflowExecutionDependencies = pgTable("workflow_execution_dependencies", {

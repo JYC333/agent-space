@@ -117,11 +117,11 @@ export class PgRuntimeSkillProvider implements RuntimeSkillProvider {
           AND b.capability_key = se.capability_key
           AND b.runtime_adapter_type = $5
           AND b.enabled = TRUE
-          AND (se.capability_version_id IS NULL OR se.capability_version_id = b.capability_version_id)
+          AND se.capability_version_id IS NOT NULL
+          AND se.capability_version_id = b.capability_version_id
          JOIN capability_versions cv
            ON cv.id = b.capability_version_id
-          AND cv.scope_type = 'space'
-          AND cv.scope_id = $1
+          AND cv.space_id = $1
           AND cv.status = 'available'
         WHERE se.enabled = TRUE
         ORDER BY b.capability_key ASC, b.runtime_adapter_type ASC, b.render_mode ASC`,

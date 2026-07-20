@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { PoolClient } from "../../db/pool";
 import { HttpError, type Queryable } from "../routeUtils/common";
 import { contentReadSql } from "../access/contentAccessSql";
+import { canonicalAcademicIdentity } from "./identity";
 
 export interface AcademicPaperRow {
   object_id: string;
@@ -85,10 +86,10 @@ export class AcademicRepository {
       [
         objectId,
         input.spaceId,
-        input.doi,
-        input.arxivId,
-        input.pmid,
-        input.openalexId,
+        canonicalAcademicIdentity(input.doi),
+        canonicalAcademicIdentity(input.arxivId),
+        canonicalAcademicIdentity(input.pmid),
+        canonicalAcademicIdentity(input.openalexId),
         input.publicationDate,
         input.venue,
         input.paperType,
@@ -127,11 +128,11 @@ export class AcademicRepository {
     const params: unknown[] = [spaceId, userId];
     const clauses: string[] = [];
     if (input.doi) {
-      params.push(input.doi);
+      params.push(canonicalAcademicIdentity(input.doi));
       clauses.push(`ap.doi = $${params.length}`);
     }
     if (input.arxivId) {
-      params.push(input.arxivId);
+      params.push(canonicalAcademicIdentity(input.arxivId));
       clauses.push(`ap.arxiv_id = $${params.length}`);
     }
     const result = await this.db.query<AcademicPaperRow>(
@@ -235,38 +236,6 @@ export class AcademicRepository {
     return result.rows.length > 0;
   }
 
-  async linkAuthor(
-    spaceId: string,
-    paperObjectId: string,
-    personObjectId: string,
-    input: { authorPosition: number | null; isCorresponding: boolean; createdByUserId: string | null },
-  ): Promise<string> {
-    const id = randomUUID();
-    const now = new Date().toISOString();
-    const result = await this.db.query<{ id: string }>(
-      `INSERT INTO object_relations (
-         id, space_id, from_object_id, to_object_id, relation_type, status,
-         metadata_json, created_by_user_id, created_at, updated_at
-       ) VALUES ($1, $2, $3, $4, 'authored_by', 'active', $5::jsonb, $6, $7, $7)
-       ON CONFLICT (space_id, from_object_id, to_object_id, relation_type)
-       WHERE ((status)::text = 'active'::text)
-       DO UPDATE SET
-         metadata_json = EXCLUDED.metadata_json,
-         updated_at = EXCLUDED.updated_at
-       RETURNING id`,
-      [
-        id,
-        spaceId,
-        paperObjectId,
-        personObjectId,
-        JSON.stringify({ author_position: input.authorPosition, is_corresponding: input.isCorresponding }),
-        input.createdByUserId,
-        now,
-      ],
-    );
-    return result.rows[0]!.id;
-  }
-
   async listAuthors(spaceId: string, paperObjectId: string, userId: string): Promise<AcademicAuthorRow[]> {
     const result = await this.db.query<AcademicAuthorRow>(
       `SELECT
@@ -277,6 +246,7 @@ export class AcademicRepository {
          orl.id AS object_relation_id
        FROM object_relations orl
        JOIN space_objects so ON so.id = orl.to_object_id AND so.space_id = orl.space_id
+       JOIN relation_people person ON person.object_id = so.id AND person.space_id = so.space_id
       WHERE orl.space_id = $1
         AND orl.from_object_id = $2
         AND orl.relation_type = 'authored_by'
@@ -286,23 +256,6 @@ export class AcademicRepository {
       [spaceId, paperObjectId, userId],
     );
     return result.rows;
-  }
-
-  async linkCitation(spaceId: string, citingPaperObjectId: string, citedPaperObjectId: string, createdByUserId: string | null): Promise<string> {
-    const id = randomUUID();
-    const now = new Date().toISOString();
-    const result = await this.db.query<{ id: string }>(
-      `INSERT INTO object_relations (
-         id, space_id, from_object_id, to_object_id, relation_type, status,
-         metadata_json, created_by_user_id, created_at, updated_at
-       ) VALUES ($1, $2, $3, $4, 'cites', 'active', '{}'::jsonb, $5, $6, $6)
-       ON CONFLICT (space_id, from_object_id, to_object_id, relation_type)
-       WHERE ((status)::text = 'active'::text)
-       DO UPDATE SET updated_at = EXCLUDED.updated_at
-       RETURNING id`,
-      [id, spaceId, citingPaperObjectId, citedPaperObjectId, createdByUserId, now],
-    );
-    return result.rows[0]!.id;
   }
 
   async listCitations(spaceId: string, paperObjectId: string, userId: string): Promise<AcademicCitationRow[]> {

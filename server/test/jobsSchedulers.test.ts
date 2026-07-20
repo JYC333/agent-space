@@ -1072,6 +1072,9 @@ class MaintenanceAutomationFakePool implements Queryable {
     if (sql.includes("FROM agent_versions")) {
       return { rowCount: 1, rows: [{ id: "agent-version-1" }] as Row[] };
     }
+    if (sql.includes("SELECT id FROM automations") && sql.includes("FOR UPDATE")) {
+      return { rowCount: 1, rows: [{ id: "auto-1" }] as Row[] };
+    }
     if (sql.includes("INSERT INTO context_snapshots")) {
       return { rowCount: 1, rows: [] };
     }
@@ -1186,6 +1189,9 @@ class AgentAutomationFireFakePool implements Queryable {
     }
     if (sql.includes("FROM agent_versions")) {
       return { rowCount: 1, rows: [{ id: "agent-version-1" }] as Row[] };
+    }
+    if (sql.includes("SELECT id FROM automations") && sql.includes("FOR UPDATE")) {
+      return { rowCount: 1, rows: [{ id: "auto-1" }] as Row[] };
     }
     if (sql.includes("FROM agent_runtime_profiles")) {
       return {

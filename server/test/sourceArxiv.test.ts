@@ -326,7 +326,16 @@ class ExtractionDb implements Queryable {
     if (sql.includes("FROM project_source_bindings psb")) {
       return { rows: [] as Row[], rowCount: 0 };
     }
-    if (sql.includes("UPDATE project_corpus_items")) {
+    if (sql.includes("SELECT EXISTS") && sql.includes("FROM project_source_item_links")) {
+      return { rows: [{ exists: false }] as Row[], rowCount: 1 };
+    }
+    if (sql.includes("SELECT DISTINCT link.project_id") && sql.includes("FROM project_source_item_links")) {
+      return { rows: [] as Row[], rowCount: 0 };
+    }
+    if (sql.includes("FROM projects project") && sql.includes("FOR UPDATE")) {
+      return { rows: [] as Row[], rowCount: 0 };
+    }
+    if (sql.includes("project_corpus_items") || sql.includes("project_corpus_item_sources")) {
       return { rows: [] as Row[], rowCount: 0 };
     }
     if (sql.includes("FROM source_connections")) {
@@ -347,11 +356,16 @@ class ExtractionDb implements Queryable {
     if (sql.includes("FROM scheduler_tasks") || sql.includes("FROM settings")) {
       return { rows: [] as Row[], rowCount: 0 };
     }
+    if (sql.includes("INSERT INTO extracted_evidence")) {
+      return { rows: [{ id: String(params[0]) }] as Row[], rowCount: 1 };
+    }
+    if (sql.includes("SELECT owner_user_id, access_level FROM source_items")) {
+      return { rows: [{ owner_user_id: "user-1", access_level: "full" }] as Row[], rowCount: 1 };
+    }
     if (
       sql.includes("INSERT INTO artifacts") ||
       sql.includes("INSERT INTO source_snapshots") ||
       sql.includes("UPDATE source_items") ||
-      sql.includes("INSERT INTO extracted_evidence") ||
       sql.includes("UPDATE extraction_jobs SET source_snapshot_id")
     ) {
       return { rows: [] as Row[], rowCount: 1 };

@@ -415,5 +415,5 @@ describeWithPostgres("evolution bundles against real PostgreSQL", () => {
       [bundledPromotion.id],
     );
     expect(rollbackProposals.rows).toHaveLength(0);
-  });
+  }, 20_000);
 });

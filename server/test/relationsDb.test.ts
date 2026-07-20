@@ -7,14 +7,14 @@ import { RelationsRepository } from "../src/modules/relations/repository";
 import { RelationsService } from "../src/modules/relations/service";
 
 // Real-Postgres coverage for Relation Core: the space_objects composite-FK
-// extension pattern, the CHECK-constrained enums, the relation_affiliations ->
-// object_relations materialization, and space isolation across all relation
+// extension pattern, proposal-gated canonical affiliation edges, and space isolation across relation
 // entities. A FakeDb unit test cannot catch constraint/FK-shape bugs here.
 
 const MIGRATIONS_DIR = join(process.cwd(), "migrations");
 const SPACE = "11111111-1111-4111-8111-111111111111";
 const OTHER_SPACE = "22222222-2222-4222-8222-222222222222";
 const USER = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const OTHER_USER = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 
 let container: TestPostgresDatabase | undefined;
 let pool: Pool | undefined;
@@ -39,7 +39,7 @@ afterAll(async () => {
 beforeEach(async () => {
   if (!available || !pool) return;
   await pool.query(
-    "TRUNCATE relation_source_links, relation_notes, relation_affiliations, relation_identities, relation_organizations, relation_people, object_relations, space_objects, users, spaces CASCADE",
+    "TRUNCATE relation_source_links, relation_notes, relation_identities, relation_organizations, relation_people, object_relations, space_objects, users, spaces CASCADE",
   );
   await pool.query(
     `INSERT INTO users (id, display_name, status, created_at, updated_at)
@@ -164,35 +164,56 @@ describe("relations module (real Postgres)", () => {
     expect(identities).toHaveLength(1);
   });
 
-  it("creates an affiliation and materializes an object_relations edge, then ends it", async () => {
+  it("creates a pending proposal instead of directly writing an affiliation edge", async () => {
     if (!available) return;
     const person = await service().createPerson({ spaceId: SPACE, userId: USER }, { title: "Barbara Liskov" });
     const org = await service().createOrganization({ spaceId: SPACE, userId: USER }, { title: "MIT", org_type: "university" });
 
-    const affiliation = await service().createAffiliation({ spaceId: SPACE, userId: USER }, {
+    const proposal = await service().createAffiliation({ spaceId: SPACE, userId: USER }, {
       person_object_id: person.object_id,
       organization_object_id: org.object_id,
       role: "professor",
       title: "Professor of Computer Science",
     });
-    expect(affiliation.status).toBe("active");
+    expect(proposal).toMatchObject({ proposal_type: "object_relation_create", status: "pending" });
+    const stored = await pool!.query<{ payload_json: Record<string, unknown> }>(
+      `SELECT payload_json FROM proposals WHERE id=$1`,
+      [proposal.id],
+    );
+    expect(stored.rows[0]!.payload_json).toMatchObject({
+      operation: "object_relation_create",
+      from_object_id: person.object_id,
+      to_object_id: org.object_id,
+      relation_type: "affiliated_with",
+      metadata: expect.objectContaining({ role: "professor", title: "Professor of Computer Science" }),
+    });
 
     const edgeResult = await pool!.query(
       `SELECT relation_type, status FROM object_relations WHERE from_object_id = $1 AND to_object_id = $2`,
       [person.object_id, org.object_id],
     );
-    expect(edgeResult.rows).toHaveLength(1);
-    expect(edgeResult.rows[0].relation_type).toBe("affiliated_with");
-    expect(edgeResult.rows[0].status).toBe("active");
+    expect(edgeResult.rows).toHaveLength(0);
 
-    const ended = await service().endAffiliation({ spaceId: SPACE, userId: USER }, affiliation.id, "2020-01-01T00:00:00.000Z");
-    expect(ended.status).toBe("past");
+    const approved = await pool!.query<{ id: string }>(
+      `INSERT INTO object_relations (
+         id, space_id, from_object_id, to_object_id, relation_type, status,
+         confidence, metadata_json, created_by_user_id, created_at, updated_at
+       ) VALUES (gen_random_uuid()::varchar,$1,$2,$3,'affiliated_with','active',0.9,$4::jsonb,$5,now(),now())
+       RETURNING id`,
+      [SPACE, person.object_id, org.object_id, JSON.stringify({ role: "professor", source: "manual" }), USER],
+    );
+    await expect(service().listAffiliations(
+      { spaceId: SPACE, userId: USER },
+      { personObjectId: person.object_id, organizationObjectId: org.object_id },
+    )).resolves.toEqual([expect.objectContaining({ id: approved.rows[0]!.id, role: "professor" })]);
 
-    const edgeAfterEnd = await pool!.query(`SELECT status FROM object_relations WHERE from_object_id = $1 AND to_object_id = $2`, [
-      person.object_id,
-      org.object_id,
-    ]);
-    expect(edgeAfterEnd.rows[0].status).toBe("archived");
+    const archiveProposal = await service().endAffiliation(
+      { spaceId: SPACE, userId: USER },
+      approved.rows[0]!.id,
+      "2020-01-01T00:00:00.000Z",
+    );
+    expect(archiveProposal).toMatchObject({ proposal_type: "object_relation_delete", status: "pending" });
+    expect((await pool!.query(`SELECT status FROM object_relations WHERE id=$1`, [approved.rows[0]!.id])).rows[0]!.status).toBe("active");
   });
 
   it("rejects an affiliation referencing a person from another space", async () => {
@@ -226,6 +247,19 @@ describe("relations module (real Postgres)", () => {
     const links = await service().listSourceLinks({ spaceId: SPACE, userId: USER }, person.object_id);
     expect(links).toHaveLength(1);
     expect(links[0]!.link_type).toBe("external");
+
+    await expect(pool!.query(
+      `INSERT INTO relation_source_links (
+         id, space_id, object_id, link_type, created_by_user_id, created_at
+       ) VALUES ($1,$2,$3,'external',$4,now())`,
+      ["33333333-3333-4333-8333-333333333333", SPACE, person.object_id, USER],
+    )).rejects.toMatchObject({ code: "23514" });
+    await expect(pool!.query(
+      `INSERT INTO relation_source_links (
+         id, space_id, object_id, link_type, external_ref, created_by_user_id, created_at
+       ) VALUES ($1,$2,$3,'activity','https://example.com/wrong-target',$4,now())`,
+      ["44444444-4444-4444-8444-444444444444", SPACE, person.object_id, USER],
+    )).rejects.toMatchObject({ code: "23514" });
   });
 
   it("rejects an invalid source link type", async () => {
@@ -234,6 +268,80 @@ describe("relations module (real Postgres)", () => {
     await expect(
       service().createSourceLink({ spaceId: SPACE, userId: USER }, person.object_id, { link_type: "not_a_type" }),
     ).rejects.toMatchObject({ statusCode: 422 });
+  });
+
+  it("does not write or reveal links to unreadable Source and Evidence endpoints", async () => {
+    if (!available || !pool) return;
+    const now = new Date().toISOString();
+    await pool.query(
+      `INSERT INTO users (id, display_name, status, created_at, updated_at)
+       VALUES ($1,'Other','active',$2,$2)`,
+      [OTHER_USER, now],
+    );
+    await pool.query(
+      `INSERT INTO space_memberships (id, space_id, user_id, role, status, created_at, updated_at)
+       VALUES (gen_random_uuid()::varchar,$1,$2,'member','active',$3,$3)`,
+      [SPACE, OTHER_USER, now],
+    );
+    const sourceItemId = "55555555-5555-4555-8555-555555555555";
+    await pool.query(
+      `INSERT INTO source_items (
+         id, space_id, owner_user_id, visibility, access_level, item_type, title,
+         first_seen_at, last_seen_at, content_state, retention_policy, created_at, updated_at
+       ) VALUES ($1,$2,$3,'private','full','document','Private source',$4,$4,'excerpt_saved','summary_only',$4,$4)`,
+      [sourceItemId, SPACE, OTHER_USER, now],
+    );
+    const evidenceId = "66666666-6666-4666-8666-666666666666";
+    await pool.query(
+      `INSERT INTO extracted_evidence (
+         id, space_id, owner_user_id, visibility, access_level, source_item_id,
+         evidence_type, title, content_excerpt, metadata_json, extraction_method,
+         trust_level, status, created_at, updated_at
+       ) VALUES ($1,$2,$3,'space_shared','full',$4,'excerpt','Derived evidence','Secret','{}'::jsonb,'manual','normal','active',$5,$5)`,
+      [evidenceId, SPACE, OTHER_USER, sourceItemId, now],
+    );
+    const sourceObjectId = "88888888-8888-4888-8888-888888888888";
+    await pool.query(
+      `INSERT INTO space_objects (
+         id, space_id, object_type, title, status, visibility, access_level,
+         owner_user_id, created_at, updated_at
+       ) VALUES ($1,$2,'source','Private canonical source','processed','private','full',$3,$4,$4)`,
+      [sourceObjectId, SPACE, OTHER_USER, now],
+    );
+    const objectEvidenceId = "99999999-9999-4999-8999-999999999999";
+    await pool.query(
+      `INSERT INTO extracted_evidence (
+         id, space_id, owner_user_id, visibility, access_level, source_object_type,
+         source_object_id, evidence_type, title, content_excerpt, metadata_json,
+         extraction_method, trust_level, status, created_at, updated_at
+       ) VALUES ($1,$2,$3,'space_shared','full','source',$4,'excerpt','Object evidence','Secret','{}'::jsonb,'manual','normal','active',$5,$5)`,
+      [objectEvidenceId, SPACE, OTHER_USER, sourceObjectId, now],
+    );
+    const person = await service().createPerson({ spaceId: SPACE, userId: USER }, { title: "Private source boundary" });
+
+    await expect(service().createSourceLink({ spaceId: SPACE, userId: USER }, person.object_id, {
+      link_type: "source_item", source_item_id: sourceItemId,
+    })).rejects.toMatchObject({ statusCode: 422 });
+    await expect(service().createSourceLink({ spaceId: SPACE, userId: USER }, person.object_id, {
+      link_type: "evidence", evidence_id: evidenceId,
+    })).rejects.toMatchObject({ statusCode: 422 });
+    await expect(service().createSourceLink({ spaceId: SPACE, userId: USER }, person.object_id, {
+      link_type: "evidence", evidence_id: objectEvidenceId,
+    })).rejects.toMatchObject({ statusCode: 422 });
+
+    await pool.query(
+      `INSERT INTO relation_source_links (
+         id, space_id, object_id, link_type, source_item_id, created_by_user_id, created_at
+       ) VALUES ($1,$2,$3,'source_item',$4,$5,$6)`,
+      ["77777777-7777-4777-8777-777777777777", SPACE, person.object_id, sourceItemId, OTHER_USER, now],
+    );
+    await pool.query(
+      `INSERT INTO relation_source_links (
+         id, space_id, object_id, link_type, evidence_id, created_by_user_id, created_at
+       ) VALUES ($1,$2,$3,'evidence',$4,$5,$6)`,
+      ["aaaaaaaa-7777-4777-8777-777777777777", SPACE, person.object_id, objectEvidenceId, OTHER_USER, now],
+    );
+    await expect(service().listSourceLinks({ spaceId: SPACE, userId: USER }, person.object_id)).resolves.toEqual([]);
   });
 
   it("searches people and organizations by title within a space", async () => {

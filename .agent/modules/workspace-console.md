@@ -57,7 +57,7 @@ GET  /api/v1/workspace-console/workspaces/{id}/git/diff?path=...
   not caller-supplied input.
 
 ## Related Files
-- `server/migrations/` — Workspace, WorkspaceMembership
+- `server/src/db/schema/workspaces.ts` — Workspace schema; access derives from Space/Project authority
 - `packages/protocol/src/` — WorkspaceCreate, WorkspaceOut when shared
 - `server/src/modules/workspaces/` — workspace console read API, WorkspaceManager, PathPolicy, SandboxManager
 - `server/src/modules/workspaces/pathPolicy.ts` — PathPolicy enforcement

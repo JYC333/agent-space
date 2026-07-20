@@ -154,6 +154,15 @@ async function insertApprovedVersion(
 }
 
 describe("Evolvable asset/version/pin (real Postgres)", () => {
+  it("rejects capability rows because CapabilityVersion is the canonical model", async () => {
+    if (!available) return;
+    await expect(repo().createAsset(identity, {
+      asset_type: "capability",
+      asset_key: "research.search",
+      display_name: "Research search",
+    })).rejects.toMatchObject({ statusCode: 422 });
+  });
+
   it("rejects a duplicate asset_key in the same space", async () => {
     if (!available) return;
     await createAsset();

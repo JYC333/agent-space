@@ -68,7 +68,7 @@
 │     server/src/modules/auth + agents          │
 ├─────────────────────────────────────────────────────┤
 │   1. Space Layer                                     │
-│     Space, SpaceMembership, WorkspaceMembership     │
+│     Space, SpaceMembership, Workspace               │
 │     All data scoped by space_id                     │
 │     server/migrations + modules/spaces        │
 └─────────────────────────────────────────────────────┘

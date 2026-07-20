@@ -36,11 +36,11 @@ class FakeRelationsRepository {
     return (this.refs.activities ?? new Set()).has(activityId);
   }
 
-  async sourceItemExistsInSpace(_spaceId: string, sourceItemId: string): Promise<boolean> {
+  async sourceItemExistsInSpace(_spaceId: string, sourceItemId: string, _userId: string): Promise<boolean> {
     return (this.refs.sourceItems ?? new Set()).has(sourceItemId);
   }
 
-  async evidenceExistsInSpace(_spaceId: string, evidenceId: string): Promise<boolean> {
+  async evidenceExistsInSpace(_spaceId: string, evidenceId: string, _userId: string): Promise<boolean> {
     return (this.refs.evidence ?? new Set()).has(evidenceId);
   }
 
@@ -115,7 +115,7 @@ describe("RelationsService source link boundaries", () => {
     expect(repo.createdLinks).toHaveLength(0);
   });
 
-  it("validates optional activity and evidence references before writing", async () => {
+  it("requires exactly one source-link target", async () => {
     const repo = new FakeRelationsRepository({
       activities: new Set(["activity-local"]),
       evidence: new Set(["evidence-local"]),
@@ -125,21 +125,18 @@ describe("RelationsService source link boundaries", () => {
       service(repo).createSourceLink({ spaceId: "space-1", userId: "user-1" }, "person-1", {
         link_type: "external",
         external_ref: "https://example.com/profile",
-        activity_id: "activity-other-space",
+        activity_id: "activity-local",
       }),
     ).rejects.toMatchObject({
       statusCode: 422,
-      message: "activity_id does not reference an activity in this space",
+      message: "Exactly one source link target is required",
     });
     expect(repo.createdLinks).toHaveLength(0);
 
     const created = await service(repo).createSourceLink({ spaceId: "space-1", userId: "user-1" }, "person-1", {
-      link_type: "external",
-      external_ref: "https://example.com/profile",
-      activity_id: "activity-local",
+      link_type: "evidence",
       evidence_id: "evidence-local",
     });
-    expect(created.activity_id).toBe("activity-local");
     expect(created.evidence_id).toBe("evidence-local");
   });
 });

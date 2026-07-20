@@ -925,7 +925,11 @@ export class PgKnowledgeRepository {
     });
   }
 
-  async proposeObjectRelationArchive(identity: SpaceUserIdentity, relationId: string): Promise<ProposalOut> {
+  async proposeObjectRelationArchive(
+    identity: SpaceUserIdentity,
+    relationId: string,
+    metadataPatch: Record<string, unknown> = {},
+  ): Promise<ProposalOut> {
     const relation = await this.getObjectRelationRow(identity, relationId);
     if (!relation) throw new HttpError(404, "Object relation not found");
     const fromObject = await this.requireVisibleSpaceObject(identity, relation.from_object_id, "Object relation not found");
@@ -936,6 +940,7 @@ export class PgKnowledgeRepository {
       payload: {
         operation: "object_relation_delete",
         relation_id: relationId,
+        metadata_patch: metadataPatch,
       },
       rationale: "Object relation archive requested.",
       workspaceId: fromObject.workspace_id,

@@ -13,6 +13,7 @@ import { projects } from "./projects";
 import { contextSnapshots } from "./context";
 import { tasks } from "./tasks";
 import { jobs } from "./jobs";
+import { evolvableAssetVersions } from "./evolvableAssets";
 
 export const runs = pgTable("runs", {
 	id: varchar({ length: 36 }).primaryKey().notNull(),
@@ -99,16 +100,22 @@ export const runs = pgTable("runs", {
 	index("ix_runs_trigger_origin").using("btree", table.triggerOrigin.asc().nullsLast()),
 	index("ix_runs_working_dir_id").using("btree", table.workingDirId.asc().nullsLast()),
 	index("ix_runs_workspace_id").using("btree", table.workspaceId.asc().nullsLast()),
+	foreignKey({ columns: [table.workflowVersionId], foreignColumns: [evolvableAssetVersions.id], name: "runs_workflow_version_fkey" }),
 	foreignKey({
 			columns: [table.ownerUserId],
 			foreignColumns: [users.id],
 			name: "runs_owner_user_id_fkey"
 		}),
 	foreignKey({
+			columns: [table.projectId],
+			foreignColumns: [projects.id],
+			name: "runs_project_id_delete_fkey"
+		}).onDelete("set null"),
+	foreignKey({
 			columns: [table.projectId, table.spaceId],
 			foreignColumns: [projects.id, projects.spaceId],
 			name: "fk_runs_project_id_projects"
-		}).onDelete("set null"),
+		}),
 	foreignKey({
 			columns: [table.workingDirId],
 			foreignColumns: [workingDirs.id],
@@ -120,8 +127,8 @@ export const runs = pgTable("runs", {
 			name: "runs_agent_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.agentVersionId],
-			foreignColumns: [agentVersions.id],
+			columns: [table.agentVersionId, table.agentId, table.spaceId],
+			foreignColumns: [agentVersions.id, agentVersions.agentId, agentVersions.spaceId],
 			name: "runs_agent_version_id_fkey"
 		}),
 	foreignKey({
@@ -193,12 +200,12 @@ export const runs = pgTable("runs", {
 			columns: [table.delegationId, table.spaceId],
 			foreignColumns: [runDelegations.id, runDelegations.spaceId],
 			name: "fk_runs_delegation_same_space"
-		}).onDelete("set null"),
+		}),
 	foreignKey({
 			columns: [table.instructedByAgentId, table.spaceId],
 			foreignColumns: [agents.id, agents.spaceId],
 			name: "fk_runs_instructed_by_agent_same_space"
-		}).onDelete("set null"),
+		}),
 	foreignKey({
 			columns: [table.parentRunId, table.spaceId],
 			foreignColumns: [table.id, table.spaceId],
@@ -208,12 +215,12 @@ export const runs = pgTable("runs", {
 			columns: [table.rootRunId, table.spaceId],
 			foreignColumns: [table.id, table.spaceId],
 			name: "fk_runs_root_run_same_space"
-		}).onDelete("set null"),
+		}),
 	foreignKey({
 			columns: [table.runGroupId, table.spaceId],
 			foreignColumns: [agentRunGroups.id, agentRunGroups.spaceId],
 			name: "fk_runs_run_group_same_space"
-		}).onDelete("set null"),
+		}),
 	unique("uq_runs_space_id_id").on(table.id, table.spaceId),
 	check("ck_runs_data_exposure_level", sql`(data_exposure_level IS NULL) OR ((data_exposure_level)::text = ANY (ARRAY[('local_only'::character varying)::text, ('model_provider'::character varying)::text, ('vendor_platform'::character varying)::text, ('third_party_tools'::character varying)::text, ('unknown'::character varying)::text]))`),
 	check("ck_runs_externality_level", sql`(externality_level IS NULL) OR ((externality_level)::text = ANY (ARRAY[('native'::character varying)::text, ('local_external'::character varying)::text, ('remote_external'::character varying)::text, ('hybrid'::character varying)::text, ('manual'::character varying)::text]))`),

@@ -18,6 +18,8 @@ function state(current_stage: ResearchStage, stage_state: ResearchOperationState
     workflow_id: "workflow-1",
     research_question: "Question",
     research_question_version: 1,
+    report_depth: "full",
+    question_refine_skipped: false,
     channel_ids: [],
     project_source_binding_ids: [],
     source_post_processing_rule_ids: [],

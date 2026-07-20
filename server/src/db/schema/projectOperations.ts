@@ -18,6 +18,7 @@ export const projectOperations = pgTable("project_operations", {
 	initiatingRunId: varchar("initiating_run_id", { length: 36 }),
 	planArtifactId: varchar("plan_artifact_id", { length: 36 }),
 	progressJson: jsonb("progress_json").default({}).notNull(),
+	version: integer().default(1).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).notNull(),
 }, (t): PgTableExtraConfigValue[] => [
@@ -31,14 +32,11 @@ export const projectOperations = pgTable("project_operations", {
 	foreignKey({ columns: [t.spaceId], foreignColumns: [spaces.id], name: "project_operations_space_fkey" }),
 	foreignKey({ columns: [t.createdByUserId], foreignColumns: [users.id], name: "project_operations_user_fkey" }),
 	foreignKey({ columns: [t.initiatingRunId, t.spaceId], foreignColumns: [runs.id, runs.spaceId], name: "project_operations_run_fkey" }),
-	// Single-column FK, matching every other artifact reference in the schema:
-	// `artifacts` has no composite (id, space_id) unique constraint to satisfy
-	// a composite FK. Cross-space integrity for this pointer is a service-level
-	// check, same as the other artifact references below.
-	foreignKey({ columns: [t.planArtifactId], foreignColumns: [artifacts.id], name: "project_operations_artifact_fkey" }),
+	foreignKey({ columns: [t.planArtifactId, t.spaceId], foreignColumns: [artifacts.id, artifacts.spaceId], name: "project_operations_artifact_fkey" }),
 	unique("uq_project_operations_space_id_id").on(t.id, t.spaceId),
 	check("ck_project_operations_kind", sql`kind IN ('source_setup','source_backfill','research','custom')`),
 	check("ck_project_operations_status", sql`status IN ('draft','active','waiting_review','completed','failed','cancelled')`),
+	check("ck_project_operations_version", sql`version >= 1`),
 ]);
 
 export const projectOperationSteps = pgTable("project_operation_steps", {

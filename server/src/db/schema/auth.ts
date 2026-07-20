@@ -1,4 +1,5 @@
-import { pgTable, index, uniqueIndex, unique, foreignKey, varchar, text, timestamp, type PgTableExtraConfigValue } from "drizzle-orm/pg-core";
+import { pgTable, index, uniqueIndex, unique, check, foreignKey, varchar, text, timestamp, type PgTableExtraConfigValue } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 export const users = pgTable("users", {
 	id: varchar({ length: 36 }).primaryKey().notNull(),
@@ -12,6 +13,7 @@ export const users = pgTable("users", {
 }, (table): PgTableExtraConfigValue[] => [
 	uniqueIndex("ix_users_email").using("btree", table.email.asc().nullsLast()),
 	index("ix_users_status").using("btree", table.status.asc().nullsLast()),
+	check("ck_users_status", sql`status IN ('active', 'disabled')`),
 ]);
 
 export const authAccounts = pgTable("auth_accounts", {

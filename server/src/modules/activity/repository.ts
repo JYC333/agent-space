@@ -19,8 +19,15 @@ import { insertProposalRow } from "../proposals/reviewPackets";
 import { assertProjectReadable } from "../projects/access";
 import type { ProposalOut } from "@agent-space/protocol" with { "resolution-mode": "import" };
 import { assessActivityMemoryDuplicate } from "./memoryDedup";
-import { contentReadSql } from "../access/contentAccessSql";
+import { contentAccessLevelSql, contentReadSql } from "../access/contentAccessSql";
+import { contentResourceDefinition } from "../access/contentAccessRegistry";
 import { isContentVisibility } from "../access/contentAccessTypes";
+import { evidenceProvenanceReadableClause, sourceItemReadableClause } from "../sources/sourceItemAccess";
+import { enforceSourceDerivedImportTarget } from "../sources/sourceConsent";
+
+const ACTIVITY_SUMMARY_EVIDENCE_ACCESS = contentResourceDefinition("extracted_evidence")!;
+const ACTIVITY_SUMMARY_SOURCE_ACCESS = contentResourceDefinition("source_item")!;
+const ACTIVITY_SUMMARY_ACTIVITY_ACCESS = contentResourceDefinition("activity")!;
 
 export interface ActivityRow {
   id: string;
@@ -305,7 +312,8 @@ export class PgActivityRepository {
              FROM activity_records
             WHERE space_id = $1
               AND id::text = ANY($2::text[])
-              AND ${contentReadSql("activity", "activity_records", "$3")}`,
+              AND ${contentReadSql("activity", "activity_records", "$3")}
+              AND ${contentAccessLevelSql({ definition: ACTIVITY_SUMMARY_ACTIVITY_ACCESS, alias: "activity_records", userExpr: "$3" })} = 'full'`,
           [identity.spaceId, input.activityIds, identity.userId],
         )
       : { rows: [] };
@@ -314,22 +322,38 @@ export class PgActivityRepository {
     }
     const evidenceRows = input.evidenceIds.length
       ? await this.db.query<SummaryEvidenceRow>(
-          `SELECT id, title, content_excerpt, source_uri, trust_level
-             FROM extracted_evidence
-            WHERE space_id = $1 AND id::text = ANY($2::text[]) AND deleted_at IS NULL`,
-          [identity.spaceId, input.evidenceIds],
+          `SELECT ee.id, ee.title, ee.content_excerpt, ee.source_uri, ee.trust_level
+             FROM extracted_evidence ee
+             LEFT JOIN source_items evidence_source
+               ON evidence_source.id=COALESCE(ee.source_item_id,ee.origin_source_item_id)
+              AND evidence_source.space_id=ee.space_id
+              AND evidence_source.deleted_at IS NULL
+            WHERE ee.space_id = $1 AND ee.id::text = ANY($2::text[]) AND ee.deleted_at IS NULL
+              AND ${contentReadSql("extracted_evidence", "ee", "$3")}
+              AND ${contentAccessLevelSql({ definition: ACTIVITY_SUMMARY_EVIDENCE_ACCESS, alias: "ee", userExpr: "$3" })} = 'full'
+              AND ${evidenceProvenanceReadableClause("ee", "$3", true)}`,
+          [identity.spaceId, input.evidenceIds, identity.userId],
         )
       : { rows: [] };
     const sourceRows = input.sourceItemIds.length
       ? await this.db.query<SummarySourceItemRow>(
           `SELECT id, title, excerpt, source_uri, content_state
-             FROM source_items
-            WHERE space_id = $1 AND id::text = ANY($2::text[]) AND deleted_at IS NULL`,
-          [identity.spaceId, input.sourceItemIds],
+            FROM source_items si
+            WHERE si.space_id = $1 AND si.id::text = ANY($2::text[]) AND si.deleted_at IS NULL
+              AND ${sourceItemReadableClause("si", "$3", false)}
+              AND ${contentAccessLevelSql({ definition: ACTIVITY_SUMMARY_SOURCE_ACCESS, alias: "si", userExpr: "$3" })} = 'full'`,
+          [identity.spaceId, input.sourceItemIds, identity.userId],
         )
       : { rows: [] };
     if (evidenceRows.rows.length !== input.evidenceIds.length || sourceRows.rows.length !== input.sourceItemIds.length) {
       throw new HttpError(403, "Summary input is not visible in this space");
+    }
+    await this.enforceSummarySourcePolicies(identity.spaceId, input.evidenceIds, input.sourceItemIds, "source_artifact");
+    if (input.createMemoryProposal) {
+      await this.enforceSummarySourcePolicies(identity.spaceId, input.evidenceIds, input.sourceItemIds, "memory_proposal");
+    }
+    if (input.createKnowledgeProposal) {
+      await this.enforceSummarySourcePolicies(identity.spaceId, input.evidenceIds, input.sourceItemIds, "knowledge");
     }
     const sourceRefs: SummarySourceRef[] = [
       ...activityRows.rows.map((row) => ({
@@ -365,7 +389,7 @@ export class PgActivityRepository {
          $1, $2, NULL, NULL, 'summary', $3, $4,
          NULL, NULL, 'text/markdown', $5::jsonb,
          'markdown', false, $6, $6, $7::jsonb,
-         'space_shared', $8, 'medium'
+         'private', $8, 'medium'
        )`,
       [
         artifactId,
@@ -400,6 +424,40 @@ export class PgActivityRepository {
       status: "succeeded",
       summary_preview: summaryPreview.slice(0, 500),
     };
+  }
+
+  private async enforceSummarySourcePolicies(
+    spaceId: string,
+    evidenceIds: string[],
+    sourceItemIds: string[],
+    target: "source_artifact" | "memory_proposal" | "knowledge",
+  ): Promise<void> {
+    const policies = await this.db.query<{ policy_json: unknown }>(
+      `WITH referenced_connections AS (
+         SELECT si.connection_id
+           FROM source_items si
+          WHERE si.space_id=$1 AND si.id::text=ANY($2::text[]) AND si.connection_id IS NOT NULL
+         UNION
+         SELECT evidence_source.connection_id
+           FROM extracted_evidence ee
+           JOIN source_items evidence_source
+             ON evidence_source.id=COALESCE(ee.source_item_id,ee.origin_source_item_id)
+            AND evidence_source.space_id=ee.space_id
+          WHERE ee.space_id=$1 AND ee.id::text=ANY($3::text[]) AND evidence_source.connection_id IS NOT NULL
+         UNION
+         SELECT snapshot.connection_id
+           FROM extracted_evidence ee
+           JOIN source_snapshots snapshot
+             ON snapshot.id=ee.source_snapshot_id AND snapshot.space_id=ee.space_id
+          WHERE ee.space_id=$1 AND ee.id::text=ANY($3::text[]) AND snapshot.connection_id IS NOT NULL
+       )
+       SELECT connection.policy_json
+         FROM source_connections connection
+         JOIN referenced_connections referenced ON referenced.connection_id=connection.id
+        WHERE connection.space_id=$1`,
+      [spaceId, sourceItemIds, evidenceIds],
+    );
+    for (const row of policies.rows) enforceSourceDerivedImportTarget(row.policy_json, target);
   }
 
   private async insertMemoryProposalFromActivity(
@@ -490,7 +548,8 @@ export class PgActivityRepository {
         title: "Input summary",
         content: summary,
         content_format: "markdown",
-        visibility: "space_shared",
+        visibility: "private",
+        owner_user_id: identity.userId,
         tags: ["summary"],
         source_refs: [
           {
@@ -526,7 +585,7 @@ export class PgActivityRepository {
       workspaceId: input.workspaceId,
       projectId: input.projectId,
       createdByUserId: input.identity.userId,
-      visibility: "space_shared",
+      visibility: "private",
       riskLevel: "low",
     });
     return proposalToOut(row, now);

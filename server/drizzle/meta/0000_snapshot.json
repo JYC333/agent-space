@@ -1,5 +1,5 @@
 {
-  "id": "db6434ba-3477-4da7-a826-c3038af35c15",
+  "id": "2fcdc3e3-a83c-4489-a68b-822527c419d5",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -245,6 +245,10 @@
         "ck_academic_papers_paper_type": {
           "name": "ck_academic_papers_paper_type",
           "value": "(paper_type)::text = ANY (ARRAY[('article'::character varying)::text, ('preprint'::character varying)::text, ('conference_paper'::character varying)::text, ('book_chapter'::character varying)::text, ('thesis'::character varying)::text, ('report'::character varying)::text, ('other'::character varying)::text])"
+        },
+        "ck_academic_papers_canonical_identity": {
+          "name": "ck_academic_papers_canonical_identity",
+          "value": "(doi IS NULL OR (doi <> '' AND doi = lower(btrim(doi)))) AND (arxiv_id IS NULL OR (arxiv_id <> '' AND arxiv_id = lower(btrim(arxiv_id)))) AND (pmid IS NULL OR (pmid <> '' AND pmid = lower(btrim(pmid)))) AND (openalex_id IS NULL OR (openalex_id <> '' AND openalex_id = lower(btrim(openalex_id)))) AND (semantic_scholar_id IS NULL OR (semantic_scholar_id <> '' AND semantic_scholar_id = lower(btrim(semantic_scholar_id))))"
         }
       },
       "isRLSEnabled": false
@@ -759,6 +763,19 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
+        "activity_records_project_id_delete_fkey": {
+          "name": "activity_records_project_id_delete_fkey",
+          "tableFrom": "activity_records",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "project_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
         "fk_activity_records_project_id_projects": {
           "name": "fk_activity_records_project_id_projects",
           "tableFrom": "activity_records",
@@ -771,7 +788,7 @@
             "id",
             "space_id"
           ],
-          "onDelete": "set null",
+          "onDelete": "no action",
           "onUpdate": "no action"
         },
         "fk_activity_records_source_task_id_tasks": {
@@ -1506,7 +1523,7 @@
             "id",
             "space_id"
           ],
-          "onDelete": "set null",
+          "onDelete": "no action",
           "onUpdate": "no action"
         },
         "fk_agent_run_groups_root_run_same_space": {
@@ -1521,7 +1538,7 @@
             "id",
             "space_id"
           ],
-          "onDelete": "set null",
+          "onDelete": "no action",
           "onUpdate": "no action"
         }
       },
@@ -1817,7 +1834,7 @@
             "id",
             "space_id"
           ],
-          "onDelete": "set null",
+          "onDelete": "no action",
           "onUpdate": "no action"
         },
         "fk_agent_run_messages_run_same_space": {
@@ -1832,7 +1849,7 @@
             "id",
             "space_id"
           ],
-          "onDelete": "set null",
+          "onDelete": "no action",
           "onUpdate": "no action"
         },
         "fk_agent_run_messages_sender_agent_same_space": {
@@ -1847,7 +1864,7 @@
             "id",
             "space_id"
           ],
-          "onDelete": "set null",
+          "onDelete": "no action",
           "onUpdate": "no action"
         }
       },
@@ -2272,7 +2289,7 @@
             "id",
             "space_id"
           ],
-          "onDelete": "set null",
+          "onDelete": "no action",
           "onUpdate": "no action"
         },
         "fk_run_delegations_group_same_space": {
@@ -2317,7 +2334,7 @@
             "id",
             "space_id"
           ],
-          "onDelete": "set null",
+          "onDelete": "no action",
           "onUpdate": "no action"
         },
         "fk_run_delegations_request_message_same_space": {
@@ -2332,7 +2349,7 @@
             "id",
             "space_id"
           ],
-          "onDelete": "set null",
+          "onDelete": "no action",
           "onUpdate": "no action"
         },
         "fk_run_delegations_requesting_agent_same_space": {
@@ -3145,6 +3162,15 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
+        "uq_agent_versions_id_agent_space": {
+          "name": "uq_agent_versions_id_agent_space",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "agent_id",
+            "space_id"
+          ]
+        },
         "uq_agent_versions_agent_label": {
           "name": "uq_agent_versions_agent_label",
           "nullsNotDistinct": false,
@@ -3416,12 +3442,16 @@
           "tableFrom": "agents",
           "tableTo": "agent_versions",
           "columnsFrom": [
-            "current_version_id"
+            "current_version_id",
+            "id",
+            "space_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "agent_id",
+            "space_id"
           ],
-          "onDelete": "set null",
+          "onDelete": "no action",
           "onUpdate": "no action"
         }
       },
@@ -4299,6 +4329,19 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
+        "artifacts_project_id_delete_fkey": {
+          "name": "artifacts_project_id_delete_fkey",
+          "tableFrom": "artifacts",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "project_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
         "fk_artifacts_project_id_projects": {
           "name": "fk_artifacts_project_id_projects",
           "tableFrom": "artifacts",
@@ -4311,7 +4354,7 @@
             "id",
             "space_id"
           ],
-          "onDelete": "set null",
+          "onDelete": "no action",
           "onUpdate": "no action"
         }
       },
@@ -4619,7 +4662,12 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "ck_users_status": {
+          "name": "ck_users_status",
+          "value": "status IN ('active', 'disabled')"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.automation_credential_grants": {
@@ -5251,6 +5299,19 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
+        "automations_project_id_delete_fkey": {
+          "name": "automations_project_id_delete_fkey",
+          "tableFrom": "automations",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "project_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
         "automations_project_id_fkey": {
           "name": "automations_project_id_fkey",
           "tableFrom": "automations",
@@ -5263,7 +5324,7 @@
             "id",
             "space_id"
           ],
-          "onDelete": "set null",
+          "onDelete": "no action",
           "onUpdate": "no action"
         },
         "automations_space_id_fkey": {
@@ -5835,6 +5896,19 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
+        "workflow_execution_nodes_agent_delete_fkey": {
+          "name": "workflow_execution_nodes_agent_delete_fkey",
+          "tableFrom": "workflow_execution_nodes",
+          "tableTo": "agents",
+          "columnsFrom": [
+            "assigned_agent_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
         "workflow_execution_nodes_agent_space_fkey": {
           "name": "workflow_execution_nodes_agent_space_fkey",
           "tableFrom": "workflow_execution_nodes",
@@ -5847,7 +5921,7 @@
             "id",
             "space_id"
           ],
-          "onDelete": "set null",
+          "onDelete": "no action",
           "onUpdate": "no action"
         },
         "workflow_execution_nodes_space_id_fkey": {
@@ -5884,7 +5958,12 @@
         }
       },
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "ck_workflow_execution_nodes_status": {
+          "name": "ck_workflow_execution_nodes_status",
+          "value": "status IN ('inbox', 'ready', 'in_progress', 'blocked', 'waiting_for_review', 'done', 'failed')"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.workflow_executions": {
@@ -6080,6 +6159,19 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
+        "workflow_executions_root_run_delete_fkey": {
+          "name": "workflow_executions_root_run_delete_fkey",
+          "tableFrom": "workflow_executions",
+          "tableTo": "runs",
+          "columnsFrom": [
+            "root_run_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
         "workflow_executions_root_run_space_fkey": {
           "name": "workflow_executions_root_run_space_fkey",
           "tableFrom": "workflow_executions",
@@ -6092,7 +6184,20 @@
             "id",
             "space_id"
           ],
-          "onDelete": "set null",
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "workflow_executions_workflow_version_fkey": {
+          "name": "workflow_executions_workflow_version_fkey",
+          "tableFrom": "workflow_executions",
+          "tableTo": "evolvable_asset_versions",
+          "columnsFrom": [
+            "workflow_version_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
           "onUpdate": "no action"
         },
         "workflow_executions_space_id_fkey": {
@@ -6540,17 +6645,77 @@
         }
       },
       "foreignKeys": {
-        "capability_enablements_capability_version_id_fkey": {
-          "name": "capability_enablements_capability_version_id_fkey",
+        "capability_enablements_capability_version_fkey": {
+          "name": "capability_enablements_capability_version_fkey",
           "tableFrom": "capability_enablements",
           "tableTo": "capability_versions",
           "columnsFrom": [
-            "capability_version_id"
+            "capability_version_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "space_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "capability_enablements_space_fkey": {
+          "name": "capability_enablements_space_fkey",
+          "tableFrom": "capability_enablements",
+          "tableTo": "spaces",
+          "columnsFrom": [
+            "space_id"
           ],
           "columnsTo": [
             "id"
           ],
-          "onDelete": "no action",
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "capability_enablements_project_fkey": {
+          "name": "capability_enablements_project_fkey",
+          "tableFrom": "capability_enablements",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "project_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "space_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "capability_enablements_agent_fkey": {
+          "name": "capability_enablements_agent_fkey",
+          "tableFrom": "capability_enablements",
+          "tableTo": "agents",
+          "columnsFrom": [
+            "agent_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "space_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "capability_enablements_user_membership_fkey": {
+          "name": "capability_enablements_user_membership_fkey",
+          "tableFrom": "capability_enablements",
+          "tableTo": "space_memberships",
+          "columnsFrom": [
+            "space_id",
+            "user_id"
+          ],
+          "columnsTo": [
+            "space_id",
+            "user_id"
+          ],
+          "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },
@@ -6567,257 +6732,6 @@
           "value": "((((project_id IS NOT NULL))::integer + ((agent_id IS NOT NULL))::integer) + ((user_id IS NOT NULL))::integer) <= 1"
         }
       },
-      "isRLSEnabled": false
-    },
-    "public.capability_overlays": {
-      "name": "capability_overlays",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "varchar(36)",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "capability_key": {
-          "name": "capability_key",
-          "type": "varchar(128)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "scope_type": {
-          "name": "scope_type",
-          "type": "varchar(32)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "scope_id": {
-          "name": "scope_id",
-          "type": "varchar(128)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "base_version_id": {
-          "name": "base_version_id",
-          "type": "varchar(36)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "overlay_type": {
-          "name": "overlay_type",
-          "type": "varchar(64)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "patch_json": {
-          "name": "patch_json",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "status": {
-          "name": "status",
-          "type": "varchar(32)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "proposal_id": {
-          "name": "proposal_id",
-          "type": "varchar(36)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "metadata_json": {
-          "name": "metadata_json",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "ix_capability_overlays_base_version_id": {
-          "name": "ix_capability_overlays_base_version_id",
-          "columns": [
-            {
-              "expression": "base_version_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "ix_capability_overlays_capability_key": {
-          "name": "ix_capability_overlays_capability_key",
-          "columns": [
-            {
-              "expression": "capability_key",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "ix_capability_overlays_key_scope_status": {
-          "name": "ix_capability_overlays_key_scope_status",
-          "columns": [
-            {
-              "expression": "capability_key",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "scope_type",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "scope_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "status",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "ix_capability_overlays_overlay_type": {
-          "name": "ix_capability_overlays_overlay_type",
-          "columns": [
-            {
-              "expression": "overlay_type",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "ix_capability_overlays_proposal_id": {
-          "name": "ix_capability_overlays_proposal_id",
-          "columns": [
-            {
-              "expression": "proposal_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "ix_capability_overlays_scope_id": {
-          "name": "ix_capability_overlays_scope_id",
-          "columns": [
-            {
-              "expression": "scope_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "ix_capability_overlays_scope_type": {
-          "name": "ix_capability_overlays_scope_type",
-          "columns": [
-            {
-              "expression": "scope_type",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "ix_capability_overlays_status": {
-          "name": "ix_capability_overlays_status",
-          "columns": [
-            {
-              "expression": "status",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "capability_overlays_proposal_id_fkey": {
-          "name": "capability_overlays_proposal_id_fkey",
-          "tableFrom": "capability_overlays",
-          "tableTo": "proposals",
-          "columnsFrom": [
-            "proposal_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "fk_capability_overlays_base_version_id": {
-          "name": "fk_capability_overlays_base_version_id",
-          "tableFrom": "capability_overlays",
-          "tableTo": "capability_versions",
-          "columnsFrom": [
-            "base_version_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
       "isRLSEnabled": false
     },
     "public.capability_runtime_bindings": {
@@ -6986,12 +6900,44 @@
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
+        },
+        "capability_runtime_bindings_capability_version_space_fkey": {
+          "name": "capability_runtime_bindings_capability_version_space_fkey",
+          "tableFrom": "capability_runtime_bindings",
+          "tableTo": "capability_versions",
+          "columnsFrom": [
+            "capability_version_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "space_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "capability_runtime_bindings_space_fkey": {
+          "name": "capability_runtime_bindings_space_fkey",
+          "tableFrom": "capability_runtime_bindings",
+          "tableTo": "spaces",
+          "columnsFrom": [
+            "space_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
+        "ck_capability_runtime_bindings_version_space": {
+          "name": "ck_capability_runtime_bindings_version_space",
+          "value": "capability_version_id IS NULL OR space_id IS NOT NULL"
+        },
         "ck_capability_runtime_bindings_binding_object": {
           "name": "ck_capability_runtime_bindings_binding_object",
           "value": "jsonb_typeof(binding_json) = 'object'::text"
@@ -7019,17 +6965,11 @@
           "primaryKey": false,
           "notNull": true
         },
-        "scope_type": {
-          "name": "scope_type",
-          "type": "varchar(32)",
+        "space_id": {
+          "name": "space_id",
+          "type": "varchar(36)",
           "primaryKey": false,
           "notNull": true
-        },
-        "scope_id": {
-          "name": "scope_id",
-          "type": "varchar(128)",
-          "primaryKey": false,
-          "notNull": false
         },
         "parent_version_id": {
           "name": "parent_version_id",
@@ -7114,8 +7054,8 @@
           "method": "btree",
           "with": {}
         },
-        "ix_capability_versions_key_scope_status": {
-          "name": "ix_capability_versions_key_scope_status",
+        "ix_capability_versions_key_space_status": {
+          "name": "ix_capability_versions_key_space_status",
           "columns": [
             {
               "expression": "capability_key",
@@ -7124,13 +7064,7 @@
               "nulls": "last"
             },
             {
-              "expression": "scope_type",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "scope_id",
+              "expression": "space_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -7177,26 +7111,11 @@
           "method": "btree",
           "with": {}
         },
-        "ix_capability_versions_scope_id": {
-          "name": "ix_capability_versions_scope_id",
+        "ix_capability_versions_space_id": {
+          "name": "ix_capability_versions_space_id",
           "columns": [
             {
-              "expression": "scope_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "ix_capability_versions_scope_type": {
-          "name": "ix_capability_versions_scope_type",
-          "columns": [
-            {
-              "expression": "scope_type",
+              "expression": "space_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -7239,12 +7158,12 @@
         }
       },
       "foreignKeys": {
-        "capability_versions_proposal_id_fkey": {
-          "name": "capability_versions_proposal_id_fkey",
+        "capability_versions_space_fkey": {
+          "name": "capability_versions_space_fkey",
           "tableFrom": "capability_versions",
-          "tableTo": "proposals",
+          "tableTo": "spaces",
           "columnsFrom": [
-            "proposal_id"
+            "space_id"
           ],
           "columnsTo": [
             "id"
@@ -7252,24 +7171,55 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "fk_capability_versions_parent_version_id": {
-          "name": "fk_capability_versions_parent_version_id",
+        "capability_versions_proposal_fkey": {
+          "name": "capability_versions_proposal_fkey",
+          "tableFrom": "capability_versions",
+          "tableTo": "proposals",
+          "columnsFrom": [
+            "proposal_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "space_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "capability_versions_parent_version_fkey": {
+          "name": "capability_versions_parent_version_fkey",
           "tableFrom": "capability_versions",
           "tableTo": "capability_versions",
           "columnsFrom": [
-            "parent_version_id"
+            "parent_version_id",
+            "space_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "space_id"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "uq_capability_versions_id_space": {
+          "name": "uq_capability_versions_id_space",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "space_id"
+          ]
+        }
+      },
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "ck_capability_versions_status": {
+          "name": "ck_capability_versions_status",
+          "value": "status IN ('draft', 'proposed', 'testing', 'available', 'disabled', 'archived')"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.project_workflow_profiles": {
@@ -7409,7 +7359,49 @@
           "with": {}
         }
       },
-      "foreignKeys": {},
+      "foreignKeys": {
+        "project_workflow_profiles_space_fkey": {
+          "name": "project_workflow_profiles_space_fkey",
+          "tableFrom": "project_workflow_profiles",
+          "tableTo": "spaces",
+          "columnsFrom": [
+            "space_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "project_workflow_profiles_project_fkey": {
+          "name": "project_workflow_profiles_project_fkey",
+          "tableFrom": "project_workflow_profiles",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "project_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "space_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "project_workflow_profiles_created_by_user_fkey": {
+          "name": "project_workflow_profiles_created_by_user_fkey",
+          "tableFrom": "project_workflow_profiles",
+          "tableTo": "users",
+          "columnsFrom": [
+            "created_by_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
@@ -11735,15 +11727,17 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "fk_evolution_targets_current_version_id": {
-          "name": "fk_evolution_targets_current_version_id",
+        "evolution_targets_current_version_fkey": {
+          "name": "evolution_targets_current_version_fkey",
           "tableFrom": "evolution_targets",
           "tableTo": "capability_versions",
           "columnsFrom": [
-            "current_version_id"
+            "current_version_id",
+            "space_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "space_id"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
@@ -11752,7 +11746,12 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "ck_evolution_targets_current_version_space": {
+          "name": "ck_evolution_targets_current_version_space",
+          "value": "current_version_id IS NULL OR space_id IS NOT NULL"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.run_reflections": {
@@ -12915,7 +12914,7 @@
           "columnsTo": [
             "id"
           ],
-          "onDelete": "cascade",
+          "onDelete": "no action",
           "onUpdate": "no action"
         },
         "evolvable_asset_versions_space_id_fkey": {
@@ -13217,7 +13216,7 @@
       "checkConstraints": {
         "ck_evolvable_assets_asset_type": {
           "name": "ck_evolvable_assets_asset_type",
-          "value": "(asset_type)::text = ANY (ARRAY[('prompt_template'::character varying)::text, ('workflow_template'::character varying)::text, ('capability'::character varying)::text, ('agent_config'::character varying)::text, ('runtime_skill_binding'::character varying)::text, ('source_post_processing_rule'::character varying)::text])"
+          "value": "(asset_type)::text = ANY (ARRAY[('prompt_template'::character varying)::text, ('workflow_template'::character varying)::text, ('agent_config'::character varying)::text, ('runtime_skill_binding'::character varying)::text, ('source_post_processing_rule'::character varying)::text])"
         },
         "ck_evolvable_assets_owner_scope_type": {
           "name": "ck_evolvable_assets_owner_scope_type",
@@ -14876,6 +14875,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "origin_source_item_id": {
+          "name": "origin_source_item_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false
+        },
         "extraction_job_id": {
           "name": "extraction_job_id",
           "type": "varchar(36)",
@@ -15172,6 +15177,21 @@
           "method": "btree",
           "with": {}
         },
+        "ix_extracted_evidence_origin_source_item_id": {
+          "name": "ix_extracted_evidence_origin_source_item_id",
+          "columns": [
+            {
+              "expression": "origin_source_item_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "ix_extracted_evidence_source_item_id": {
           "name": "ix_extracted_evidence_source_item_id",
           "columns": [
@@ -15356,12 +15376,6 @@
               "nulls": "last"
             },
             {
-              "expression": "extraction_method",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
               "expression": "content_hash",
               "isExpression": false,
               "asc": true,
@@ -15369,7 +15383,7 @@
             }
           ],
           "isUnique": true,
-          "where": "content_hash IS NOT NULL",
+          "where": "source_item_id IS NOT NULL AND content_hash IS NOT NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -15467,6 +15481,21 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
+        "extracted_evidence_origin_source_item_space_fkey": {
+          "name": "extracted_evidence_origin_source_item_space_fkey",
+          "tableFrom": "extracted_evidence",
+          "tableTo": "source_items",
+          "columnsFrom": [
+            "origin_source_item_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "space_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
         "extracted_evidence_source_snapshot_id_fkey": {
           "name": "extracted_evidence_source_snapshot_id_fkey",
           "tableFrom": "extracted_evidence",
@@ -15495,7 +15524,16 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "uq_extracted_evidence_id_space": {
+          "name": "uq_extracted_evidence_id_space",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "space_id"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {
         "ck_extracted_evidence_evidence_type": {
@@ -16018,6 +16056,19 @@
         }
       },
       "foreignKeys": {
+        "knowledge_items_redirect_delete_fkey": {
+          "name": "knowledge_items_redirect_delete_fkey",
+          "tableFrom": "knowledge_items",
+          "tableTo": "knowledge_items",
+          "columnsFrom": [
+            "redirect_to_item_id"
+          ],
+          "columnsTo": [
+            "object_id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
         "fk_knowledge_items_redirect_to_item_id_knowledge_items": {
           "name": "fk_knowledge_items_redirect_to_item_id_knowledge_items",
           "tableFrom": "knowledge_items",
@@ -16029,6 +16080,19 @@
           "columnsTo": [
             "object_id",
             "space_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "knowledge_items_root_delete_fkey": {
+          "name": "knowledge_items_root_delete_fkey",
+          "tableFrom": "knowledge_items",
+          "tableTo": "knowledge_items",
+          "columnsFrom": [
+            "root_item_id"
+          ],
+          "columnsTo": [
+            "object_id"
           ],
           "onDelete": "set null",
           "onUpdate": "no action"
@@ -16045,6 +16109,19 @@
             "object_id",
             "space_id"
           ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "knowledge_items_supersedes_delete_fkey": {
+          "name": "knowledge_items_supersedes_delete_fkey",
+          "tableFrom": "knowledge_items",
+          "tableTo": "knowledge_items",
+          "columnsFrom": [
+            "supersedes_item_id"
+          ],
+          "columnsTo": [
+            "object_id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -16060,7 +16137,7 @@
             "object_id",
             "space_id"
           ],
-          "onDelete": "set null",
+          "onDelete": "no action",
           "onUpdate": "no action"
         },
         "knowledge_items_approved_by_user_id_fkey": {
@@ -16472,6 +16549,19 @@
         }
       },
       "foreignKeys": {
+        "note_collections_parent_delete_fkey": {
+          "name": "note_collections_parent_delete_fkey",
+          "tableFrom": "note_collections",
+          "tableTo": "note_collections",
+          "columnsFrom": [
+            "parent_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
         "note_collections_parent_id_space_id_fkey": {
           "name": "note_collections_parent_id_space_id_fkey",
           "tableFrom": "note_collections",
@@ -16484,7 +16574,7 @@
             "id",
             "space_id"
           ],
-          "onDelete": "set null",
+          "onDelete": "no action",
           "onUpdate": "no action"
         },
         "note_collections_space_id_fkey": {
@@ -17348,6 +17438,102 @@
           "value": "(status)::text = ANY (ARRAY[('candidate'::character varying)::text, ('active'::character varying)::text, ('rejected'::character varying)::text, ('archived'::character varying)::text])"
         }
       },
+      "isRLSEnabled": false
+    },
+    "public.source_item_references": {
+      "name": "source_item_references",
+      "schema": "",
+      "columns": {
+        "source_item_id": {
+          "name": "source_item_id",
+          "type": "varchar(36)",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "space_id": {
+          "name": "space_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "reference_object_id": {
+          "name": "reference_object_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "ix_source_item_references_reference": {
+          "name": "ix_source_item_references_reference",
+          "columns": [
+            {
+              "expression": "space_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "reference_object_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "source_item_references_source_item_fkey": {
+          "name": "source_item_references_source_item_fkey",
+          "tableFrom": "source_item_references",
+          "tableTo": "source_items",
+          "columnsFrom": [
+            "source_item_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "space_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "source_item_references_reference_fkey": {
+          "name": "source_item_references_reference_fkey",
+          "tableFrom": "source_item_references",
+          "tableTo": "sources",
+          "columnsFrom": [
+            "reference_object_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "object_id",
+            "space_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
       "isRLSEnabled": false
     },
     "public.sources": {
@@ -18335,7 +18521,7 @@
       "checkConstraints": {
         "ck_space_objects_object_type": {
           "name": "ck_space_objects_object_type",
-          "value": "(object_type)::text = ANY (ARRAY[('knowledge_item'::character varying)::text, ('note'::character varying)::text, ('source'::character varying)::text, ('project'::character varying)::text, ('person'::character varying)::text, ('organization'::character varying)::text, ('relationship'::character varying)::text, ('asset'::character varying)::text, ('event'::character varying)::text, ('task'::character varying)::text, ('document'::character varying)::text, ('claim'::character varying)::text])"
+          "value": "(object_type)::text = ANY (ARRAY[('knowledge_item'::character varying)::text, ('note'::character varying)::text, ('source'::character varying)::text, ('person'::character varying)::text, ('organization'::character varying)::text, ('relationship'::character varying)::text, ('claim'::character varying)::text])"
         },
         "ck_space_objects_status": {
           "name": "ck_space_objects_status",
@@ -19068,6 +19254,19 @@
         }
       },
       "foreignKeys": {
+        "memory_entries_project_id_delete_fkey": {
+          "name": "memory_entries_project_id_delete_fkey",
+          "tableFrom": "memory_entries",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "project_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
         "fk_memory_entries_project_id_projects": {
           "name": "fk_memory_entries_project_id_projects",
           "tableFrom": "memory_entries",
@@ -19080,7 +19279,7 @@
             "id",
             "space_id"
           ],
-          "onDelete": "set null",
+          "onDelete": "no action",
           "onUpdate": "no action"
         },
         "fk_memory_entries_root_memory_id_memory_entries": {
@@ -21790,6 +21989,19 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
+        "plan_nodes_assigned_agent_delete_fkey": {
+          "name": "plan_nodes_assigned_agent_delete_fkey",
+          "tableFrom": "plan_nodes",
+          "tableTo": "agents",
+          "columnsFrom": [
+            "assigned_agent_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
         "plan_nodes_assigned_agent_space_fkey": {
           "name": "plan_nodes_assigned_agent_space_fkey",
           "tableFrom": "plan_nodes",
@@ -21802,7 +22014,7 @@
             "id",
             "space_id"
           ],
-          "onDelete": "set null",
+          "onDelete": "no action",
           "onUpdate": "no action"
         },
         "plan_nodes_space_id_fkey": {
@@ -21839,7 +22051,12 @@
         }
       },
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "ck_plan_nodes_status": {
+          "name": "ck_plan_nodes_status",
+          "value": "status IN ('inbox', 'ready', 'in_progress', 'blocked', 'waiting_for_review', 'done', 'failed')"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.plan_versions": {
@@ -22071,6 +22288,19 @@
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
+        },
+        "plan_versions_reference_workflow_version_fkey": {
+          "name": "plan_versions_reference_workflow_version_fkey",
+          "tableFrom": "plan_versions",
+          "tableTo": "evolvable_asset_versions",
+          "columnsFrom": [
+            "reference_workflow_version_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -22289,6 +22519,19 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
+        "plans_project_id_delete_fkey": {
+          "name": "plans_project_id_delete_fkey",
+          "tableFrom": "plans",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "project_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
         "plans_project_id_fkey": {
           "name": "plans_project_id_fkey",
           "tableFrom": "plans",
@@ -22301,7 +22544,7 @@
             "id",
             "space_id"
           ],
-          "onDelete": "set null",
+          "onDelete": "no action",
           "onUpdate": "no action"
         },
         "plans_source_task_space_fkey": {
@@ -23319,6 +23562,125 @@
       },
       "isRLSEnabled": false
     },
+    "public.project_corpus_item_sources": {
+      "name": "project_corpus_item_sources",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar(36)",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "corpus_item_id": {
+          "name": "corpus_item_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "space_id": {
+          "name": "space_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_item_id": {
+          "name": "source_item_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "ix_project_corpus_item_sources_source": {
+          "name": "ix_project_corpus_item_sources_source",
+          "columns": [
+            {
+              "expression": "space_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "source_item_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "project_corpus_item_sources_corpus_item_fkey": {
+          "name": "project_corpus_item_sources_corpus_item_fkey",
+          "tableFrom": "project_corpus_item_sources",
+          "tableTo": "project_corpus_items",
+          "columnsFrom": [
+            "corpus_item_id",
+            "project_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "project_id",
+            "space_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "project_corpus_item_sources_source_item_fkey": {
+          "name": "project_corpus_item_sources_source_item_fkey",
+          "tableFrom": "project_corpus_item_sources",
+          "tableTo": "source_items",
+          "columnsFrom": [
+            "source_item_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "space_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "uq_project_corpus_item_sources_item_source": {
+          "name": "uq_project_corpus_item_sources_item_source",
+          "nullsNotDistinct": false,
+          "columns": [
+            "corpus_item_id",
+            "source_item_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.project_corpus_items": {
       "name": "project_corpus_items",
       "schema": "",
@@ -23675,7 +24037,7 @@
             }
           ],
           "isUnique": true,
-          "where": "evidence_id IS NOT NULL AND object_id IS NULL",
+          "where": "evidence_id IS NOT NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -23731,7 +24093,7 @@
             }
           ],
           "isUnique": true,
-          "where": "source_item_id IS NOT NULL AND object_id IS NULL AND evidence_id IS NULL",
+          "where": "source_item_id IS NOT NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -23756,10 +24118,12 @@
           "tableFrom": "project_corpus_items",
           "tableTo": "extracted_evidence",
           "columnsFrom": [
-            "evidence_id"
+            "evidence_id",
+            "space_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "space_id"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
@@ -23799,10 +24163,12 @@
           "tableFrom": "project_corpus_items",
           "tableTo": "source_connections",
           "columnsFrom": [
-            "source_connection_id"
+            "source_connection_id",
+            "space_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "space_id"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
@@ -23812,10 +24178,12 @@
           "tableFrom": "project_corpus_items",
           "tableTo": "source_post_processing_item_decisions",
           "columnsFrom": [
-            "source_decision_id"
+            "source_decision_id",
+            "space_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "space_id"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
@@ -23825,10 +24193,12 @@
           "tableFrom": "project_corpus_items",
           "tableTo": "source_items",
           "columnsFrom": [
-            "source_item_id"
+            "source_item_id",
+            "space_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "space_id"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
@@ -23856,6 +24226,15 @@
             "id",
             "space_id"
           ]
+        },
+        "uq_project_corpus_items_id_project_space": {
+          "name": "uq_project_corpus_items_id_project_space",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "project_id",
+            "space_id"
+          ]
         }
       },
       "policies": {},
@@ -23864,9 +24243,9 @@
           "name": "ck_project_corpus_items_confidence",
           "value": "(confidence IS NULL) OR ((confidence >= (0)::double precision) AND (confidence <= (1)::double precision))"
         },
-        "ck_project_corpus_items_has_target": {
-          "name": "ck_project_corpus_items_has_target",
-          "value": "object_id IS NOT NULL OR source_item_id IS NOT NULL OR evidence_id IS NOT NULL"
+        "ck_project_corpus_items_exactly_one_target": {
+          "name": "ck_project_corpus_items_exactly_one_target",
+          "value": "num_nonnulls(object_id, source_item_id, evidence_id) = 1"
         },
         "ck_project_corpus_items_metadata_object": {
           "name": "ck_project_corpus_items_metadata_object",
@@ -24091,10 +24470,12 @@
           "tableFrom": "project_experiment_campaigns",
           "tableTo": "workspaces",
           "columnsFrom": [
-            "workspace_id"
+            "workspace_id",
+            "space_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "space_id"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
@@ -24125,12 +24506,40 @@
           "onDelete": "set null",
           "onUpdate": "no action"
         },
+        "project_experiment_campaigns_baseline_run_delete_fkey": {
+          "name": "project_experiment_campaigns_baseline_run_delete_fkey",
+          "tableFrom": "project_experiment_campaigns",
+          "tableTo": "project_experiment_runs",
+          "columnsFrom": [
+            "baseline_run_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
         "project_experiment_campaigns_baseline_run_id_fkey": {
           "name": "project_experiment_campaigns_baseline_run_id_fkey",
           "tableFrom": "project_experiment_campaigns",
           "tableTo": "project_experiment_runs",
           "columnsFrom": [
-            "baseline_run_id"
+            "baseline_run_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "space_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "project_experiment_campaigns_best_run_delete_fkey": {
+          "name": "project_experiment_campaigns_best_run_delete_fkey",
+          "tableFrom": "project_experiment_campaigns",
+          "tableTo": "project_experiment_runs",
+          "columnsFrom": [
+            "best_run_id"
           ],
           "columnsTo": [
             "id"
@@ -24143,12 +24552,14 @@
           "tableFrom": "project_experiment_campaigns",
           "tableTo": "project_experiment_runs",
           "columnsFrom": [
-            "best_run_id"
+            "best_run_id",
+            "space_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "space_id"
           ],
-          "onDelete": "set null",
+          "onDelete": "no action",
           "onUpdate": "no action"
         }
       },
@@ -24363,8 +24774,8 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "project_experiment_provenance_campaign_id_fkey": {
-          "name": "project_experiment_provenance_campaign_id_fkey",
+        "project_experiment_provenance_campaign_delete_fkey": {
+          "name": "project_experiment_provenance_campaign_delete_fkey",
           "tableFrom": "project_experiment_provenance",
           "tableTo": "project_experiment_campaigns",
           "columnsFrom": [
@@ -24374,6 +24785,21 @@
             "id"
           ],
           "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "project_experiment_provenance_campaign_id_fkey": {
+          "name": "project_experiment_provenance_campaign_id_fkey",
+          "tableFrom": "project_experiment_provenance",
+          "tableTo": "project_experiment_campaigns",
+          "columnsFrom": [
+            "campaign_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "space_id"
+          ],
+          "onDelete": "no action",
           "onUpdate": "no action"
         },
         "project_experiment_provenance_space_id_fkey": {
@@ -24594,16 +25020,18 @@
           "tableFrom": "project_experiment_runs",
           "tableTo": "workspaces",
           "columnsFrom": [
-            "workspace_id"
+            "workspace_id",
+            "space_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "space_id"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "project_experiment_runs_run_id_fkey": {
-          "name": "project_experiment_runs_run_id_fkey",
+        "project_experiment_runs_run_delete_fkey": {
+          "name": "project_experiment_runs_run_delete_fkey",
           "tableFrom": "project_experiment_runs",
           "tableTo": "runs",
           "columnsFrom": [
@@ -24613,6 +25041,21 @@
             "id"
           ],
           "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "project_experiment_runs_run_id_fkey": {
+          "name": "project_experiment_runs_run_id_fkey",
+          "tableFrom": "project_experiment_runs",
+          "tableTo": "runs",
+          "columnsFrom": [
+            "run_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "space_id"
+          ],
+          "onDelete": "no action",
           "onUpdate": "no action"
         },
         "project_experiment_runs_space_id_fkey": {
@@ -25121,8 +25564,8 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "project_research_claim_links_workflow_id_fkey": {
-          "name": "project_research_claim_links_workflow_id_fkey",
+        "project_research_claim_links_workflow_delete_fkey": {
+          "name": "project_research_claim_links_workflow_delete_fkey",
           "tableFrom": "project_research_claim_links",
           "tableTo": "project_research_workflows",
           "columnsFrom": [
@@ -25132,6 +25575,21 @@
             "id"
           ],
           "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "project_research_claim_links_workflow_id_fkey": {
+          "name": "project_research_claim_links_workflow_id_fkey",
+          "tableFrom": "project_research_claim_links",
+          "tableTo": "project_research_workflows",
+          "columnsFrom": [
+            "workflow_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "space_id"
+          ],
+          "onDelete": "no action",
           "onUpdate": "no action"
         },
         "project_research_claim_links_space_id_fkey": {
@@ -26084,8 +26542,8 @@
           "onDelete": "set null",
           "onUpdate": "no action"
         },
-        "project_research_workflows_started_run_id_fkey": {
-          "name": "project_research_workflows_started_run_id_fkey",
+        "project_research_workflows_started_run_delete_fkey": {
+          "name": "project_research_workflows_started_run_delete_fkey",
           "tableFrom": "project_research_workflows",
           "tableTo": "runs",
           "columnsFrom": [
@@ -26095,6 +26553,21 @@
             "id"
           ],
           "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "project_research_workflows_started_run_id_fkey": {
+          "name": "project_research_workflows_started_run_id_fkey",
+          "tableFrom": "project_research_workflows",
+          "tableTo": "runs",
+          "columnsFrom": [
+            "started_run_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "space_id"
+          ],
+          "onDelete": "no action",
           "onUpdate": "no action"
         }
       },
@@ -26345,6 +26818,21 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
+        "research_scan_summaries_operation_id_fkey": {
+          "name": "research_scan_summaries_operation_id_fkey",
+          "tableFrom": "research_scan_summaries",
+          "tableTo": "project_operations",
+          "columnsFrom": [
+            "operation_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "space_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
         "research_scan_summaries_space_id_fkey": {
           "name": "research_scan_summaries_space_id_fkey",
           "tableFrom": "research_scan_summaries",
@@ -26559,8 +27047,8 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "research_search_strategies_operation_fkey": {
-          "name": "research_search_strategies_operation_fkey",
+        "research_search_strategies_operation_delete_fkey": {
+          "name": "research_search_strategies_operation_delete_fkey",
           "tableFrom": "research_search_strategies",
           "tableTo": "project_operations",
           "columnsFrom": [
@@ -26570,6 +27058,21 @@
             "id"
           ],
           "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "research_search_strategies_operation_fkey": {
+          "name": "research_search_strategies_operation_fkey",
+          "tableFrom": "research_search_strategies",
+          "tableTo": "project_operations",
+          "columnsFrom": [
+            "operation_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "space_id"
+          ],
+          "onDelete": "no action",
           "onUpdate": "no action"
         },
         "research_search_strategies_user_fkey": {
@@ -26725,8 +27228,8 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "research_checklist_items_run_fkey": {
-          "name": "research_checklist_items_run_fkey",
+        "research_checklist_items_run_delete_fkey": {
+          "name": "research_checklist_items_run_delete_fkey",
           "tableFrom": "research_checklist_items",
           "tableTo": "runs",
           "columnsFrom": [
@@ -26736,6 +27239,21 @@
             "id"
           ],
           "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "research_checklist_items_run_fkey": {
+          "name": "research_checklist_items_run_fkey",
+          "tableFrom": "research_checklist_items",
+          "tableTo": "runs",
+          "columnsFrom": [
+            "origin_run_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "space_id"
+          ],
+          "onDelete": "no action",
           "onUpdate": "no action"
         }
       },
@@ -26875,8 +27393,8 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "research_integrity_alerts_source_item_fkey": {
-          "name": "research_integrity_alerts_source_item_fkey",
+        "research_integrity_alerts_source_item_delete_fkey": {
+          "name": "research_integrity_alerts_source_item_delete_fkey",
           "tableFrom": "research_integrity_alerts",
           "tableTo": "source_items",
           "columnsFrom": [
@@ -26886,6 +27404,21 @@
             "id"
           ],
           "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "research_integrity_alerts_source_item_fkey": {
+          "name": "research_integrity_alerts_source_item_fkey",
+          "tableFrom": "research_integrity_alerts",
+          "tableTo": "source_items",
+          "columnsFrom": [
+            "source_item_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "space_id"
+          ],
+          "onDelete": "no action",
           "onUpdate": "no action"
         }
       },
@@ -26922,6 +27455,12 @@
           "name": "id",
           "type": "varchar(36)",
           "primaryKey": true,
+          "notNull": true
+        },
+        "space_id": {
+          "name": "space_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
           "notNull": true
         },
         "section_id": {
@@ -26997,6 +27536,12 @@
           "name": "ix_research_notebook_section_revisions_section",
           "columns": [
             {
+              "expression": "space_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
               "expression": "section_id",
               "isExpression": false,
               "asc": true,
@@ -27016,15 +27561,30 @@
         }
       },
       "foreignKeys": {
+        "research_notebook_section_revisions_space_fkey": {
+          "name": "research_notebook_section_revisions_space_fkey",
+          "tableFrom": "research_notebook_section_revisions",
+          "tableTo": "spaces",
+          "columnsFrom": [
+            "space_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
         "research_notebook_section_revisions_section_fkey": {
           "name": "research_notebook_section_revisions_section_fkey",
           "tableFrom": "research_notebook_section_revisions",
           "tableTo": "research_notebook_sections",
           "columnsFrom": [
-            "section_id"
+            "section_id",
+            "space_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "space_id"
           ],
           "onDelete": "cascade",
           "onUpdate": "no action"
@@ -27042,8 +27602,8 @@
           "onDelete": "set null",
           "onUpdate": "no action"
         },
-        "research_notebook_section_revisions_run_fkey": {
-          "name": "research_notebook_section_revisions_run_fkey",
+        "research_notebook_section_revisions_run_delete_fkey": {
+          "name": "research_notebook_section_revisions_run_delete_fkey",
           "tableFrom": "research_notebook_section_revisions",
           "tableTo": "runs",
           "columnsFrom": [
@@ -27053,6 +27613,21 @@
             "id"
           ],
           "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "research_notebook_section_revisions_run_fkey": {
+          "name": "research_notebook_section_revisions_run_fkey",
+          "tableFrom": "research_notebook_section_revisions",
+          "tableTo": "runs",
+          "columnsFrom": [
+            "created_by_run_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "space_id"
+          ],
+          "onDelete": "no action",
           "onUpdate": "no action"
         }
       },
@@ -27092,6 +27667,12 @@
           "name": "id",
           "type": "varchar(36)",
           "primaryKey": true,
+          "notNull": true
+        },
+        "space_id": {
+          "name": "space_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
           "notNull": true
         },
         "notebook_id": {
@@ -27162,6 +27743,12 @@
           "name": "ix_research_notebook_sections_notebook",
           "columns": [
             {
+              "expression": "space_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
               "expression": "notebook_id",
               "isExpression": false,
               "asc": true,
@@ -27175,15 +27762,30 @@
         }
       },
       "foreignKeys": {
+        "research_notebook_sections_space_fkey": {
+          "name": "research_notebook_sections_space_fkey",
+          "tableFrom": "research_notebook_sections",
+          "tableTo": "spaces",
+          "columnsFrom": [
+            "space_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
         "research_notebook_sections_notebook_fkey": {
           "name": "research_notebook_sections_notebook_fkey",
           "tableFrom": "research_notebook_sections",
           "tableTo": "research_notebooks",
           "columnsFrom": [
-            "notebook_id"
+            "notebook_id",
+            "space_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "space_id"
           ],
           "onDelete": "cascade",
           "onUpdate": "no action"
@@ -27201,8 +27803,8 @@
           "onDelete": "set null",
           "onUpdate": "no action"
         },
-        "research_notebook_sections_run_fkey": {
-          "name": "research_notebook_sections_run_fkey",
+        "research_notebook_sections_run_delete_fkey": {
+          "name": "research_notebook_sections_run_delete_fkey",
           "tableFrom": "research_notebook_sections",
           "tableTo": "runs",
           "columnsFrom": [
@@ -27212,6 +27814,21 @@
             "id"
           ],
           "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "research_notebook_sections_run_fkey": {
+          "name": "research_notebook_sections_run_fkey",
+          "tableFrom": "research_notebook_sections",
+          "tableTo": "runs",
+          "columnsFrom": [
+            "updated_by_run_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "space_id"
+          ],
+          "onDelete": "no action",
           "onUpdate": "no action"
         }
       },
@@ -27223,6 +27840,14 @@
           "columns": [
             "notebook_id",
             "section_key"
+          ]
+        },
+        "uq_research_notebook_sections_id_space": {
+          "name": "uq_research_notebook_sections_id_space",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "space_id"
           ]
         }
       },
@@ -27303,6 +27928,14 @@
           "nullsNotDistinct": false,
           "columns": [
             "project_id",
+            "space_id"
+          ]
+        },
+        "uq_research_notebooks_id_space": {
+          "name": "uq_research_notebooks_id_space",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
             "space_id"
           ]
         }
@@ -27449,16 +28082,18 @@
           "tableFrom": "research_paper_cards",
           "tableTo": "source_items",
           "columnsFrom": [
-            "source_item_id"
+            "source_item_id",
+            "space_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "space_id"
           ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "research_paper_cards_object_fkey": {
-          "name": "research_paper_cards_object_fkey",
+        "research_paper_cards_object_delete_fkey": {
+          "name": "research_paper_cards_object_delete_fkey",
           "tableFrom": "research_paper_cards",
           "tableTo": "space_objects",
           "columnsFrom": [
@@ -27469,6 +28104,21 @@
           ],
           "onDelete": "set null",
           "onUpdate": "no action"
+        },
+        "research_paper_cards_object_fkey": {
+          "name": "research_paper_cards_object_fkey",
+          "tableFrom": "research_paper_cards",
+          "tableTo": "space_objects",
+          "columnsFrom": [
+            "object_id",
+            "space_id"
+          ],
+          "columnsTo": [
+            "id",
+            "space_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -27477,6 +28127,7 @@
           "name": "uq_research_paper_cards_project_source",
           "nullsNotDistinct": false,
           "columns": [
+            "space_id",
             "project_id",
             "source_item_id"
           ]
@@ -28320,6 +28971,13 @@
           "notNull": true,
           "default": "'{}'::jsonb"
         },
+        "version": {
+          "name": "version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -28440,10 +29098,12 @@
           "tableFrom": "project_operations",
           "tableTo": "artifacts",
           "columnsFrom": [
-            "plan_artifact_id"
+            "plan_artifact_id",
+            "space_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "space_id"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
@@ -28469,6 +29129,10 @@
         "ck_project_operations_status": {
           "name": "ck_project_operations_status",
           "value": "status IN ('draft','active','waiting_review','completed','failed','cancelled')"
+        },
+        "ck_project_operations_version": {
+          "name": "ck_project_operations_version",
+          "value": "version >= 1"
         }
       },
       "isRLSEnabled": false
@@ -29711,6 +30375,19 @@
         }
       },
       "foreignKeys": {
+        "proposals_project_id_delete_fkey": {
+          "name": "proposals_project_id_delete_fkey",
+          "tableFrom": "proposals",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "project_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
         "fk_proposals_project_id_projects": {
           "name": "fk_proposals_project_id_projects",
           "tableFrom": "proposals",
@@ -29723,7 +30400,7 @@
             "id",
             "space_id"
           ],
-          "onDelete": "set null",
+          "onDelete": "no action",
           "onUpdate": "no action"
         },
         "proposals_created_by_agent_id_fkey": {
@@ -30764,270 +31441,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.relation_affiliations": {
-      "name": "relation_affiliations",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "varchar(36)",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "space_id": {
-          "name": "space_id",
-          "type": "varchar(36)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "person_object_id": {
-          "name": "person_object_id",
-          "type": "varchar(36)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "organization_object_id": {
-          "name": "organization_object_id",
-          "type": "varchar(36)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "role": {
-          "name": "role",
-          "type": "varchar(128)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "title": {
-          "name": "title",
-          "type": "varchar(256)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "status": {
-          "name": "status",
-          "type": "varchar(32)",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'active'"
-        },
-        "start_date": {
-          "name": "start_date",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "end_date": {
-          "name": "end_date",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "confidence": {
-          "name": "confidence",
-          "type": "double precision",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "source": {
-          "name": "source",
-          "type": "varchar(32)",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'manual'"
-        },
-        "object_relation_id": {
-          "name": "object_relation_id",
-          "type": "varchar(36)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_by_user_id": {
-          "name": "created_by_user_id",
-          "type": "varchar(36)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_by_agent_id": {
-          "name": "created_by_agent_id",
-          "type": "varchar(36)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "ix_relation_affiliations_person": {
-          "name": "ix_relation_affiliations_person",
-          "columns": [
-            {
-              "expression": "person_object_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "ix_relation_affiliations_organization": {
-          "name": "ix_relation_affiliations_organization",
-          "columns": [
-            {
-              "expression": "organization_object_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "ix_relation_affiliations_space_id": {
-          "name": "ix_relation_affiliations_space_id",
-          "columns": [
-            {
-              "expression": "space_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "ix_relation_affiliations_status": {
-          "name": "ix_relation_affiliations_status",
-          "columns": [
-            {
-              "expression": "status",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "relation_affiliations_created_by_agent_id_fkey": {
-          "name": "relation_affiliations_created_by_agent_id_fkey",
-          "tableFrom": "relation_affiliations",
-          "tableTo": "agents",
-          "columnsFrom": [
-            "created_by_agent_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "relation_affiliations_created_by_user_id_fkey": {
-          "name": "relation_affiliations_created_by_user_id_fkey",
-          "tableFrom": "relation_affiliations",
-          "tableTo": "users",
-          "columnsFrom": [
-            "created_by_user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "relation_affiliations_space_id_fkey": {
-          "name": "relation_affiliations_space_id_fkey",
-          "tableFrom": "relation_affiliations",
-          "tableTo": "spaces",
-          "columnsFrom": [
-            "space_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "relation_affiliations_person_object_id_fkey": {
-          "name": "relation_affiliations_person_object_id_fkey",
-          "tableFrom": "relation_affiliations",
-          "tableTo": "space_objects",
-          "columnsFrom": [
-            "person_object_id",
-            "space_id"
-          ],
-          "columnsTo": [
-            "id",
-            "space_id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "relation_affiliations_organization_object_id_fkey": {
-          "name": "relation_affiliations_organization_object_id_fkey",
-          "tableFrom": "relation_affiliations",
-          "tableTo": "space_objects",
-          "columnsFrom": [
-            "organization_object_id",
-            "space_id"
-          ],
-          "columnsTo": [
-            "id",
-            "space_id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "relation_affiliations_object_relation_id_fkey": {
-          "name": "relation_affiliations_object_relation_id_fkey",
-          "tableFrom": "relation_affiliations",
-          "tableTo": "object_relations",
-          "columnsFrom": [
-            "object_relation_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "ck_relation_affiliations_status": {
-          "name": "ck_relation_affiliations_status",
-          "value": "(status)::text = ANY (ARRAY[('active'::character varying)::text, ('past'::character varying)::text, ('unknown'::character varying)::text])"
-        },
-        "ck_relation_affiliations_source": {
-          "name": "ck_relation_affiliations_source",
-          "value": "(source)::text = ANY (ARRAY[('manual'::character varying)::text, ('import'::character varying)::text, ('source_sync'::character varying)::text, ('agent'::character varying)::text])"
-        }
-      },
-      "isRLSEnabled": false
-    },
     "public.relation_identities": {
       "name": "relation_identities",
       "schema": "",
@@ -31908,7 +32321,15 @@
       "checkConstraints": {
         "ck_relation_source_links_link_type": {
           "name": "ck_relation_source_links_link_type",
-          "value": "(link_type)::text = ANY (ARRAY[('activity'::character varying)::text, ('source_item'::character varying)::text, ('evidence'::character varying)::text, ('external'::character varying)::text, ('import'::character varying)::text])"
+          "value": "(link_type)::text = ANY (ARRAY[('activity'::character varying)::text, ('source_item'::character varying)::text, ('evidence'::character varying)::text, ('external'::character varying)::text])"
+        },
+        "ck_relation_source_links_exactly_one_target": {
+          "name": "ck_relation_source_links_exactly_one_target",
+          "value": "num_nonnulls(activity_id, source_item_id, evidence_id, external_ref) = 1"
+        },
+        "ck_relation_source_links_target_matches_type": {
+          "name": "ck_relation_source_links_target_matches_type",
+          "value": "(link_type = 'activity' AND activity_id IS NOT NULL) OR (link_type = 'source_item' AND source_item_id IS NOT NULL) OR (link_type = 'evidence' AND evidence_id IS NOT NULL) OR (link_type = 'external' AND external_ref IS NOT NULL)"
         }
       },
       "isRLSEnabled": false
@@ -36076,6 +36497,19 @@
         }
       },
       "foreignKeys": {
+        "runs_workflow_version_fkey": {
+          "name": "runs_workflow_version_fkey",
+          "tableFrom": "runs",
+          "tableTo": "evolvable_asset_versions",
+          "columnsFrom": [
+            "workflow_version_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
         "runs_owner_user_id_fkey": {
           "name": "runs_owner_user_id_fkey",
           "tableFrom": "runs",
@@ -36087,6 +36521,19 @@
             "id"
           ],
           "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "runs_project_id_delete_fkey": {
+          "name": "runs_project_id_delete_fkey",
+          "tableFrom": "runs",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "project_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
           "onUpdate": "no action"
         },
         "fk_runs_project_id_projects": {
@@ -36101,7 +36548,7 @@
             "id",
             "space_id"
           ],
-          "onDelete": "set null",
+          "onDelete": "no action",
           "onUpdate": "no action"
         },
         "fk_runs_working_dir_id": {
@@ -36135,10 +36582,14 @@
           "tableFrom": "runs",
           "tableTo": "agent_versions",
           "columnsFrom": [
-            "agent_version_id"
+            "agent_version_id",
+            "agent_id",
+            "space_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "agent_id",
+            "space_id"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
@@ -36326,7 +36777,7 @@
             "id",
             "space_id"
           ],
-          "onDelete": "set null",
+          "onDelete": "no action",
           "onUpdate": "no action"
         },
         "fk_runs_instructed_by_agent_same_space": {
@@ -36341,7 +36792,7 @@
             "id",
             "space_id"
           ],
-          "onDelete": "set null",
+          "onDelete": "no action",
           "onUpdate": "no action"
         },
         "fk_runs_parent_run_same_space": {
@@ -36371,7 +36822,7 @@
             "id",
             "space_id"
           ],
-          "onDelete": "set null",
+          "onDelete": "no action",
           "onUpdate": "no action"
         },
         "fk_runs_run_group_same_space": {
@@ -36386,7 +36837,7 @@
             "id",
             "space_id"
           ],
-          "onDelete": "set null",
+          "onDelete": "no action",
           "onUpdate": "no action"
         }
       },
@@ -41933,7 +42384,16 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "uq_source_items_id_space": {
+          "name": "uq_source_items_id_space",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "space_id"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {
         "ck_source_items_content_state": {
@@ -41947,6 +42407,14 @@
         "ck_source_items_retention_policy": {
           "name": "ck_source_items_retention_policy",
           "value": "(retention_policy)::text = ANY (ARRAY[('metadata_only'::character varying)::text, ('summary_only'::character varying)::text, ('full_text'::character varying)::text, ('full_snapshot'::character varying)::text, ('archived'::character varying)::text])"
+        },
+        "ck_source_items_origin_pair": {
+          "name": "ck_source_items_origin_pair",
+          "value": "(source_object_type IS NULL) = (source_object_id IS NULL)"
+        },
+        "ck_source_items_origin_type": {
+          "name": "ck_source_items_origin_type",
+          "value": "source_object_type IS NULL OR source_object_type IN ('activity_record', 'artifact', 'run_event')"
         },
         "ck_source_items_visibility": {
           "name": "ck_source_items_visibility",
@@ -42326,7 +42794,16 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "uq_source_post_processing_item_decisions_id_space": {
+          "name": "uq_source_post_processing_item_decisions_id_space",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "space_id"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {
         "ck_source_post_processing_item_decisions_action_object": {
@@ -45744,10 +46221,12 @@
           "tableFrom": "board_columns",
           "tableTo": "boards",
           "columnsFrom": [
-            "board_id"
+            "board_id",
+            "space_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "space_id"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
@@ -45767,9 +46246,24 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "uq_board_columns_id_board_space": {
+          "name": "uq_board_columns_id_board_space",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "board_id",
+            "space_id"
+          ]
+        }
+      },
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "ck_board_columns_status_key": {
+          "name": "ck_board_columns_status_key",
+          "value": "status_key IN ('inbox', 'ready', 'in_progress', 'blocked', 'done', 'cancelled')"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.boards": {
@@ -45977,6 +46471,19 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
+        "boards_project_id_delete_fkey": {
+          "name": "boards_project_id_delete_fkey",
+          "tableFrom": "boards",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "project_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
         "boards_project_id_fkey": {
           "name": "boards_project_id_fkey",
           "tableFrom": "boards",
@@ -45989,12 +46496,21 @@
             "id",
             "space_id"
           ],
-          "onDelete": "set null",
+          "onDelete": "no action",
           "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "uq_boards_id_space": {
+          "name": "uq_boards_id_space",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "space_id"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -46916,10 +47432,12 @@
           "tableFrom": "tasks",
           "tableTo": "boards",
           "columnsFrom": [
-            "board_id"
+            "board_id",
+            "space_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "space_id"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
@@ -46955,10 +47473,14 @@
           "tableFrom": "tasks",
           "tableTo": "board_columns",
           "columnsFrom": [
-            "column_id"
+            "column_id",
+            "board_id",
+            "space_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "board_id",
+            "space_id"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
@@ -47095,6 +47617,19 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
+        "tasks_project_id_delete_fkey": {
+          "name": "tasks_project_id_delete_fkey",
+          "tableFrom": "tasks",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "project_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
         "tasks_project_id_fkey": {
           "name": "tasks_project_id_fkey",
           "tableFrom": "tasks",
@@ -47107,7 +47642,7 @@
             "id",
             "space_id"
           ],
-          "onDelete": "set null",
+          "onDelete": "no action",
           "onUpdate": "no action"
         }
       },
@@ -47139,6 +47674,14 @@
         "ck_tasks_role": {
           "name": "ck_tasks_role",
           "value": "task_role IN ('source', 'subtask')"
+        },
+        "ck_tasks_status": {
+          "name": "ck_tasks_status",
+          "value": "status IN ('inbox', 'ready', 'in_progress', 'blocked', 'done', 'cancelled')"
+        },
+        "ck_tasks_column_requires_board": {
+          "name": "ck_tasks_column_requires_board",
+          "value": "column_id IS NULL OR board_id IS NOT NULL"
         }
       },
       "isRLSEnabled": false

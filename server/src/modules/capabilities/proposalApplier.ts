@@ -55,6 +55,10 @@ async function applyCapabilityInstallProposal(
   const payload = objectValue(context.proposal.payload_json);
   ensureOperation(payload, "install_from_skill_package");
   const skillPackageId = requiredPayloadString(payload, "skill_package_id");
+  const capabilityId = optionalString(payload.capability_id);
+  if (capabilityId && getBuiltInCapabilityDefinition(capabilityId)) {
+    throw new HttpError(409, "Imported capability id conflicts with a built-in capability");
+  }
   const result = await convertSkillPackageToCapabilityInTransaction({
     db: context.db,
     identity: {
@@ -64,7 +68,7 @@ async function applyCapabilityInstallProposal(
     skillPackageId,
     proposalId: context.proposal.id,
     body: {
-      capability_id: optionalString(payload.capability_id) ?? undefined,
+      capability_id: capabilityId ?? undefined,
       namespace: optionalString(payload.namespace) ?? undefined,
       create_runtime_bindings: payload.create_runtime_bindings !== false,
     },
@@ -101,14 +105,20 @@ async function applyCapabilityUpdateProposal(
     throw new HttpError(422, "capability_update status is invalid");
   }
   const now = new Date().toISOString();
+  const target = await context.db.query<{ id: string; capability_key: string }>(
+    `SELECT id, capability_key
+       FROM capability_versions
+      WHERE id = $1 AND space_id = $2`,
+    [versionId, context.proposal.space_id],
+  );
+  if (!target.rows[0]) throw new HttpError(404, "Capability version not found");
   const updated = await context.db.query<{ id: string; capability_key: string; status: string }>(
     `UPDATE capability_versions
         SET status = COALESCE($3, status),
             metadata_json = metadata_json || $4::jsonb,
             updated_at = $5
       WHERE id = $1
-        AND scope_type = 'space'
-        AND scope_id = $2
+        AND space_id = $2
       RETURNING id, capability_key, status`,
     [
       versionId,
@@ -152,14 +162,13 @@ async function applyCapabilityEnableProposal(
     now,
   });
   if (capabilityVersionId) {
-    // Per-scope enable/disable truth lives in capability_enablements. The
-    // version row only records that an enabled version reached the shared
-    // "available" lifecycle state; "available" is the canonical status used by
-    // capability_update validation (no separate "enabled" status exists).
+    // Availability is a version lifecycle state, not a Space-wide "current"
+    // pointer. Each enablement remains pinned to the version approved for its
+    // own scope; enabling one scope must never rewrite another scope.
     await context.db.query(
       `UPDATE capability_versions
           SET status = 'available', updated_at = $3
-        WHERE id = $1 AND scope_type = 'space' AND scope_id = $2`,
+        WHERE id = $1 AND space_id = $2`,
       [capabilityVersionId, context.proposal.space_id, now],
     );
   }
@@ -288,8 +297,7 @@ async function requireCapabilityVersion(
     `SELECT id, capability_key
        FROM capability_versions
       WHERE id = $1
-        AND scope_type = 'space'
-        AND scope_id = $2
+        AND space_id = $2
         AND status <> 'archived'`,
     [capabilityVersionId, context.proposal.space_id],
   );

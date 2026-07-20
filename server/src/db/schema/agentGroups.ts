@@ -48,12 +48,12 @@ export const agentRunGroups = pgTable("agent_run_groups", {
 			columns: [table.managerAgentId, table.spaceId],
 			foreignColumns: [agents.id, agents.spaceId],
 			name: "fk_agent_run_groups_manager_agent_same_space"
-		}).onDelete("set null"),
+		}),
 	foreignKey({
 			columns: [table.rootRunId, table.spaceId],
 			foreignColumns: [runs.id, runs.spaceId],
 			name: "fk_agent_run_groups_root_run_same_space"
-		}).onDelete("set null"),
+		}),
 	unique("uq_agent_run_groups_space_id_id").on(table.id, table.spaceId),
 	check("ck_agent_run_groups_status", sql`(status)::text = ANY (ARRAY[('active'::character varying)::text, ('paused'::character varying)::text, ('succeeded'::character varying)::text, ('failed'::character varying)::text, ('cancelled'::character varying)::text, ('archived'::character varying)::text])`),
 ]);
@@ -159,17 +159,17 @@ export const agentRunMessages = pgTable("agent_run_messages", {
 			columns: [table.parentMessageId, table.spaceId],
 			foreignColumns: [table.id, table.spaceId],
 			name: "fk_agent_run_messages_parent_same_space"
-		}).onDelete("set null"),
+		}),
 	foreignKey({
 			columns: [table.runId, table.spaceId],
 			foreignColumns: [runs.id, runs.spaceId],
 			name: "fk_agent_run_messages_run_same_space"
-		}).onDelete("set null"),
+		}),
 	foreignKey({
 			columns: [table.senderAgentId, table.spaceId],
 			foreignColumns: [agents.id, agents.spaceId],
 			name: "fk_agent_run_messages_sender_agent_same_space"
-		}).onDelete("set null"),
+		}),
 	unique("uq_agent_run_messages_space_id_id").on(table.id, table.spaceId),
 	check("ck_agent_run_messages_message_type", sql`(message_type)::text = ANY (ARRAY[('user_instruction'::character varying)::text, ('agent_message'::character varying)::text, ('delegation_request'::character varying)::text, ('delegation_result'::character varying)::text, ('system_event'::character varying)::text, ('review_note'::character varying)::text])`),
 ]);
@@ -250,7 +250,7 @@ export const runDelegations = pgTable("run_delegations", {
 			columns: [table.childRunId, table.spaceId],
 			foreignColumns: [runs.id, runs.spaceId],
 			name: "fk_run_delegations_child_run_same_space"
-		}).onDelete("set null"),
+		}),
 	foreignKey({
 			columns: [table.groupId, table.spaceId],
 			foreignColumns: [agentRunGroups.id, agentRunGroups.spaceId],
@@ -265,12 +265,12 @@ export const runDelegations = pgTable("run_delegations", {
 			columns: [table.policyDecisionRecordId, table.spaceId],
 			foreignColumns: [policyDecisionRecords.id, policyDecisionRecords.spaceId],
 			name: "fk_run_delegations_policy_decision_same_space"
-		}).onDelete("set null"),
+		}),
 	foreignKey({
 			columns: [table.requestMessageId, table.spaceId],
 			foreignColumns: [agentRunMessages.id, agentRunMessages.spaceId],
 			name: "fk_run_delegations_request_message_same_space"
-		}).onDelete("set null"),
+		}),
 	foreignKey({
 			columns: [table.requestingAgentId, table.spaceId],
 			foreignColumns: [agents.id, agents.spaceId],

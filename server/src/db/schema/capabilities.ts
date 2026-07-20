@@ -1,8 +1,10 @@
-import { pgTable, index, uniqueIndex, check, foreignKey, varchar, text, integer, boolean, jsonb, timestamp, type PgTableExtraConfigValue } from "drizzle-orm/pg-core";
+import { pgTable, index, unique, uniqueIndex, check, foreignKey, varchar, text, integer, boolean, jsonb, timestamp, type PgTableExtraConfigValue } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { users } from "./auth";
-import { spaces } from "./spaces";
+import { spaceMemberships, spaces } from "./spaces";
 import { proposals } from "./proposals";
+import { projects } from "./projects";
+import { agents } from "./agents";
 
 export const projectWorkflowProfiles = pgTable("project_workflow_profiles", {
 	id: varchar({ length: 36 }).primaryKey().notNull(),
@@ -19,14 +21,16 @@ export const projectWorkflowProfiles = pgTable("project_workflow_profiles", {
 	index("ix_project_workflow_profiles_space_project").using("btree", table.spaceId.asc().nullsLast(), table.projectId.asc().nullsLast()),
 	index("ix_project_workflow_profiles_template").using("btree", table.workflowTemplateId.asc().nullsLast()),
 	uniqueIndex("uq_project_workflow_profiles_name").using("btree", table.spaceId.asc().nullsLast(), table.projectId.asc().nullsLast(), table.workflowTemplateId.asc().nullsLast(), table.name.asc().nullsLast()),
+	foreignKey({ columns: [table.spaceId], foreignColumns: [spaces.id], name: "project_workflow_profiles_space_fkey" }),
+	foreignKey({ columns: [table.projectId, table.spaceId], foreignColumns: [projects.id, projects.spaceId], name: "project_workflow_profiles_project_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.createdByUserId], foreignColumns: [users.id], name: "project_workflow_profiles_created_by_user_fkey" }).onDelete("set null"),
 	check("ck_project_workflow_profiles_config_object", sql`jsonb_typeof(config_json) = 'object'::text`),
 ]);
 
 export const capabilityVersions = pgTable("capability_versions", {
 	id: varchar({ length: 36 }).primaryKey().notNull(),
 	capabilityKey: varchar("capability_key", { length: 128 }).notNull(),
-	scopeType: varchar("scope_type", { length: 32 }).notNull(),
-	scopeId: varchar("scope_id", { length: 128 }),
+	spaceId: varchar("space_id", { length: 36 }).notNull(),
 	parentVersionId: varchar("parent_version_id", { length: 36 }),
 	version: varchar({ length: 64 }).notNull(),
 	source: varchar({ length: 32 }).notNull(),
@@ -40,23 +44,25 @@ export const capabilityVersions = pgTable("capability_versions", {
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).notNull(),
 }, (table): PgTableExtraConfigValue[] => [
 	index("ix_capability_versions_capability_key").using("btree", table.capabilityKey.asc().nullsLast()),
-	index("ix_capability_versions_key_scope_status").using("btree", table.capabilityKey.asc().nullsLast(), table.scopeType.asc().nullsLast(), table.scopeId.asc().nullsLast(), table.status.asc().nullsLast()),
+	index("ix_capability_versions_key_space_status").using("btree", table.capabilityKey.asc().nullsLast(), table.spaceId.asc().nullsLast(), table.status.asc().nullsLast()),
 	index("ix_capability_versions_parent_version_id").using("btree", table.parentVersionId.asc().nullsLast()),
 	index("ix_capability_versions_proposal_id").using("btree", table.proposalId.asc().nullsLast()),
-	index("ix_capability_versions_scope_id").using("btree", table.scopeId.asc().nullsLast()),
-	index("ix_capability_versions_scope_type").using("btree", table.scopeType.asc().nullsLast()),
+	index("ix_capability_versions_space_id").using("btree", table.spaceId.asc().nullsLast()),
 	index("ix_capability_versions_source").using("btree", table.source.asc().nullsLast()),
 	index("ix_capability_versions_status").using("btree", table.status.asc().nullsLast()),
+	unique("uq_capability_versions_id_space").on(table.id, table.spaceId),
+	foreignKey({ columns: [table.spaceId], foreignColumns: [spaces.id], name: "capability_versions_space_fkey" }),
 	foreignKey({
-			columns: [table.proposalId],
-			foreignColumns: [proposals.id],
-			name: "capability_versions_proposal_id_fkey"
+			columns: [table.proposalId, table.spaceId],
+			foreignColumns: [proposals.id, proposals.spaceId],
+			name: "capability_versions_proposal_fkey"
 		}),
 	foreignKey({
-			columns: [table.parentVersionId],
-			foreignColumns: [table.id],
-			name: "fk_capability_versions_parent_version_id"
+			columns: [table.parentVersionId, table.spaceId],
+			foreignColumns: [table.id, table.spaceId],
+			name: "capability_versions_parent_version_fkey"
 		}),
+	check("ck_capability_versions_status", sql`status IN ('draft', 'proposed', 'testing', 'available', 'disabled', 'archived')`),
 ]);
 
 export const capabilityEnablements = pgTable("capability_enablements", {
@@ -82,46 +88,16 @@ export const capabilityEnablements = pgTable("capability_enablements", {
 	uniqueIndex("uq_capability_enablements_space").using("btree", table.spaceId.asc().nullsLast(), table.capabilityKey.asc().nullsLast()).where(sql`((project_id IS NULL) AND (agent_id IS NULL) AND (user_id IS NULL))`),
 	uniqueIndex("uq_capability_enablements_user").using("btree", table.spaceId.asc().nullsLast(), table.userId.asc().nullsLast(), table.capabilityKey.asc().nullsLast()).where(sql`((user_id IS NOT NULL) AND (project_id IS NULL) AND (agent_id IS NULL))`),
 	foreignKey({
-			columns: [table.capabilityVersionId],
-			foreignColumns: [capabilityVersions.id],
-			name: "capability_enablements_capability_version_id_fkey"
+			columns: [table.capabilityVersionId, table.spaceId],
+			foreignColumns: [capabilityVersions.id, capabilityVersions.spaceId],
+			name: "capability_enablements_capability_version_fkey"
 		}),
+	foreignKey({ columns: [table.spaceId], foreignColumns: [spaces.id], name: "capability_enablements_space_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.projectId, table.spaceId], foreignColumns: [projects.id, projects.spaceId], name: "capability_enablements_project_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.agentId, table.spaceId], foreignColumns: [agents.id, agents.spaceId], name: "capability_enablements_agent_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.spaceId, table.userId], foreignColumns: [spaceMemberships.spaceId, spaceMemberships.userId], name: "capability_enablements_user_membership_fkey" }).onDelete("cascade"),
 	check("ck_capability_enablements_config_object", sql`jsonb_typeof(config_json) = 'object'::text`),
 	check("ck_capability_enablements_single_scope", sql`((((project_id IS NOT NULL))::integer + ((agent_id IS NOT NULL))::integer) + ((user_id IS NOT NULL))::integer) <= 1`),
-]);
-
-export const capabilityOverlays = pgTable("capability_overlays", {
-	id: varchar({ length: 36 }).primaryKey().notNull(),
-	capabilityKey: varchar("capability_key", { length: 128 }).notNull(),
-	scopeType: varchar("scope_type", { length: 32 }).notNull(),
-	scopeId: varchar("scope_id", { length: 128 }),
-	baseVersionId: varchar("base_version_id", { length: 36 }),
-	overlayType: varchar("overlay_type", { length: 64 }).notNull(),
-	patchJson: jsonb("patch_json").notNull(),
-	status: varchar({ length: 32 }).notNull(),
-	proposalId: varchar("proposal_id", { length: 36 }),
-	metadataJson: jsonb("metadata_json").notNull(),
-	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).notNull(),
-	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).notNull(),
-}, (table): PgTableExtraConfigValue[] => [
-	index("ix_capability_overlays_base_version_id").using("btree", table.baseVersionId.asc().nullsLast()),
-	index("ix_capability_overlays_capability_key").using("btree", table.capabilityKey.asc().nullsLast()),
-	index("ix_capability_overlays_key_scope_status").using("btree", table.capabilityKey.asc().nullsLast(), table.scopeType.asc().nullsLast(), table.scopeId.asc().nullsLast(), table.status.asc().nullsLast()),
-	index("ix_capability_overlays_overlay_type").using("btree", table.overlayType.asc().nullsLast()),
-	index("ix_capability_overlays_proposal_id").using("btree", table.proposalId.asc().nullsLast()),
-	index("ix_capability_overlays_scope_id").using("btree", table.scopeId.asc().nullsLast()),
-	index("ix_capability_overlays_scope_type").using("btree", table.scopeType.asc().nullsLast()),
-	index("ix_capability_overlays_status").using("btree", table.status.asc().nullsLast()),
-	foreignKey({
-			columns: [table.proposalId],
-			foreignColumns: [proposals.id],
-			name: "capability_overlays_proposal_id_fkey"
-		}),
-	foreignKey({
-			columns: [table.baseVersionId],
-			foreignColumns: [capabilityVersions.id],
-			name: "fk_capability_overlays_base_version_id"
-		}),
 ]);
 
 export const capabilityRuntimeBindings = pgTable("capability_runtime_bindings", {
@@ -145,6 +121,13 @@ export const capabilityRuntimeBindings = pgTable("capability_runtime_bindings", 
 			foreignColumns: [capabilityVersions.id],
 			name: "capability_runtime_bindings_capability_version_id_fkey"
 		}),
+	foreignKey({
+			columns: [table.capabilityVersionId, table.spaceId],
+			foreignColumns: [capabilityVersions.id, capabilityVersions.spaceId],
+			name: "capability_runtime_bindings_capability_version_space_fkey"
+		}),
+	foreignKey({ columns: [table.spaceId], foreignColumns: [spaces.id], name: "capability_runtime_bindings_space_fkey" }).onDelete("cascade"),
+	check("ck_capability_runtime_bindings_version_space", sql`capability_version_id IS NULL OR space_id IS NOT NULL`),
 	check("ck_capability_runtime_bindings_binding_object", sql`jsonb_typeof(binding_json) = 'object'::text`),
 	check("ck_capability_runtime_bindings_render_mode", sql`(render_mode)::text = ANY (ARRAY[('render_skill'::character varying)::text, ('inline_prompt'::character varying)::text, ('native_executor'::character varying)::text, ('mcp_tool'::character varying)::text])`),
 ]);

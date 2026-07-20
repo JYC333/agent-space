@@ -38,6 +38,30 @@ Load this file for any task that changes structure, models, APIs, or agent behav
 
 **B12** — External chat capture (e.g. conversation imports) must create activity records first, not active memory.
 
+## Relationship / Provenance Boundaries
+
+**B12A** — Route durable links by meaning and endpoint shape:
+
+| Link meaning | Canonical writer/table |
+|---|---|
+| Both endpoints are `space_objects` and the edge is part of the durable graph | Proposal-gated `object_relations` |
+| Curated KnowledgeItem/Claim citation or supporting evidence | `knowledge_item_sources` / `claim_sources`; citation lineage is not a canonical semantic graph edge |
+| Accepted asymmetric lineage with a non-object endpoint | `provenance_links`, or the owning domain's dedicated `*_sources` table |
+| MemoryEntry-to-MemoryEntry semantic relationship | `memory_relations`; its relation vocabulary is frozen and must not expand into general provenance |
+| Candidate/context Evidence association | `evidence_links`; it is not accepted provenance or the canonical object graph |
+| Working-note navigation | `note_links`; it is a UI link, not canonical graph authority |
+| Relation-card source citation | `relation_source_links`, with exactly one activity, SourceItem, Evidence, or external target |
+
+Do not dual-write the same semantic edge to multiple tables. Do not add another
+generic relationship/provenance link table; extend the canonical table or add
+a narrowly owned domain join table only when its lifecycle is genuinely
+different.
+
+**B12B** — Polymorphic link rows are not proof that an endpoint still exists.
+Every writer validates endpoint space/access through the owning module, and
+every reader must tolerate deleted or inaccessible endpoints without treating
+the link as canonical object existence.
+
 ---
 
 ## Execution Boundaries

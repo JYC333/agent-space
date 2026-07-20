@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Queryable, SpaceUserIdentity } from "../routeUtils/common";
 import { HttpError, dateIso, numberValue, objectValue, optionalString, requiredString } from "../routeUtils/common";
 import { canAccessProject } from "../memory/projectAccess";
-import { assertProjectWriter } from "./access";
+import { assertProjectWriter, lockActiveProjectForMutation } from "./access";
 import { contentDecisionFromDb } from "../access/contentAccessQuery";
 import { projectSourceBindingOut } from "../sources/sourceRepositoryMappers";
 import { PROJECT_SOURCE_BINDING_COLUMNS, type ProjectSourceBindingRow } from "../sources/sourceRepositoryRows";
@@ -49,6 +49,7 @@ export class ProjectSourceBindingRepository {
       throw new HttpError(404, "Source connection not found");
     }
     await assertProjectWriter(this.db, identity.spaceId, projectId, identity.userId);
+    await lockActiveProjectForMutation(this.db, identity.spaceId, projectId);
     const deliveryScope = this.resolveProjectSourceDeliveryScope(identity, connection, body);
     const bindingKey = optionalString(body.binding_key) ?? "default";
     const now = new Date().toISOString();
@@ -131,6 +132,7 @@ export class ProjectSourceBindingRepository {
     const row = await this.getProjectSourceBindingRow(identity.spaceId, bindingId);
     if (!row) throw new HttpError(404, "Project source binding not found");
     await assertProjectWriter(this.db, identity.spaceId, row.project_id, identity.userId);
+    await lockActiveProjectForMutation(this.db, identity.spaceId, row.project_id);
     const connection = await this.getConnectionRow(identity, row.source_channel_id);
     if (!connection) throw new HttpError(404, "Source connection not found");
     const status = optionalString(body.status) ?? row.status;
@@ -180,6 +182,7 @@ export class ProjectSourceBindingRepository {
     const row = await this.getProjectSourceBindingRow(identity.spaceId, bindingId);
     if (!row) throw new HttpError(404, "Project source binding not found");
     await assertProjectWriter(this.db, identity.spaceId, row.project_id, identity.userId);
+    await lockActiveProjectForMutation(this.db, identity.spaceId, row.project_id);
     const now = new Date().toISOString();
     await this.db.query(
       `UPDATE project_source_bindings
@@ -197,6 +200,7 @@ export class ProjectSourceBindingRepository {
     const row = await this.getProjectSourceBindingRow(identity.spaceId, bindingId);
     if (!row) throw new HttpError(404, "Project source binding not found");
     await assertProjectWriter(this.db, identity.spaceId, row.project_id, identity.userId);
+    await lockActiveProjectForMutation(this.db, identity.spaceId, row.project_id);
     return this.backfillProjectSourceBindingRow(identity, row);
   }
 

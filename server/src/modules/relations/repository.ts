@@ -3,6 +3,7 @@ import type { PoolClient } from "../../db/pool";
 import { countFromRow, HttpError, type Queryable } from "../routeUtils/common";
 import { contentOwnerFilterSql, contentReadSql } from "../access/contentAccessSql";
 import { contentOwnerFromDb } from "../access/contentAccessQuery";
+import { evidenceProvenanceReadableClause, sourceItemReadableClause } from "../sources/sourceItemAccess";
 
 export interface RelationPersonRow {
   object_id: string;
@@ -98,15 +99,6 @@ const ORGANIZATION_COLUMNS = `
 
 const IDENTITY_COLUMNS = `
   id, space_id, object_id, id_type, id_value, is_primary, confidence, source, created_at, updated_at
-`;
-
-const AFFILIATION_COLUMNS = `
-  id, space_id, person_object_id, organization_object_id, role, title, status,
-  start_date, end_date, confidence, source, object_relation_id, created_at, updated_at
-`;
-const AFFILIATION_COLUMNS_ALIASED = `
-  ra.id, ra.space_id, ra.person_object_id, ra.organization_object_id, ra.role, ra.title, ra.status,
-  ra.start_date, ra.end_date, ra.confidence, ra.source, ra.object_relation_id, ra.created_at, ra.updated_at
 `;
 
 const NOTE_COLUMNS = `
@@ -374,57 +366,6 @@ export class RelationsRepository {
     return result.rows;
   }
 
-  async createAffiliation(
-    client: PoolClient,
-    input: {
-      spaceId: string;
-      personObjectId: string;
-      organizationObjectId: string;
-      role: string | null;
-      title: string | null;
-      startDate: string | null;
-      endDate: string | null;
-      confidence: number | null;
-      source: string;
-      createdByUserId: string | null;
-    },
-  ): Promise<RelationAffiliationRow> {
-    const id = randomUUID();
-    const relationId = randomUUID();
-    const now = new Date().toISOString();
-    await client.query(
-      `INSERT INTO object_relations (
-         id, space_id, from_object_id, to_object_id, relation_type, status,
-         confidence, metadata_json, created_by_user_id, created_at, updated_at
-       ) VALUES ($1, $2, $3, $4, 'affiliated_with', 'active', $5, '{}'::jsonb, $6, $7, $7)`,
-      [relationId, input.spaceId, input.personObjectId, input.organizationObjectId, input.confidence, input.createdByUserId, now],
-    );
-    const result = await client.query<RelationAffiliationRow>(
-      `INSERT INTO relation_affiliations (
-         id, space_id, person_object_id, organization_object_id, role, title, status,
-         start_date, end_date, confidence, source, object_relation_id,
-         created_by_user_id, created_at, updated_at
-       ) VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $8, $9, $10, $11, $12, $13, $13)
-       RETURNING ${AFFILIATION_COLUMNS}`,
-      [
-        id,
-        input.spaceId,
-        input.personObjectId,
-        input.organizationObjectId,
-        input.role,
-        input.title,
-        input.startDate,
-        input.endDate,
-        input.confidence,
-        input.source,
-        relationId,
-        input.createdByUserId,
-        now,
-      ],
-    );
-    return result.rows[0]!;
-  }
-
   async listAffiliations(
     spaceId: string,
     userId: string,
@@ -432,56 +373,56 @@ export class RelationsRepository {
   ): Promise<RelationAffiliationRow[]> {
     const params: unknown[] = [spaceId, userId];
     const clauses = [
-      "ra.space_id = $1",
+      "orl.space_id = $1",
+      "orl.relation_type = 'affiliated_with'",
+      "orl.status = 'active'",
       contentReadSql("space_object", "person_so", "$2"),
       contentReadSql("space_object", "organization_so", "$2"),
     ];
     if (filters.personObjectId) {
       params.push(filters.personObjectId);
-      clauses.push(`ra.person_object_id = $${params.length}`);
+      clauses.push(`orl.from_object_id = $${params.length}`);
     }
     if (filters.organizationObjectId) {
       params.push(filters.organizationObjectId);
-      clauses.push(`ra.organization_object_id = $${params.length}`);
+      clauses.push(`orl.to_object_id = $${params.length}`);
     }
     const result = await this.db.query<RelationAffiliationRow>(
-      `SELECT ${AFFILIATION_COLUMNS_ALIASED}
-         FROM relation_affiliations ra
+      `SELECT orl.id, orl.space_id,
+              orl.from_object_id AS person_object_id,
+              orl.to_object_id AS organization_object_id,
+              orl.metadata_json->>'role' AS role,
+              orl.metadata_json->>'title' AS title,
+              orl.status,
+              (orl.metadata_json->>'start_date')::timestamptz AS start_date,
+              (orl.metadata_json->>'end_date')::timestamptz AS end_date,
+              orl.confidence,
+              COALESCE(orl.metadata_json->>'source', 'manual') AS source,
+              orl.id AS object_relation_id,
+              orl.created_at, orl.updated_at
+         FROM object_relations orl
          JOIN space_objects person_so
-           ON person_so.id = ra.person_object_id AND person_so.space_id = ra.space_id
+           ON person_so.id = orl.from_object_id AND person_so.space_id = orl.space_id
+         JOIN relation_people person
+           ON person.object_id = person_so.id AND person.space_id = person_so.space_id
          JOIN space_objects organization_so
-           ON organization_so.id = ra.organization_object_id AND organization_so.space_id = ra.space_id
+           ON organization_so.id = orl.to_object_id AND organization_so.space_id = orl.space_id
+         JOIN relation_organizations organization
+           ON organization.object_id = organization_so.id AND organization.space_id = organization_so.space_id
         WHERE ${clauses.join(" AND ")}
-        ORDER BY ra.start_date DESC NULLS LAST, ra.created_at DESC`,
+        ORDER BY (orl.metadata_json->>'start_date')::timestamptz DESC NULLS LAST, orl.created_at DESC`,
       params,
     );
     return result.rows;
   }
 
-  async endAffiliation(client: PoolClient, spaceId: string, affiliationId: string, endDate: string | null): Promise<RelationAffiliationRow | null> {
-    const now = new Date().toISOString();
-    const result = await client.query<RelationAffiliationRow>(
-      `UPDATE relation_affiliations
-          SET status = 'past', end_date = COALESCE($3, end_date, $4), updated_at = $4
-        WHERE id = $1 AND space_id = $2
-        RETURNING ${AFFILIATION_COLUMNS}`,
-      [affiliationId, spaceId, endDate, now],
-    );
-    const affiliation = result.rows[0] ?? null;
-    if (affiliation?.object_relation_id) {
-      await client.query(`UPDATE object_relations SET status = 'archived', updated_at = $2 WHERE id = $1`, [
-        affiliation.object_relation_id,
-        now,
-      ]);
-    }
-    return affiliation;
-  }
-
   async affiliationPersonObjectId(spaceId: string, affiliationId: string): Promise<string | null> {
     const result = await this.db.query<{ person_object_id: string }>(
-      `SELECT person_object_id
-         FROM relation_affiliations
+      `SELECT from_object_id AS person_object_id
+         FROM object_relations
         WHERE id = $1 AND space_id = $2
+          AND relation_type = 'affiliated_with'
+          AND status = 'active'
         LIMIT 1`,
       [affiliationId, spaceId],
     );
@@ -568,35 +509,69 @@ export class RelationsRepository {
     return result.rows.length > 0;
   }
 
-  async sourceItemExistsInSpace(spaceId: string, sourceItemId: string): Promise<boolean> {
+  async sourceItemExistsInSpace(spaceId: string, sourceItemId: string, userId: string): Promise<boolean> {
     const result = await this.db.query(
       `SELECT 1
-         FROM source_items
-        WHERE id = $1 AND space_id = $2 AND deleted_at IS NULL
+         FROM source_items si
+        WHERE si.id = $1 AND si.space_id = $2 AND si.deleted_at IS NULL
+          AND ${sourceItemReadableClause("si", "$3", false)}
         LIMIT 1`,
-      [sourceItemId, spaceId],
+      [sourceItemId, spaceId, userId],
     );
     return result.rows.length > 0;
   }
 
-  async evidenceExistsInSpace(spaceId: string, evidenceId: string): Promise<boolean> {
+  async evidenceExistsInSpace(spaceId: string, evidenceId: string, userId: string): Promise<boolean> {
     const result = await this.db.query(
       `SELECT 1
-         FROM extracted_evidence
-        WHERE id = $1 AND space_id = $2 AND deleted_at IS NULL
+         FROM extracted_evidence ee
+        WHERE ee.id = $1 AND ee.space_id = $2 AND ee.deleted_at IS NULL
+          AND ${contentReadSql("extracted_evidence", "ee", "$3")}
+          AND ${evidenceProvenanceReadableClause("ee", "$3")}
         LIMIT 1`,
-      [evidenceId, spaceId],
+      [evidenceId, spaceId, userId],
     );
     return result.rows.length > 0;
   }
 
-  async listSourceLinks(spaceId: string, objectId: string): Promise<RelationSourceLinkRow[]> {
+  async listSourceLinks(spaceId: string, objectId: string, userId: string): Promise<RelationSourceLinkRow[]> {
     const result = await this.db.query<RelationSourceLinkRow>(
       `SELECT ${SOURCE_LINK_COLUMNS}
-         FROM relation_source_links
-        WHERE space_id = $1 AND object_id = $2
+         FROM relation_source_links rsl
+        WHERE rsl.space_id = $1 AND rsl.object_id = $2
+          AND (
+            rsl.activity_id IS NULL
+            OR EXISTS (
+              SELECT 1 FROM activity_records link_activity
+               WHERE link_activity.id = rsl.activity_id
+                 AND link_activity.space_id = rsl.space_id
+                 AND ${contentReadSql("activity", "link_activity", "$3")}
+            )
+          )
+          AND (
+            rsl.source_item_id IS NULL
+            OR EXISTS (
+              SELECT 1 FROM source_items link_source
+               WHERE link_source.id = rsl.source_item_id
+                 AND link_source.space_id = rsl.space_id
+                 AND link_source.deleted_at IS NULL
+                 AND ${sourceItemReadableClause("link_source", "$3", false)}
+            )
+          )
+          AND (
+            rsl.evidence_id IS NULL
+            OR EXISTS (
+              SELECT 1
+                FROM extracted_evidence link_evidence
+               WHERE link_evidence.id = rsl.evidence_id
+                 AND link_evidence.space_id = rsl.space_id
+                 AND link_evidence.deleted_at IS NULL
+                 AND ${contentReadSql("extracted_evidence", "link_evidence", "$3")}
+                 AND ${evidenceProvenanceReadableClause("link_evidence", "$3")}
+            )
+          )
         ORDER BY created_at DESC`,
-      [spaceId, objectId],
+      [spaceId, objectId, userId],
     );
     return result.rows;
   }

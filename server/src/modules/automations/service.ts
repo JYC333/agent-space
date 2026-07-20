@@ -24,6 +24,7 @@ import { assertBudgetSourcesAvailable } from "../runs/budgetEnforcement";
 import { contractRouteHints, type RunBudgetSource } from "../runs/contractSnapshot";
 import { BUILTIN_RUNTIME_ADAPTER_SPECS, type RuntimeAdapterType } from "../runtimeAdapters";
 import { resolveEvolvableAssetVersion } from "../evolution/assetResolutionService";
+import { lockActiveProjectForMutation } from "../projects/access";
 import { WorkflowExecutionService } from "./workflowExecutionService";
 import { computeNextRunAt, InvalidScheduleError } from "./schedule";
 import {
@@ -1596,12 +1597,13 @@ function automationBudgetSource(auto: AutomationRow): RunBudgetSource {
 }
 
 async function lockAndCheckAutomationBudget(client: PoolClient, auto: AutomationRow): Promise<void> {
-  const source = automationBudgetSource(auto);
-  if (source.max_runs === null || source.max_runs === undefined) return;
+  if (auto.project_id) await lockActiveProjectForMutation(client, auto.space_id, auto.project_id);
   await client.query(
     `SELECT id FROM automations WHERE space_id = $1 AND id = $2 FOR UPDATE`,
     [auto.space_id, auto.id],
   );
+  const source = automationBudgetSource(auto);
+  if (source.max_runs === null || source.max_runs === undefined) return;
   await assertBudgetSourcesAvailable(client, auto.space_id, [source]);
 }
 

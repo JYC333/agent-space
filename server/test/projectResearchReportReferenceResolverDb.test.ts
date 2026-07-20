@@ -121,9 +121,12 @@ describe("research report evidence reference resolution (real Postgres)", () => 
     const evidenceId = randomUUID();
     await insertEvidence({ id: evidenceId, visibility: "private", owner: OTHER });
 
-    const result = await resolveResearchReportReferences(pool!, identity, referenceContent(evidenceId));
+    const result = await resolveResearchReportReferences(pool!, identity, {
+      findings: [{ references: [{ evidence_id: evidenceId, doi: "10.0000/private" }] }], sources: [], ideas: [],
+    });
     expect(result.resolved).toEqual([{ id: "ref-1", availability: "unavailable" }]);
     expect(JSON.stringify(result)).not.toContain("Key finding");
+    expect(JSON.stringify(result)).not.toContain("10.0000/private");
   });
 
   it("numbers references per article with lettered excerpts and resolves them grouped", async () => {
@@ -174,7 +177,7 @@ describe("research report evidence reference resolution (real Postgres)", () => 
     ]);
   });
 
-  it("falls back to evidence-level metadata when the source item is not readable", async () => {
+  it("does not fall back to evidence metadata when its source item is not readable", async () => {
     if (!available) return;
     const sourceItemId = randomUUID();
     const evidenceId = randomUUID();
@@ -182,9 +185,9 @@ describe("research report evidence reference resolution (real Postgres)", () => 
     await insertEvidence({ id: evidenceId, sourceItemId, sourceAuthor: "Grace" });
 
     const result = await resolveResearchReportReferences(pool!, identity, referenceContent(evidenceId));
-    expect(result.resolved).toEqual([{
-      id: "ref-1", availability: "available", title: "Key finding", authors: ["Grace"], year: null,
-    }]);
+    expect(result.resolved).toEqual([{ id: "ref-1", availability: "unavailable" }]);
+    expect(JSON.stringify(result)).not.toContain("Key finding");
+    expect(JSON.stringify(result)).not.toContain("Grace");
     expect(JSON.stringify(result)).not.toContain("Paper A");
   });
 });

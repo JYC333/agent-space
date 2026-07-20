@@ -212,6 +212,50 @@ describe("Claim proposal applier", () => {
       retrieval_projected: false,
     });
   });
+
+  it("rejects relation metadata that would break typed read models", async () => {
+    const db = new ClaimApplyFakeDb();
+
+    await expect(apply(db, proposal("object_relation_create", {
+      operation: "object_relation_create",
+      from_object_id: "project-1",
+      to_object_id: "task-1",
+      relation_type: "affiliated_with",
+      metadata: { start_date: "not-a-date" },
+    }))).rejects.toThrow(/invalid timestamp value/);
+
+    await expect(apply(db, proposal("object_relation_create", {
+      operation: "object_relation_create",
+      from_object_id: "project-1",
+      to_object_id: "task-1",
+      relation_type: "authored_by",
+      metadata: { author_position: "first", is_corresponding: "yes" },
+    }))).rejects.toThrow(/author_position must be a positive integer or null/);
+
+    expect(db.writes).toEqual([]);
+  });
+
+  it("rejects typed relations whose endpoint object types do not match", async () => {
+    const db = new ClaimApplyFakeDb();
+
+    await expect(apply(db, proposal("object_relation_create", {
+      operation: "object_relation_create",
+      from_object_id: "project-1",
+      to_object_id: "task-1",
+      relation_type: "affiliated_with",
+      metadata: {},
+    }))).rejects.toThrow(/person -> organization/);
+
+    await expect(apply(db, proposal("object_relation_create", {
+      operation: "object_relation_create",
+      from_object_id: "project-1",
+      to_object_id: "task-1",
+      relation_type: "authored_by",
+      metadata: { author_position: 1, is_corresponding: false },
+    }))).rejects.toThrow(/source -> person/);
+
+    expect(db.writes).toEqual([]);
+  });
 });
 
 async function apply(db: ClaimApplyFakeDb, p: ApplyProposal) {

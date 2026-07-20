@@ -628,7 +628,7 @@ describe("runs repositories against real PostgreSQL", () => {
     const now = new Date().toISOString();
     await pool!.query(
       `INSERT INTO tasks (id, space_id, title, status, created_at, updated_at)
-       VALUES ($1,'space-1','Task bridge target','open',$2,$2)`,
+       VALUES ($1,'space-1','Task bridge target','ready',$2,$2)`,
       [taskId, now],
     );
     await pool!.query(

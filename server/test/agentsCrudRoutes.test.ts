@@ -445,6 +445,12 @@ describe("agents CRUD routes", () => {
         if (norm.startsWith("SELECT version_label FROM agent_versions")) {
           return { rows: [{ version_label: "v1" }], rowCount: 1 };
         }
+        if (norm.startsWith("SELECT current_version_id FROM agents")) {
+          return { rows: [{ current_version_id: "agent-version-1" }], rowCount: 1 };
+        }
+        if (norm.includes("FROM agent_versions") && norm.includes("WHERE id = $1")) {
+          return { rows: [currentVersion], rowCount: 1 };
+        }
         if (norm.startsWith("INSERT INTO agent_versions")) {
           newVersionId = String(params[0]);
           return { rows: [{ id: newVersionId }], rowCount: 1 };

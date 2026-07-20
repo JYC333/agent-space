@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Queryable, SpaceUserIdentity } from "../routeUtils/common";
+import { lockActiveProjectForMutation } from "../projects/access";
 import { HttpError, withQueryableTransaction } from "../routeUtils/common";
 import { PgJobQueueRepository } from "../jobs/repository";
 import { PgRunRepository } from "../runs/repository";
@@ -40,6 +41,9 @@ export class WorkflowExecutionService {
     scheduledNodeIds: string[];
   }> {
     const graph = await materializePlanGraph(input.target.contentJson);
+    if (input.automation.project_id) {
+      await lockActiveProjectForMutation(input.db, input.identity.spaceId, input.automation.project_id);
+    }
     await lockAutomationBudget(input.db, input.automation, input.budgetSources);
     const now = new Date().toISOString();
     const executionId = randomUUID();
@@ -88,21 +92,39 @@ export class WorkflowExecutionService {
   }
 
   private async reconcileLocked(client: Queryable, spaceId: string, executionId: string, userId: string): Promise<Record<string, unknown>> {
+    const scope = await client.query<{ project_id: string | null }>(
+      `SELECT a.project_id
+         FROM workflow_executions e
+         JOIN automations a ON a.id=e.automation_id AND a.space_id=e.space_id
+        WHERE e.space_id=$1 AND e.id=$2`,
+      [spaceId, executionId],
+    );
+    if (!scope.rows[0]) throw new HttpError(404, "Workflow Execution not found");
+    if (scope.rows[0].project_id) {
+      // Aggregate lock must precede the execution lock so archive and
+      // reconciliation share the Project -> WorkflowExecution order.
+      await lockActiveProjectForMutation(client, spaceId, scope.rows[0].project_id);
+    }
     const result = await client.query<{
       id: string; automation_id: string; workflow_version_id: string; root_run_id: string | null;
       status: string; input_json: Record<string, unknown>; definition_json: unknown; resolution_trace_json: string[];
       budget_snapshot_json: unknown; project_id: string | null; workspace_id: string | null; agent_id: string;
       name: string; description: string | null; config_json: Record<string, unknown> | null;
+      automation_status: string;
     }>(
       `SELECT e.id, e.automation_id, e.workflow_version_id, e.root_run_id, e.status,
               e.input_json, e.definition_json, e.resolution_trace_json, e.budget_snapshot_json,
-              a.project_id, a.workspace_id, a.agent_id, a.name, a.description, a.config_json
+              a.project_id, a.workspace_id, a.agent_id, a.name, a.description, a.config_json,
+              a.status AS automation_status
          FROM workflow_executions e JOIN automations a ON a.id = e.automation_id AND a.space_id = e.space_id
         WHERE e.space_id = $1 AND e.id = $2 FOR UPDATE`,
       [spaceId, executionId],
     );
     const execution = result.rows[0];
     if (!execution) throw new HttpError(404, "Workflow Execution not found");
+    if (!['queued', 'running'].includes(execution.status) || execution.automation_status !== "active") {
+      return { workflow_execution_id: executionId, status: execution.status, scheduled_node_ids: [] };
+    }
     await projectLatestWorkflowNodeRuns(client, spaceId, executionId);
     const nodes = await client.query<{ id: string; status: string; depends_on: string[] }>(
       `SELECT n.id, n.status,
@@ -135,7 +157,7 @@ export class WorkflowExecutionService {
       name: execution.name,
       description: execution.description,
       trigger_type: "manual",
-      status: "active",
+      status: execution.automation_status,
       preflight_snapshot_json: null,
       config_json: execution.config_json,
       next_run_at: null,

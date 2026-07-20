@@ -179,9 +179,10 @@ export async function assertProjectWriter(
   spaceId: string,
   projectId: string,
   userId: string,
+  options: { allowArchived?: boolean } = {},
 ): Promise<void> {
-  const exists = await db.query<{ id: string }>(
-    `SELECT id
+  const exists = await db.query<{ id: string; status: string }>(
+    `SELECT id, status
        FROM projects
       WHERE id = $1
         AND space_id = $2
@@ -193,6 +194,30 @@ export async function assertProjectWriter(
   }
   if (!(await canWriteProject(db, spaceId, projectId, userId))) {
     throw new HttpError(403, "Requires project writer, project owner, or space owner/admin role");
+  }
+  if (!options.allowArchived && exists.rows[0]?.status !== "active") {
+    throw new HttpError(409, "Project is archived; reactivate it before making changes");
+  }
+}
+
+/**
+ * Aggregate write fence. Call inside the transaction that creates Project-owned
+ * work, after authorization, so archive and producers serialize on one row.
+ */
+export async function lockActiveProjectForMutation(
+  db: Queryable,
+  spaceId: string,
+  projectId: string,
+): Promise<void> {
+  const project = await db.query<{ status: string }>(
+    `SELECT status FROM projects
+      WHERE id=$1 AND space_id=$2 AND deleted_at IS NULL
+      FOR UPDATE`,
+    [projectId, spaceId],
+  );
+  if (!project.rows[0]) throw new HttpError(404, "Project not found");
+  if (project.rows[0].status !== "active") {
+    throw new HttpError(409, "Project is archived; reactivate it before making changes");
   }
 }
 

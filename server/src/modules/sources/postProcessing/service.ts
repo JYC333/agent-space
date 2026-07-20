@@ -2028,22 +2028,25 @@ async function ensureSourcePostProcessingAgent(pool: Pool, spaceId: string): Pro
   return { id: created.id };
 }
 
-async function refreshSourcePostProcessingAgentPrompt(
+export async function refreshSourcePostProcessingAgentPrompt(
   pool: Pool,
   spaceId: string,
   agentId: string,
 ): Promise<void> {
-  await pool.query(
-    `UPDATE agent_versions av
-        SET system_prompt = $3
-       FROM agents a
-      WHERE a.space_id = $1
-        AND a.id = $2
-        AND a.agent_kind = 'system_source_post_processor'
-        AND a.current_version_id = av.id
-        AND av.system_prompt IS DISTINCT FROM $3`,
-    [spaceId, agentId, sourcePostProcessingAgentSystemPrompt()],
+  const managed = await pool.query<{ agent_kind: string }>(
+    `SELECT agent_kind
+       FROM agents
+      WHERE space_id = $1 AND id = $2 AND status = 'active'
+      LIMIT 1`,
+    [spaceId, agentId],
   );
+  if (managed.rows[0]?.agent_kind !== "system_source_post_processor") return;
+  await new PgAgentRepository(pool).publishSystemManagedPrompt({
+    spaceId,
+    agentId,
+    agentKind: "system_source_post_processor",
+    systemPrompt: sourcePostProcessingAgentSystemPrompt(),
+  });
 }
 
 function sourcePostProcessingAgentSystemPrompt(): string {

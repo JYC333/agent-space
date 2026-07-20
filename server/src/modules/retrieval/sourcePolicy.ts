@@ -99,7 +99,7 @@ export async function loadSourceConnectionIdsForTargets(
         AND ev.deleted_at IS NULL
        LEFT JOIN source_items ii_ev
          ON ii_ev.space_id = ev.space_id
-        AND ii_ev.id = ev.source_item_id
+        AND ii_ev.id = COALESCE(ev.source_item_id, ev.origin_source_item_id)
         AND ii_ev.deleted_at IS NULL
        LEFT JOIN source_snapshots ss_ev
          ON ss_ev.space_id = ev.space_id

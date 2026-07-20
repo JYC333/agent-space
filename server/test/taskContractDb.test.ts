@@ -92,4 +92,21 @@ describe("task contract persistence (real Postgres)", () => {
     expect(updated.metadata_json).toEqual({ source: "ui", revision: 2 });
     expect(updated.tags).toEqual(["contract", "updated"]);
   });
+
+  it("rejects task statuses outside the canonical lifecycle vocabulary", async () => {
+    if (!available || !pool) return;
+    const repository = new PgTaskRepository(pool);
+    await expect(repository.createTask(identity, { title: "Ghost state", status: "waiting_for_review" })).rejects.toMatchObject({
+      statusCode: 422,
+    });
+
+    const now = new Date().toISOString();
+    await expect(
+      pool.query(
+        `INSERT INTO tasks (id, space_id, title, status, created_at, updated_at)
+         VALUES ($1,$2,'Ghost state','waiting_for_review',$3,$3)`,
+        [randomUUID(), SPACE, now],
+      ),
+    ).rejects.toMatchObject({ code: "23514" });
+  });
 });

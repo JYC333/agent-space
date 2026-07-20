@@ -12,7 +12,9 @@ import { evolutionTargets } from "./evolution";
 // existing `evolution` foundation (evolution_targets/signals/strategy_assets/
 // experiences) rather than duplicating it.
 
-const ASSET_TYPES = sql`ARRAY[('prompt_template'::character varying)::text, ('workflow_template'::character varying)::text, ('capability'::character varying)::text, ('agent_config'::character varying)::text, ('runtime_skill_binding'::character varying)::text, ('source_post_processing_rule'::character varying)::text]`;
+// 'capability' is intentionally excluded: capability_versions is the sole
+// version authority for capabilities, to avoid a second source of truth.
+const ASSET_TYPES = sql`ARRAY[('prompt_template'::character varying)::text, ('workflow_template'::character varying)::text, ('agent_config'::character varying)::text, ('runtime_skill_binding'::character varying)::text, ('source_post_processing_rule'::character varying)::text]`;
 const SCOPE_TYPES = sql`ARRAY[('system'::character varying)::text, ('space'::character varying)::text, ('project'::character varying)::text, ('user'::character varying)::text, ('agent'::character varying)::text]`;
 
 export const evolvableAssets = pgTable("evolvable_assets", {
@@ -84,7 +86,7 @@ export const evolvableAssetVersions = pgTable("evolvable_asset_versions", {
 			columns: [table.assetId],
 			foreignColumns: [evolvableAssets.id],
 			name: "evolvable_asset_versions_asset_id_fkey"
-		}).onDelete("cascade"),
+		}),
 	foreignKey({
 			columns: [table.spaceId],
 			foreignColumns: [spaces.id],

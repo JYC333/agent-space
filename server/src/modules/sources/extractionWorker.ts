@@ -38,6 +38,7 @@ import { inheritContentAccessGrants } from "../access/contentAccessInheritance";
 import { sourceConnectorRegistry, type SourceConnectorHandler } from "./catalog/sourceConnectorRegistry";
 import { ProjectResearchOrchestrator } from "../projectResearch/orchestrator";
 import { CustomSourceCredentialService } from "./customSources/customSourceCredentialService";
+import { upsertCanonicalEvidence } from "./evidenceIdentity";
 
 interface ExtractionJobRow {
   id: string;
@@ -791,47 +792,35 @@ export class SourceExtractionWorker {
         WHERE space_id = $1 AND id = $2`,
       [job.space_id, item.id, artifactId, contentHash, now, rawArtifactId],
     );
-    const evidenceId = randomUUID();
-    await this.db.query(
-      `INSERT INTO extracted_evidence (
-         id, space_id, source_item_id, source_object_type, source_object_id,
-         extraction_job_id, source_snapshot_id, evidence_type, title, content_excerpt,
-         content_hash, artifact_id, source_uri, source_title,
-         extraction_method, trust_level, confidence, status, metadata_json, created_at, updated_at,
-         owner_user_id, visibility, access_level
-       ) VALUES (
-         $1, $2, $3, 'source_item', $4,
-         $5, $6, 'document', $7, $8,
-         $9, $10, $11, $12,
-         $13, 'normal', 0.7, 'candidate', '{}'::jsonb, $14, $15,
-         (SELECT owner_user_id FROM source_items WHERE space_id = $16::varchar AND id = $17::varchar),
-         (SELECT visibility FROM source_items WHERE space_id = $18::varchar AND id = $19::varchar),
-         (SELECT access_level FROM source_items WHERE space_id = $20::varchar AND id = $21::varchar)
-      )`,
-      [
-        evidenceId,
-        job.space_id,
-        item.id,
-        item.id,
-        job.id,
-        sourceSnapshotId,
-        item.title ?? "Extracted text",
-        text.slice(0, 4000),
-        contentHash,
-        artifactId,
-        item.source_uri,
-        item.title,
-        evidenceExtractionMethod,
-        now,
-        now,
-        job.space_id,
-        item.id,
-        job.space_id,
-        item.id,
-        job.space_id,
-        item.id,
-      ],
+    const access = await this.db.query<{ owner_user_id: string | null; access_level: string }>(
+      `SELECT owner_user_id, access_level FROM source_items WHERE space_id=$1 AND id=$2`,
+      [job.space_id, item.id],
     );
+    if (!access.rows[0]) throw new Error("Evidence source item disappeared");
+    const evidenceId = await upsertCanonicalEvidence(this.db, {
+      spaceId: job.space_id,
+      ownerUserId: access.rows[0].owner_user_id,
+      visibility: item.visibility,
+      accessLevel: access.rows[0].access_level,
+      sourceItemId: item.id,
+      extractionJobId: job.id,
+      sourceSnapshotId,
+      sourceObjectType: "source_item",
+      sourceObjectId: item.id,
+      evidenceType: "document",
+      title: item.title ?? "Extracted text",
+      contentExcerpt: text.slice(0, 4000),
+      contentHash,
+      artifactId,
+      sourceUri: item.source_uri,
+      sourceTitle: item.title,
+      trustLevel: "normal",
+      extractionMethod: evidenceExtractionMethod,
+      confidence: 0.7,
+      status: "candidate",
+      metadata: {},
+      observedAt: now,
+    });
     if (item.visibility === "selected_users") await inheritContentAccessGrants(this.db, {
       spaceId: job.space_id,
       sourceResourceType: "source_item",
@@ -979,34 +968,26 @@ export class SourceExtractionWorker {
       targetResourceId: itemId,
       inheritedAt: now,
     });
-    const evidenceId = randomUUID();
-    await this.db.query(
-      `INSERT INTO extracted_evidence (
-         id, space_id, source_item_id, source_object_type, source_object_id,
-         evidence_type, title, content_excerpt, extraction_method, trust_level,
-         confidence, status, metadata_json, created_at, updated_at,
-         owner_user_id, visibility, access_level
-       ) VALUES (
-         $1, $2, $3, $4, $5,
-         $6, $7, $8, 'internal_normalization', 'normal',
-         0.8, 'candidate', '{}'::jsonb, $9, $9,
-         $10, $11, $12
-       )`,
-      [
-        evidenceId,
-        job.space_id,
-        itemId,
-        sourceType,
-        sourceId,
-        payload.evidenceType,
-        payload.title,
-        payload.excerpt,
-        now,
-        payload.ownerUserId,
-        payload.visibility,
-        payload.accessLevel,
-      ],
-    );
+    const evidenceId = await upsertCanonicalEvidence(this.db, {
+      spaceId: job.space_id,
+      ownerUserId: payload.ownerUserId,
+      visibility: payload.visibility,
+      accessLevel: payload.accessLevel,
+      sourceItemId: itemId,
+      extractionJobId: job.id,
+      sourceObjectType: sourceType,
+      sourceObjectId: sourceId,
+      evidenceType: payload.evidenceType,
+      title: payload.title,
+      contentExcerpt: payload.excerpt,
+      contentHash: sha256(payload.excerpt),
+      trustLevel: "normal",
+      extractionMethod: "internal_normalization",
+      confidence: 0.8,
+      status: "candidate",
+      metadata: {},
+      observedAt: now,
+    });
     if (payload.visibility === "selected_users") await inheritContentAccessGrants(this.db, {
       spaceId: job.space_id,
       sourceResourceType: "source_item",

@@ -55,6 +55,27 @@ Each step adds trust validation and human review opportunity.
 | `archived_at` | datetime (nullable) | Set when archived |
 | `deleted_at` | datetime (nullable) | Soft-delete marker |
 
+Archiving is a centralized, transactional lifecycle operation. It preserves
+historical Tasks, Runs, Artifacts, Memory, and Corpus content, while pausing
+active Automations, Project Source bindings, and Source post-processing rules,
+pausing the active research workflow, cancelling non-terminal managed research
+operations, and cancelling queued/running Workflow Executions while blocking
+all non-terminal nodes, cancelling their queued/running Jobs and child Runs,
+and terminalizing the coordinator Run so no reconciler can continue the
+archived Project or leave a permanent `waiting_for_dependency` record.
+Reactivating a Project does not automatically resume any of those components;
+each must be reviewed and resumed through its owning module.
+Project-scoped mutation gates reject writes while the Project is archived;
+only the centralized Project lifecycle update/archive path may act on an
+archived row. This prevents delayed proposals, retries, or schedulers from
+restarting work after the archive transaction commits.
+Work producers serialize with archive by locking the Project row in the same
+transaction that creates a managed operation, automation execution, Source
+post-processing run, Source binding, or research workflow/stage. Initial-intake
+draft saves, research-question changes, and incremental-trigger consumption use
+the same fence. The aggregate lock order is Project, then Operation/Automation,
+then Research Workflow.
+
 ### ProjectWorkspace (association)
 
 | Field | Type | Notes |
@@ -134,9 +155,17 @@ A project source binding whose `extraction_policy_json.profile_key` is
 paper object (`space_objects` + `sources` + `academic_papers`, deduped per
 space by DOI, arXiv, OpenAlex, and Semantic Scholar ids) before the normal Project Corpus sync runs — see
 `materializeAcademicPaperFromSourceItem`
-(`server/src/modules/academic/paperMaterializer.ts`). Once
-`source_items.source_object_id` is set, the object is picked up by the
-existing corpus/graph sync with no preset-specific wiring.
+(`server/src/modules/academic/paperMaterializer.ts`). Once a
+`source_item_references` row links the SourceItem to the Reference object, the
+object is picked up by the existing corpus/graph sync with no preset-specific
+wiring. The materializer performs its dedupe read and all Reference writes in
+one transaction and serializes overlapping DOI/provider identities with
+transaction-scoped advisory locks. Those provider identifiers are stored in
+trimmed lowercase canonical form; the schema rejects non-canonical direct
+writes, including empty values and surrounding whitespace, so equivalent
+variants cannot bypass the identity lock or uniqueness checks. Project routing
+isolates this best-effort materialization behind a savepoint, so a rejected
+paper cannot leave the surrounding Source transaction unusable.
 
 The `project_research` module (`/api/v1/projects/{id}/research/*`, see below)
 adds a project-owned research workflow foundation on top of Project Corpus:
@@ -413,12 +442,54 @@ operation state. The reconciler observes those tables and applies the next
 legal transition through the research state machine, so a lost hook cannot
 stall an operation.
 
+For managed research, `project_operations.progress_json.current_stage` is the
+canonical stage. `project_research_workflows.current_stage` and
+`project_operation_steps` are transactionally regenerated projections, never
+independent transition authorities. Each operation state write increments the
+integer `project_operations.version`; the state machine supplies the locked
+row's expected version so a stale writer fails rather than overwriting newer
+state. Only one active/waiting-review research operation may exist per workflow.
+Creation and initial activation of a managed research operation are one
+transaction, so a uniqueness loser cannot leave a draft for the reconciler.
+Successful Source post-processing runs carry `research_reconciled_at` as the
+durable recovery marker consumed by level-triggered reconciliation. Extracted
+Evidence deduplicates non-null content hashes per `(space_id, source_item_id)`
+regardless of extraction method, so crash/retry or alternate extractors cannot
+create two identities for the same source content. Each distinct extractor,
+semantic type, run, artifact, and metadata payload is retained as a deduplicated
+`metadata_json.evidence_observations` entry on that canonical Evidence row.
+That observation array is system-owned provenance: ordinary Evidence metadata
+updates preserve it even if a client supplies a field with the same name.
+Human Reader Annotation Evidence remains annotation-owned and ACL-scoped
+(`source_object_type = reader_annotation`); it deliberately leaves
+`source_item_id` null and therefore never merges private annotation provenance
+into the canonical Source content identity. When its document is Source-backed,
+`origin_source_item_id` (and, for snapshot annotations, `source_snapshot_id`)
+retains an explicit access-policy origin. Evidence reads, context selection,
+retrieval revalidation, and provenance policy resolution enforce that origin's
+Source gate without adding it to the content-identity uniqueness key. Summary
+proposal import-target checks, Project Corpus admission/reads, and research
+artifact materialization revalidate the same origin instead of trusting the
+Evidence row's visibility alone.
+SourceItem/Evidence `summary` access is metadata-only: reader DTOs redact
+excerpts, URIs, hashes, metadata JSON, storage/index references, and Artifact
+links. Content-bearing durable or model-facing derivations (Activity/Source
+summaries, Context selection, post-processing, literature matrices, and
+critiques) require effective `full` access to every Source, Evidence, and
+Snapshot input. Their intermediate Artifacts are owner-private; sharing is a
+separate explicit publication/review decision and never follows from Project
+membership or Space oversight alone.
+
 Research workflows may contain multiple Source Monitors for independent
 scanning. The workflow stores channel ids, binding ids, query fingerprints,
 per-channel coverage, and pending incremental channel events; it does not store
 a provider-specific query as its source of truth. Monitor configuration remains
 owned by Sources, while the workflow only records which monitors are included
 and how their collected corpus participates in the research lifecycle.
+Pending incremental Source items are a durable workflow queue. Both append and
+consume paths lock Project then Workflow in one transaction; consumption only
+removes the queue key in the transaction that merges the items into an existing
+operation or creates their new managed operation.
 
 ### project_id on durable objects
 
@@ -449,6 +520,16 @@ source_connection_id, binding_key)`.
 `project_corpus_items` is Project-owned. It reconciles Sources output into the
 project's working corpus:
 
+- Corpus upsert/update and automated Source reconciliation serialize on the
+  Project row. This is both the archive write fence and the identity fence:
+  target resolution occurs after the lock, so a concurrent SourceItem→Reference
+  bridge cannot create parallel source-target and object-target rows. Background
+  routing only selects active Projects, and explicit sync rejects a Project that
+  becomes archived while waiting for the lock. Multi-Project routing computes
+  and sorts the exact active affected-Project set before any write, then scopes
+  every Corpus sync to that set; stale links from archived Projects neither
+  expand the lock set nor block an active Project's reconciliation;
+
 - `status` is link lifecycle (`active` / `archived`);
 - `triage_status` is the project-level judgement (`new`, `relevant`, `maybe`,
   `excluded`, `included`);
@@ -458,7 +539,9 @@ project's working corpus:
   `last_reviewed_at` once this is true — AI screening only suggests, the user
   confirms;
 - `read_status` is project-level reading progress (`unread`, `skimmed`,
-  `read`, `discussed`).
+  `read`, `discussed`). It is shared team review state for the Project, not a
+  particular member's reading history. Personal progress is owned solely by
+  `source_item_user_states.read_status`; the two fields are never synchronized.
 
 When the corpus item's object is a materialized academic paper (see above),
 the corpus DTO's `object.academic` field carries joined `academic_papers` +
@@ -640,6 +723,8 @@ space.
 Runs, Jobs, Proposals, Artifacts, source bindings, and history-import plans.
 It never executes or blocks those objects. Ordered optional steps provide a
 product progress view; status and `progress_json` are projected from validated,
-same-space links when an operation is read. Public routes live under
+same-space links when an operation is read. `version` starts at 1 and increments
+on every operation projection/state mutation; managed research updates require
+the version read under the state-machine row lock. Public routes live under
 `/api/v1/projects/{projectId}/operations`; cancellation changes only the
 operation grouping record and never cancels linked execution objects.

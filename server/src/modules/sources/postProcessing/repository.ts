@@ -5,9 +5,10 @@ import { HttpError, page, countFromRow, type Queryable, withQueryableTransaction
 import { PgSchedulerTaskStore, type SchedulerTaskRow } from "../../scheduler/taskStore";
 import { computeNextRunAt, InvalidScheduleError } from "../../automations/schedule";
 import type { SourceConnectionRow, SourceItemRow, EvidenceRow } from "../sourceRepositoryRows";
-import { ITEM_COLUMNS, EVIDENCE_COLUMNS } from "../sourceRepositoryRows";
+import { ITEM_COLUMNS, evidenceColumnsForAlias } from "../sourceRepositoryRows";
 import { inheritContentAccessGrants } from "../../access/contentAccessInheritance";
-import { contentReadSql } from "../../access/contentAccessSql";
+import { contentAccessLevelSql, contentReadSql } from "../../access/contentAccessSql";
+import { contentResourceDefinition } from "../../access/contentAccessRegistry";
 import {
   reindexExtractedEvidenceAndParentForRetrieval,
 } from "../retrievalIndexing";
@@ -16,6 +17,12 @@ import {
   normalizeSourceConnectionReadGovernance,
 } from "../sourceConsent";
 import { SOURCE_POST_PROCESSING_LIMITS } from "./config";
+import { upsertCanonicalEvidence } from "../evidenceIdentity";
+import { lockActiveProjectForMutation } from "../../projects/access";
+import { evidenceProvenanceReadableClause, sourceItemReadableClause } from "../sourceItemAccess";
+
+const POST_PROCESSING_EVIDENCE_ACCESS = contentResourceDefinition("extracted_evidence")!;
+const POST_PROCESSING_SOURCE_ACCESS = contentResourceDefinition("source_item")!;
 
 export const SOURCE_POST_PROCESSING_EVENT_JOB_TYPE = "source_post_processing_event";
 export const SOURCE_POST_PROCESSING_TASK_TYPE = "source_post_processing_rule";
@@ -948,6 +955,7 @@ export class PgSourcePostProcessingRepository {
     createdByUserId: string;
   }): Promise<SourcePostProcessingRuleOut> {
     const write = async (db: Queryable) => {
+      if (input.projectId) await lockActiveProjectForMutation(db, input.spaceId, input.projectId);
       const id = randomUUID();
       const now = new Date().toISOString();
       const result = await db.query<SourcePostProcessingRuleRow>(
@@ -998,8 +1006,28 @@ export class PgSourcePostProcessingRepository {
       actions?: SourcePostProcessingActions;
     },
   ): Promise<SourcePostProcessingRuleOut> {
+    return withQueryableTransaction(this.db, (db) =>
+      new PgSourcePostProcessingRepository(db).updateRuleLocked(spaceId, ruleId, patch));
+  }
+
+  private async updateRuleLocked(
+    spaceId: string,
+    ruleId: string,
+    patch: {
+      name?: string;
+      agentId?: string;
+      projectId?: string | null;
+      status?: SourcePostProcessingRuleStatus;
+      triggerType?: SourcePostProcessingTriggerType;
+      triggerConfig?: SourcePostProcessingTriggerConfig;
+      inputConfig?: SourcePostProcessingInputConfig;
+      actions?: SourcePostProcessingActions;
+    },
+  ): Promise<SourcePostProcessingRuleOut> {
     const existing = await this.getRule(spaceId, ruleId);
     if (!existing) throw new HttpError(404, "Post-processing rule not found");
+    const projectIds = [...new Set([existing.project_id, patch.projectId].filter((id): id is string => Boolean(id)))].sort();
+    for (const projectId of projectIds) await lockActiveProjectForMutation(this.db, spaceId, projectId);
     const now = new Date().toISOString();
     const setProject = patch.projectId !== undefined;
     const result = await this.db.query<SourcePostProcessingRuleRow>(
@@ -1037,6 +1065,25 @@ export class PgSourcePostProcessingRepository {
   }
 
   async createRun(input: {
+    spaceId: string;
+    ruleId: string | null;
+    sourceChannelId: string;
+    agentId: string;
+    projectId: string | null;
+    triggeredByUserId: string | null;
+    triggerType: SourcePostProcessingTriggerType;
+    inputItemIds: string[];
+    inputEvidenceIds: string[];
+    cursorBefore: SourceWatermark | null;
+    cursorAfter: SourceWatermark | null;
+  }): Promise<SourcePostProcessingRunRow> {
+    return withQueryableTransaction(this.db, async (db) => {
+      if (input.projectId) await lockActiveProjectForMutation(db, input.spaceId, input.projectId);
+      return new PgSourcePostProcessingRepository(db).createRunLocked(input);
+    });
+  }
+
+  private async createRunLocked(input: {
     spaceId: string;
     ruleId: string | null;
     sourceChannelId: string;
@@ -1550,64 +1597,34 @@ export class PgSourcePostProcessingRepository {
     createdByRunId: string | null;
     metadata: Record<string, unknown>;
   }): Promise<string> {
-    const id = randomUUID();
     const now = new Date().toISOString();
-    const inserted = await this.db.query<{ id: string }>(
-      `INSERT INTO extracted_evidence (
-         id, space_id, owner_user_id, visibility, access_level,
-         source_item_id, extraction_job_id, source_snapshot_id,
-         source_object_type, source_object_id, evidence_type, title,
-         content_excerpt, content_hash, artifact_id, source_uri, source_title,
-         source_author, occurred_at, trust_level, extraction_method, confidence,
-         status, metadata_json, created_by_user_id, created_by_agent_id,
-         created_by_run_id, created_at, updated_at
-       ) VALUES (
-         $1, $2, $3, $4, $5,
-         $6, NULL, NULL,
-         $7, $8, 'summary', $9,
-         $10, $11, $12, $13, $14,
-         $15, $16::timestamptz, 'normal', 'source_post_processing', 0.7,
-         'candidate', $17::jsonb, $18, $19,
-         $20, $21, $21
-       )
-       ON CONFLICT (space_id, source_item_id, extraction_method, content_hash)
-         WHERE content_hash IS NOT NULL
-       DO NOTHING
-       RETURNING id`,
-      [
-        id,
-        input.spaceId,
-        input.item.owner_user_id,
-        input.item.visibility,
-        input.item.access_level,
-        input.item.id,
-        input.item.source_object_type,
-        input.item.source_object_id,
-        input.title,
-        input.content.slice(0, 4000),
-        sha256(input.content),
-        input.artifactId,
-        input.item.source_uri,
-        input.item.title,
-        input.item.author,
-        timestampString(input.item.occurred_at),
-        JSON.stringify(input.metadata),
-        input.createdByUserId,
-        input.createdByAgentId,
-        input.createdByRunId,
-        now,
-      ],
-    );
-    const evidenceId = inserted.rows[0]?.id ?? (await this.db.query<{ id: string }>(
-      `SELECT id FROM extracted_evidence
-        WHERE space_id=$1 AND source_item_id=$2
-          AND extraction_method='source_post_processing' AND content_hash=$3
-        ORDER BY created_at ASC, id ASC
-        LIMIT 1`,
-      [input.spaceId, input.item.id, sha256(input.content)],
-    )).rows[0]?.id;
-    if (!evidenceId) throw new Error("Evidence insert conflicted but the existing row could not be read");
-    if (!inserted.rows[0]) return evidenceId;
+    const evidenceId = await upsertCanonicalEvidence(this.db, {
+      spaceId: input.spaceId,
+      ownerUserId: input.item.owner_user_id,
+      visibility: input.item.visibility,
+      accessLevel: input.item.access_level,
+      sourceItemId: input.item.id,
+      sourceObjectType: input.item.source_object_type,
+      sourceObjectId: input.item.source_object_id,
+      evidenceType: "summary",
+      title: input.title,
+      contentExcerpt: input.content.slice(0, 4000),
+      contentHash: sha256(input.content),
+      artifactId: input.artifactId,
+      sourceUri: input.item.source_uri,
+      sourceTitle: input.item.title,
+      sourceAuthor: input.item.author,
+      occurredAt: timestampString(input.item.occurred_at),
+      trustLevel: "normal",
+      extractionMethod: "source_post_processing",
+      confidence: 0.7,
+      status: "candidate",
+      metadata: input.metadata,
+      createdByUserId: input.createdByUserId,
+      createdByAgentId: input.createdByAgentId,
+      createdByRunId: input.createdByRunId,
+      observedAt: now,
+    });
     if (input.item.visibility === "selected_users") {
       await inheritContentAccessGrants(this.db, {
         spaceId: input.spaceId,
@@ -1939,6 +1956,7 @@ export class PgSourcePostProcessingRepository {
     const { clauses, params } = itemWindowWhere(input);
     params.push(input.viewerUserId);
     clauses.push(contentReadSql("source_item", "source_items", `$${params.length}`));
+    clauses.push(`${contentAccessLevelSql({ definition: POST_PROCESSING_SOURCE_ACCESS, alias: "source_items", userExpr: `$${params.length}` })} = 'full'`);
     params.push(input.inputConfig.item_limit);
     const result = await this.db.query<SourceItemRow>(
       `SELECT ${ITEM_COLUMNS}
@@ -1969,6 +1987,7 @@ export class PgSourcePostProcessingRepository {
           AND deleted_at IS NULL
           AND ${channelItemLinkExistsSql("source_items.space_id", "source_items.id", "$2")}
           AND ${contentReadSql("source_item", "source_items", "$4")}
+          AND ${contentAccessLevelSql({ definition: POST_PROCESSING_SOURCE_ACCESS, alias: "source_items", userExpr: "$4" })} = 'full'
         ORDER BY created_at ASC, id ASC`,
       [spaceId, sourceChannelId, itemIds, viewerUserId],
     );
@@ -1985,17 +2004,40 @@ export class PgSourcePostProcessingRepository {
     viewerUserId: string,
   ): Promise<EvidenceRow[]> {
     const result = await this.db.query<EvidenceRow>(
-      `SELECT ${EVIDENCE_COLUMNS}
+      `SELECT ${evidenceColumnsForAlias("ee")}
          FROM extracted_evidence ee
          LEFT JOIN source_items ii
            ON ii.space_id = ee.space_id
-          AND ii.id = ee.source_item_id
+          AND ii.id = COALESCE(ee.source_item_id,ee.origin_source_item_id)
         WHERE ee.space_id = $1
           AND ee.id::text = ANY($2::text[])
           AND ee.deleted_at IS NULL
-          AND (ee.source_item_id IS NULL OR ${channelItemLinkExistsSql("ee.space_id", "ee.source_item_id", "$3")})
+          AND (
+            (
+              COALESCE(ee.source_item_id,ee.origin_source_item_id) IS NOT NULL
+              AND ${channelItemLinkExistsSql("ee.space_id", "COALESCE(ee.source_item_id,ee.origin_source_item_id)", "$3")}
+            )
+            OR (
+              COALESCE(ee.source_item_id,ee.origin_source_item_id) IS NULL
+              AND ee.source_snapshot_id IS NOT NULL
+              AND EXISTS (
+                SELECT 1
+                  FROM source_snapshots evidence_snapshot
+                  JOIN source_channels evidence_channel
+                    ON evidence_channel.space_id=evidence_snapshot.space_id
+                   AND evidence_channel.source_connection_id=evidence_snapshot.connection_id
+                 WHERE evidence_snapshot.space_id=ee.space_id
+                   AND evidence_snapshot.id=ee.source_snapshot_id
+                   AND evidence_channel.id=$3
+                   AND evidence_channel.status <> 'archived'
+              )
+            )
+          )
           AND ${contentReadSql("extracted_evidence", "ee", "$4")}
-          AND (ii.id IS NULL OR ${contentReadSql("source_item", "ii", "$4")})
+          AND ${contentAccessLevelSql({ definition: POST_PROCESSING_EVIDENCE_ACCESS, alias: "ee", userExpr: "$4" })} = 'full'
+          AND (ii.id IS NULL OR ${sourceItemReadableClause("ii", "$4", false)})
+          AND (ii.id IS NULL OR ${contentAccessLevelSql({ definition: POST_PROCESSING_SOURCE_ACCESS, alias: "ii", userExpr: "$4" })} = 'full')
+          AND ${evidenceProvenanceReadableClause("ee", "$4", true)}
         ORDER BY ee.created_at ASC, ee.id ASC`,
       [spaceId, evidenceIds, sourceChannelId, viewerUserId],
     );
@@ -2007,13 +2049,22 @@ export class PgSourcePostProcessingRepository {
 
   private async findEvidenceForItems(spaceId: string, itemIds: string[], viewerUserId: string): Promise<EvidenceRow[]> {
     const result = await this.db.query<EvidenceRow>(
-      `SELECT ${EVIDENCE_COLUMNS}
-         FROM extracted_evidence
-        WHERE space_id = $1
-          AND source_item_id::text = ANY($2::text[])
-          AND deleted_at IS NULL
-          AND ${contentReadSql("extracted_evidence", "extracted_evidence", "$3")}
-        ORDER BY created_at ASC, id ASC`,
+      `SELECT ${evidenceColumnsForAlias("ee")}
+         FROM extracted_evidence ee
+         LEFT JOIN source_items ii
+           ON ii.space_id=ee.space_id
+          AND ii.id=COALESCE(ee.source_item_id,ee.origin_source_item_id)
+          AND ii.deleted_at IS NULL
+        WHERE ee.space_id = $1
+          AND COALESCE(ee.source_item_id,ee.origin_source_item_id)::text = ANY($2::text[])
+          AND ee.deleted_at IS NULL
+          AND ${contentReadSql("extracted_evidence", "ee", "$3")}
+          AND ${contentAccessLevelSql({ definition: POST_PROCESSING_EVIDENCE_ACCESS, alias: "ee", userExpr: "$3" })} = 'full'
+          AND ii.id IS NOT NULL
+          AND ${sourceItemReadableClause("ii", "$3", false)}
+          AND ${contentAccessLevelSql({ definition: POST_PROCESSING_SOURCE_ACCESS, alias: "ii", userExpr: "$3" })} = 'full'
+          AND ${evidenceProvenanceReadableClause("ee", "$3", true)}
+        ORDER BY ee.created_at ASC, ee.id ASC`,
       [spaceId, itemIds, viewerUserId],
     );
     return result.rows;

@@ -67,10 +67,15 @@ export const memoryEntries = pgTable("memory_entries", {
 	index("ix_memory_entries_visibility").using("btree", table.visibility.asc().nullsLast()),
 	index("ix_memory_entries_workspace_id").using("btree", table.workspaceId.asc().nullsLast()),
 	foreignKey({
+			columns: [table.projectId],
+			foreignColumns: [projects.id],
+			name: "memory_entries_project_id_delete_fkey"
+		}).onDelete("set null"),
+	foreignKey({
 			columns: [table.projectId, table.spaceId],
 			foreignColumns: [projects.id, projects.spaceId],
 			name: "fk_memory_entries_project_id_projects"
-		}).onDelete("set null"),
+		}),
 	foreignKey({
 			columns: [table.rootMemoryId],
 			foreignColumns: [table.id],

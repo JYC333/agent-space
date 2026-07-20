@@ -179,13 +179,12 @@ describe("Academic paper materialization from arXiv source items (real Postgres)
     const routeResult = await materializeProjectSourceItemLinks(pool!, { spaceId: SPACE, sourceItemId: itemId });
     expect(routeResult).toMatchObject({ created: 1, reactivated: 0, archived: 0 });
 
-    const item = await pool!.query<{ source_object_id: string; source_object_type: string }>(
-      `SELECT source_object_id, source_object_type FROM source_items WHERE id = $1`,
+    const item = await pool!.query<{ reference_object_id: string }>(
+      `SELECT reference_object_id FROM source_item_references WHERE source_item_id = $1`,
       [itemId],
     );
-    const objectId = item.rows[0]!.source_object_id;
-    expect(item.rows[0]!.source_object_id).toBe(objectId);
-    expect(item.rows[0]!.source_object_type).toBe("source");
+    const objectId = item.rows[0]!.reference_object_id;
+    expect(objectId).toBeTruthy();
 
     const paper = await pool!.query<{ arxiv_id: string; doi: string | null; paper_type: string }>(
       `SELECT arxiv_id, doi, paper_type FROM academic_papers WHERE object_id = $1`,
@@ -237,6 +236,78 @@ describe("Academic paper materialization from arXiv source items (real Postgres)
     expect(count.rows[0]!.total).toBe(1);
   });
 
+  it("atomically dedupes concurrent SourceItems for the same academic identity", async () => {
+    if (!available) return;
+    const firstItemId = await seedArxivItem("2401.00030", "10.1000/concurrent-materialize");
+    const secondItemId = await seedArxivItem("2401.00031", "10.1000/concurrent-materialize");
+
+    const [first, second] = await Promise.all([
+      materializeAcademicPaperFromSourceItem(pool!, { spaceId: SPACE, sourceItemId: firstItemId }),
+      materializeAcademicPaperFromSourceItem(pool!, { spaceId: SPACE, sourceItemId: secondItemId }),
+    ]);
+
+    expect(second!.objectId).toBe(first!.objectId);
+    expect([first!.created, second!.created].sort()).toEqual([false, true]);
+    const counts = await pool!.query<{
+      objects: number;
+      sources: number;
+      papers: number;
+      references: number;
+    }>(
+      `SELECT
+         (SELECT count(*)::int FROM space_objects WHERE space_id=$1 AND object_type='source') AS objects,
+         (SELECT count(*)::int FROM sources WHERE space_id=$1) AS sources,
+         (SELECT count(*)::int FROM academic_papers WHERE space_id=$1 AND doi='10.1000/concurrent-materialize') AS papers,
+         (SELECT count(*)::int FROM source_item_references WHERE space_id=$1 AND reference_object_id=$2) AS references`,
+      [SPACE, first!.objectId],
+    );
+    expect(counts.rows[0]).toEqual({ objects: 1, sources: 1, papers: 1, references: 2 });
+  });
+
+  it("canonicalizes case variants before locking and persisting academic identities", async () => {
+    if (!available) return;
+    const firstItemId = await seedProviderItem({
+      academic_provider: "openalex",
+      openalex_id: "W-CASE-1",
+      doi: "10.1000/Case-Sensitive",
+      source_url: "https://openalex.org/W-CASE-1",
+    }, "Case variant one");
+    const secondItemId = await seedProviderItem({
+      academic_provider: "semantic_scholar",
+      semantic_scholar_id: "S2-CASE-2",
+      doi: "10.1000/case-sensitive",
+      source_url: "https://semanticscholar.org/paper/S2-CASE-2",
+    }, "Case variant two");
+
+    const [first, second] = await Promise.all([
+      materializeAcademicPaperFromSourceItem(pool!, { spaceId: SPACE, sourceItemId: firstItemId }),
+      materializeAcademicPaperFromSourceItem(pool!, { spaceId: SPACE, sourceItemId: secondItemId }),
+    ]);
+
+    expect(second!.objectId).toBe(first!.objectId);
+    const rows = await pool!.query<{ doi: string; openalex_id: string | null; semantic_scholar_id: string | null }>(
+      `SELECT doi, openalex_id, semantic_scholar_id FROM academic_papers WHERE object_id=$1`,
+      [first!.objectId],
+    );
+    expect(rows.rows).toEqual([{
+      doi: "10.1000/case-sensitive",
+      openalex_id: "w-case-1",
+      semantic_scholar_id: "s2-case-2",
+    }]);
+    await expect(pool!.query(
+      `UPDATE academic_papers SET doi='10.1000/UPPER' WHERE object_id=$1`,
+      [first!.objectId],
+    )).rejects.toMatchObject({ constraint: "ck_academic_papers_canonical_identity" });
+    await expect(pool!.query(
+      `UPDATE academic_papers SET doi=' 10.1000/case-sensitive ' WHERE object_id=$1`,
+      [first!.objectId],
+    )).rejects.toMatchObject({ constraint: "ck_academic_papers_canonical_identity" });
+    await expect(pool!.query(
+      `UPDATE academic_papers SET doi='' WHERE object_id=$1`,
+      [first!.objectId],
+    )).rejects.toMatchObject({ constraint: "ck_academic_papers_canonical_identity" });
+  });
+
   it("materializes OpenAlex and links a Semantic Scholar record with the same DOI to one paper", async () => {
     if (!available) return;
     const openAlexItem = await seedProviderItem({ academic_provider: "openalex", openalex_id: "W123", doi: "10.1000/cross-provider", authors: ["Ada"], published_at: "2026-01-01", venue: "Journal", paper_type: "article", cited_by_count: 7, reference_count: 11, source_url: "https://openalex.org/W123" }, "Cross-provider paper");
@@ -245,8 +316,169 @@ describe("Academic paper materialization from arXiv source items (real Postgres)
     const second = await materializeAcademicPaperFromSourceItem(pool!, { spaceId: SPACE, sourceItemId: semanticItem });
     expect(second).toEqual({ objectId: first!.objectId, created: false });
     const row = await pool!.query(`SELECT openalex_id,semantic_scholar_id,cited_by_count,reference_count FROM academic_papers WHERE object_id=$1`, [first!.objectId]);
-    expect(row.rows[0]).toMatchObject({ openalex_id: "W123", semantic_scholar_id: "s2-123", cited_by_count: 7, reference_count: 11 });
+    expect(row.rows[0]).toMatchObject({ openalex_id: "w123", semantic_scholar_id: "s2-123", cited_by_count: 7, reference_count: 11 });
     expect((await pool!.query(`SELECT count(*)::int AS total FROM academic_papers WHERE doi='10.1000/cross-provider'`)).rows[0].total).toBe(1);
+  });
+
+  it("promotes a source-target corpus row in place when the SourceItem gains a Reference", async () => {
+    if (!available) return;
+    await seedBinding(null);
+    const itemId = await seedArxivItem("2401.00005");
+    await materializeProjectSourceItemLinks(pool!, { spaceId: SPACE, sourceItemId: itemId });
+    await syncProjectCorpusForSourceItem(pool!, { spaceId: SPACE, sourceItemId: itemId });
+
+    const before = await pool!.query<{ id: string }>(
+      `UPDATE project_corpus_items
+          SET triage_status = 'included', triage_confirmed_by_user = true, read_status = 'discussed'
+        WHERE project_id = $1 AND source_item_id = $2
+        RETURNING id`,
+      [PROJECT, itemId],
+    );
+    expect(before.rows).toHaveLength(1);
+
+    const materialized = await materializeAcademicPaperFromSourceItem(pool!, { spaceId: SPACE, sourceItemId: itemId });
+    await syncProjectCorpusForSourceItem(pool!, { spaceId: SPACE, sourceItemId: itemId });
+
+    const after = await pool!.query<{
+      id: string;
+      object_id: string;
+      source_item_id: string | null;
+      triage_status: string;
+      triage_confirmed_by_user: boolean;
+      read_status: string;
+    }>(
+      `SELECT id, object_id, source_item_id, triage_status, triage_confirmed_by_user, read_status
+         FROM project_corpus_items
+        WHERE project_id = $1`,
+      [PROJECT],
+    );
+    expect(after.rows).toEqual([
+      expect.objectContaining({
+        id: before.rows[0]!.id,
+        object_id: materialized!.objectId,
+        source_item_id: null,
+        triage_status: "included",
+        triage_confirmed_by_user: true,
+        read_status: "discussed",
+      }),
+    ]);
+  });
+
+  it("merges human corpus state when a canonical Reference row already exists", async () => {
+    if (!available) return;
+    await seedBinding(null);
+    const itemId = await seedArxivItem("2401.00007");
+    await materializeProjectSourceItemLinks(pool!, { spaceId: SPACE, sourceItemId: itemId });
+    await syncProjectCorpusForSourceItem(pool!, { spaceId: SPACE, sourceItemId: itemId });
+    await pool!.query(
+      `UPDATE project_corpus_items
+          SET triage_status = 'included', triage_confirmed_by_user = true, read_status = 'discussed'
+        WHERE project_id = $1 AND source_item_id = $2`,
+      [PROJECT, itemId],
+    );
+
+    const materialized = await materializeAcademicPaperFromSourceItem(pool!, { spaceId: SPACE, sourceItemId: itemId });
+    const canonicalId = randomUUID();
+    const now = new Date().toISOString();
+    await pool!.query(
+      `INSERT INTO project_corpus_items (
+         id, space_id, project_id, object_id, role, status, triage_status, read_status,
+         metadata_json, created_at, updated_at
+       ) VALUES ($1,$2,$3,$4,'candidate','active','new','skimmed','{}'::jsonb,$5,$5)`,
+      [canonicalId, SPACE, PROJECT, materialized!.objectId, now],
+    );
+
+    await syncProjectCorpusForSourceItem(pool!, { spaceId: SPACE, sourceItemId: itemId });
+    const after = await pool!.query<{
+      id: string;
+      source_item_id: string | null;
+      triage_status: string;
+      triage_confirmed_by_user: boolean;
+      read_status: string;
+    }>(
+      `SELECT id, source_item_id, triage_status, triage_confirmed_by_user, read_status
+         FROM project_corpus_items WHERE project_id = $1`,
+      [PROJECT],
+    );
+    expect(after.rows).toEqual([
+      expect.objectContaining({
+        id: canonicalId,
+        source_item_id: null,
+        triage_status: "included",
+        triage_confirmed_by_user: true,
+        read_status: "discussed",
+      }),
+    ]);
+  });
+
+  it("serializes concurrent promotions of two SourceItems to one Reference", async () => {
+    if (!available) return;
+    await seedBinding(null);
+    const firstItemId = await seedArxivItem("2401.00008", "10.1000/concurrent");
+    const secondItemId = await seedArxivItem("2401.00009", "10.1000/concurrent");
+    await materializeProjectSourceItemLinks(pool!, { spaceId: SPACE, sourceItemId: firstItemId });
+    await materializeProjectSourceItemLinks(pool!, { spaceId: SPACE, sourceItemId: secondItemId });
+    await syncProjectCorpusForSourceItem(pool!, { spaceId: SPACE, sourceItemId: firstItemId });
+    await syncProjectCorpusForSourceItem(pool!, { spaceId: SPACE, sourceItemId: secondItemId });
+    const first = await materializeAcademicPaperFromSourceItem(pool!, { spaceId: SPACE, sourceItemId: firstItemId });
+    const second = await materializeAcademicPaperFromSourceItem(pool!, { spaceId: SPACE, sourceItemId: secondItemId });
+    expect(second!.objectId).toBe(first!.objectId);
+
+    await Promise.all([
+      syncProjectCorpusForSourceItem(pool!, { spaceId: SPACE, sourceItemId: firstItemId }),
+      syncProjectCorpusForSourceItem(pool!, { spaceId: SPACE, sourceItemId: secondItemId }),
+    ]);
+
+    const corpus = await pool!.query<{ id: string; object_id: string; source_item_id: string | null }>(
+      `SELECT id, object_id, source_item_id FROM project_corpus_items WHERE project_id = $1`,
+      [PROJECT],
+    );
+    expect(corpus.rows).toEqual([
+      expect.objectContaining({ object_id: first!.objectId, source_item_id: null }),
+    ]);
+    const provenance = await pool!.query<{ source_item_id: string }>(
+      `SELECT source_item_id FROM project_corpus_item_sources WHERE corpus_item_id = $1 ORDER BY source_item_id`,
+      [corpus.rows[0]!.id],
+    );
+    expect(provenance.rows.map((row) => row.source_item_id).sort()).toEqual([firstItemId, secondItemId].sort());
+  });
+
+  it("enforces Reference bridge type and exact-one corpus targets in PostgreSQL", async () => {
+    if (!available) return;
+    const itemId = await seedArxivItem("2401.00006");
+    const now = new Date().toISOString();
+    const noteId = randomUUID();
+    await pool!.query(
+      `INSERT INTO space_objects (id, space_id, object_type, title, status, created_at, updated_at)
+       VALUES ($1,$2,'note','Not a Reference','active',$3,$3)`,
+      [noteId, SPACE, now],
+    );
+
+    await expect(
+      pool!.query(
+        `INSERT INTO source_item_references (source_item_id, space_id, reference_object_id, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$4)`,
+        [itemId, SPACE, noteId, now],
+      ),
+    ).rejects.toMatchObject({ code: "23503" });
+
+    const materialized = await materializeAcademicPaperFromSourceItem(pool!, { spaceId: SPACE, sourceItemId: itemId });
+    await expect(
+      pool!.query(
+        `INSERT INTO project_corpus_items (
+           id, space_id, project_id, object_id, source_item_id, role, status, triage_status, read_status,
+           metadata_json, created_at, updated_at
+         ) VALUES ($1,$2,$3,$4,$5,'candidate','active','new','unread','{}'::jsonb,$6,$6)`,
+        [randomUUID(), SPACE, PROJECT, materialized!.objectId, itemId, now],
+      ),
+    ).rejects.toMatchObject({ code: "23514" });
+
+    await expect(
+      pool!.query(
+        `UPDATE source_items SET source_object_type = 'source', source_object_id = $2 WHERE id = $1`,
+        [itemId, materialized!.objectId],
+      ),
+    ).rejects.toMatchObject({ code: "23514" });
   });
 
   it("returns null for a non-arXiv source item", async () => {

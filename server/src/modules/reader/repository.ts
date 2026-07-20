@@ -14,6 +14,7 @@ import { inheritContentAccessGrants } from "../access/contentAccessInheritance";
 import { insertProposalRow } from "../proposals/reviewPackets";
 import { canAccessProject } from "../memory/projectAccess";
 import { parseStructuredReaderContent, type ReaderPmDoc } from "../sources/contentParsing";
+import { upsertCanonicalEvidence } from "../sources/evidenceIdentity";
 
 /**
  * Normalizes raw plainText into the canonical form used by the Tiptap reader:
@@ -1307,45 +1308,54 @@ export class PgReaderActionRepository {
     const title = optionalString(body.title) || ann.quote_text.slice(0, 80);
     const now = new Date().toISOString();
     const contentHash = sha256Hex(ann.quote_text);
+    const originSourceItemId = doc?.documentType === "source_item"
+      ? doc.documentId
+      : doc?.documentType === "source_snapshot"
+        ? (await this.db.query<{ source_item_id: string | null }>(
+            `SELECT source_item_id FROM source_snapshots WHERE space_id=$1 AND id=$2`,
+            [identity.spaceId, doc.documentId],
+          )).rows[0]?.source_item_id ?? null
+        : null;
 
     interface EvidenceRow {
       id: string; title: string; status: string; evidence_type: string;
       source_item_id: string | null; source_object_type: string; source_object_id: string;
     }
+    const metadata = {
+      annotation_id: ann.id,
+      annotation_type: ann.annotation_type,
+      document_type: doc?.documentType ?? null,
+      document_id: doc?.documentId ?? null,
+    };
+    const evidenceId = await upsertCanonicalEvidence(this.db, {
+      spaceId: identity.spaceId,
+      ownerUserId: ann.owner_user_id,
+      visibility: ann.visibility,
+      accessLevel: ann.access_level,
+      // Annotation-derived Evidence is an ACL-bearing human observation, not
+      // canonical Source content. Keeping it outside the SourceItem/hash
+      // collision domain prevents private annotation provenance from being
+      // merged into a differently visible canonical Evidence row.
+      sourceItemId: null,
+      originSourceItemId,
+      sourceSnapshotId: doc?.documentType === "source_snapshot" ? doc.documentId : null,
+      sourceObjectType: "reader_annotation",
+      sourceObjectId: annotationId,
+      evidenceType: "excerpt",
+      title,
+      contentExcerpt: ann.quote_text,
+      contentHash,
+      trustLevel: "normal",
+      extractionMethod: "manual",
+      status: "candidate",
+      metadata,
+      createdByUserId: identity.userId,
+      observedAt: now,
+    });
     const r = await this.db.query<EvidenceRow>(
-      `INSERT INTO extracted_evidence (
-         id, space_id, owner_user_id, visibility, access_level,
-         source_item_id, source_object_type, source_object_id,
-         evidence_type, title, content_excerpt, content_hash,
-         trust_level, extraction_method, status, metadata_json,
-         created_by_user_id, created_at, updated_at
-       ) VALUES (
-         $1, $2, $3, $4, $5,
-         $6, 'reader_annotation', $7,
-         'excerpt', $8, $9, $10,
-         'normal', 'manual', 'candidate', $11::jsonb,
-         $12, $13, $13
-       ) RETURNING id, title, status, evidence_type, source_item_id, source_object_type, source_object_id`,
-      [
-        randomUUID(),
-        identity.spaceId,
-        ann.owner_user_id,
-        ann.visibility,
-        ann.access_level,
-        ann.document_type === "source_item" ? ann.document_id : null,
-        annotationId,
-        title,
-        ann.quote_text,
-        contentHash,
-        JSON.stringify({
-          annotation_id: ann.id,
-          annotation_type: ann.annotation_type,
-          document_type: doc?.documentType ?? null,
-          document_id: doc?.documentId ?? null,
-        }),
-        identity.userId,
-        now,
-      ],
+      `SELECT id, title, status, evidence_type, source_item_id, source_object_type, source_object_id
+         FROM extracted_evidence WHERE space_id=$1 AND id=$2`,
+      [identity.spaceId, evidenceId],
     );
     if (ann.visibility === "selected_users") {
       await inheritContentAccessGrants(this.db, {

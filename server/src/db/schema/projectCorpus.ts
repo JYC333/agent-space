@@ -24,6 +24,8 @@ export const projectCorpusItems = pgTable("project_corpus_items", {
 	// triage_status once this is true: AI screening may suggest decisions,
 	// but the user confirms durable inclusion/exclusion.
 	triageConfirmedByUser: boolean("triage_confirmed_by_user").default(false).notNull(),
+	// Project/team review progress. Personal reading progress is owned solely by
+	// source_item_user_states and is never synchronized with this field.
 	readStatus: varchar("read_status", { length: 32 }).default("unread").notNull(),
 	relevance: varchar({ length: 32 }),
 	confidence: doublePrecision(),
@@ -46,17 +48,17 @@ export const projectCorpusItems = pgTable("project_corpus_items", {
 	index("ix_project_corpus_items_source_item_id").using("btree", table.sourceItemId.asc().nullsLast()),
 	index("ix_project_corpus_items_space_id").using("btree", table.spaceId.asc().nullsLast()),
 	index("ix_project_corpus_items_status").using("btree", table.status.asc().nullsLast()),
-	uniqueIndex("uq_project_corpus_items_project_evidence").using("btree", table.spaceId.asc().nullsLast(), table.projectId.asc().nullsLast(), table.evidenceId.asc().nullsLast()).where(sql`evidence_id IS NOT NULL AND object_id IS NULL`),
+	uniqueIndex("uq_project_corpus_items_project_evidence").using("btree", table.spaceId.asc().nullsLast(), table.projectId.asc().nullsLast(), table.evidenceId.asc().nullsLast()).where(sql`evidence_id IS NOT NULL`),
 	uniqueIndex("uq_project_corpus_items_project_object").using("btree", table.spaceId.asc().nullsLast(), table.projectId.asc().nullsLast(), table.objectId.asc().nullsLast()).where(sql`object_id IS NOT NULL`),
-	uniqueIndex("uq_project_corpus_items_project_source_item").using("btree", table.spaceId.asc().nullsLast(), table.projectId.asc().nullsLast(), table.sourceItemId.asc().nullsLast()).where(sql`source_item_id IS NOT NULL AND object_id IS NULL AND evidence_id IS NULL`),
+	uniqueIndex("uq_project_corpus_items_project_source_item").using("btree", table.spaceId.asc().nullsLast(), table.projectId.asc().nullsLast(), table.sourceItemId.asc().nullsLast()).where(sql`source_item_id IS NOT NULL`),
 	foreignKey({
 			columns: [table.addedByUserId],
 			foreignColumns: [users.id],
 			name: "project_corpus_items_added_by_user_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.evidenceId],
-			foreignColumns: [extractedEvidence.id],
+			columns: [table.evidenceId, table.spaceId],
+			foreignColumns: [extractedEvidence.id, extractedEvidence.spaceId],
 			name: "project_corpus_items_evidence_id_fkey"
 		}),
 	foreignKey({
@@ -70,18 +72,18 @@ export const projectCorpusItems = pgTable("project_corpus_items", {
 			name: "project_corpus_items_project_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.sourceConnectionId],
-			foreignColumns: [sourceConnections.id],
+			columns: [table.sourceConnectionId, table.spaceId],
+			foreignColumns: [sourceConnections.id, sourceConnections.spaceId],
 			name: "project_corpus_items_source_connection_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.sourceDecisionId],
-			foreignColumns: [sourcePostProcessingItemDecisions.id],
+			columns: [table.sourceDecisionId, table.spaceId],
+			foreignColumns: [sourcePostProcessingItemDecisions.id, sourcePostProcessingItemDecisions.spaceId],
 			name: "project_corpus_items_source_decision_id_fkey"
 		}),
 	foreignKey({
-			columns: [table.sourceItemId],
-			foreignColumns: [sourceItems.id],
+			columns: [table.sourceItemId, table.spaceId],
+			foreignColumns: [sourceItems.id, sourceItems.spaceId],
 			name: "project_corpus_items_source_item_id_fkey"
 		}),
 	foreignKey({
@@ -90,12 +92,38 @@ export const projectCorpusItems = pgTable("project_corpus_items", {
 			name: "project_corpus_items_space_id_fkey"
 		}),
 	unique("uq_project_corpus_items_id_space_id").on(table.id, table.spaceId),
+	unique("uq_project_corpus_items_id_project_space").on(table.id, table.projectId, table.spaceId),
 	check("ck_project_corpus_items_confidence", sql`(confidence IS NULL) OR ((confidence >= (0)::double precision) AND (confidence <= (1)::double precision))`),
-	check("ck_project_corpus_items_has_target", sql`object_id IS NOT NULL OR source_item_id IS NOT NULL OR evidence_id IS NOT NULL`),
+	check("ck_project_corpus_items_exactly_one_target", sql`num_nonnulls(object_id, source_item_id, evidence_id) = 1`),
 	check("ck_project_corpus_items_metadata_object", sql`jsonb_typeof(metadata_json) = 'object'::text`),
 	check("ck_project_corpus_items_read_status", sql`(read_status)::text = ANY (ARRAY[('unread'::character varying)::text, ('skimmed'::character varying)::text, ('read'::character varying)::text, ('discussed'::character varying)::text])`),
 	check("ck_project_corpus_items_relevance", sql`(relevance IS NULL) OR ((relevance)::text = ANY (ARRAY[('relevant'::character varying)::text, ('maybe'::character varying)::text, ('not_relevant'::character varying)::text]))`),
 	check("ck_project_corpus_items_role", sql`(role)::text = ANY (ARRAY[('candidate'::character varying)::text, ('reference'::character varying)::text, ('primary'::character varying)::text, ('related'::character varying)::text, ('background'::character varying)::text])`),
 	check("ck_project_corpus_items_status", sql`(status)::text = ANY (ARRAY[('active'::character varying)::text, ('archived'::character varying)::text])`),
 	check("ck_project_corpus_items_triage_status", sql`(triage_status)::text = ANY (ARRAY[('new'::character varying)::text, ('relevant'::character varying)::text, ('maybe'::character varying)::text, ('excluded'::character varying)::text, ('included'::character varying)::text])`),
+]);
+
+// Explicit project-authorized provenance. Corpus target identity remains
+// exactly-one; this relation records only SourceItems that actually produced
+// or were admitted into this project's Corpus item.
+export const projectCorpusItemSources = pgTable("project_corpus_item_sources", {
+	id: varchar({ length: 36 }).primaryKey().notNull(),
+	corpusItemId: varchar("corpus_item_id", { length: 36 }).notNull(),
+	spaceId: varchar("space_id", { length: 36 }).notNull(),
+	projectId: varchar("project_id", { length: 36 }).notNull(),
+	sourceItemId: varchar("source_item_id", { length: 36 }).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
+}, (table): PgTableExtraConfigValue[] => [
+	index("ix_project_corpus_item_sources_source").using("btree", table.spaceId.asc().nullsLast(), table.projectId.asc().nullsLast(), table.sourceItemId.asc().nullsLast()),
+	unique("uq_project_corpus_item_sources_item_source").on(table.corpusItemId, table.sourceItemId),
+	foreignKey({
+		columns: [table.corpusItemId, table.projectId, table.spaceId],
+		foreignColumns: [projectCorpusItems.id, projectCorpusItems.projectId, projectCorpusItems.spaceId],
+		name: "project_corpus_item_sources_corpus_item_fkey",
+	}).onDelete("cascade"),
+	foreignKey({
+		columns: [table.sourceItemId, table.spaceId],
+		foreignColumns: [sourceItems.id, sourceItems.spaceId],
+		name: "project_corpus_item_sources_source_item_fkey",
+	}),
 ]);

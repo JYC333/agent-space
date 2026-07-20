@@ -121,12 +121,13 @@ export class ProjectResearchIntegrityMonitorService {
       for (const row of evidence.rows) if (row.source_item_id) sourceRefs.add(row.source_item_id);
     }
     const mapped = sourceRefs.size > 0 ? await this.db.query<{ source_item_id: string; doi: string | null }>(
-      `SELECT DISTINCT pci.source_item_id,
+      `SELECT DISTINCT pcis.source_item_id,
               COALESCE(ap.doi,NULLIF(si.metadata_json->>'doi','')) AS doi
-         FROM project_corpus_items pci
-         JOIN source_items si ON si.id=pci.source_item_id AND si.space_id=pci.space_id
+         FROM project_corpus_item_sources pcis
+         JOIN project_corpus_items pci ON pci.id=pcis.corpus_item_id AND pci.space_id=pcis.space_id
+         JOIN source_items si ON si.id=pcis.source_item_id AND si.space_id=pcis.space_id AND si.deleted_at IS NULL
          LEFT JOIN academic_papers ap ON ap.object_id=pci.object_id AND ap.space_id=pci.space_id
-        WHERE pci.space_id=$1 AND pci.project_id=$2 AND pci.source_item_id=ANY($3::text[])`,
+        WHERE pcis.space_id=$1 AND pcis.project_id=$2 AND pcis.source_item_id=ANY($3::text[])`,
       [spaceId, projectId, [...sourceRefs]],
     ) : { rows: [] as Array<{ source_item_id: string; doi: string | null }> };
     const values = new Map<string, string | null>();

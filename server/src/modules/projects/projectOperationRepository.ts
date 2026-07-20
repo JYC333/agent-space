@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Queryable, SpaceUserIdentity } from "../routeUtils/common";
 import { HttpError, objectValue, optionalString, requiredString, withQueryableTransaction } from "../routeUtils/common";
-import { assertProjectReadable, assertProjectWriter } from "./access";
+import { assertProjectReadable, assertProjectWriter, lockActiveProjectForMutation } from "./access";
 
 const KINDS = new Set(["source_setup", "source_backfill", "research", "custom"]);
 
@@ -45,6 +45,50 @@ export class ProjectOperationRepository {
     return withQueryableTransaction(this.db, (db) => new ProjectOperationRepository(db).createLocked(identity, projectId, body));
   }
 
+  async createManagedResearch(
+    identity: SpaceUserIdentity,
+    projectId: string,
+    input: {
+      title: string;
+      intentText: string;
+      status: "active" | "waiting_review";
+      progress: Record<string, unknown>;
+      steps: Array<{ title: string; status: "pending" | "active" | "blocked" | "done" | "skipped"; detail?: Record<string, unknown> }>;
+    },
+  ): Promise<{ id: string }> {
+    await assertProjectWriter(this.db, identity.spaceId, projectId, identity.userId);
+    return withQueryableTransaction(this.db, async (db) => {
+      await lockActiveProjectForMutation(db, identity.spaceId, projectId);
+      const now = new Date().toISOString();
+      const id = randomUUID();
+      try {
+        await db.query(
+          `INSERT INTO project_operations (
+             id, space_id, project_id, kind, title, intent_text, status,
+             created_by_user_id, progress_json, created_at, updated_at
+           ) VALUES ($1,$2,$3,'research',$4,$5,$6,$7,$8::jsonb,$9,$9)`,
+          [id, identity.spaceId, projectId, input.title, input.intentText, input.status,
+            identity.userId, JSON.stringify({ projection_mode: "managed", ...input.progress }), now],
+        );
+        for (let seq = 0; seq < input.steps.length; seq += 1) {
+          const step = input.steps[seq]!;
+          await db.query(
+            `INSERT INTO project_operation_steps
+               (id, operation_id, space_id, seq, title, status, detail_json)
+             VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)`,
+            [randomUUID(), id, identity.spaceId, seq, step.title, step.status, JSON.stringify(step.detail ?? {})],
+          );
+        }
+      } catch (error) {
+        if (isUniqueViolation(error, "uq_project_operations_active_research_workflow")) {
+          throw new HttpError(409, "Another Project Research operation is already active for this workflow");
+        }
+        throw error;
+      }
+      return { id };
+    });
+  }
+
   async list(identity: SpaceUserIdentity, projectId: string) {
     await assertProjectReadable(this.db, identity.spaceId, projectId, identity.userId);
     const rows = await this.db.query<{ id: string }>(
@@ -75,7 +119,7 @@ export class ProjectOperationRepository {
     await assertProjectWriter(this.db, identity.spaceId, projectId, identity.userId);
     await this.assertOperationInProject(operationId, identity.spaceId, projectId);
     const result = await this.db.query<ProjectOperationRecord>(
-      `UPDATE project_operations SET status='cancelled', updated_at=$4
+      `UPDATE project_operations SET status='cancelled', version=version+1, updated_at=$4
         WHERE id=$1 AND space_id=$2 AND project_id=$3 AND status NOT IN ('completed','cancelled')
         RETURNING *`,
       [operationId, identity.spaceId, projectId, new Date().toISOString()],
@@ -119,20 +163,25 @@ export class ProjectOperationRepository {
        * The `links` projection (maintained by refreshProjection) is preserved.
        */
       replaceProgress?: boolean;
+      expectedVersion: number;
     },
   ): Promise<void> {
     await this.assertOperationInProject(operationId, spaceId, projectId);
     const progressSql = input.replaceProgress
       ? `(CASE WHEN progress_json ? 'links' THEN jsonb_build_object('links', progress_json->'links') ELSE '{}'::jsonb END) || $5::jsonb`
       : `COALESCE(progress_json,'{}'::jsonb) || $5::jsonb`;
-    await this.db.query(
+    const updated = await this.db.query(
       `UPDATE project_operations
           SET status=$4,
               progress_json=${progressSql},
+              version=version+1,
               updated_at=$6
-        WHERE id=$1 AND space_id=$2 AND project_id=$3`,
-      [operationId, spaceId, projectId, input.status, JSON.stringify({ projection_mode: "managed", ...input.progress }), new Date().toISOString()],
+        WHERE id=$1 AND space_id=$2 AND project_id=$3 AND version=$7`,
+      [operationId, spaceId, projectId, input.status, JSON.stringify({ projection_mode: "managed", ...input.progress }), new Date().toISOString(), input.expectedVersion],
     );
+    if ((updated.rowCount ?? 0) !== 1) {
+      throw new HttpError(409, "Project operation changed concurrently; reload and retry");
+    }
     for (const step of input.stepStates ?? []) {
       await this.db.query(
         `UPDATE project_operation_steps
@@ -144,6 +193,7 @@ export class ProjectOperationRepository {
   }
 
   private async createLocked(identity: SpaceUserIdentity, projectId: string, body: Record<string, unknown>) {
+    await lockActiveProjectForMutation(this.db, identity.spaceId, projectId);
     const kind = requiredString(body.kind, "kind");
     if (!KINDS.has(kind)) throw new HttpError(422, "invalid operation kind");
     await this.assertOptionalReference(identity.spaceId, projectId, "run", optionalString(body.initiating_run_id));
@@ -213,20 +263,29 @@ export class ProjectOperationRepository {
     // decisions rather than inferred from a heterogeneous link set.
     const managed = objectValue(current.rows[0]?.progress_json).projection_mode === "managed";
     if (managed) {
+      const linksProjection = { total: links.rows.length, completed: done, failed, pending };
       await this.db.query(
         `UPDATE project_operations
-            SET progress_json=COALESCE(progress_json,'{}'::jsonb) || $3::jsonb
-          WHERE id=$1 AND space_id=$2`,
-        [operationId, spaceId, JSON.stringify({ links: { total: links.rows.length, completed: done, failed, pending } })],
+            SET progress_json=COALESCE(progress_json,'{}'::jsonb) || $3::jsonb,
+                version=version+1
+          WHERE id=$1 AND space_id=$2 AND status <> 'cancelled'
+            AND (progress_json->'links') IS DISTINCT FROM $3::jsonb->'links'`,
+        [operationId, spaceId, JSON.stringify({ links: linksProjection })],
       );
       return;
     }
 
     const status = failed ? "failed" : links.rows.length && pending === 0 ? "completed" : links.rows.length ? "active" : "draft";
-    await this.db.query(
-      `UPDATE project_operations SET status=$3, progress_json=COALESCE(progress_json,'{}'::jsonb) || $4::jsonb, updated_at=$5 WHERE id=$1 AND space_id=$2`,
-      [operationId, spaceId, status, JSON.stringify({ total: links.rows.length, completed: done, failed, pending }), new Date().toISOString()],
+    const projection = { total: links.rows.length, completed: done, failed, pending };
+    const updated = await this.db.query(
+      `UPDATE project_operations
+          SET status=$3, progress_json=COALESCE(progress_json,'{}'::jsonb) || $4::jsonb,
+              version=version+1, updated_at=$5
+        WHERE id=$1 AND space_id=$2 AND status <> 'cancelled'
+          AND (status IS DISTINCT FROM $3 OR progress_json IS DISTINCT FROM (COALESCE(progress_json,'{}'::jsonb) || $4::jsonb))`,
+      [operationId, spaceId, status, JSON.stringify(projection), new Date().toISOString()],
     );
+    if ((updated.rowCount ?? 0) === 0) return;
     await this.db.query(
       `UPDATE project_operation_steps
           SET status = CASE
@@ -271,4 +330,10 @@ export class ProjectOperationRepository {
     const row = await this.db.query(`SELECT 1 FROM ${table} WHERE id=$1 AND space_id=$2${clause}`, [id, spaceId, ...(scoped ? [projectId] : [])]);
     if (!row.rows[0]) throw new HttpError(404, "Operation link target not found");
   }
+}
+
+function isUniqueViolation(error: unknown, constraint: string): boolean {
+  if (!error || typeof error !== "object") return false;
+  const value = error as { code?: unknown; constraint?: unknown };
+  return value.code === "23505" && value.constraint === constraint;
 }

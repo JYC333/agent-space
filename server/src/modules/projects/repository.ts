@@ -9,6 +9,7 @@ import {
   optionalString,
   page,
   requiredString,
+  withQueryableTransaction,
   type Queryable,
   type SpaceUserIdentity,
 } from "../routeUtils/common";
@@ -19,6 +20,7 @@ import { assertProjectReadable } from "./access";
 import { projectRetrievalRegistry } from "./retrievalAdapter";
 import { contentReadSql } from "../access/contentAccessSql";
 import { memorySensitivityReadSql } from "../memory/memorySensitivitySql";
+import { PgRunRepository } from "../runs/repository";
 
 export interface ProjectRow {
   id: string;
@@ -174,8 +176,18 @@ export class PgProjectRepository {
     projectId: string,
     body: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
-    await assertProjectWriter(this.db, identity.spaceId, projectId, identity.userId);
-    const current = await this.getRow(identity.spaceId, projectId);
+    return withQueryableTransaction(this.db, (db) =>
+      new PgProjectRepository(db).updateLocked(identity, projectId, body),
+    );
+  }
+
+  private async updateLocked(
+    identity: SpaceUserIdentity,
+    projectId: string,
+    body: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    await assertProjectWriter(this.db, identity.spaceId, projectId, identity.userId, { allowArchived: true });
+    const current = await this.lockProjectRow(identity.spaceId, projectId);
     if (!current) throw new HttpError(404, "Project not found");
     const status = optionalString(body.status) ?? current.status;
     if (!["active", "archived"].includes(status)) throw new HttpError(422, "status must be active or archived");
@@ -206,11 +218,22 @@ export class PgProjectRepository {
         now,
       ],
     );
+    if (status === "archived") {
+      await this.pauseArchivedProjectActivity(identity.spaceId, projectId, now);
+    }
     return projectToOut(result.rows[0]!);
   }
 
   async archive(identity: SpaceUserIdentity, projectId: string): Promise<Record<string, unknown>> {
-    await assertProjectWriter(this.db, identity.spaceId, projectId, identity.userId);
+    return withQueryableTransaction(this.db, (db) =>
+      new PgProjectRepository(db).archiveLocked(identity, projectId),
+    );
+  }
+
+  private async archiveLocked(identity: SpaceUserIdentity, projectId: string): Promise<Record<string, unknown>> {
+    await assertProjectWriter(this.db, identity.spaceId, projectId, identity.userId, { allowArchived: true });
+    const current = await this.lockProjectRow(identity.spaceId, projectId);
+    if (!current) throw new HttpError(404, "Project not found");
     const now = new Date().toISOString();
     const result = await this.db.query<ProjectRow>(
       `UPDATE projects
@@ -221,6 +244,7 @@ export class PgProjectRepository {
         RETURNING ${PROJECT_COLUMNS}`,
       [identity.spaceId, projectId, now],
     );
+    await this.pauseArchivedProjectActivity(identity.spaceId, projectId, now);
     return projectToOut(result.rows[0]!);
   }
 
@@ -558,6 +582,126 @@ export class PgProjectRepository {
       [spaceId, projectId],
     );
     return result.rows[0] ?? null;
+  }
+
+  private async lockProjectRow(spaceId: string, projectId: string): Promise<ProjectRow | null> {
+    const result = await this.db.query<ProjectRow>(
+      `SELECT ${PROJECT_COLUMNS}
+         FROM projects
+        WHERE space_id = $1 AND id = $2 AND deleted_at IS NULL
+        FOR UPDATE`,
+      [spaceId, projectId],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  /**
+   * Archiving a Project preserves historical Tasks, Runs, Artifacts and Memory,
+   * but atomically stops every Project-owned source of future work.
+   * Reactivating the Project never auto-resumes these records; each one must be
+   * reviewed and resumed through its owning module.
+   */
+  private async pauseArchivedProjectActivity(spaceId: string, projectId: string, now: string): Promise<void> {
+    await this.db.query(
+      `UPDATE automations
+          SET status = 'paused', updated_at = $3
+        WHERE space_id = $1 AND project_id = $2 AND status = 'active'`,
+      [spaceId, projectId, now],
+    );
+    await this.db.query(
+      `UPDATE workflow_executions execution
+          SET status='cancelled', ended_at=$3, updated_at=$3
+         FROM automations automation
+        WHERE execution.space_id=$1
+          AND automation.space_id=execution.space_id
+          AND automation.id=execution.automation_id
+          AND automation.project_id=$2
+          AND execution.status IN ('queued','running')`,
+      [spaceId, projectId, now],
+    );
+    const workflowRuns = await this.db.query<{ run_id: string }>(
+      `SELECT DISTINCT run_id
+         FROM (
+           SELECT execution.root_run_id AS run_id
+             FROM workflow_executions execution
+             JOIN automations automation
+               ON automation.id=execution.automation_id AND automation.space_id=execution.space_id
+            WHERE execution.space_id=$1 AND automation.project_id=$2
+           UNION ALL
+           SELECT link.run_id
+             FROM workflow_execution_node_runs link
+             JOIN workflow_execution_nodes node
+               ON node.id=link.node_id AND node.space_id=link.space_id
+             JOIN workflow_executions execution
+               ON execution.id=node.execution_id AND execution.space_id=node.space_id
+             JOIN automations automation
+               ON automation.id=execution.automation_id AND automation.space_id=execution.space_id
+            WHERE link.space_id=$1 AND automation.project_id=$2
+         ) scoped_runs
+        WHERE run_id IS NOT NULL`,
+      [spaceId, projectId],
+    );
+    const runIds = workflowRuns.rows.map((row) => row.run_id);
+    if (runIds.length > 0) {
+      await this.db.query(
+        `UPDATE jobs
+            SET status='cancelled', heartbeat_at=NULL, completed_at=$3, updated_at=$3
+          WHERE space_id=$1
+            AND job_type='agent_run'
+            AND payload_json->>'run_id'=ANY($2::text[])
+            AND status IN ('pending','claimed','running')`,
+        [spaceId, runIds, now],
+      );
+      const runs = new PgRunRepository(this.db);
+      for (const runId of runIds) {
+        await runs.markRunTerminal({
+          run_id: runId,
+          space_id: spaceId,
+          status: "cancelled",
+          output_json: { project_id: projectId, cancellation_source: "project_archive" },
+          error_json: { error_code: "project_archived", error_text: "Workflow run cancelled because its Project was archived" },
+          exit_code: null,
+          completed_at: now,
+        });
+      }
+    }
+    await this.db.query(
+      `UPDATE workflow_execution_nodes node
+          SET status='blocked', blocked_reason='project_archived', updated_at=$3
+         FROM workflow_executions execution
+         JOIN automations automation
+           ON automation.id=execution.automation_id AND automation.space_id=execution.space_id
+        WHERE node.space_id=$1
+          AND node.execution_id=execution.id
+          AND automation.project_id=$2
+          AND node.status IN ('inbox','ready','in_progress','waiting_for_review')`,
+      [spaceId, projectId, now],
+    );
+    await this.db.query(
+      `UPDATE project_source_bindings
+          SET status = 'paused', updated_at = $3
+        WHERE space_id = $1 AND project_id = $2 AND status = 'active'`,
+      [spaceId, projectId, now],
+    );
+    await this.db.query(
+      `UPDATE source_post_processing_rules
+          SET status = 'paused', updated_at = $3
+        WHERE space_id = $1 AND project_id = $2 AND status = 'active'`,
+      [spaceId, projectId, now],
+    );
+    await this.db.query(
+      `UPDATE project_operations
+          SET status = 'cancelled', version = version + 1, updated_at = $3
+        WHERE space_id = $1 AND project_id = $2 AND kind = 'research'
+          AND status IN ('draft', 'active', 'waiting_review')`,
+      [spaceId, projectId, now],
+    );
+    await this.db.query(
+      `UPDATE project_research_workflows
+          SET status = 'paused', updated_at = $3
+        WHERE space_id = $1 AND project_id = $2 AND status = 'active'`,
+      [spaceId, projectId, now],
+    );
   }
 
   private async requireProject(spaceId: string, projectId: string): Promise<void> {

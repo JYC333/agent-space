@@ -19,6 +19,9 @@ const AGENT = "33333333-3333-4333-8333-333333333333";
 const AGENT_VERSION = "44444444-4444-4444-8444-444444444444";
 const TASK = "77777777-7777-4777-8777-777777777777";
 const AUTOMATION = "88888888-8888-4888-8888-888888888888";
+const WORKFLOW_ASSET = "99999999-9999-4999-8999-999999999999";
+const FIXED_WORKFLOW_VERSION = "workflow-version-fixed-1";
+const BINDING_WORKFLOW_VERSION = "workflow-version-bindings";
 
 let container: TestPostgresDatabase | undefined;
 let pool: Pool | undefined;
@@ -63,6 +66,23 @@ beforeEach(async () => {
     `INSERT INTO space_memberships (id, space_id, user_id, role, status, created_at, updated_at)
      VALUES ($1, $2, $3, 'owner', 'active', $4, $4)`,
     ["66666666-6666-4666-8666-666666666666", SPACE, USER, now],
+  );
+  await pool.query(
+    `INSERT INTO evolvable_assets (
+       id, space_id, asset_type, asset_key, display_name, owner_scope_type,
+       owner_scope_id, status, metadata_json, created_at, updated_at
+     ) VALUES ($1, $2, 'workflow_template', 'plan-graph-test', 'Plan graph test',
+               'space', $2, 'active', '{}'::jsonb, $3, $3)`,
+    [WORKFLOW_ASSET, SPACE, now],
+  );
+  await pool.query(
+    `INSERT INTO evolvable_asset_versions (
+       id, asset_id, space_id, scope_type, scope_id, version, status, source,
+       content_json, created_at, updated_at
+     ) VALUES
+       ($1, $3, $4, 'space', $4, 1, 'approved', 'user_authored', '{}'::jsonb, $5, $5),
+       ($2, $3, $4, 'space', $4, 2, 'approved', 'user_authored', '{}'::jsonb, $5, $5)`,
+    [FIXED_WORKFLOW_VERSION, BINDING_WORKFLOW_VERSION, WORKFLOW_ASSET, SPACE, now],
   );
   await pool.query(
     `INSERT INTO agents (id, space_id, owner_user_id, name, status, current_version_id,
@@ -254,8 +274,8 @@ describeWithPostgres("Task to Agent Plan real PostgreSQL lifecycle", () => {
         updated_at: now,
       },
       target: {
-        versionId: "workflow-version-fixed-1",
-        resolutionTrace: ["pin:workflow-version-fixed-1"],
+        versionId: FIXED_WORKFLOW_VERSION,
+        resolutionTrace: [`pin:${FIXED_WORKFLOW_VERSION}`],
         contentJson: {
           schema_version: "workflow_definition.v1",
           workflow_id: "fixed-workflow-db-test",
@@ -425,7 +445,7 @@ describeWithPostgres("Task to Agent Plan real PostgreSQL lifecycle", () => {
       identity,
       automation,
       target: {
-        versionId: "workflow-version-bindings",
+        versionId: BINDING_WORKFLOW_VERSION,
         resolutionTrace: [],
         contentJson: {
           schema_version: "workflow_definition.v1",

@@ -74,7 +74,7 @@ afterAll(async () => {
 beforeEach(async () => {
   if (!available || !pool) return;
   await pool.query("DROP SCHEMA public CASCADE; CREATE SCHEMA public; RESET search_path;");
-});
+}, 30_000);
 
 async function baselineTableNames(p: Pool): Promise<string[]> {
   const res = await p.query<{ table_name: string }>(
@@ -308,6 +308,34 @@ describe("server runner applies the baseline schema", () => {
     for (const t of REPRESENTATIVE_TABLES) {
       expect(tables).toContain(t);
     }
+  }, 15_000);
+
+  it("rejects unknown user states and unimplemented space-object types", async () => {
+    if (!available || !pool) return;
+    await migrate(pool, MIGRATIONS_DIR);
+
+    await expect(pool.query(
+      `INSERT INTO users (id, display_name, status, created_at, updated_at)
+       VALUES ('invalid-user', 'Invalid', 'pending', now(), now())`,
+    )).rejects.toMatchObject({ code: "23514" });
+
+    await pool.query(
+      `INSERT INTO users (id, display_name, status, created_at, updated_at)
+       VALUES ('user-1', 'User', 'active', now(), now())`,
+    );
+    await pool.query(
+      `INSERT INTO spaces (id, name, type, created_by_user_id, created_at, updated_at)
+       VALUES ('space-1', 'Space', 'team', 'user-1', now(), now())`,
+    );
+    await expect(pool.query(
+      `INSERT INTO space_objects (
+         id, space_id, object_type, title, status, visibility, access_level,
+         owner_user_id, created_at, updated_at
+       ) VALUES (
+         'object-1', 'space-1', 'project', 'Duplicate Project', 'active',
+         'private', 'full', 'user-1', now(), now()
+       )`,
+    )).rejects.toMatchObject({ code: "23514" });
   }, 15_000);
 
   it("enforces object kind registry constraints in Postgres", async () => {

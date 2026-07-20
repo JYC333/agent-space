@@ -6,7 +6,6 @@ import { users } from "./auth";
 import { spaces } from "./spaces";
 import { spaceObjects, extractedEvidence } from "./knowledge";
 import { sourceItems } from "./sources";
-import { objectRelations } from "./knowledge";
 
 // Relation Core MVP batch 1 (people, organizations, identities, affiliations,
 // notes, source links). Interactions/participants/important-dates and the
@@ -107,62 +106,6 @@ export const relationIdentities = pgTable("relation_identities", {
 	check("ck_relation_identities_source", sql`(source)::text = ANY (ARRAY[('manual'::character varying)::text, ('import'::character varying)::text, ('source_sync'::character varying)::text, ('agent'::character varying)::text])`),
 ]);
 
-export const relationAffiliations = pgTable("relation_affiliations", {
-	id: varchar({ length: 36 }).primaryKey().notNull(),
-	spaceId: varchar("space_id", { length: 36 }).notNull(),
-	personObjectId: varchar("person_object_id", { length: 36 }).notNull(),
-	organizationObjectId: varchar("organization_object_id", { length: 36 }).notNull(),
-	role: varchar({ length: 128 }),
-	title: varchar({ length: 256 }),
-	status: varchar({ length: 32 }).default('active').notNull(),
-	startDate: timestamp("start_date", { withTimezone: true, mode: 'string' }),
-	endDate: timestamp("end_date", { withTimezone: true, mode: 'string' }),
-	confidence: doublePrecision(),
-	source: varchar({ length: 32 }).default('manual').notNull(),
-	objectRelationId: varchar("object_relation_id", { length: 36 }),
-	createdByUserId: varchar("created_by_user_id", { length: 36 }),
-	createdByAgentId: varchar("created_by_agent_id", { length: 36 }),
-	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).notNull(),
-	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).notNull(),
-}, (table): PgTableExtraConfigValue[] => [
-	index("ix_relation_affiliations_person").using("btree", table.personObjectId.asc().nullsLast()),
-	index("ix_relation_affiliations_organization").using("btree", table.organizationObjectId.asc().nullsLast()),
-	index("ix_relation_affiliations_space_id").using("btree", table.spaceId.asc().nullsLast()),
-	index("ix_relation_affiliations_status").using("btree", table.status.asc().nullsLast()),
-	foreignKey({
-			columns: [table.createdByAgentId],
-			foreignColumns: [agents.id],
-			name: "relation_affiliations_created_by_agent_id_fkey"
-		}),
-	foreignKey({
-			columns: [table.createdByUserId],
-			foreignColumns: [users.id],
-			name: "relation_affiliations_created_by_user_id_fkey"
-		}),
-	foreignKey({
-			columns: [table.spaceId],
-			foreignColumns: [spaces.id],
-			name: "relation_affiliations_space_id_fkey"
-		}),
-	foreignKey({
-			columns: [table.personObjectId, table.spaceId],
-			foreignColumns: [spaceObjects.id, spaceObjects.spaceId],
-			name: "relation_affiliations_person_object_id_fkey"
-		}).onDelete("cascade"),
-	foreignKey({
-			columns: [table.organizationObjectId, table.spaceId],
-			foreignColumns: [spaceObjects.id, spaceObjects.spaceId],
-			name: "relation_affiliations_organization_object_id_fkey"
-		}).onDelete("cascade"),
-	foreignKey({
-			columns: [table.objectRelationId],
-			foreignColumns: [objectRelations.id],
-			name: "relation_affiliations_object_relation_id_fkey"
-		}),
-	check("ck_relation_affiliations_status", sql`(status)::text = ANY (ARRAY[('active'::character varying)::text, ('past'::character varying)::text, ('unknown'::character varying)::text])`),
-	check("ck_relation_affiliations_source", sql`(source)::text = ANY (ARRAY[('manual'::character varying)::text, ('import'::character varying)::text, ('source_sync'::character varying)::text, ('agent'::character varying)::text])`),
-]);
-
 // Deliberately not the generic `notes` table: generic notes are linked to
 // their subject via `noteLinks`, whose endpoint types are constrained to the
 // `retrieval_object_type` DB domain (knowledge_item/note/source/claim/...),
@@ -256,5 +199,7 @@ export const relationSourceLinks = pgTable("relation_source_links", {
 			foreignColumns: [extractedEvidence.id],
 			name: "relation_source_links_evidence_id_fkey"
 		}),
-	check("ck_relation_source_links_link_type", sql`(link_type)::text = ANY (ARRAY[('activity'::character varying)::text, ('source_item'::character varying)::text, ('evidence'::character varying)::text, ('external'::character varying)::text, ('import'::character varying)::text])`),
+	check("ck_relation_source_links_link_type", sql`(link_type)::text = ANY (ARRAY[('activity'::character varying)::text, ('source_item'::character varying)::text, ('evidence'::character varying)::text, ('external'::character varying)::text])`),
+	check("ck_relation_source_links_exactly_one_target", sql`num_nonnulls(activity_id, source_item_id, evidence_id, external_ref) = 1`),
+	check("ck_relation_source_links_target_matches_type", sql`(link_type = 'activity' AND activity_id IS NOT NULL) OR (link_type = 'source_item' AND source_item_id IS NOT NULL) OR (link_type = 'evidence' AND evidence_id IS NOT NULL) OR (link_type = 'external' AND external_ref IS NOT NULL)`),
 ]);

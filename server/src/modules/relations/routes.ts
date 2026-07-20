@@ -164,7 +164,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     const identity = await resolveIdentity(context.config, request, reply);
     if (!identity) return reply;
     try {
-      return reply.code(201).send(await service(context).createAffiliation(identity, jsonBody(request)));
+      return reply.code(202).send(await service(context).createAffiliation(identity, jsonBody(request)));
     } catch (error) {
       return sendRouteError(reply, error);
     }
@@ -191,7 +191,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     if (!identity) return reply;
     try {
       const body = jsonBody(request);
-      return reply.send(
+      return reply.code(202).send(
         await service(context).endAffiliation(identity, requireParam(request, "affiliationId"), optionalString(body.end_date)),
       );
     } catch (error) {

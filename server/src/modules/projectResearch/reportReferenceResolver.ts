@@ -1,5 +1,6 @@
 import type { Queryable, SpaceUserIdentity } from "../routeUtils/common";
 import { contentReadSql } from "../access/contentAccessSql";
+import { evidenceProvenanceReadableClause } from "../sources/sourceItemAccess";
 
 export interface ResolvedResearchReferenceExcerpt { id: string; title?: string }
 export interface ResolvedResearchReference { id: string; availability: "available" | "unavailable"; title?: string; authors?: string[]; year?: number | null; library_path?: string; academic_path?: string; external_url?: string; excerpts?: ResolvedResearchReferenceExcerpt[] }
@@ -49,8 +50,11 @@ export async function resolveResearchReportReferences(db: Queryable, identity: S
       groupsWithArticle.add(groupId);
     } else if (!groupsWithArticle.has(groupId)) {
       const doi = text(ref.doi); const arxiv = text(ref.arxiv_id)
-      if (doi && !group.external_url) { group.external_url = `https://doi.org/${encodeURIComponent(doi)}`; group.availability = "available"; }
-      else if (arxiv && !group.external_url) { group.external_url = `https://arxiv.org/abs/${encodeURIComponent(arxiv)}`; group.availability = "available"; }
+      // DOI/arXiv-only citations have no local ACL-bearing source. When a
+      // local id is present, however, never use its embedded metadata as an
+      // authorization fallback after that local resource fails its read gate.
+      if (!evidenceToken && !sourceItemId && doi && !group.external_url) { group.external_url = `https://doi.org/${encodeURIComponent(doi)}`; group.availability = "available"; }
+      else if (!evidenceToken && !sourceItemId && arxiv && !group.external_url) { group.external_url = `https://arxiv.org/abs/${encodeURIComponent(arxiv)}`; group.availability = "available"; }
       else if (evidence && group.availability === "unavailable") {
         group.availability = "available";
         group.title = evidence.title;
@@ -81,9 +85,10 @@ async function readableSourceItem(
 ): Promise<SourceItemMeta | null> {
   const cached = cache.get(sourceItemId);
   if (cached !== undefined) return cached;
-  const row = await db.query<{ title: string; metadata_json: unknown; occurred_at: unknown; source_object_id: string | null }>(
-    `SELECT si.title,si.metadata_json,si.occurred_at,si.source_object_id FROM source_items si
+  const row = await db.query<{ title: string; metadata_json: unknown; occurred_at: unknown; reference_object_id: string | null }>(
+    `SELECT si.title,si.metadata_json,si.occurred_at,sir.reference_object_id FROM source_items si
       LEFT JOIN source_connections sc ON sc.id=si.connection_id
+      LEFT JOIN source_item_references sir ON sir.source_item_id=si.id AND sir.space_id=si.space_id
      WHERE si.id=$1 AND si.space_id=$2 AND si.deleted_at IS NULL
        AND ${contentReadSql("source_item", "si", "$3")}
        AND (si.created_by_user_id=$3 OR sc.consent_json->>'owner_user_id'=$3
@@ -102,7 +107,7 @@ async function readableSourceItem(
       authors: stringArray(metadata.authors),
       year: year(metadata.year) ?? year(row.rows[0].occurred_at),
       library_path: `/library/items/${sourceItemId}`,
-      ...(row.rows[0].source_object_id ? { academic_path: `/knowledge/sources?object=${encodeURIComponent(row.rows[0].source_object_id)}` } : {}),
+      ...(row.rows[0].reference_object_id ? { academic_path: `/knowledge/sources?object=${encodeURIComponent(row.rows[0].reference_object_id)}` } : {}),
     }
   }
   cache.set(sourceItemId, meta);
@@ -122,11 +127,17 @@ async function readableEvidence(
   if (cached !== undefined) return cached;
   const prefixed = /^[0-9a-f][0-9a-f-]{7,35}$/i.test(evidenceId)
   const rows = await db.query<EvidenceRow>(
-    `SELECT ee.source_item_id, ee.title, ee.source_author, ee.occurred_at
+    `SELECT COALESCE(ee.source_item_id, ee.origin_source_item_id) AS source_item_id,
+            ee.title, ee.source_author, ee.occurred_at
        FROM extracted_evidence ee
+       LEFT JOIN source_items evidence_source
+         ON evidence_source.id=COALESCE(ee.source_item_id,ee.origin_source_item_id)
+        AND evidence_source.space_id=ee.space_id
+        AND evidence_source.deleted_at IS NULL
       WHERE ee.space_id=$2 AND ee.deleted_at IS NULL
         AND (ee.id=$1 OR ($4::boolean AND ee.id LIKE $1 || '%'))
         AND ${contentReadSql("extracted_evidence", "ee", "$3")}
+        AND ${evidenceProvenanceReadableClause("ee", "$3")}
       LIMIT 2`,
     [evidenceId, identity.spaceId, identity.userId, prefixed],
   );

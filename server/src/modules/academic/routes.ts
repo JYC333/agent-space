@@ -61,7 +61,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     if (!identity) return reply;
     try {
       return reply
-        .code(201)
+        .code(202)
         .send(await service(context).linkAuthor(identity, requireParam(request, "objectId"), jsonBody(request)));
     } catch (error) {
       return sendRouteError(reply, error);
@@ -83,7 +83,7 @@ export function registerRoutes(app: FastifyInstance, context: ModuleContext): vo
     if (!identity) return reply;
     try {
       return reply
-        .code(201)
+        .code(202)
         .send(await service(context).linkCitation(identity, requireParam(request, "objectId"), jsonBody(request)));
     } catch (error) {
       return sendRouteError(reply, error);

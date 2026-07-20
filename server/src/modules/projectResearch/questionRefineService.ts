@@ -2,6 +2,7 @@ import type { ServerConfig } from "../../config";
 import type { Queryable, SpaceUserIdentity } from "../routeUtils/common";
 import { HttpError, objectValue, optionalString } from "../routeUtils/common";
 import { assertProjectWriter } from "../projects/access";
+import { sourceItemReadableClause } from "../sources/sourceItemAccess";
 import { resolvePrompt } from "../prompts/resolver";
 import { resolveProviderCommandStore } from "../providers/commands/store";
 import { completeProviderMessages } from "../providers/invocation/invocation";
@@ -90,12 +91,15 @@ export class ProjectResearchQuestionRefineService {
     );
     if (!project.rows[0]) throw new HttpError(404, "Project not found");
     const corpus = await this.db.query<{ count: string; titles: string[] | null }>(
-      `SELECT count(*)::text AS count,
+      `SELECT count(DISTINCT pci.id)::text AS count,
               array_agg(si.title ORDER BY COALESCE(si.occurred_at, pci.created_at) DESC) FILTER (WHERE si.title IS NOT NULL) AS titles
          FROM project_corpus_items pci
-         LEFT JOIN source_items si ON si.id=pci.source_item_id AND si.space_id=pci.space_id
-        WHERE pci.space_id=$1 AND pci.project_id=$2 AND pci.status='active'`,
-      [identity.spaceId, projectId],
+         LEFT JOIN project_corpus_item_sources pcis
+           ON pcis.corpus_item_id=pci.id AND pcis.space_id=pci.space_id
+         LEFT JOIN source_items si ON si.id=pcis.source_item_id AND si.space_id=pcis.space_id AND si.deleted_at IS NULL
+        WHERE pci.space_id=$1 AND pci.project_id=$2 AND pci.status='active'
+          AND (si.id IS NULL OR ${sourceItemReadableClause("si", "$3", false)})`,
+      [identity.spaceId, projectId, identity.userId],
     );
     const corpusSummary = `${Number(corpus.rows[0]?.count ?? 0)} active items; examples: ${(corpus.rows[0]?.titles ?? []).slice(0, 8).join(" | ") || "none"}`;
     const resolved = await resolvePrompt(this.db, {

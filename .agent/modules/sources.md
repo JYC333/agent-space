@@ -179,7 +179,11 @@ cursor/offset state and normalize DOI, arXiv id, native id, authors, venue,
 publication date, citation/reference counts, and abstract into the same source
 item metadata contract. `paperMaterializer` recognizes that provider-neutral
 contract and deduplicates `academic_papers` by DOI, arXiv id, OpenAlex id, or
-Semantic Scholar id. Brave results remain external URL items and their
+Semantic Scholar id. Academic provider identifiers are persisted in trimmed
+lowercase canonical form, with schema enforcement so case variants share one
+paper identity and empty/whitespace variants are rejected. Project routing
+contains best-effort academic materialization in a transaction savepoint before
+continuing link and Corpus reconciliation. Brave results remain external URL items and their
 Connection is created with `trust_level=untrusted`; screening instructions
 require independent or scholarly corroboration before high confidence.
 
@@ -369,9 +373,9 @@ idempotent through `uq_evidence_links_active_dedupe` and are what run-context
 evidence selection reads for project-bound agent runs.
 
 The same materialization pass syncs Project corpus rows in
-`project_corpus_items`: source-item rows, source-object rows when
-`source_items.source_object_id` is available, evidence rows, and evidence
-source-object rows. Corpus sync does not move source item decisions into a new
+`project_corpus_items`: SourceItem rows, Reference-object rows when a
+`source_item_references` bridge exists, Evidence rows, and Evidence
+Reference-object rows. Corpus sync does not move source item decisions into a new
 decision table. `source_post_processing_item_decisions` remains the
 source-item-level post-processing record; Project corpus rows may point to the
 latest decision and map its relevance into project `triage_status` while keeping

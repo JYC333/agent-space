@@ -46,6 +46,7 @@ export interface SourceItemRow {
   owner_user_id: string | null;
   visibility: string;
   access_level: string;
+  effective_access_level?: string;
   connection_id: string | null;
   item_type: string;
   source_object_type: string | null;
@@ -108,7 +109,9 @@ export interface EvidenceRow {
   owner_user_id: string | null;
   visibility: string;
   access_level: string;
+  effective_access_level?: string;
   source_item_id: string | null;
+  origin_source_item_id: string | null;
   extraction_job_id: string | null;
   source_snapshot_id: string | null;
   source_object_type: string | null;
@@ -273,6 +276,7 @@ const EVIDENCE_TABLE_COLUMNS = [
   "visibility",
   "access_level",
   "source_item_id",
+  "origin_source_item_id",
   "extraction_job_id",
   "source_snapshot_id",
   "source_object_type",

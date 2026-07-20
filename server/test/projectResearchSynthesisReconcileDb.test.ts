@@ -210,8 +210,11 @@ describe("ProjectResearchOrchestrator.reconcileOperation synthesis stage (real P
     expect(operation.rows[0]).toMatchObject({ status: "waiting_review", progress_json: { current_stage: "idea_review" } });
     const reports = await pool.query<{ synthesis_run_id: string }>(`SELECT synthesis_run_id FROM project_research_reports WHERE operation_id=$1`, [OPERATION]);
     expect(reports.rows).toEqual([{ synthesis_run_id: seeded.candidateRunId }]);
-    const critiques = await pool.query(`SELECT id FROM artifacts WHERE run_id=$1 AND artifact_type='research_critique'`, [seeded.critiqueRunId]);
-    expect(critiques.rows).toHaveLength(1);
+    const critiques = await pool.query<{ id: string; visibility: string; owner_user_id: string }>(
+      `SELECT id,visibility,owner_user_id FROM artifacts WHERE run_id=$1 AND artifact_type='research_critique'`,
+      [seeded.critiqueRunId],
+    );
+    expect(critiques.rows).toEqual([expect.objectContaining({ visibility: "private", owner_user_id: OWNER })]);
   });
 
   it("keeps quick reports bounded by recording critical critique issues without a revision run", async () => {
@@ -447,19 +450,33 @@ describe("ProjectResearchOrchestrator.reconcileOperation synthesis stage (real P
     await pool.query(`UPDATE project_research_workflows SET current_stage='comparison' WHERE id=$1`, [WORKFLOW]);
     await pool.query(`INSERT INTO research_notebooks (id,space_id,project_id,created_at,updated_at) VALUES ($1,$2,$3,$4,$4)`, [notebook, SPACE, PROJECT, now]);
     await pool.query(
-      `INSERT INTO research_notebook_sections (id,notebook_id,section_key,content_json,normalized_text,content_hash,refs_json,version,updated_at)
-       VALUES ($1,$2,'understanding','{"type":"doc","content":[]}'::jsonb,'Current claim','hash','[]'::jsonb,1,$3)`,
-      [randomUUID(), notebook, now],
+      `INSERT INTO research_notebook_sections (id,space_id,notebook_id,section_key,content_json,normalized_text,content_hash,refs_json,version,updated_at)
+       VALUES ($1,$2,$3,'understanding','{"type":"doc","content":[]}'::jsonb,'Current claim','hash','[]'::jsonb,1,$4)`,
+      [randomUUID(), SPACE, notebook, now],
     );
     await pool.query(
       `INSERT INTO source_items (id,space_id,owner_user_id,visibility,item_type,title,excerpt,first_seen_at,last_seen_at,content_state,retention_policy,created_at,updated_at)
        VALUES ($1,$2,$3,'space_shared','feed_entry','Contradicting paper','No effect under stronger controls.',$4,$4,'excerpt_saved','summary_only',$4,$4)`,
       [sourceItem, SPACE, OWNER, now],
     );
+    const corpusItemId = randomUUID();
     await pool.query(
       `INSERT INTO project_corpus_items (id,space_id,project_id,source_item_id,role,status,triage_status,triage_confirmed_by_user,read_status,created_at,updated_at)
        VALUES ($1,$2,$3,$4,'candidate','active','relevant',true,'unread',$5,$5)`,
-      [randomUUID(), SPACE, PROJECT, sourceItem, now],
+      [corpusItemId, SPACE, PROJECT, sourceItem, now],
+    );
+    await pool.query(
+      `INSERT INTO project_corpus_item_sources (id,corpus_item_id,space_id,project_id,source_item_id,created_at)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [randomUUID(), corpusItemId, SPACE, PROJECT, sourceItem, now],
+    );
+    await pool.query(
+      `INSERT INTO project_operations (
+         id, space_id, project_id, kind, title, status, created_by_user_id,
+         progress_json, created_at, updated_at
+       ) VALUES ($1, $2, $3, 'research', 'Monitor comparison', 'active', $4,
+                 '{}'::jsonb, $5, $5)`,
+      [OPERATION, SPACE, PROJECT, OWNER, now],
     );
     await pool.query(
       `INSERT INTO research_scan_summaries (id,space_id,project_id,workflow_id,operation_id,scan_key,scanned_at,new_item_count,relevant_count,maybe_count,excluded_count,created_at)
@@ -480,9 +497,10 @@ describe("ProjectResearchOrchestrator.reconcileOperation synthesis stage (real P
       watermark: { before: null, after: now, overlap_hours: 48 },
     };
     await pool.query(
-      `INSERT INTO project_operations (id,space_id,project_id,kind,title,status,created_by_user_id,progress_json,created_at,updated_at)
-       VALUES ($1,$2,$3,'research','Monitor comparison','active',$4,$5::jsonb,$6,$6)`,
-      [OPERATION, SPACE, PROJECT, OWNER, JSON.stringify(progress), now],
+      `UPDATE project_operations
+          SET progress_json = $4::jsonb, updated_at = $5
+        WHERE id = $1 AND space_id = $2 AND project_id = $3`,
+      [OPERATION, SPACE, PROJECT, JSON.stringify(progress), now],
     );
     await new ProjectResearchOrchestrator(pool).reconcileOperation(SPACE, OPERATION);
     const operation = (await pool.query(`SELECT status,progress_json FROM project_operations WHERE id=$1`, [OPERATION])).rows[0];
@@ -500,9 +518,9 @@ describe("ProjectResearchOrchestrator.reconcileOperation synthesis stage (real P
     const now = new Date().toISOString(); const notebook = randomUUID(); const sectionId = randomUUID();
     await pool.query(`INSERT INTO research_notebooks (id,space_id,project_id,created_at,updated_at) VALUES ($1,$2,$3,$4,$4)`, [notebook, SPACE, PROJECT, now]);
     await pool.query(
-      `INSERT INTO research_notebook_sections (id,notebook_id,section_key,content_json,normalized_text,content_hash,refs_json,version,updated_at)
-       VALUES ($1,$2,'understanding','{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Old claim"}]},{"type":"paragraph","content":[{"type":"text","text":"Kept block"}]}]}'::jsonb,'Old claim\n\nKept block','hash','[]'::jsonb,3,$3)`,
-      [sectionId, notebook, now],
+      `INSERT INTO research_notebook_sections (id,space_id,notebook_id,section_key,content_json,normalized_text,content_hash,refs_json,version,updated_at)
+       VALUES ($1,$2,$3,'understanding','{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Old claim"}]},{"type":"paragraph","content":[{"type":"text","text":"Kept block"}]}]}'::jsonb,'Old claim\n\nKept block','hash','[]'::jsonb,3,$4)`,
+      [sectionId, SPACE, notebook, now],
     );
     const adhocContract = (baseVersion: number) => ({ workflow_input_json: { research_adhoc: {
       notebook_id: notebook, section_key: "understanding", base_version: baseVersion, source_item_ids: [],

@@ -2,6 +2,7 @@ import {
   pgTable,
   index,
   unique,
+  check,
   foreignKey,
   varchar,
   text,
@@ -11,6 +12,7 @@ import {
   timestamp,
   type PgTableExtraConfigValue,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { spaces } from "./spaces";
 import { users } from "./auth";
 import { agents } from "./agents";
@@ -18,6 +20,7 @@ import { projects } from "./projects";
 import { workspaces } from "./workspaces";
 import { tasks } from "./tasks";
 import { runs } from "./runs";
+import { evolvableAssetVersions } from "./evolvableAssets";
 
 export const plans = pgTable("plans", {
   id: varchar({ length: 36 }).primaryKey().notNull(),
@@ -43,7 +46,8 @@ export const plans = pgTable("plans", {
   unique("uq_plans_id_space_id").on(table.id, table.spaceId),
   foreignKey({ columns: [table.spaceId], foreignColumns: [spaces.id], name: "plans_space_id_fkey" }),
   foreignKey({ columns: [table.workspaceId, table.spaceId], foreignColumns: [workspaces.id, workspaces.spaceId], name: "plans_workspace_id_fkey" }),
-  foreignKey({ columns: [table.projectId, table.spaceId], foreignColumns: [projects.id, projects.spaceId], name: "plans_project_id_fkey" }).onDelete("set null"),
+  foreignKey({ columns: [table.projectId], foreignColumns: [projects.id], name: "plans_project_id_delete_fkey" }).onDelete("set null"),
+  foreignKey({ columns: [table.projectId, table.spaceId], foreignColumns: [projects.id, projects.spaceId], name: "plans_project_id_fkey" }),
   foreignKey({ columns: [table.sourceTaskId, table.spaceId], foreignColumns: [tasks.id, tasks.spaceId], name: "plans_source_task_space_fkey" }),
   foreignKey({ columns: [table.createdByUserId], foreignColumns: [users.id], name: "plans_created_by_user_id_fkey" }),
   foreignKey({ columns: [table.createdByAgentId], foreignColumns: [agents.id], name: "plans_created_by_agent_id_fkey" }),
@@ -79,6 +83,7 @@ export const planVersions = pgTable("plan_versions", {
   foreignKey({ columns: [table.createdByUserId], foreignColumns: [users.id], name: "plan_versions_created_by_user_id_fkey" }),
   foreignKey({ columns: [table.createdByAgentId], foreignColumns: [agents.id], name: "plan_versions_created_by_agent_id_fkey" }),
   foreignKey({ columns: [table.planningRunId, table.spaceId], foreignColumns: [runs.id, runs.spaceId], name: "plan_versions_planning_run_space_fkey" }),
+  foreignKey({ columns: [table.referenceWorkflowVersionId], foreignColumns: [evolvableAssetVersions.id], name: "plan_versions_reference_workflow_version_fkey" }),
 ]);
 
 export const planNodes = pgTable("plan_nodes", {
@@ -117,8 +122,10 @@ export const planNodes = pgTable("plan_nodes", {
   unique("uq_plan_nodes_version_key").on(table.planVersionId, table.nodeKey),
   unique("uq_plan_nodes_id_space").on(table.id, table.spaceId),
   foreignKey({ columns: [table.planVersionId, table.spaceId], foreignColumns: [planVersions.id, planVersions.spaceId], name: "plan_nodes_version_space_fkey" }),
-  foreignKey({ columns: [table.assignedAgentId, table.spaceId], foreignColumns: [agents.id, agents.spaceId], name: "plan_nodes_assigned_agent_space_fkey" }).onDelete("set null"),
+  foreignKey({ columns: [table.assignedAgentId], foreignColumns: [agents.id], name: "plan_nodes_assigned_agent_delete_fkey" }).onDelete("set null"),
+  foreignKey({ columns: [table.assignedAgentId, table.spaceId], foreignColumns: [agents.id, agents.spaceId], name: "plan_nodes_assigned_agent_space_fkey" }),
   foreignKey({ columns: [table.spaceId], foreignColumns: [spaces.id], name: "plan_nodes_space_id_fkey" }),
+  check("ck_plan_nodes_status", sql`status IN ('inbox', 'ready', 'in_progress', 'blocked', 'waiting_for_review', 'done', 'failed')`),
 ]);
 
 export const planNodeDependencies = pgTable("plan_node_dependencies", {

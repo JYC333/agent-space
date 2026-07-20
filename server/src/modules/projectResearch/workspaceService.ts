@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { HttpError, objectValue, optionalString, type Queryable, type SpaceUserIdentity, withQueryableTransaction } from "../routeUtils/common";
-import { assertProjectReadable, assertProjectWriter, canWriteProject } from "../projects/access";
+import { assertProjectReadable, assertProjectWriter, canWriteProject, lockActiveProjectForMutation } from "../projects/access";
 import { ProjectCorpusRepository } from "../projects/corpusRepository";
+import { sourceItemReadableClause } from "../sources/sourceItemAccess";
 import type { ServerConfig } from "../../config";
 import { ProjectResearchExecutionProfileService } from "./executionProfileService";
 import { PgRunRepository } from "../runs/repository";
@@ -88,6 +89,8 @@ export class ProjectResearchWorkspaceService {
       throw new HttpError(404, "Research workspace not initialized");
     }
     await withQueryableTransaction(this.db, async (db) => {
+      await assertProjectWriter(db, identity.spaceId, projectId, identity.userId);
+      await lockActiveProjectForMutation(db, identity.spaceId, projectId);
       const service = new ProjectResearchWorkspaceService(db, this.config);
       await service.ensureNotebook(identity.spaceId, projectId);
       // Projects with reports from before the living workspace existed get
@@ -159,10 +162,14 @@ export class ProjectResearchWorkspaceService {
     const now = new Date().toISOString();
     const result = await this.db.query(
       `INSERT INTO research_paper_cards (id,space_id,project_id,source_item_id,object_id,why_md,how_md,what_md,provenance_json,edited_by_user,created_at,updated_at)
-       SELECT $1::varchar,$2::varchar,$3::varchar,$4::varchar,pci.object_id,$5::text,$6::text,$7::text,'{}'::jsonb,true,$8::timestamptz,$8::timestamptz FROM project_corpus_items pci
-       WHERE pci.space_id=$2::varchar AND pci.project_id=$3::varchar AND pci.source_item_id=$4::varchar AND pci.status='active' LIMIT 1
-       ON CONFLICT (project_id,source_item_id) DO UPDATE SET why_md=EXCLUDED.why_md,how_md=EXCLUDED.how_md,what_md=EXCLUDED.what_md,edited_by_user=true,updated_at=EXCLUDED.updated_at RETURNING *`,
-      [randomUUID(), identity.spaceId, projectId, sourceItemId, text(body.why_md, 4000), text(body.how_md, 4000), text(body.what_md, 4000), now],
+       SELECT $1::varchar,$2::varchar,$3::varchar,$4::varchar,pci.object_id,$5::text,$6::text,$7::text,'{}'::jsonb,true,$8::timestamptz,$8::timestamptz
+         FROM project_corpus_items pci
+         JOIN project_corpus_item_sources pcis ON pcis.corpus_item_id=pci.id AND pcis.space_id=pci.space_id
+         JOIN source_items si ON si.id=pcis.source_item_id AND si.space_id=pcis.space_id AND si.deleted_at IS NULL
+        WHERE pci.space_id=$2::varchar AND pci.project_id=$3::varchar AND pcis.source_item_id=$4::varchar
+          AND pci.status='active' AND ${sourceItemReadableClause("si", "$9", false)} LIMIT 1
+       ON CONFLICT (space_id,project_id,source_item_id) DO UPDATE SET why_md=EXCLUDED.why_md,how_md=EXCLUDED.how_md,what_md=EXCLUDED.what_md,edited_by_user=true,updated_at=EXCLUDED.updated_at RETURNING *`,
+      [randomUUID(), identity.spaceId, projectId, sourceItemId, text(body.why_md, 4000), text(body.how_md, 4000), text(body.what_md, 4000), now, identity.userId],
     );
     if (!result.rows[0]) throw new HttpError(404, "Project paper not found");
     return result.rows[0];
@@ -208,8 +215,14 @@ export class ProjectResearchWorkspaceService {
     const blocks = pmBlocksText(section.rows[0]?.content_json ?? { type: "doc", content: [] });
     const paperIds = (Array.isArray(body.source_item_ids) ? body.source_item_ids : []).filter((v): v is string => typeof v === "string").slice(0, 20);
     const papers = paperIds.length ? await this.db.query<{ title: string; excerpt: string | null; why_md: string | null; how_md: string | null; what_md: string | null }>(
-      `SELECT si.title,si.excerpt,pc.why_md,pc.how_md,pc.what_md FROM project_corpus_items pci JOIN source_items si ON si.id=pci.source_item_id LEFT JOIN research_paper_cards pc ON pc.project_id=pci.project_id AND pc.source_item_id=pci.source_item_id WHERE pci.space_id=$1 AND pci.project_id=$2 AND pci.source_item_id=ANY($3::text[]) AND pci.status='active'`,
-      [identity.spaceId, projectId, paperIds],
+      `SELECT si.title,si.excerpt,pc.why_md,pc.how_md,pc.what_md
+         FROM project_corpus_items pci
+         JOIN project_corpus_item_sources pcis ON pcis.corpus_item_id=pci.id AND pcis.space_id=pci.space_id
+         JOIN source_items si ON si.id=pcis.source_item_id AND si.space_id=pcis.space_id AND si.deleted_at IS NULL
+         LEFT JOIN research_paper_cards pc ON pc.project_id=pci.project_id AND pc.source_item_id=pcis.source_item_id
+        WHERE pci.space_id=$1 AND pci.project_id=$2 AND pcis.source_item_id=ANY($3::text[])
+          AND pci.status='active' AND ${sourceItemReadableClause("si", "$4", false)}`,
+      [identity.spaceId, projectId, paperIds, identity.userId],
     ) : { rows: [] };
     const execution = objectValue(body.execution); const resolved = await new ProjectResearchExecutionProfileService(this.db, this.config).resolve(identity, { modelProviderId: optionalString(execution.model_provider_id), modelName: optionalString(execution.model_name) });
     const instruction = [
@@ -346,9 +359,11 @@ export class ProjectResearchWorkspaceService {
       const result = await this.db.query(
         `INSERT INTO research_paper_cards (id,space_id,project_id,source_item_id,object_id,why_md,how_md,what_md,provenance_json,edited_by_user,created_at,updated_at)
          SELECT $1::varchar,$2::varchar,$3::varchar,$4::varchar,pci.object_id,$5::text,$6::text,$7::text,$8::jsonb,false,$9::timestamptz,$9::timestamptz FROM project_corpus_items pci
-          WHERE pci.space_id=$2::varchar AND pci.project_id=$3::varchar AND pci.source_item_id=$4::varchar AND pci.status='active'
+          JOIN project_corpus_item_sources pcis ON pcis.corpus_item_id=pci.id AND pcis.space_id=pci.space_id
+          JOIN source_items si ON si.id=pcis.source_item_id AND si.space_id=pcis.space_id AND si.deleted_at IS NULL
+          WHERE pci.space_id=$2::varchar AND pci.project_id=$3::varchar AND pcis.source_item_id=$4::varchar AND pci.status='active'
             AND pci.triage_status IN ('relevant','maybe','included') LIMIT 1
-         ON CONFLICT (project_id,source_item_id) DO UPDATE SET why_md=EXCLUDED.why_md,how_md=EXCLUDED.how_md,what_md=EXCLUDED.what_md,provenance_json=EXCLUDED.provenance_json,updated_at=EXCLUDED.updated_at
+         ON CONFLICT (space_id,project_id,source_item_id) DO UPDATE SET why_md=EXCLUDED.why_md,how_md=EXCLUDED.how_md,what_md=EXCLUDED.what_md,provenance_json=EXCLUDED.provenance_json,updated_at=EXCLUDED.updated_at
          WHERE research_paper_cards.edited_by_user=false
          RETURNING id`,
         [randomUUID(), input.spaceId, input.projectId, summary.source_item_id, parts.why, parts.how, parts.what,
@@ -377,8 +392,8 @@ export class ProjectResearchWorkspaceService {
     const found = await this.db.query<any>(`SELECT * FROM research_notebooks WHERE space_id=$1 AND project_id=$2`, [spaceId, projectId]); const notebook = found.rows[0];
     for (const key of NOTEBOOK_SECTION_KEYS) {
       const sectionId = randomUUID();
-      const inserted = await this.db.query(`INSERT INTO research_notebook_sections (id,notebook_id,section_key,content_json,normalized_text,content_hash,version,updated_at) VALUES ($1,$2,$3,$4::jsonb,'',$5,1,$6) ON CONFLICT (notebook_id,section_key) DO NOTHING RETURNING id`, [sectionId, notebook.id, key, JSON.stringify(empty), sha256(""), now]);
-      if (inserted.rows[0]) await insertInitialRevision(this.db, { sectionId, doc: empty, at: now });
+      const inserted = await this.db.query(`INSERT INTO research_notebook_sections (id,space_id,notebook_id,section_key,content_json,normalized_text,content_hash,version,updated_at) VALUES ($1,$2,$3,$4,$5::jsonb,'',$6,1,$7) ON CONFLICT (notebook_id,section_key) DO NOTHING RETURNING id`, [sectionId, spaceId, notebook.id, key, JSON.stringify(empty), sha256(""), now]);
+      if (inserted.rows[0]) await insertInitialRevision(this.db, { spaceId, sectionId, doc: empty, at: now });
     }
     return notebook;
   }

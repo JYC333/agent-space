@@ -1,13 +1,14 @@
 import { randomUUID } from "node:crypto";
-import type { Queryable } from "../routeUtils/common";
+import { withQueryableTransaction, type Queryable } from "../routeUtils/common";
 import { inheritContentAccessGrants } from "../access/contentAccessInheritance";
+import { canonicalAcademicIdentity } from "./identity";
 
 interface SourceItemForMaterialization {
   id: string;
   space_id: string;
   title: string;
   metadata_json: unknown;
-  source_object_id: string | null;
+  reference_object_id: string | null;
   created_by_user_id: string | null;
   owner_user_id: string | null;
   visibility: string;
@@ -60,16 +61,16 @@ function stringArray(value: unknown): string[] {
 /** Reads the normalized metadata emitted by supported academic connectors. */
 function academicMetadataFromItem(item: SourceItemForMaterialization): AcademicItemMetadata | null {
   const meta = record(item.metadata_json);
-  const arxivId = stringOrNull(meta.arxiv_id);
-  const openalexId = stringOrNull(meta.openalex_id);
-  const semanticScholarId = stringOrNull(meta.semantic_scholar_id);
+  const arxivId = canonicalAcademicIdentity(stringOrNull(meta.arxiv_id));
+  const openalexId = canonicalAcademicIdentity(stringOrNull(meta.openalex_id));
+  const semanticScholarId = canonicalAcademicIdentity(stringOrNull(meta.semantic_scholar_id));
   const provider = stringOrNull(meta.academic_provider) ?? (arxivId ? "arxiv" : null);
   if (!provider || !["arxiv", "openalex", "semantic_scholar"].includes(provider)) return null;
   if (!arxivId && !openalexId && !semanticScholarId && !stringOrNull(meta.doi)) return null;
   return {
     provider: provider as AcademicItemMetadata["provider"],
     arxivId,
-    doi: stringOrNull(meta.doi),
+    doi: canonicalAcademicIdentity(stringOrNull(meta.doi)),
     openalexId,
     semanticScholarId,
     authors: stringArray(meta.authors),
@@ -97,7 +98,7 @@ function academicMetadataFromItem(item: SourceItemForMaterialization): AcademicI
  * (source_type='paper') + `academic_papers`, deduped per space by
  * DOI and provider-native ids (matches the partial unique indexes on
  * `academic_papers`).
- * Idempotent — a source_item whose `source_object_id` is already set is
+ * Idempotent — a SourceItem with an existing `source_item_references` row is
  * treated as already materialized, and re-running against an existing
  * arxiv_id/doi links the item to that paper instead of creating a duplicate.
  *
@@ -111,20 +112,48 @@ export async function materializeAcademicPaperFromSourceItem(
   db: Queryable,
   input: { spaceId: string; sourceItemId: string },
 ): Promise<MaterializeAcademicPaperResult | null> {
+  return withQueryableTransaction(db, (tx) => materializeAcademicPaperInTransaction(tx, input));
+}
+
+async function materializeAcademicPaperInTransaction(
+  db: Queryable,
+  input: { spaceId: string; sourceItemId: string },
+): Promise<MaterializeAcademicPaperResult | null> {
   const itemResult = await db.query<SourceItemForMaterialization>(
-    `SELECT id, space_id, title, metadata_json, source_object_id, created_by_user_id,
-            owner_user_id, visibility, access_level
-       FROM source_items
-      WHERE space_id = $1 AND id = $2 AND deleted_at IS NULL
-      LIMIT 1`,
+    `SELECT si.id, si.space_id, si.title, si.metadata_json,
+            sir.reference_object_id, si.created_by_user_id,
+            si.owner_user_id, si.visibility, si.access_level
+       FROM source_items si
+       LEFT JOIN source_item_references sir
+         ON sir.source_item_id = si.id AND sir.space_id = si.space_id
+      WHERE si.space_id = $1 AND si.id = $2 AND si.deleted_at IS NULL
+      LIMIT 1
+      FOR UPDATE OF si`,
     [input.spaceId, input.sourceItemId],
   );
   const item = itemResult.rows[0];
   if (!item) return null;
-  if (item.source_object_id) return { objectId: item.source_object_id, created: false };
+  if (item.reference_object_id) return { objectId: item.reference_object_id, created: false };
 
   const academic = academicMetadataFromItem(item);
   if (!academic) return null;
+
+  // Different SourceItems for the same paper do not share a row lock. Lock
+  // every available external identity in a deterministic order so overlapping
+  // DOI/provider-id sets serialize without deadlocking. The surrounding
+  // transaction makes the dedupe read and all created rows one atomic unit.
+  const identityKeys = [
+    academic.arxivId ? `arxiv:${academic.arxivId.toLowerCase()}` : null,
+    academic.doi ? `doi:${academic.doi.toLowerCase()}` : null,
+    academic.openalexId ? `openalex:${academic.openalexId.toLowerCase()}` : null,
+    academic.semanticScholarId ? `semantic-scholar:${academic.semanticScholarId.toLowerCase()}` : null,
+  ].filter((value): value is string => Boolean(value)).sort();
+  for (const identityKey of identityKeys) {
+    await db.query(
+      `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
+      [`academic-paper:${input.spaceId}:${identityKey}`],
+    );
+  }
 
   const existing = await db.query<{ object_id: string }>(
     `SELECT ap.object_id
@@ -154,12 +183,7 @@ export async function materializeAcademicPaperFromSourceItem(
         academic.semanticScholarId, academic.publishedAt ?? academic.updatedAt, academic.venue,
         academic.citedByCount, academic.referenceCount, now],
     );
-    await db.query(
-      `UPDATE source_items
-          SET source_object_id = $3, source_object_type = 'source', updated_at = $4
-        WHERE space_id = $1 AND id = $2 AND source_object_id IS NULL`,
-      [input.spaceId, input.sourceItemId, existingObjectId, now],
-    );
+    await linkSourceItemReference(db, input.spaceId, input.sourceItemId, existingObjectId, now);
     return { objectId: existingObjectId, created: false };
   }
 
@@ -219,11 +243,24 @@ export async function materializeAcademicPaperFromSourceItem(
     [objectId, input.spaceId, academic.doi, academic.arxivId, academic.openalexId, academic.semanticScholarId,
       academic.publishedAt ?? academic.updatedAt, academic.venue, academic.paperType, academic.citedByCount, academic.referenceCount, now],
   );
-  await db.query(
-    `UPDATE source_items
-        SET source_object_id = $3, source_object_type = 'source', updated_at = $4
-      WHERE space_id = $1 AND id = $2`,
-    [input.spaceId, input.sourceItemId, objectId, now],
-  );
+  await linkSourceItemReference(db, input.spaceId, input.sourceItemId, objectId, now);
   return { objectId, created: true };
+}
+
+async function linkSourceItemReference(
+  db: Queryable,
+  spaceId: string,
+  sourceItemId: string,
+  referenceObjectId: string,
+  now: string,
+): Promise<void> {
+  await db.query(
+    `INSERT INTO source_item_references (
+       source_item_id, space_id, reference_object_id, created_at, updated_at
+     ) VALUES ($1, $2, $3, $4, $4)
+     ON CONFLICT (source_item_id) DO UPDATE SET
+       reference_object_id = EXCLUDED.reference_object_id,
+       updated_at = EXCLUDED.updated_at`,
+    [sourceItemId, spaceId, referenceObjectId, now],
+  );
 }

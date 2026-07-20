@@ -188,6 +188,7 @@ export interface ResearchOperationRow {
   kind?: string;
   status: string;
   progress_json: unknown;
+  version: number;
   created_at?: string;
 }
 
@@ -336,8 +337,21 @@ function illegal(
 }
 
 async function lockOperationRow(tx: Queryable, spaceId: string, operationId: string): Promise<ResearchOperationRow | null> {
+  const owner = await tx.query<{ project_id: string }>(
+    `SELECT project_id FROM project_operations
+      WHERE id=$1 AND space_id=$2 AND kind='research'`,
+    [operationId, spaceId],
+  );
+  if (!owner.rows[0]) return null;
+  const project = await tx.query<{ status: string }>(
+    `SELECT status FROM projects
+      WHERE id=$1 AND space_id=$2 AND deleted_at IS NULL
+      FOR UPDATE`,
+    [owner.rows[0].project_id, spaceId],
+  );
+  if (project.rows[0]?.status !== "active") return null;
   const result = await tx.query<ResearchOperationRow>(
-    `SELECT id, space_id, project_id, kind, status, progress_json, created_at
+    `SELECT id, space_id, project_id, kind, status, progress_json, version, created_at
        FROM project_operations WHERE id=$1 AND space_id=$2 AND kind='research' FOR UPDATE`,
     [operationId, spaceId],
   );
@@ -357,6 +371,7 @@ async function writeOperationState(
       progress: state as unknown as Record<string, unknown>,
       stepStates: steps,
       replaceProgress: true,
+      expectedVersion: row.version,
     });
   } catch (error) {
     if (isUniqueViolation(error, ACTIVE_RESEARCH_OPERATION_INDEX)) {

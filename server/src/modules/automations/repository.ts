@@ -1,10 +1,8 @@
 import { randomUUID } from "node:crypto";
-import type { Pool } from "../../db/pool";
-import { withTransaction } from "../../db/tx";
 import type { Queryable } from "../routeUtils/common";
-import { HttpError } from "../routeUtils/common";
+import { HttpError, withQueryableTransaction } from "../routeUtils/common";
 import { PgSchedulerTaskStore, type SchedulerTaskRow } from "../scheduler/taskStore";
-import { assertProjectWriter, canWriteProject } from "../projects/access";
+import { assertProjectWriter, canWriteProject, lockActiveProjectForMutation } from "../projects/access";
 import { computeNextRunAt } from "./schedule";
 
 export interface AutomationRow {
@@ -181,12 +179,8 @@ export class PgAutomationRepository implements AutomationRepositoryPort {
     configJson: Record<string, unknown>;
     preflightSnapshot: Record<string, unknown>;
   }): Promise<AutomationRow> {
-    if (isTransactionCapable(this.db)) {
-      return withTransaction(this.db, async (client) =>
-        new PgAutomationRepository(client).createInCurrentUnit(input),
-      );
-    }
-    return this.createInCurrentUnit(input);
+    return withQueryableTransaction(this.db, (db) =>
+      new PgAutomationRepository(db).createInCurrentUnit(input));
   }
 
   private async createInCurrentUnit(input: {
@@ -201,6 +195,7 @@ export class PgAutomationRepository implements AutomationRepositoryPort {
     configJson: Record<string, unknown>;
     preflightSnapshot: Record<string, unknown>;
   }): Promise<AutomationRow> {
+    if (input.projectId) await lockActiveProjectForMutation(this.db, input.spaceId, input.projectId);
     const id = randomUUID();
     const now = new Date().toISOString();
     const nextRunAt =
@@ -263,8 +258,25 @@ export class PgAutomationRepository implements AutomationRepositoryPort {
       project_id?: string | null;
     },
   ): Promise<AutomationRow> {
+    return withQueryableTransaction(this.db, (db) =>
+      new PgAutomationRepository(db).updateInCurrentUnit(spaceId, automationId, patch));
+  }
+
+  private async updateInCurrentUnit(
+    spaceId: string,
+    automationId: string,
+    patch: {
+      name?: string;
+      description?: string | null;
+      status?: string;
+      config_json?: Record<string, unknown>;
+      project_id?: string | null;
+    },
+  ): Promise<AutomationRow> {
     const existing = await this.get(spaceId, automationId);
     if (!existing) throw new HttpError(404, `Automation '${automationId}' not found`);
+    const projectIds = [...new Set([existing.project_id, patch.project_id].filter((id): id is string => Boolean(id)))].sort();
+    for (const projectId of projectIds) await lockActiveProjectForMutation(this.db, spaceId, projectId);
     const now = new Date().toISOString();
     const configJson = patch.config_json ?? existing.config_json;
     let nextRunAt = existing.next_run_at;
@@ -492,10 +504,6 @@ export class PgAutomationRepository implements AutomationRepositoryPort {
       updatedAt: input.updatedAt,
     });
   }
-}
-
-function isTransactionCapable(db: Queryable): db is Queryable & Pool {
-  return "connect" in db && typeof (db as { connect?: unknown }).connect === "function";
 }
 
 function automationSchedulerTaskKey(automationId: string): string {

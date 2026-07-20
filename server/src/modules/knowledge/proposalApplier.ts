@@ -1145,9 +1145,11 @@ async function applyObjectRelationCreateProposal(
   if (!RELATION_CREATE_STATUSES.has(status)) {
     throw new KnowledgeApplyValidationError(`invalid relation status: ${JSON.stringify(status)}`);
   }
+  const metadata = validatedObjectRelationMetadata(relationType, payload.metadata);
 
   const fromObject = await requireSpaceObjectForMutation(context.db, context.proposal.space_id, fromObjectId, context.proposal);
   const toObject = await requireSpaceObjectForMutation(context.db, context.proposal.space_id, toObjectId, context.proposal);
+  assertTypedObjectRelationEndpoints(relationType, fromObject.object_type, toObject.object_type);
   const sourceClaimId = optionalString(payload.source_claim_id);
   if (sourceClaimId) await requireClaimForMutation(context.db, context.proposal.space_id, sourceClaimId, context.proposal);
   const sourceObjectId = optionalString(payload.source_object_id);
@@ -1182,7 +1184,7 @@ async function applyObjectRelationCreateProposal(
       sourceClaimId,
       sourceObjectId,
       context.proposal.id,
-      JSON.stringify(optionalObject(payload.metadata) ?? {}),
+      JSON.stringify(metadata),
       context.proposal.created_by_user_id,
       now,
     ],
@@ -1212,11 +1214,18 @@ async function applyObjectRelationDeleteProposal(
   const toObject = await requireSpaceObjectForMutation(context.db, context.proposal.space_id, relation.to_object_id, context.proposal);
 
   const now = new Date().toISOString();
+  const metadataPatch = strictMetadataObject(payload.metadata_patch, "metadata_patch");
+  const metadata = validatedObjectRelationMetadata(relation.relation_type, {
+    ...strictMetadataObject(relation.metadata_json, "stored relation metadata"),
+    ...metadataPatch,
+  });
   await context.db.query(
     `UPDATE object_relations
-        SET status = 'archived', updated_at = $3
+        SET status = 'archived',
+            metadata_json = $4::jsonb,
+            updated_at = $3
       WHERE id = $1 AND space_id = $2`,
-    [relationId, context.proposal.space_id, now],
+    [relationId, context.proposal.space_id, now, JSON.stringify(metadata)],
   );
 
   await reindexWithinApply(context, async (projection) => {
@@ -2296,6 +2305,71 @@ function optionalDateIso(value: unknown): string | null {
     throw new KnowledgeApplyValidationError("invalid timestamp value");
   }
   return date.toISOString();
+}
+
+const AFFILIATION_PROVENANCE_SOURCES = new Set(["manual", "import", "source_sync", "agent"]);
+
+function strictMetadataObject(value: unknown, field: string): Record<string, unknown> {
+  if (value === null || value === undefined) return {};
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new KnowledgeApplyValidationError(`${field} must be a JSON object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function validatedObjectRelationMetadata(
+  relationType: string,
+  value: unknown,
+): Record<string, unknown> {
+  const metadata = strictMetadataObject(value, "object relation metadata");
+  const normalized = { ...metadata };
+  if (relationType === "authored_by") {
+    const position = metadata.author_position;
+    if (position !== null && position !== undefined) {
+      if (typeof position !== "number" || !Number.isInteger(position) || position < 1) {
+        throw new KnowledgeApplyValidationError("authored_by author_position must be a positive integer or null");
+      }
+    }
+    const corresponding = metadata.is_corresponding;
+    if (corresponding !== null && corresponding !== undefined && typeof corresponding !== "boolean") {
+      throw new KnowledgeApplyValidationError("authored_by is_corresponding must be a boolean or null");
+    }
+  }
+  if (relationType === "affiliated_with") {
+    for (const field of ["role", "title"] as const) {
+      const fieldValue = metadata[field];
+      if (fieldValue !== null && fieldValue !== undefined && typeof fieldValue !== "string") {
+        throw new KnowledgeApplyValidationError(`affiliated_with ${field} must be a string or null`);
+      }
+    }
+    for (const field of ["start_date", "end_date"] as const) {
+      const fieldValue = metadata[field];
+      if (fieldValue !== null && fieldValue !== undefined && typeof fieldValue !== "string") {
+        throw new KnowledgeApplyValidationError(`affiliated_with ${field} must be an ISO timestamp or null`);
+      }
+      if (fieldValue !== undefined) normalized[field] = optionalDateIso(fieldValue);
+    }
+    const source = metadata.source;
+    if (source !== null && source !== undefined) {
+      if (typeof source !== "string" || !AFFILIATION_PROVENANCE_SOURCES.has(source)) {
+        throw new KnowledgeApplyValidationError("affiliated_with source is invalid");
+      }
+    }
+  }
+  return normalized;
+}
+
+function assertTypedObjectRelationEndpoints(
+  relationType: string,
+  fromObjectType: string,
+  toObjectType: string,
+): void {
+  if (relationType === "affiliated_with" && (fromObjectType !== "person" || toObjectType !== "organization")) {
+    throw new KnowledgeApplyValidationError("affiliated_with requires person -> organization endpoints");
+  }
+  if (relationType === "authored_by" && (fromObjectType !== "source" || toObjectType !== "person")) {
+    throw new KnowledgeApplyValidationError("authored_by requires source -> person endpoints");
+  }
 }
 
 function hasPayloadKey(payload: Record<string, unknown>, key: string): boolean {
